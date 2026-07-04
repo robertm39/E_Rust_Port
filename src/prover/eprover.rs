@@ -4689,6 +4689,10 @@ fn run_syntax_only(
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
+    if config.flags.contains(EProverFlag::PrintFormulas) {
+        return run_syntax_only_print_formulas(output, config, &mut bank);
+    }
+
     let mut clauses = ClauseSet::new();
     let mut watchlist = ClauseSet::new();
 
@@ -4726,39 +4730,55 @@ fn run_syntax_only(
         .into());
     }
 
-    if config.flags.contains(EProverFlag::PrintFormulas) {
-        match config.output_format {
-            IoFormat::Tptp => {
-                let options = EqnPrintOptions::tptp().with_print_types(config.encoding.print_types);
-                output.write_all(
-                    clauses
-                        .print_tptp_format_string_with_options(&bank, options)
-                        .as_bytes(),
-                )?;
-            }
-            IoFormat::Tstp => {
-                let rendered = clauses.tstp_print_string_with_type_suffixes(
-                    &bank,
-                    true,
-                    crate::basics::simple_stuff::ProblemType::FirstOrder,
-                    config.encoding.print_types,
-                )?;
-                output.write_all(rendered.as_bytes())?;
-            }
-            IoFormat::Auto | IoFormat::Lop => {
-                let rendered = clauses.print_lop_string_with_options(
-                    &bank,
-                    true,
-                    config
-                        .equation_print
-                        .into_eqn_print_options(config.output_format)
-                        .with_print_types(config.encoding.print_types),
-                );
-                output.write_all(rendered.as_bytes())?;
-            }
+    Ok(())
+}
+
+fn run_syntax_only_print_formulas(
+    output: &mut impl Write,
+    config: &mut EProverConfig,
+    bank: &mut TermBank,
+) -> Result<(), EProverError> {
+    let mut formulas = FormulaSet::new();
+    let mut watchlist = ClauseSet::new();
+    let mut print_problem_type = ProblemType::FirstOrder;
+
+    config.flags.clear(EProverFlag::FormulaConjectureSeen);
+    let mut input_owner_seen = false;
+    let files = config.files.clone();
+    for file in &files {
+        let parsed_file = parse_formula_file(
+            file,
+            config.parse_format,
+            FormulaPreprocessing::parse_only_from_config(config),
+            bank,
+            &mut formulas,
+            &mut watchlist,
+        )?;
+        if parsed_file.formula_conjecture_seen {
+            config.flags.set(EProverFlag::FormulaConjectureSeen);
+        }
+        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
+        input_owner_seen |= parsed_file.input_owner_seen;
+        print_problem_type = combine_problem_types(print_problem_type, parsed_file.problem_type);
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
+            return Err(Diagnostic::new(
+                ErrorCode::INPUT_SEMANTIC_ERROR,
+                format!("Input file {file} did not contain any clauses"),
+            )
+            .into());
         }
     }
 
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
+        return Err(Diagnostic::new(
+            ErrorCode::INPUT_SEMANTIC_ERROR,
+            "Input did not contain any clauses",
+        )
+        .into());
+    }
+
+    let rendered = formulas.pretty_print_tstp_string(bank, true, print_problem_type, true)?;
+    output.write_all(rendered.as_bytes())?;
     Ok(())
 }
 
@@ -8709,6 +8729,37 @@ fn parse_clause_file(
     )
 }
 
+fn parse_formula_file(
+    file: &str,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
+    let mut scanner = if file == "-" {
+        let mut input = Vec::new();
+        io::stdin().read_to_end(&mut input).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read standard input: {error}"),
+            )
+        })?;
+        Scanner::from_file_content("-", input, false)?
+    } else {
+        Scanner::from_file(Path::new(file), false)?
+    };
+    parse_clause_scanner_into_formula_set_with_options(
+        &mut scanner,
+        parse_format,
+        formula_preprocessing,
+        ClauseParseOptions::default(),
+        bank,
+        formulas,
+        watchlist,
+    )
+}
+
 pub(crate) fn parse_clause_scanner_into_sets(
     scanner: &mut Scanner,
     parse_format: IoFormat,
@@ -8845,6 +8896,7 @@ fn parse_clause_scanner_into_destination_with_options(
     let mut formula_conjecture_seen = false;
     let mut raw_formula_features = RawFormulaFeatures::default();
     let input_owner_seen;
+    let result_problem_type;
     match detected_format {
         IoFormat::Tstp => {
             let parsed = parse_tstp_entry_list(
@@ -8859,6 +8911,7 @@ fn parse_clause_scanner_into_destination_with_options(
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
             input_owner_seen = parsed.input_owner_seen;
+            result_problem_type = parsed.problem_type;
         }
         IoFormat::Tptp => {
             let parsed = parse_tptp_entry_list(
@@ -8873,6 +8926,7 @@ fn parse_clause_scanner_into_destination_with_options(
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
             input_owner_seen = parsed.input_owner_seen;
+            result_problem_type = parsed.problem_type;
         }
         _ => {
             while clause_starts_maybe(scanner) {
@@ -8885,6 +8939,7 @@ fn parse_clause_scanner_into_destination_with_options(
                 destination.insert_clause_owner(bank, clause)?;
             }
             input_owner_seen = destination.input_owner_count() != start_input_count;
+            result_problem_type = ProblemType::FirstOrder;
         }
     }
     if !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -8902,6 +8957,7 @@ fn parse_clause_scanner_into_destination_with_options(
         input_owner_seen,
         formula_conjecture_seen,
         raw_formula_features,
+        problem_type: result_problem_type,
     })
 }
 
@@ -8963,13 +9019,26 @@ pub(crate) struct ParsedClauseFile {
     pub(crate) input_owner_seen: bool,
     pub(crate) formula_conjecture_seen: bool,
     pub(crate) raw_formula_features: RawFormulaFeatures,
+    pub(crate) problem_type: ProblemType,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ParsedEntryList {
     input_owner_seen: bool,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
+    problem_type: ProblemType,
+}
+
+impl Default for ParsedEntryList {
+    fn default() -> Self {
+        Self {
+            input_owner_seen: false,
+            formula_conjecture_seen: false,
+            raw_formula_features: RawFormulaFeatures::default(),
+            problem_type: ProblemType::FirstOrder,
+        }
+    }
 }
 
 impl ParsedEntryList {
@@ -8977,6 +9046,7 @@ impl ParsedEntryList {
         self.input_owner_seen |= other.input_owner_seen;
         self.formula_conjecture_seen |= other.formula_conjecture_seen;
         self.raw_formula_features.add(other.raw_formula_features);
+        self.problem_type = combine_problem_types(self.problem_type, other.problem_type);
     }
 }
 
@@ -9148,6 +9218,8 @@ fn parse_tptp_entry_list(
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
+                    result.problem_type =
+                        combine_problem_types(result.problem_type, parsed.problem_type);
                 }
                 insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
@@ -9217,6 +9289,8 @@ fn parse_tstp_entry_list(
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
+                    result.problem_type =
+                        combine_problem_types(result.problem_type, parsed.problem_type);
                 }
                 insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
@@ -9285,6 +9359,14 @@ fn insert_parsed_formula_or_watchlist_clause(
 
 fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
     if formula_kind == "thf" {
+        ProblemType::HigherOrder
+    } else {
+        ProblemType::FirstOrder
+    }
+}
+
+fn combine_problem_types(left: ProblemType, right: ProblemType) -> ProblemType {
+    if left == ProblemType::HigherOrder || right == ProblemType::HigherOrder {
         ProblemType::HigherOrder
     } else {
         ProblemType::FirstOrder
@@ -9373,6 +9455,7 @@ struct ParsedSimpleFofClause {
     clauses: Vec<Clause>,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
+    problem_type: ProblemType,
 }
 
 struct SimpleFofBoundVariable {
@@ -9527,14 +9610,12 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
     scanner.accept_tok(TokenType::COMMA)?;
     if scanner.test_id("type") {
-        scanner.accept_id("type")?;
-        scanner.accept_tok(TokenType::COMMA)?;
-        bank.signature_mut()
-            .parse_tff_type_declaration(scanner, formula_problem_type)?;
-        parse_simple_tstp_optional_source(scanner)?;
-        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-        scanner.accept_tok(TokenType::FULLSTOP)?;
-        return Ok(parsed_simple_tstp_type_declaration_clause(name));
+        return parse_simple_tstp_type_declaration_clause(
+            scanner,
+            bank,
+            name,
+            formula_problem_type,
+        );
     }
 
     let roles = if formula_kind == "tcf" {
@@ -9614,10 +9695,33 @@ fn parse_simple_tstp_formula_clause(
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
+        problem_type: formula_problem_type,
     })
 }
 
-fn parsed_simple_tstp_type_declaration_clause(name: String) -> ParsedSimpleFofClause {
+fn parse_simple_tstp_type_declaration_clause(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    name: String,
+    problem_type: ProblemType,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    scanner.accept_id("type")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    bank.signature_mut()
+        .parse_tff_type_declaration(scanner, problem_type)?;
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    Ok(parsed_simple_tstp_type_declaration_clause(
+        name,
+        problem_type,
+    ))
+}
+
+fn parsed_simple_tstp_type_declaration_clause(
+    name: String,
+    problem_type: ProblemType,
+) -> ParsedSimpleFofClause {
     ParsedSimpleFofClause {
         name,
         raw_formula_type: CP_TYPE_AXIOM,
@@ -9625,6 +9729,7 @@ fn parsed_simple_tstp_type_declaration_clause(name: String) -> ParsedSimpleFofCl
         clauses: Vec::new(),
         formula_conjecture_seen: false,
         raw_formula_features: RawFormulaFeatures::default(),
+        problem_type,
     }
 }
 
@@ -9706,6 +9811,7 @@ fn parse_simple_tptp_formula_clause(
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
+        problem_type: ProblemType::FirstOrder,
     })
 }
 
@@ -13118,6 +13224,21 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("eprover-{name}-{}.out", std::process::id()))
+    }
+
+    fn assert_formula_owner_print(stdout: Vec<u8>, stderr: Vec<u8>, expected_fragments: &[&str]) {
+        let printed = String::from_utf8(stdout).unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(!printed.is_empty());
+        assert!(!printed.contains("cnf(i_0_"), "{printed}");
+        assert!(!printed.contains("<-"), "{printed}");
+        for fragment in expected_fragments {
+            assert!(
+                printed.contains(fragment),
+                "missing {fragment:?} in {printed}"
+            );
+        }
+        assert!(stderr.is_empty());
     }
 
     fn bool_binary_term(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
@@ -22563,16 +22684,8 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
 
-        let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.contains("(epred1_1(X1))"));
-        assert!(printed.contains("(p(X1)|~epred1_1(X1))"));
-        assert!(printed.contains("(epred1_1(X1)|~p(X1))"));
-        assert!(printed.contains("(epred2_1(esk1_0))"));
-        assert!(printed.contains("(q(X1)|~epred2_1(X1))"));
-        assert!(printed.contains("(epred2_1(X1)|~q(X1))"));
-        assert!(!printed.contains("$let"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["let_univ", "let_ex", "$let"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -22602,15 +22715,12 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
 
-        let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.contains("negated_conjecture, (~epred"));
-        assert!(printed.contains("plain, (p(a)|~epred"));
-        assert!(printed.contains("plain, (epred"));
-        assert!(printed.contains("|~p(a))).\n"));
-        assert!(!printed.contains("negated_conjecture, (p(a)|~epred"));
-        assert!(!printed.contains("negated_conjecture, (epred"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(fact, axiom", "fof(goal, conjecture", "$let"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24084,11 +24194,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(
-            String::from_utf8(stdout).unwrap(),
-            "p(a) <- .\nq(a) <- p(a).\n"
-        );
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["p(a)", "(q(a)|~p(a))"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24115,8 +24221,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "equal(a, b) <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["a=b"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24143,8 +24248,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:$i):$o <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["p(a)"]);
 
         let mut tptp_stdout = Vec::new();
         let mut tptp_stderr = Vec::new();
@@ -24163,10 +24267,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(tptp_stdout).unwrap();
-        assert!(printed.starts_with("input_clause(i_0_"));
-        assert!(printed.ends_with(",axiom,[++p(a:$i):$o]).\n"));
-        assert!(tptp_stderr.is_empty());
+        assert_formula_owner_print(tptp_stdout, tptp_stderr, &["p(a)"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24200,8 +24301,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:person):$o <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "type, a: person",
+                "type, p: person > $o",
+                "tff(test1, axiom, p(a))",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24238,8 +24346,11 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a) <- .\nq(a) <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(selected, axiom, p(a))", "fof(main, axiom, q(a))"],
+        );
         std::fs::remove_file(&include_path).unwrap();
         std::fs::remove_file(&path).unwrap();
     }
@@ -24274,8 +24385,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:person):$o <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "type, a: person",
+                "type, p: person > $o",
+                "tff(test1, axiom, p(a))",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24309,8 +24427,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:person):$o <- .\n");
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "type, a: person",
+                "type, p: person > $o",
+                "tff(test1, axiom, p(a))",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24343,11 +24468,11 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(
-            String::from_utf8(stdout).unwrap(),
-            "p(esk1_0:person):$o <- .\n"
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["type, p: person > $o", "tff(exists, axiom"],
         );
-        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24382,11 +24507,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(
-            String::from_utf8(stdout).unwrap(),
-            "p(X1:$i):$o; q(X2:person):$o; r(X1:$i):$o <- .\n"
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "type, p: $i > $o",
+                "type, q: person > $o",
+                "tff(test, axiom",
+            ],
         );
-        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24407,12 +24536,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (a!=b)).\n"));
-        assert!(printed.contains(", axiom, (a!=c)).\n"));
-        assert!(printed.contains(", axiom, (b!=c)).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 3);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24433,10 +24557,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", negated_conjecture, (a=b|a=c|b=c)).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24468,16 +24589,11 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(!printed.contains("$true"));
-        assert_eq!(printed.matches(", axiom, ($false)).\n").count(), 3);
-        assert_eq!(printed.matches(", axiom, (p(a))).\n").count(), 2);
-        assert!(!printed.contains("skip(a)"));
-        assert!(!printed.contains("q(a)"));
-        assert!(!printed.contains("s(a)"));
-        assert!(printed.contains(", negated_conjecture, ($false)).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 6);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["true_axiom", "false_axiom", "$true", "~$true"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24498,20 +24614,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 2, "{printed}");
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("~p(a)") && line.contains("q(a)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
-            && !line.contains("~p(a)")
-            && line.contains("~r(a)")));
-        assert!(!printed.contains("$ite"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(ite_bool, axiom", "$ite"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24542,26 +24645,11 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 4, "{printed}");
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("q(a)") && line.contains("~p(a)")));
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("q(b)") && line.contains("p(a)") && !line.contains("~p(a)")));
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("a=c") && line.contains("~p(a)")));
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("b=c") && line.contains("p(a)") && !line.contains("~p(a)")));
-        assert!(!printed.contains("$ite"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(ite_arg, axiom", "fof(ite_eq, axiom", "$ite"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24596,12 +24684,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert_eq!(printed.matches("cnf(i_0_").count(), 1);
-        assert!(printed.contains("$and($eq(p(a),$true),$eq(q(a),$true))"));
-        assert!(!printed.contains("f($true)"));
-        assert!(!printed.contains("f($false)"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(bool_arg, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24628,11 +24711,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("input_clause(i_0_"));
-        assert!(printed.ends_with(",axiom,[++equal(a, b)]).\n"));
-        assert!(!printed.starts_with("cnf("));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["a=b"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24665,12 +24744,11 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert_eq!(printed.matches(", axiom, ").count(), 2);
-        assert_eq!(printed.matches(", question, ").count(), 1);
-        assert!(!printed.contains(", lemma, "));
-        assert!(!printed.contains(", plain, "));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(lem, axiom", "fof(unk, axiom", "fof(que, question"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24701,22 +24779,12 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
 
-        let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 3, "{printed}");
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("q(esk1_0)") && line.contains("~p(esk1_0)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")
-            && !line.contains("~p(esk1_0)")
-            && line.contains("r(esk1_0)")));
-        assert!(!printed.contains("$ite("));
-        assert!(printed.contains("$let($eq(f,$eq(a,$true)),f)=esk2_0"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(ex_ite, axiom", "fof(ex_let_eq, axiom", "$ite", "$let"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24737,11 +24805,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(a))).\n"));
-        assert!(!printed.contains("<-"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["p(a)"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24762,11 +24826,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", question, (p(a))).\n"));
-        assert!(!printed.contains(", plain, "));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(query, question", "p(a)"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24787,10 +24847,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (~p(a))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(ax, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24811,22 +24868,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 3, "{printed}");
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("q(a)") && line.contains("r(a)") && line.contains("~p(a)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
-            && line.contains("~q(a)")
-            && !line.contains("~p(a)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
-            && line.contains("~r(a)")
-            && !line.contains("~p(a)")));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(eq_right, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24856,18 +24898,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 5, "{printed}");
-        assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("(q(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("q(esk1_0)")));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "fof(and_app, axiom",
+                "fof(not_app, axiom",
+                "fof(ex_app, axiom",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24901,18 +24940,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 8, "{printed}");
-        assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("(q(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(esk2_0)")));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "fof(app, axiom",
+                "fof(neg_app, axiom",
+                "fof(paren_ex_app, axiom",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -24947,30 +24983,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 6, "{printed}");
-        assert_eq!(
-            cnf_lines
-                .iter()
-                .filter(|line| line.contains("h(a,b)=c"))
-                .count(),
-            2,
-            "{printed}"
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "thf(curried_eq, axiom",
+                "thf(curried_eq_right, axiom",
+                "thf(parenthesized_head_eq_right, axiom",
+            ],
         );
-        assert_eq!(
-            cnf_lines
-                .iter()
-                .filter(|line| line.contains("c=h(a,b)"))
-                .count(),
-            3,
-            "{printed}"
-        );
-        assert!(cnf_lines.iter().any(|line| line.contains("c=g(a)")));
-        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25001,16 +25022,15 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 3, "{printed}");
-        assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
-        assert!(cnf_lines.iter().any(|line| line.contains("f(a)=b")));
-        assert!(cnf_lines.iter().any(|line| line.contains("b=f(a)")));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "fof(lambda_app, axiom",
+                "fof(lambda_eq_left, axiom",
+                "fof(lambda_eq_right, axiom",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25031,10 +25051,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25064,24 +25081,12 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
 
-        let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 4, "{printed}");
-        assert!(cnf_lines
-            .iter()
-            .any(|line| line.contains("q(esk1_0)") && line.contains("~p(esk1_0)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")
-            && !line.contains("~p(esk1_0)")
-            && line.contains("r(esk1_0)")));
-        assert!(cnf_lines.iter().any(|line| line.contains("esk2_0=esk3_0")));
-        assert!(cnf_lines.iter().any(|line| line.contains("esk2_0=a")));
-        assert!(!printed.contains("$ite("));
-        assert!(!printed.contains("$let"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(ex_ite, axiom", "fof(ex_let_eq, axiom", "$ite", "$let"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25127,12 +25132,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.contains(", axiom, (p(esk1_0))).\n"));
-        assert!(printed.contains(", axiom, (q(esk1_0))).\n"));
-        assert_eq!(printed.matches("esk1_0").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25153,10 +25153,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0,esk2_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25177,10 +25174,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0,esk2_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25201,11 +25195,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", negated_conjecture, (~p(X1,X2))).\n"));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25226,11 +25216,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (p(esk1_0))).\n"));
-        assert!(printed.contains(", axiom, (q(a))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25251,11 +25237,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", negated_conjecture, (~p(X1)|~q(a))).\n"));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25276,10 +25258,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0)|q(a))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25300,11 +25279,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (p(esk1_0)|r(a))).\n"));
-        assert!(printed.contains(", axiom, (q(esk1_0)|r(a))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25325,11 +25300,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (p(a)|r(a))).\n"));
-        assert!(printed.contains(", axiom, (q(esk1_0)|r(a))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25350,13 +25321,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.contains(", negated_conjecture, ("));
-        assert!(printed.contains("~p("));
-        assert!(printed.contains("~q("));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25377,10 +25342,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_1(X1),X1))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25401,10 +25363,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", negated_conjecture, (~p(X2,esk1_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25425,10 +25384,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0,X2))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25449,10 +25405,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_0,X2))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25473,10 +25426,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (~p(esk1_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25497,10 +25447,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (~p(esk1_0,esk2_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25521,10 +25468,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (q(esk1_0,X2)|~p(esk1_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25545,10 +25489,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (q(esk1_1(X1),X1)|~p(X1))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25569,11 +25510,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (q(X1)|~p(X2,X1))).\n"));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25594,11 +25531,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (q(esk1_1(X1),X1)|~p(X1))).\n"));
-        assert!(printed.contains(", axiom, (p(X1)|~q(X2,X1))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25619,11 +25552,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (p(a)|q(esk1_0))).\n"));
-        assert!(printed.contains(", axiom, (~p(a)|~q(X1))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25644,11 +25573,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (~p(a)|~q(X1))).\n"));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25669,12 +25594,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.contains(", axiom, (~p(a))).\n"));
-        assert!(printed.contains(", axiom, (~q(X1))).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25695,11 +25615,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (~p(X1)|~q(X2,X1))).\n"));
-        assert!(!printed.contains("esk"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -25720,10 +25636,7 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", negated_conjecture, (~p(esk1_0))).\n"));
-        assert!(stderr.is_empty());
+        assert_formula_owner_print(stdout, stderr, &["fof(goal, conjecture"]);
         std::fs::remove_file(&path).unwrap();
     }
 
