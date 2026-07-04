@@ -135,6 +135,10 @@ Source files reviewed: `TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Change Later
+
+- `TypeBankAppEncodeTypes` prints its `%-- ...` type comments through `TypePrintTSTP`, so higher-order arrow formatting depends on the process-global `problemType` rather than on the type bank itself. Rust keeps app-encode type comments explicit by threading the parsed problem type into the renderer; a future type-printing API should continue to carry the dialect directly instead of reintroducing hidden global state.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

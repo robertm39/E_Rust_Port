@@ -4797,6 +4797,7 @@ fn run_app_encode<W: Write + ?Sized>(
     let mut include_echoes = Vec::new();
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
+    let mut app_encode_problem_type = ProblemType::FirstOrder;
 
     let files = config.files.clone();
     for file in &files {
@@ -4812,6 +4813,8 @@ fn run_app_encode<W: Write + ?Sized>(
         saw_any_input_owner |= parsed_file.saw_input_owner;
         saw_any_formula_owner |= parsed_file.saw_formula_owner;
         include_echoes.extend(parsed_file.include_echoes);
+        app_encode_problem_type =
+            combine_problem_types(app_encode_problem_type, parsed_file.problem_type);
         formulas.extend(parsed_file.formulas);
     }
 
@@ -4825,7 +4828,13 @@ fn run_app_encode<W: Write + ?Sized>(
 
     write_app_encode_include_echoes(output, &include_echoes)?;
     write_preprocessing_config_debug_line(output, config)?;
-    write_app_encoded_formula_set(output, &mut bank, &formulas, saw_any_formula_owner)?;
+    write_app_encoded_formula_set(
+        output,
+        &mut bank,
+        &formulas,
+        saw_any_formula_owner,
+        app_encode_problem_type,
+    )?;
     Ok(())
 }
 
@@ -4843,18 +4852,19 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
     bank: &mut TermBank,
     formulas: &[SimpleAppEncodedFormula],
     saw_formula_owner: bool,
+    problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     if !saw_formula_owner {
         return Ok(());
     }
 
     if let Some(formula_set) = simple_app_encoded_formula_set(formulas, bank)? {
-        let rendered = formula_set.app_encode_string(bank, ProblemType::FirstOrder, true)?;
+        let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
         output.write_stdout_side_channel(rendered.as_bytes())?;
         return Ok(());
     }
 
-    write_simple_app_encoded_formula_set(output, bank, formulas)
+    write_simple_app_encoded_formula_set(output, bank, formulas, problem_type)
 }
 
 fn write_app_encode_include_echoes<W: Write + ?Sized>(
@@ -5028,6 +5038,7 @@ fn write_simple_app_encoded_formula_set<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     bank: &mut TermBank,
     formulas: &[SimpleAppEncodedFormula],
+    problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     for formula in formulas {
         simple_fof_preload_app_encoded_formulas(&formula.formulas, bank)?;
@@ -5036,7 +5047,7 @@ fn write_simple_app_encoded_formula_set<W: Write + ?Sized>(
     let mut rendered = Vec::new();
     bank.signature()
         .type_bank()
-        .app_encode_types(&mut rendered, ProblemType::FirstOrder, true)?;
+        .app_encode_types(&mut rendered, problem_type, true)?;
     bank.signature().print_app_encoded_decls(&mut rendered)?;
 
     for formula in formulas {
@@ -9023,6 +9034,7 @@ fn parse_app_encode_file(
         saw_input_owner,
         saw_formula_owner,
         include_echoes,
+        problem_type: combine_simple_app_encoded_formula_problem_types(&formulas),
         formulas,
     })
 }
@@ -9070,6 +9082,7 @@ struct ParsedAppEncodeFile {
     saw_input_owner: bool,
     saw_formula_owner: bool,
     include_echoes: Vec<String>,
+    problem_type: ProblemType,
     formulas: Vec<SimpleAppEncodedFormula>,
 }
 
@@ -9077,7 +9090,18 @@ struct ParsedAppEncodeFile {
 struct SimpleAppEncodedFormula {
     name: String,
     type_: FormulaProperties,
+    problem_type: ProblemType,
     formulas: Vec<SimpleFofFormula>,
+}
+
+fn combine_simple_app_encoded_formula_problem_types(
+    formulas: &[SimpleAppEncodedFormula],
+) -> ProblemType {
+    formulas
+        .iter()
+        .fold(ProblemType::FirstOrder, |combined, formula| {
+            combine_problem_types(combined, formula.problem_type)
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -9538,6 +9562,7 @@ fn parse_simple_tstp_app_encode_formula(
         return Ok(Some(SimpleAppEncodedFormula {
             name,
             type_: CP_TYPE_AXIOM | CP_INPUT_FORMULA,
+            problem_type: formula_problem_type,
             formulas: simple_fof_truth_formula(true),
         }));
     }
@@ -9572,6 +9597,7 @@ fn parse_simple_tstp_app_encode_formula(
     Ok(Some(SimpleAppEncodedFormula {
         name,
         type_: formula_type | CP_INPUT_FORMULA,
+        problem_type: formula_problem_type,
         formulas,
     }))
 }
@@ -9603,6 +9629,7 @@ fn parse_simple_tptp_app_encode_formula(
     Ok(SimpleAppEncodedFormula {
         name,
         type_: formula_type | CP_INPUT_FORMULA,
+        problem_type: ProblemType::FirstOrder,
         formulas,
     })
 }
@@ -15757,6 +15784,7 @@ input_clause(c2,axiom,[++q(X)]).
             "thf(person_type, type, person: $tType).\n\
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
+             thf(lift_type, type, lift: (person > $o) > $o).\n\
              thf(ax, axiom, p @ a).\n",
         )
         .unwrap();
@@ -15775,6 +15803,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("%-- person."));
+        assert!(printed.contains("%-- (person > $o) > $o."));
+        assert!(!printed.contains("%-- person > $o > $o."));
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
         assert!(stderr.is_empty());
