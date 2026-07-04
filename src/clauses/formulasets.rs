@@ -33,8 +33,8 @@ use crate::clauses::derivation::{
 use crate::clauses::eqn_props::{EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::inferencedoc::{
-    FormulaCreationInference, FormulaCreationParents, FormulaDocView, ProofDocSession,
-    ProofDocWriteResult,
+    FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationInference,
+    ProofDocSession, ProofDocWriteResult,
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
@@ -833,6 +833,12 @@ pub struct FormulaSetSimplifyResult {
     pub term_garbage_collections: i64,
     pub terms_recovered_by_gc: i64,
     pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetSimplifyDocResult {
+    pub simplify: FormulaSetSimplifyResult,
+    pub write_results: Vec<ProofDocWriteResult>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -2177,6 +2183,41 @@ impl FormulaSet {
         self.simplify_with_garbage_collection(bank, false)
     }
 
+    /// Applies C `FormulaSetSimplify` while also emitting C
+    /// `DocFormulaModificationDefault(..., inf_fof_simpl)` output for changed
+    /// formulas.
+    ///
+    /// This is the proof-documenting counterpart to [`Self::simplify`].
+    /// Changed formulas keep the staged `DCFofSimplify` derivation entries and
+    /// also receive the proof-document id/property side effects that C applies
+    /// to the modified `WFormula`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if simplification, proof-document formula
+    /// rendering, or proof-document writing fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term or if a formula is malformed.
+    pub fn simplify_with_docs<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
+        self.simplify_with_garbage_collection_and_docs(
+            output,
+            bank,
+            session,
+            full_terms,
+            problem_type,
+            false,
+        )
+    }
+
     /// Applies C `FormulaSetSimplify` to each formula in insertion order.
     ///
     /// When `do_garbage_collect` is true, this mirrors C's thresholded
@@ -2221,6 +2262,79 @@ impl FormulaSet {
 
         if do_garbage_collect && bank.non_var_term_nodes() != old_nodes {
             collect_formula_set_simplify_garbage(bank, self, &mut result);
+        }
+        Ok(result)
+    }
+
+    /// Applies C `FormulaSetSimplify` with optional term-bank garbage
+    /// collection and proof-documenting formula modification output.
+    ///
+    /// This mirrors the C ordering at the formula-set level: each changed
+    /// formula is documented before any threshold-triggered garbage collection
+    /// for that iteration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if simplification, proof-document formula
+    /// rendering, proof-document writing, or garbage collection bookkeeping
+    /// fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term or if a formula is malformed.
+    pub fn simplify_with_garbage_collection_and_docs<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        full_terms: bool,
+        problem_type: ProblemType,
+        do_garbage_collect: bool,
+    ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
+        let mut result = FormulaSetSimplifyDocResult::default();
+        let mut old_nodes = bank.non_var_term_nodes();
+        let mut gc_threshold = formula_set_gc_threshold(old_nodes);
+        let mut index = 0;
+
+        while index < self.formulas.len() {
+            let changed = {
+                let formula = &mut self.formulas[index];
+                formula.simplify(bank)?
+            };
+            if changed {
+                result.simplify.formulas_changed += 1;
+                result.simplify.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
+                let (write_result, new_ident, new_properties) = {
+                    let formula = &self.formulas[index];
+                    let rendered =
+                        formula.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = session.doc_formula_modification(
+                        output,
+                        &mut view,
+                        FormulaModificationInference::Simplification,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                {
+                    let formula = &mut self.formulas[index];
+                    formula.ident = new_ident;
+                    formula.set_properties(new_properties);
+                }
+                result.write_results.push(write_result);
+
+                if do_garbage_collect && bank.non_var_term_nodes() > gc_threshold {
+                    collect_formula_set_simplify_garbage(bank, self, &mut result.simplify);
+                    old_nodes = bank.non_var_term_nodes();
+                    gc_threshold = formula_set_gc_threshold(old_nodes);
+                }
+            }
+            index += 1;
+        }
+
+        if do_garbage_collect && bank.non_var_term_nodes() != old_nodes {
+            collect_formula_set_simplify_garbage(bank, self, &mut result.simplify);
         }
         Ok(result)
     }
@@ -4264,6 +4378,124 @@ mod tests {
         assert_eq!(formulas[1].entry_id(), stable_entry);
         assert_eq!(formulas[1].formula(), &stable_atom);
         assert_eq!(formulas[1].derivation_entries(), &[]);
+    }
+
+    #[test]
+    fn formula_set_simplify_with_docs_prints_changed_formula_modifications() {
+        let mut bank = test_bank();
+        let changed_left = typed_const(&mut bank, "set_simpl_doc_changed_left");
+        let changed_right = typed_const(&mut bank, "set_simpl_doc_changed_right");
+        let stable_left = typed_const(&mut bank, "set_simpl_doc_stable_left");
+        let stable_right = typed_const(&mut bank, "set_simpl_doc_stable_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let changed_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &changed_left, &changed_right);
+        let stable_atom = bool_binary_with_code(&mut bank, eqn_code, &stable_left, &stable_right);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let changed_formula =
+            bool_binary_with_code(&mut bank, or_code, &false_formula, &changed_atom);
+        let mut expected_body = WrappedFormula::wt_formula_alloc(changed_atom.clone());
+        expected_body.set_tptp_type(CP_TYPE_AXIOM);
+        let expected_body = expected_body
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let mut changed = WrappedFormula::wt_formula_alloc(changed_formula);
+        changed.set_tptp_type(CP_TYPE_AXIOM);
+        changed.set_prop(CP_INPUT_FORMULA);
+        let old_changed_ident = changed.ident();
+        let stable = WrappedFormula::wt_formula_alloc(stable_atom.clone());
+        let old_stable_ident = stable.ident();
+        let mut set = FormulaSet::new();
+        set.insert(changed);
+        set.insert(stable);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .simplify_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                true,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.simplify.formulas_changed, 1);
+        assert_eq!(
+            result.simplify.formula_derivation_ops,
+            vec![DC_FOF_SIMPLIFY]
+        );
+        assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
+        assert_eq!(
+            rendered,
+            format!("     1 : :{expected_body} : fof_simplification({old_changed_ident})\n")
+        );
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas[0].ident(), 1);
+        assert!(!formulas[0].query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formulas[0].formula(), &changed_atom);
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(formulas[1].ident(), old_stable_ident);
+        assert_eq!(formulas[1].formula(), &stable_atom);
+        assert_eq!(formulas[1].derivation_entries(), &[]);
+        assert_eq!(session.id_source.current_ident(), 1);
+    }
+
+    #[test]
+    fn formula_set_simplify_with_docs_suppresses_but_keeps_c_property_side_effects() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "set_simpl_doc_suppress_left");
+        let right = typed_const(&mut bank, "set_simpl_doc_suppress_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let changed_formula = bool_binary_with_code(&mut bank, or_code, &false_formula, &atom);
+        let mut changed = WrappedFormula::wt_formula_alloc(changed_formula);
+        changed.set_tptp_type(CP_TYPE_AXIOM);
+        changed.set_prop(CP_INPUT_FORMULA);
+        let old_ident = changed.ident();
+        let mut set = FormulaSet::new();
+        set.insert(changed);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .simplify_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                true,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.simplify.formulas_changed, 1);
+        assert_eq!(
+            result.simplify.formula_derivation_ops,
+            vec![DC_FOF_SIMPLIFY]
+        );
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        let formula = set.iter().next().unwrap();
+        assert_eq!(formula.ident(), old_ident);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.formula(), &atom);
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
