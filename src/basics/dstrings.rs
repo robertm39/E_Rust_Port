@@ -3,6 +3,7 @@ use std::io::{self, BufRead};
 
 pub const DSTR_GROW: usize = 64;
 pub const DSTR_GETS_CHUNK: usize = 256;
+const DSTR_GETS_PAYLOAD: usize = DSTR_GETS_CHUNK - 1;
 
 #[derive(Debug)]
 pub struct DynamicString {
@@ -270,14 +271,18 @@ impl DynamicString {
 
     pub fn read_line<R: BufRead>(&mut self, reader: &mut R) -> io::Result<bool> {
         self.reset();
-        let mut chunk = Vec::with_capacity(DSTR_GETS_CHUNK);
-        let read = reader.read_until(b'\n', &mut chunk)?;
-        if read == 0 {
-            Ok(false)
-        } else {
-            self.append_buffer(&chunk);
-            Ok(true)
+        let Some(chunk) = read_fgets_c_chunk(reader)? else {
+            return Ok(false);
+        };
+
+        self.append_c_str_bytes(&chunk);
+        while self.last_char() != b'\n' {
+            let Some(chunk) = read_fgets_c_chunk(reader)? else {
+                break;
+            };
+            self.append_c_str_bytes(&chunk);
         }
+        Ok(true)
     }
 
     fn ensure_for_str_append(&mut self, additional: usize) {
@@ -313,11 +318,40 @@ fn c_string_prefix(bytes: &[u8]) -> &[u8] {
     &bytes[..nul_pos]
 }
 
+fn read_fgets_c_chunk<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+    let mut chunk = Vec::with_capacity(DSTR_GETS_PAYLOAD);
+    while chunk.len() < DSTR_GETS_PAYLOAD {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            break;
+        }
+
+        let remaining = DSTR_GETS_PAYLOAD - chunk.len();
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len().min(remaining), |newline| {
+                (newline + 1).min(remaining)
+            });
+        chunk.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if chunk.last() == Some(&b'\n') || take == remaining {
+            break;
+        }
+    }
+
+    if chunk.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(chunk))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use super::{DynamicString, DSTR_GROW};
+    use super::{DynamicString, DSTR_GETS_CHUNK, DSTR_GROW};
 
     #[test]
     fn new_string_views_as_empty_without_allocation() {
@@ -571,5 +605,29 @@ mod tests {
 
         assert!(!string.read_line(&mut cursor).unwrap());
         assert_eq!(string.view_bytes(), b"");
+    }
+
+    #[test]
+    fn read_line_uses_c_fgets_chunk_boundary() {
+        let mut input = vec![b'a'; DSTR_GETS_CHUNK + 2];
+        input.extend_from_slice(b"\nrest");
+        let mut cursor = Cursor::new(input);
+        let mut string = DynamicString::new();
+
+        assert!(string.read_line(&mut cursor).unwrap());
+
+        assert_eq!(string.len(), DSTR_GETS_CHUNK + 3);
+        assert_eq!(string.last_char(), b'\n');
+        assert_eq!(string.view_bytes()[DSTR_GETS_CHUNK - 2], b'a');
+    }
+
+    #[test]
+    fn read_line_uses_c_string_semantics_for_embedded_nul() {
+        let mut cursor = Cursor::new(b"one\0hidden\ntwo\n".to_vec());
+        let mut string = DynamicString::new();
+
+        assert!(string.read_line(&mut cursor).unwrap());
+
+        assert_eq!(string.view_bytes(), b"onetwo\n");
     }
 }
