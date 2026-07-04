@@ -1,4 +1,10 @@
 use std::fmt;
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+static PROGRAM_NAME: OnceLock<Mutex<String>> = OnceLock::new();
+static TMP_ERRNO: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ErrorCode(u8);
@@ -12,6 +18,7 @@ impl ErrorCode {
     pub const TYPE_ERROR: Self = Self(4);
     pub const USAGE_ERROR: Self = Self(5);
     pub const FILE_ERROR: Self = Self(6);
+    pub const SYS_ERROR: Self = Self(7);
     pub const SYSTEM_ERROR: Self = Self(7);
     pub const CPU_LIMIT_ERROR: Self = Self(8);
     pub const RESOURCE_OUT: Self = Self(9);
@@ -54,12 +61,32 @@ impl Diagnostic {
 
     #[must_use]
     pub fn render_error(&self, program_name: &str) -> String {
-        format!("{program_name}: {}\n", self.message)
+        render_error_message(program_name, &self.message)
     }
 
     #[must_use]
     pub fn render_warning(&self, program_name: &str) -> String {
-        format!("{program_name}: Warning: {}\n", self.message)
+        render_warning_message(program_name, &self.message)
+    }
+
+    #[must_use]
+    pub fn render_sys_error(&self, program_name: &str, error: &io::Error) -> String {
+        render_sys_error_message(program_name, &self.message, error)
+    }
+
+    #[must_use]
+    pub fn render_sys_warning(&self, program_name: &str, error: &io::Error) -> String {
+        render_sys_warning_message(program_name, &self.message, error)
+    }
+
+    #[must_use]
+    pub fn render_global_error(&self) -> String {
+        self.render_error(&program_name())
+    }
+
+    #[must_use]
+    pub fn render_global_warning(&self) -> String {
+        self.render_warning(&program_name())
     }
 }
 
@@ -70,6 +97,111 @@ impl fmt::Display for Diagnostic {
 }
 
 impl std::error::Error for Diagnostic {}
+
+fn program_name_cell() -> &'static Mutex<String> {
+    PROGRAM_NAME.get_or_init(|| Mutex::new(String::from("Unknown program")))
+}
+
+fn lock_program_name() -> MutexGuard<'static, String> {
+    program_name_cell()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub fn init_error(program_name: impl Into<String>) {
+    *lock_program_name() = program_name.into();
+}
+
+#[must_use]
+pub fn program_name() -> String {
+    lock_program_name().clone()
+}
+
+#[must_use]
+pub fn tmp_errno() -> i32 {
+    TMP_ERRNO.load(Ordering::SeqCst)
+}
+
+pub fn set_tmp_errno(errno: i32) -> i32 {
+    TMP_ERRNO.swap(errno, Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn render_error_message(program_name: &str, message: &str) -> String {
+    format!("{program_name}: {message}\n")
+}
+
+#[must_use]
+pub fn render_warning_message(program_name: &str, message: &str) -> String {
+    format!("{program_name}: Warning: {message}\n")
+}
+
+#[must_use]
+pub fn render_sys_message(program_name: &str, message: &str, system_message: &str) -> String {
+    format!("{program_name}: {message}\n{program_name}: {system_message}\n")
+}
+
+#[must_use]
+pub fn render_sys_error_message(program_name: &str, message: &str, error: &io::Error) -> String {
+    render_sys_message(program_name, message, &error.to_string())
+}
+
+#[must_use]
+pub fn render_sys_warning_message(program_name: &str, message: &str, error: &io::Error) -> String {
+    render_sys_message(
+        program_name,
+        &format!("Warning: {message}"),
+        &error.to_string(),
+    )
+}
+
+#[must_use]
+pub fn render_tmp_errno_error_message(message: &str) -> String {
+    let program_name = program_name();
+    let error = io::Error::from_raw_os_error(tmp_errno());
+    render_sys_error_message(&program_name, message, &error)
+}
+
+#[must_use]
+pub fn render_tmp_errno_warning_message(message: &str) -> String {
+    let program_name = program_name();
+    let error = io::Error::from_raw_os_error(tmp_errno());
+    render_sys_warning_message(&program_name, message, &error)
+}
+
+pub fn write_error_message(
+    output: &mut impl Write,
+    program_name: &str,
+    message: &str,
+) -> io::Result<()> {
+    output.write_all(render_error_message(program_name, message).as_bytes())
+}
+
+pub fn write_warning_message(
+    output: &mut impl Write,
+    program_name: &str,
+    message: &str,
+) -> io::Result<()> {
+    output.write_all(render_warning_message(program_name, message).as_bytes())
+}
+
+pub fn write_sys_error_message(
+    output: &mut impl Write,
+    program_name: &str,
+    message: &str,
+    error: &io::Error,
+) -> io::Result<()> {
+    output.write_all(render_sys_error_message(program_name, message, error).as_bytes())
+}
+
+pub fn write_sys_warning_message(
+    output: &mut impl Write,
+    program_name: &str,
+    message: &str,
+    error: &io::Error,
+) -> io::Result<()> {
+    output.write_all(render_sys_warning_message(program_name, message, error).as_bytes())
+}
 
 #[must_use]
 pub fn test_letter_string(to_check: &str, options: &str) -> bool {
@@ -95,7 +227,119 @@ pub fn check_option_letter_string(
 
 #[cfg(test)]
 mod tests {
-    use super::{check_option_letter_string, test_letter_string, ErrorCode};
+    use super::{
+        check_option_letter_string, init_error, program_name, render_error_message,
+        render_sys_error_message, render_sys_warning_message, render_tmp_errno_error_message,
+        render_tmp_errno_warning_message, render_warning_message, set_tmp_errno,
+        test_letter_string, tmp_errno, write_error_message, write_sys_error_message,
+        write_sys_warning_message, write_warning_message, Diagnostic, ErrorCode,
+    };
+    use crate::test_support::global_state_lock;
+    use std::io;
+
+    #[test]
+    fn error_code_names_match_c_exit_statuses() {
+        assert_eq!(ErrorCode::NO_ERROR.exit_status(), 0);
+        assert_eq!(ErrorCode::PROOF_FOUND.exit_status(), 0);
+        assert_eq!(ErrorCode::SATISFIABLE.exit_status(), 1);
+        assert_eq!(ErrorCode::SYS_ERROR.exit_status(), 7);
+        assert_eq!(ErrorCode::SYSTEM_ERROR, ErrorCode::SYS_ERROR);
+        assert_eq!(ErrorCode::PARENT_REQUEST.exit_status(), 14);
+    }
+
+    #[test]
+    fn global_error_state_matches_progname_and_tmp_errno_defaults() {
+        let _guard = global_state_lock();
+        init_error("Unknown program");
+        set_tmp_errno(0);
+
+        assert_eq!(program_name(), "Unknown program");
+        assert_eq!(set_tmp_errno(2), 0);
+        assert_eq!(tmp_errno(), 2);
+
+        init_error("eprover");
+        let diagnostic = Diagnostic::new(ErrorCode::FILE_ERROR, "cannot open input");
+        assert_eq!(
+            diagnostic.render_global_error(),
+            "eprover: cannot open input\n"
+        );
+        assert_eq!(
+            diagnostic.render_global_warning(),
+            "eprover: Warning: cannot open input\n"
+        );
+
+        init_error("Unknown program");
+        set_tmp_errno(0);
+    }
+
+    #[test]
+    fn diagnostics_render_c_shaped_error_warning_and_syserror_text() {
+        let system_error = io::Error::from_raw_os_error(2);
+        let diagnostic = Diagnostic::new(ErrorCode::FILE_ERROR, "cannot open input");
+
+        assert_eq!(
+            render_error_message("eprover", diagnostic.message()),
+            "eprover: cannot open input\n"
+        );
+        assert_eq!(
+            render_warning_message("eprover", diagnostic.message()),
+            "eprover: Warning: cannot open input\n"
+        );
+        assert_eq!(
+            diagnostic.render_sys_error("eprover", &system_error),
+            format!("eprover: cannot open input\neprover: {system_error}\n")
+        );
+        assert_eq!(
+            diagnostic.render_sys_warning("eprover", &system_error),
+            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+        );
+        assert_eq!(
+            render_sys_error_message("eprover", "cannot open input", &system_error),
+            format!("eprover: cannot open input\neprover: {system_error}\n")
+        );
+        assert_eq!(
+            render_sys_warning_message("eprover", "cannot open input", &system_error),
+            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+        );
+    }
+
+    #[test]
+    fn tmp_errno_syserror_rendering_uses_current_global_state() {
+        let _guard = global_state_lock();
+        init_error("eprover");
+        set_tmp_errno(2);
+
+        let system_error = io::Error::from_raw_os_error(2);
+        assert_eq!(
+            render_tmp_errno_error_message("cannot open input"),
+            format!("eprover: cannot open input\neprover: {system_error}\n")
+        );
+        assert_eq!(
+            render_tmp_errno_warning_message("cannot open input"),
+            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+        );
+
+        init_error("Unknown program");
+        set_tmp_errno(0);
+    }
+
+    #[test]
+    fn write_helpers_emit_the_rendered_c_shapes() {
+        let system_error = io::Error::from_raw_os_error(2);
+        let mut output = Vec::new();
+
+        write_error_message(&mut output, "eprover", "fatal").unwrap();
+        write_warning_message(&mut output, "eprover", "warn").unwrap();
+        write_sys_error_message(&mut output, "eprover", "sys", &system_error).unwrap();
+        write_sys_warning_message(&mut output, "eprover", "syswarn", &system_error).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!(
+                "eprover: fatal\neprover: Warning: warn\neprover: sys\neprover: {system_error}\neprover: Warning: syswarn\neprover: {system_error}\n"
+            )
+        );
+    }
 
     #[test]
     fn letter_string_accepts_only_known_letters() {
