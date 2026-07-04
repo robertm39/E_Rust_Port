@@ -144,10 +144,51 @@ impl AnnoSet {
             return 0;
         };
 
+        self.remove_except_ident_list_with_bounds(set_idents, std::iter::repeat(set_idents.len()))
+    }
+
+    /// Compatibility surface for C's `AnnoSetRemoveExceptIdentList` loop bound.
+    ///
+    /// The C implementation accidentally uses the `NumTree` traversal stack's
+    /// current stack pointer as the loop bound while indexing into the caller's
+    /// `set_idents` stack. This helper makes that bound explicit for reference
+    /// tests or future callers that need to reproduce the accident exactly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any traversal bound is larger than the provided id list,
+    /// matching the eventual `PStackElementInt(set_idents, i)` assertion in C.
+    pub fn remove_except_ident_list_with_traversal_bounds(
+        &mut self,
+        set_idents: Option<&[i64]>,
+        traversal_bounds: &[usize],
+    ) -> i64 {
+        let Some(set_idents) = set_idents else {
+            return 0;
+        };
+
+        assert_eq!(
+            traversal_bounds.len(),
+            self.set.nodes(),
+            "C traversal-bound list must match AnnoSet term count"
+        );
+        self.remove_except_ident_list_with_bounds(set_idents, traversal_bounds.iter().copied())
+    }
+
+    fn remove_except_ident_list_with_bounds(
+        &mut self,
+        set_idents: &[i64],
+        bounds: impl IntoIterator<Item = usize>,
+    ) -> i64 {
         let mut count = 0_i64;
         let mut to_delete = Vec::new();
         let keys = self.set.iter().map(|(key, _entry)| key).collect::<Vec<_>>();
-        for key in keys {
+        for (key, bound) in keys.into_iter().zip(bounds) {
+            assert!(
+                bound <= set_idents.len(),
+                "C AnnoSetRemoveExceptIdentList traversal bound exceeds id stack"
+            );
+            let retained = &set_idents[..bound];
             let Some(entry) = self.set.find_mut(key) else {
                 continue;
             };
@@ -158,7 +199,7 @@ impl AnnoSet {
                 .map(|(annotation_key, _entry)| annotation_key)
                 .collect::<Vec<_>>();
             for annotation_key in annotation_keys {
-                if !set_idents.contains(&annotation_key) {
+                if !retained.contains(&annotation_key) {
                     entry.val1.annotations.delete_entry(annotation_key);
                 }
             }
@@ -322,6 +363,14 @@ pub fn anno_set_remove_except_ident_list(set: &mut AnnoSet, set_idents: Option<&
     set.remove_except_ident_list(set_idents)
 }
 
+pub fn anno_set_remove_except_ident_list_with_traversal_bounds(
+    set: &mut AnnoSet,
+    set_idents: Option<&[i64]>,
+    traversal_bounds: &[usize],
+) -> i64 {
+    set.remove_except_ident_list_with_traversal_bounds(set_idents, traversal_bounds)
+}
+
 pub fn anno_set_compute_pattern_subst(subst: &mut PatternSubst, set: &AnnoSet) -> bool {
     set.compute_pattern_subst(subst)
 }
@@ -373,8 +422,8 @@ fn dd_index(index: i64) -> DDArrayIndex {
 mod tests {
     use super::{
         anno_set_alloc, anno_set_compute_pattern_subst, anno_set_parse, anno_set_print_string,
-        anno_set_remove_except_ident_list, anno_term_parse, anno_term_print_string,
-        anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
+        anno_set_remove_except_ident_list, anno_set_remove_except_ident_list_with_traversal_bounds,
+        anno_term_parse, anno_term_print_string, anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::eqn::Eqn;
@@ -652,6 +701,70 @@ mod tests {
 
         assert!(set.get(left.entry_no()).is_some());
         assert_eq!(set.nodes(), 1);
+    }
+
+    #[test]
+    fn anno_set_remove_except_ident_list_c_bound_uses_traversal_stack_depth() {
+        let first = term(10);
+        let second = term(20);
+        let mut set = AnnoSet::new();
+        set.add_term(AnnoTerm::new(
+            first.clone(),
+            annotation_tree(vec![
+                annotation(1, 1.0, &[10.0]),
+                annotation(2, 1.0, &[20.0]),
+            ]),
+        ));
+        set.add_term(AnnoTerm::new(
+            second.clone(),
+            annotation_tree(vec![annotation(2, 1.0, &[30.0])]),
+        ));
+
+        assert_eq!(
+            anno_set_remove_except_ident_list_with_traversal_bounds(
+                &mut set,
+                Some(&[1, 2]),
+                &[1, 2],
+            ),
+            0
+        );
+
+        let first_kept = set.get(first.entry_no()).expect("first term remains");
+        assert!(first_kept.annotations().find(1).is_some());
+        assert!(first_kept.annotations().find(2).is_none());
+        let second_kept = set.get(second.entry_no()).expect("second term remains");
+        assert!(second_kept.annotations().find(2).is_some());
+    }
+
+    #[test]
+    fn anno_set_remove_except_ident_list_c_bound_all_sentinel_is_noop() {
+        let left = term(10);
+        let mut set = AnnoSet::new();
+        set.add_term(AnnoTerm::new(
+            left.clone(),
+            annotation_tree(vec![annotation(1, 1.0, &[10.0])]),
+        ));
+
+        assert_eq!(
+            anno_set_remove_except_ident_list_with_traversal_bounds(&mut set, None, &[]),
+            0
+        );
+
+        assert!(set.get(left.entry_no()).is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "C AnnoSetRemoveExceptIdentList traversal bound exceeds id stack")]
+    fn anno_set_remove_except_ident_list_c_bound_panics_like_pstack_index_assertion() {
+        let left = term(10);
+        let mut set = AnnoSet::new();
+        set.add_term(AnnoTerm::new(
+            left,
+            annotation_tree(vec![annotation(1, 1.0, &[10.0])]),
+        ));
+
+        let _deleted =
+            anno_set_remove_except_ident_list_with_traversal_bounds(&mut set, Some(&[1]), &[2]);
     }
 
     #[test]

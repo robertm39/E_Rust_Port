@@ -134,7 +134,7 @@ Source files reviewed: `LEARN/cle_annoterms.h`, `LEARN/cle_annoterms.c`.
 - `AnnoTermPrint` writes `term : annotations.` and `AnnotationListPrint` concatenates annotation entries without separators; set printing prefixes entries with a blank line and the configured `COMCHAR` marker, which is `% Annotated terms:` in this checkout.
 - `AnnoSetComputePatternSubst` traverses every stored annotated term and calls `PatternTermCompute` even if earlier terms already changed the substitution; the return value is the OR of all per-term change results.
 - `AnnoSetFlatten` documents a return value of "number of terms remaining", but the local `count` is never incremented and the function always returns zero. Rust preserves this result for the ported flatten helper.
-- `AnnoSetRemoveExceptIdentList` checks `PStackGetSP(stack)` where `stack` is the NumTree traversal stack, not the caller's `set_idents` stack. Rust exposes the useful id-retention helper with an explicit id-list bound because the current sorted-map owner has no equivalent raw traversal stack; revisit only if learned-data reference tests expose dependence on the C accident.
+- `AnnoSetRemoveExceptIdentList` checks `PStackGetSP(stack)` where `stack` is the NumTree traversal stack, not the caller's `set_idents` stack. Rust exposes the useful id-retention helper with an explicit id-list bound and a separately named traversal-bound compatibility helper for tests or callers that need to reproduce the C accident.
 - `AnnoSetRecToFlatEnc` mutates each stored annotated term in place and returns the number of terms visited.
 
 ### Change Later
