@@ -1,7 +1,8 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 #[cfg(feature = "pdt-count-nodes")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -12,8 +13,26 @@ pub const PDTREE_CELL_MEM: usize = 16;
 pub const PDTNODE_MEM: usize = 52;
 pub const CLAUSEPOSCELL_MEM: usize = 20;
 
+static PDT_USE_SIZE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
+static PDT_USE_AGE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
+
 #[cfg(feature = "pdt-count-nodes")]
 static PDT_NODE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PdtConstraintSettings {
+    pub use_size_constraints: bool,
+    pub use_age_constraints: bool,
+}
+
+impl Default for PdtConstraintSettings {
+    fn default() -> Self {
+        Self {
+            use_size_constraints: true,
+            use_age_constraints: true,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
@@ -319,6 +338,21 @@ pub fn record_global_nodes_visited(count: u64) {
 #[must_use]
 pub fn pdt_node_counter() -> u64 {
     PDT_NODE_COUNTER.load(Ordering::Relaxed)
+}
+
+#[must_use]
+pub fn pdt_constraint_settings() -> PdtConstraintSettings {
+    PdtConstraintSettings {
+        use_size_constraints: PDT_USE_SIZE_CONSTRAINTS.load(Ordering::Relaxed),
+        use_age_constraints: PDT_USE_AGE_CONSTRAINTS.load(Ordering::Relaxed),
+    }
+}
+
+pub fn set_pdt_constraint_settings(settings: PdtConstraintSettings) -> PdtConstraintSettings {
+    let previous = pdt_constraint_settings();
+    PDT_USE_SIZE_CONSTRAINTS.store(settings.use_size_constraints, Ordering::Relaxed);
+    PDT_USE_AGE_CONSTRAINTS.store(settings.use_age_constraints, Ordering::Relaxed);
+    previous
 }
 
 fn fun_code_key(code: FunCode) -> IntMapKey {

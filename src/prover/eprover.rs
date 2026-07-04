@@ -214,6 +214,24 @@ impl Drop for ProblemTypeRunGuard {
         reset_problem_type();
     }
 }
+
+struct PdtConstraintRunGuard {
+    previous: crate::clauses::pdtrees::PdtConstraintSettings,
+}
+
+impl PdtConstraintRunGuard {
+    fn new(config: &EProverConfig) -> Self {
+        let previous =
+            crate::clauses::pdtrees::set_pdt_constraint_settings(pdt_constraint_settings(config));
+        Self { previous }
+    }
+}
+
+impl Drop for PdtConstraintRunGuard {
+    fn drop(&mut self) {
+        crate::clauses::pdtrees::set_pdt_constraint_settings(self.previous);
+    }
+}
 const DEFAULT_MAX_UNIF_STEPS: i64 = 256;
 const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
@@ -2429,6 +2447,15 @@ fn apply_time_limit_state(config: &EProverConfig) {
     configure_time_limits(hard_limit, soft_limit, schedule_limit);
 }
 
+fn pdt_constraint_settings(
+    config: &EProverConfig,
+) -> crate::clauses::pdtrees::PdtConstraintSettings {
+    crate::clauses::pdtrees::PdtConstraintSettings {
+        use_size_constraints: config.search.fingerprint_index.pdt_use_size_constraints,
+        use_age_constraints: config.search.fingerprint_index.pdt_use_age_constraints,
+    }
+}
+
 fn setup_signal_handlers() -> Result<(), Diagnostic> {
     if let SignalOutcome::HandlerInstallFailed { diagnostic, .. } = e_signal_setup(SIGXCPU_COMPAT) {
         Err(diagnostic)
@@ -4585,6 +4612,7 @@ fn run_config_with_stderr(
     apply_time_limit_state(config);
     apply_ordering_state(config);
     apply_eta_normalization_state(config);
+    let _pdt_constraint_guard = PdtConstraintRunGuard::new(config);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -12843,9 +12871,9 @@ mod tests {
         write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
         EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput,
-        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
+        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
         THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -14526,6 +14554,41 @@ input_clause(c2,axiom,[++q(X)]).
         };
         assert!(config.search.fingerprint_index.pdt_use_size_constraints);
         assert!(config.search.fingerprint_index.pdt_use_age_constraints);
+    }
+
+    #[test]
+    fn pdt_constraint_run_guard_applies_config_and_restores_globals() {
+        struct Restore(crate::clauses::pdtrees::PdtConstraintSettings);
+
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::clauses::pdtrees::set_pdt_constraint_settings(self.0);
+            }
+        }
+
+        let _lock = global_state_lock();
+        let baseline = crate::clauses::pdtrees::PdtConstraintSettings {
+            use_size_constraints: true,
+            use_age_constraints: false,
+        };
+        let original = crate::clauses::pdtrees::set_pdt_constraint_settings(baseline);
+        let _restore = Restore(original);
+        let mut config = EProverConfig::default();
+        config.search.fingerprint_index.pdt_use_size_constraints = false;
+        config.search.fingerprint_index.pdt_use_age_constraints = true;
+
+        {
+            let _guard = PdtConstraintRunGuard::new(&config);
+            assert_eq!(
+                crate::clauses::pdtrees::pdt_constraint_settings(),
+                crate::clauses::pdtrees::PdtConstraintSettings {
+                    use_size_constraints: false,
+                    use_age_constraints: true,
+                }
+            );
+        }
+
+        assert_eq!(crate::clauses::pdtrees::pdt_constraint_settings(), baseline);
     }
 
     #[test]
