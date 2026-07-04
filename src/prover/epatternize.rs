@@ -1,8 +1,11 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+use crate::basics::simple_stuff::{
+    problem_type, reset_problem_type, set_problem_type, ProblemType,
+};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::proofstate::proof_state_alloc;
+use crate::clauses::formulasets::FormulaSetCnfOptions;
+use crate::clauses::proofstate::{proof_state_alloc, ProofState};
 use crate::heuristics::clausesetfeatures::create_default_spec_limits;
 use crate::inout::commandline::{
     get_bool_arg, get_float_arg, get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -12,7 +15,8 @@ use crate::inout::scanner::{IoFormat, Scanner};
 use crate::learn::clauseenc::flat_encode_clause_list_rep;
 use crate::learn::patterns::{pattern_clause_compute, pattern_term_print_string, PatternSubst};
 use crate::prover::eprover::{
-    apply_proof_state_sine_silent, parse_clause_scanner_into_sets, FoolUnroll, FormulaPreprocessing,
+    apply_proof_state_sine_silent, parse_clause_scanner_into_formula_set_with_options, FoolUnroll,
+    FormulaPreprocessing,
 };
 use crate::prover::version::{E_URL, STS_MAIL, VERSION};
 use crate::terms::signature::{
@@ -25,6 +29,8 @@ use std::path::{Path, PathBuf};
 pub const PROGRAM_NAME: &str = "epatternize";
 const TFORM_RENAME_LIMIT_STR: &str = "24";
 const TFORM_MINISCOPE_LIMIT_STR: &str = "1000";
+const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
+const MINISCOPE_LIMIT_DEFAULT: i64 = 1_000;
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -533,6 +539,8 @@ struct EpatternizeConfig {
     parse_format: IoFormat,
     sine: Option<String>,
     free_symbol_properties: FunctionProperties,
+    formula_def_limit: i64,
+    miniscope_limit: i64,
     files: Vec<String>,
 }
 
@@ -543,6 +551,8 @@ impl Default for EpatternizeConfig {
             parse_format: IoFormat::Auto,
             sine: None,
             free_symbol_properties: FP_IGNORE_PROPS,
+            formula_def_limit: FORMULA_DEF_LIMIT_DEFAULT,
+            miniscope_limit: MINISCOPE_LIMIT_DEFAULT,
             files: Vec::new(),
         }
     }
@@ -643,10 +653,13 @@ where
             OptionCode::FreeObjects => {
                 config.free_symbol_properties |= FP_IS_OBJECT;
             }
-            OptionCode::DefinitionalCnf
-            | OptionCode::MiniscopeLimit
-            | OptionCode::EqUnfoldMaxClauses
-            | OptionCode::EqUnfoldLimit => {
+            OptionCode::DefinitionalCnf => {
+                config.formula_def_limit = get_int_arg(parsed.option(), arg)?;
+            }
+            OptionCode::MiniscopeLimit => {
+                config.miniscope_limit = get_int_arg(parsed.option(), arg)?;
+            }
+            OptionCode::EqUnfoldMaxClauses | OptionCode::EqUnfoldLimit => {
                 let _ = get_int_arg(parsed.option(), arg)?;
             }
             OptionCode::ClassMask => validate_exact_mask_len(
@@ -766,19 +779,9 @@ fn execute_epatternize(
 
     for file in &config.files {
         let mut state = proof_state_alloc(config.free_symbol_properties)?;
-        let mut scanner = scanner_for_input(file, stdin)?;
-        let mut parsed = ClauseSet::new();
-        let mut parsed_watchlist = ClauseSet::new();
-        parse_clause_scanner_into_sets(
-            &mut scanner,
-            config.parse_format,
-            FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
-            state.terms_mut(),
-            &mut parsed,
-            &mut parsed_watchlist,
-        )?;
-        state.axioms_mut().insert_set(&mut parsed);
+        parse_input_file(config, file, stdin, &mut state)?;
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
+        clausify_formula_axioms(config, &mut state)?;
         write_epatternized_axioms(&mut output, &mut state)?;
     }
 
@@ -788,9 +791,48 @@ fn execute_epatternize(
     Ok(0)
 }
 
+fn parse_input_file(
+    config: &EpatternizeConfig,
+    file: &str,
+    stdin: &mut impl Read,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let mut scanner = scanner_for_input(file, stdin)?;
+    let (terms, f_axioms, watchlist) = state.terms_f_axioms_watchlist_mut();
+    let watchlist = watchlist.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Cannot store inline watchlist clauses after the watchlist has been disabled",
+        )
+    })?;
+    parse_clause_scanner_into_formula_set_with_options(
+        &mut scanner,
+        config.parse_format,
+        FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+        Default::default(),
+        terms,
+        f_axioms,
+        watchlist,
+    )?;
+    Ok(())
+}
+
+fn clausify_formula_axioms(
+    config: &EpatternizeConfig,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let fresh_vars = state.fresh_vars().clone();
+    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type())
+        .with_def_limit(config.formula_def_limit);
+    let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_cnf_mut();
+    let _preprocessed = f_axioms.preproc_conjectures(bank, false, false)?;
+    let _cnf = f_axioms.cnf2_into(f_ax_archive, axioms, bank, &fresh_vars, options)?;
+    Ok(())
+}
+
 fn write_epatternized_axioms(
     output: &mut impl Write,
-    state: &mut crate::clauses::proofstate::ProofState,
+    state: &mut ProofState,
 ) -> Result<(), Diagnostic> {
     let (bank, axioms) = state.terms_and_axioms_mut();
     ensure_flat_clause_encoding_symbols(bank, axioms)?;
@@ -989,12 +1031,17 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        process_options, run, EpatternizeConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        clausify_formula_axioms, parse_input_file, process_options, run, EpatternizeConfig,
+        RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
+    use crate::clauses::proofstate::proof_state_alloc;
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::VERSION;
-    use crate::terms::signature::{FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL};
+    use crate::terms::signature::{
+        FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    };
     use crate::test_support::global_state_lock;
     use std::fs;
     use std::io::{self, Write};
@@ -1077,6 +1124,8 @@ mod tests {
                 parse_format: IoFormat::Tstp,
                 sine: None,
                 free_symbol_properties: FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT | FP_IS_OBJECT,
+                formula_def_limit: 5,
+                miniscope_limit: 11,
                 files: vec!["-".to_owned()],
             }
         );
@@ -1115,6 +1164,37 @@ mod tests {
         assert!(stderr.is_empty());
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(printed, "$or1($eq(f1_1(f0_1),$true))\n");
+    }
+
+    #[test]
+    fn tstp_formula_input_is_preserved_as_formula_owner_before_cnf() {
+        let _guard = global_state_lock();
+        let config = EpatternizeConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec!["-".to_owned()],
+            ..EpatternizeConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"fof(epatternize_owner_ax, axiom, (p(a) | q(a))).\n";
+
+        parse_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("real-input parsing succeeds");
+
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 1);
+        let formula = state
+            .f_axioms()
+            .iter()
+            .next()
+            .expect("formula owner exists");
+        assert!(!formula.is_clause());
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
+
+        clausify_formula_axioms(&config, &mut state).expect("formula-owner CNF succeeds");
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(state.f_axioms().cardinality(), 0);
     }
 
     #[test]
