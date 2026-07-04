@@ -4,18 +4,14 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-#[cfg(not(target_os = "linux"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TEMP_PREFIX: &str = "epr_";
-#[cfg(not(target_os = "linux"))]
 const TEMP_ATTEMPTS: usize = 1024;
 
 static TEMP_FILE_STORE: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
-#[cfg(not(target_os = "linux"))]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_file_store() -> &'static Mutex<BTreeSet<PathBuf>> {
@@ -41,7 +37,6 @@ fn tmpdir() -> PathBuf {
     std::env::var_os("TMPDIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
 }
 
-#[cfg(not(target_os = "linux"))]
 fn time_bits() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -50,7 +45,6 @@ fn time_bits() -> u64 {
         })
 }
 
-#[cfg(not(target_os = "linux"))]
 fn six_char_suffix(mut value: u64) -> String {
     const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut bytes = [b'0'; 6];
@@ -61,7 +55,6 @@ fn six_char_suffix(mut value: u64) -> String {
     bytes.into_iter().map(char::from).collect()
 }
 
-#[cfg(not(target_os = "linux"))]
 fn candidate_name(directory: &Path) -> PathBuf {
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let seed = time_bits()
@@ -320,68 +313,28 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
-mod platform_tempfile {
-    use super::{file_error, TEMP_PREFIX};
-    use crate::basics::error::Diagnostic;
-    use std::ffi::{CString, OsString};
-    use std::io;
-    use std::os::raw::{c_char, c_int};
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::path::{Path, PathBuf};
-
-    extern "C" {
-        fn mkstemp(template: *mut c_char) -> c_int;
-        fn close(fd: c_int) -> c_int;
-    }
-
-    pub(super) fn create_temp_file(directory: &Path) -> Result<PathBuf, Diagnostic> {
-        let template = directory.join(format!("{TEMP_PREFIX}XXXXXX"));
-        let c_template = CString::new(template.as_os_str().as_bytes()).map_err(|_| {
-            file_error(format!(
-                "Could not create valid temporary file name {} (check $TMPDIR): path contains NUL byte",
-                template.display()
-            ))
-        })?;
-        let mut bytes = c_template.into_bytes_with_nul();
-
-        // SAFETY: bytes is a mutable NUL-terminated `epr_XXXXXX` template and
-        // mkstemp mutates it in place, creates the file atomically, and returns
-        // an owned descriptor on success.
-        let fd = unsafe { mkstemp(bytes.as_mut_ptr().cast::<c_char>()) };
-        if fd == -1 {
-            return Err(file_error(format!(
-                "Could not create valid temporary file name {} (check $TMPDIR): {}",
-                template.display(),
-                io::Error::last_os_error()
-            )));
-        }
-
-        // SAFETY: fd is the owned descriptor returned by mkstemp. The C source
-        // ignores close errors here, so the Rust port does the same.
-        let _ = unsafe { close(fd) };
-        let _nul = bytes.pop();
-        Ok(PathBuf::from(OsString::from_vec(bytes)))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
 mod platform_tempfile {
     use super::{candidate_name, file_error, TEMP_ATTEMPTS};
     use crate::basics::error::Diagnostic;
-    use std::fs::OpenOptions;
+    use std::fs::{File, OpenOptions};
     use std::io;
     use std::path::{Path, PathBuf};
+
+    fn open_candidate(candidate: &Path) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(candidate)
+    }
 
     pub(super) fn create_temp_file(directory: &Path) -> Result<PathBuf, Diagnostic> {
         for _ in 0..TEMP_ATTEMPTS {
             let candidate = candidate_name(directory);
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
+            match open_candidate(&candidate) {
                 Ok(file) => {
                     drop(file);
                     return Ok(candidate);
