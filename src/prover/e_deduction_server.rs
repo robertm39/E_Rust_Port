@@ -6,7 +6,7 @@ use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{BatchOutputType, BatchProcCtrlRunnerSet, BatchSpec};
 use crate::control::einteractive_mode::{
     run_command_with_runner_backend, start_deduction_server_tcp_with, InteractiveCommandOutput,
-    InteractiveServerReport, InteractiveSpec,
+    InteractiveRunReport, InteractiveServerReport, InteractiveSpec,
 };
 use crate::control::sine::StructFofSpec;
 use crate::inout::commandline::{
@@ -326,7 +326,7 @@ fn serve_tcp(
                             current_time_seconds,
                             &mut backend,
                         )
-                        .map(|report| report.command)
+                        .and_then(|report| emit_run_report_global_output(report, stdout))
                     },
                 )?;
             }
@@ -343,6 +343,19 @@ fn serve_tcp(
             }
         }
     }
+}
+
+fn emit_run_report_global_output<W: Write>(
+    report: InteractiveRunReport,
+    stdout: &mut W,
+) -> Result<InteractiveCommandOutput, Diagnostic> {
+    if !report.global_output.is_empty() {
+        write_all(stdout, report.global_output.as_bytes())?;
+        stdout
+            .flush()
+            .map_err(|error| io_diagnostic(format!("Cannot flush output: {error}")))?;
+    }
+    Ok(report.command)
 }
 
 #[must_use]
@@ -437,17 +450,18 @@ mod tests {
     use std::io::Cursor;
 
     use super::{
-        deduction_batch_spec, parse_port, print_help, process_options, run, run_text_server_with,
-        DeductionServerConfig, RunCommand, DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, PROGRAM_NAME,
-        STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
+        deduction_batch_spec, emit_run_report_global_output, parse_port, print_help,
+        process_options, run, run_text_server_with, DeductionServerConfig, RunCommand,
+        DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, PROGRAM_NAME, STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
-    use crate::control::batch_spec::{BatchOutputType, BatchSpec};
+    use crate::control::batch_spec::{BatchOutputType, BatchProcessProblemReport, BatchSpec};
     use crate::control::einteractive_mode::{
-        InteractiveCommandOutput, END_OF_BLOCK_TOKEN, HELP_MESSAGE, OK_SUCCESS_MESSAGE,
+        InteractiveCommandOutput, InteractiveRunReport, END_OF_BLOCK_TOKEN, HELP_MESSAGE,
+        OK_SUCCESS_MESSAGE,
     };
-    use crate::control::sine::StructFofSpec;
+    use crate::control::sine::{StructFofSpec, StructFofSpecBacktrackReport};
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
@@ -684,6 +698,42 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             STDOUT_SERVER_UNIMPLEMENTED_MESSAGE
+        );
+    }
+
+    #[test]
+    fn run_report_adapter_emits_c_stdout_side_channel_and_returns_socket_output() {
+        let report = InteractiveRunReport {
+            command: InteractiveCommandOutput {
+                output: "socket output\n".to_owned(),
+                status: OK_SUCCESS_MESSAGE,
+            },
+            process: BatchProcessProblemReport {
+                solved: false,
+                spawned: 0,
+                completed: None,
+                backtrack: StructFofSpecBacktrackReport {
+                    removed_clause_sets: 0,
+                    removed_formula_sets: 0,
+                    signature_backtrack_to: 0,
+                },
+            },
+            global_output: "job1% global proof output\n".to_owned(),
+        };
+        let mut stdout = Vec::new();
+
+        let command = emit_run_report_global_output(report, &mut stdout).unwrap();
+
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "job1% global proof output\n"
+        );
+        assert_eq!(
+            command,
+            InteractiveCommandOutput {
+                output: "socket output\n".to_owned(),
+                status: OK_SUCCESS_MESSAGE,
+            }
         );
     }
 

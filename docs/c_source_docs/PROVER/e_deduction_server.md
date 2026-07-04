@@ -89,7 +89,7 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, and temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend.
+- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend, and the captured `RUN` global/stdout side-channel output.
 - The Rust TCP server currently serves accepted clients sequentially but creates fresh term/control state per accepted client to approximate the C child-process snapshot.
 - The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under “E Server Sessions”.
 
@@ -99,7 +99,7 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 - The executable assigns `total_wtc_limit = 30` before option parsing, so `-w 0` later overwrites the default and disables the fallback. A future configuration API should distinguish omitted limits from explicit zero.
 - `outname` is passed to `OpenGlobalOut(outname)` but no command-line option sets it; `app_encode` is file-global and unused; `OPT_PRINT_STATISTICS` remains in the enum without an option-table entry. These look like stale or anticipatory C surfaces that should not be reproduced beyond observable compatibility.
 - The first remaining argument is treated as the prover executable and later positional arguments are ignored, despite the help text saying `[files]`. A stricter Rust CLI should wait until drop-in compatibility tests cover this behavior.
-- The TCP path forks once per accepted client. That isolates each client's uploaded axiom sets and signature mutations by process snapshot, but it also makes output ordering and cleanup depend on parent/child process boundaries. Rust should add true concurrent serving only after reference tests cover `RUN` output ordering, subprocess cleanup, and global-state isolation.
+- The TCP path forks once per accepted client. That isolates each client's uploaded axiom sets and signature mutations by process snapshot, but it also makes output ordering and cleanup depend on parent/child process boundaries. Rust should add true concurrent serving or stricter output interleaving only after reference tests cover `RUN` output ordering, subprocess cleanup, and global-state isolation.
 
 ### Porting Focus
 
