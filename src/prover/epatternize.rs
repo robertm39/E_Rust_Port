@@ -3,6 +3,7 @@ use crate::basics::simple_stuff::{
     problem_type, reset_problem_type, set_problem_type, ProblemType,
 };
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::FormulaSetCnfOptions;
 use crate::clauses::proofstate::{proof_state_alloc, ProofState};
@@ -809,7 +810,7 @@ fn parse_input_file(
         &mut scanner,
         config.parse_format,
         FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
-        Default::default(),
+        ClauseParseOptions::default(),
         terms,
         f_axioms,
         watchlist,

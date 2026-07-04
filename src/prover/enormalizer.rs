@@ -11,7 +11,7 @@ use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
     clause_parse, clause_print_lop_format_string_with_options,
-    clause_print_tptp_format_string_with_options, clause_tstp_string, Clause,
+    clause_print_tptp_format_string_with_options, clause_tstp_string, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
@@ -513,7 +513,7 @@ fn execute_config(
             &mut scanner,
             config.parse_format,
             FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
-            Default::default(),
+            ClauseParseOptions::default(),
             &mut bank,
             &mut formulas,
             &mut ignored_watchlist,

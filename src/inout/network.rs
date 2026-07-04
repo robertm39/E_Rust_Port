@@ -523,7 +523,167 @@ mod platform_server_socket {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod platform_server_socket {
+    use super::TCP_BACKLOG;
+    use std::ffi::c_void;
+    use std::mem::MaybeUninit;
+    use std::net::TcpListener;
+    use std::os::raw::{c_char, c_int};
+    use std::os::windows::io::{FromRawSocket, RawSocket};
+    use std::sync::OnceLock;
+
+    type Socket = usize;
+
+    const AF_INET: c_int = 2;
+    const SOCK_STREAM: c_int = 1;
+    const IPPROTO_TCP: c_int = 6;
+    const SOL_SOCKET: c_int = 0xffff;
+    const SO_REUSEADDR: c_int = 0x0004;
+    const SOCKET_ERROR: c_int = -1;
+    const INVALID_SOCKET: Socket = Socket::MAX;
+    const SOCKADDR_IN_LEN: c_int = 16;
+    const WINSOCK_VERSION_2_2: u16 = 0x0202;
+
+    #[repr(C)]
+    struct InAddr {
+        s_addr: u32,
+    }
+
+    #[repr(C)]
+    struct SockAddr {
+        family: u16,
+        data: [u8; 14],
+    }
+
+    #[repr(C)]
+    struct SockAddrIn {
+        family: u16,
+        port: u16,
+        address: InAddr,
+        zero: [u8; 8],
+    }
+
+    #[link(name = "ws2_32")]
+    extern "system" {
+        fn WSAStartup(version_requested: u16, data: *mut c_void) -> c_int;
+        fn socket(address_family: c_int, socket_type: c_int, protocol: c_int) -> Socket;
+        fn setsockopt(
+            socket: Socket,
+            level: c_int,
+            option_name: c_int,
+            option_value: *const c_char,
+            option_len: c_int,
+        ) -> c_int;
+        fn bind(socket: Socket, address: *const SockAddr, address_len: c_int) -> c_int;
+        fn listen(socket: Socket, backlog: c_int) -> c_int;
+        fn closesocket(socket: Socket) -> c_int;
+    }
+
+    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
+        winsock_ready()?;
+
+        // SAFETY: socket is called with Winsock constants matching the AF_INET
+        // TCP stream socket shape used by cio_network.c. On success, the
+        // socket is either closed on error paths or transferred to TcpListener.
+        let socket = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
+        if socket == INVALID_SOCKET {
+            return None;
+        }
+
+        if set_reuse_addr(socket).is_none()
+            || bind_any(socket, port).is_none()
+            || listen_socket(socket).is_none()
+        {
+            close_socket(socket);
+            return None;
+        }
+
+        // SAFETY: socket is a live listening TCP socket created by Winsock,
+        // bound and switched to listening mode above. Ownership moves into
+        // TcpListener, so this module must not close it after this point.
+        Some(unsafe { TcpListener::from_raw_socket(socket as RawSocket) })
+    }
+
+    fn winsock_ready() -> Option<()> {
+        static WINSOCK_READY: OnceLock<bool> = OnceLock::new();
+        WINSOCK_READY.get_or_init(start_winsock).then_some(())
+    }
+
+    fn start_winsock() -> bool {
+        let mut data = MaybeUninit::<[usize; 128]>::uninit();
+        // SAFETY: WSAStartup writes a WSADATA record into the supplied buffer.
+        // The buffer is pointer-aligned and intentionally larger than the
+        // documented WSADATA layout on supported Windows targets.
+        unsafe { WSAStartup(WINSOCK_VERSION_2_2, data.as_mut_ptr().cast::<c_void>()) == 0 }
+    }
+
+    fn set_reuse_addr(socket: Socket) -> Option<()> {
+        let yes: c_int = 1;
+        let option_len = c_int::try_from(size_of::<c_int>()).ok()?;
+        // SAFETY: &yes points to a valid c_int option value for the duration
+        // of the call, and socket is owned by this module until success
+        // wrapping.
+        if unsafe {
+            setsockopt(
+                socket,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                (&raw const yes).cast::<c_char>(),
+                option_len,
+            )
+        } == SOCKET_ERROR
+        {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn bind_any(socket: Socket, port: u16) -> Option<()> {
+        let address = SockAddrIn {
+            family: u16::try_from(AF_INET).ok()?,
+            port: port.to_be(),
+            address: InAddr { s_addr: 0 },
+            zero: [0; 8],
+        };
+        // SAFETY: address is a properly initialized sockaddr_in with the
+        // Winsock C ABI layout used by bind for AF_INET. socket is live and
+        // owned here.
+        if unsafe {
+            bind(
+                socket,
+                (&raw const address).cast::<SockAddr>(),
+                SOCKADDR_IN_LEN,
+            )
+        } == SOCKET_ERROR
+        {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn listen_socket(socket: Socket) -> Option<()> {
+        let backlog = c_int::try_from(TCP_BACKLOG).ok()?;
+        // SAFETY: socket is a bound TCP socket owned by this module, and
+        // backlog is the C TCP_BACKLOG value represented as c_int.
+        if unsafe { listen(socket, backlog) } == SOCKET_ERROR {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn close_socket(socket: Socket) {
+        // SAFETY: socket is still owned by this module on all call sites and
+        // has not been transferred to TcpListener.
+        let _ = unsafe { closesocket(socket) };
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 mod platform_server_socket {
     use std::net::{Ipv4Addr, TcpListener};
 

@@ -9534,14 +9534,7 @@ fn parse_simple_tstp_formula_clause(
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
-        return Ok(ParsedSimpleFofClause {
-            name,
-            raw_formula_type: CP_TYPE_AXIOM,
-            owner_formula: None,
-            clauses: Vec::new(),
-            formula_conjecture_seen: false,
-            raw_formula_features: RawFormulaFeatures::default(),
-        });
+        return Ok(parsed_simple_tstp_type_declaration_clause(name));
     }
 
     let roles = if formula_kind == "tcf" {
@@ -9604,21 +9597,14 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut clauses = Vec::with_capacity(lowered_clauses.len());
-    for lowered in lowered_clauses {
-        let mut clause = Clause::alloc(lowered.literals);
-        if lowered.origin == SimpleFofLoweredClauseOrigin::InputFormula {
-            clause.set_tptp_type(clause_type);
-            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
-            clause.set_info(Some(ClauseInfo::new(
-                Some(name.as_str()),
-                Some(start_source.as_str()),
-                start_line,
-                start_column,
-            )));
-        }
-        clauses.push(clause);
-    }
+    let clauses = simple_fof_lowered_clauses_to_clauses(
+        lowered_clauses,
+        clause_type,
+        &name,
+        &start_source,
+        start_line,
+        start_column,
+    );
     let raw_formula_features =
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
@@ -9629,6 +9615,17 @@ fn parse_simple_tstp_formula_clause(
         formula_conjecture_seen,
         raw_formula_features,
     })
+}
+
+fn parsed_simple_tstp_type_declaration_clause(name: String) -> ParsedSimpleFofClause {
+    ParsedSimpleFofClause {
+        name,
+        raw_formula_type: CP_TYPE_AXIOM,
+        owner_formula: None,
+        clauses: Vec::new(),
+        formula_conjecture_seen: false,
+        raw_formula_features: RawFormulaFeatures::default(),
+    }
 }
 
 fn parse_simple_tptp_formula_clause(
@@ -9692,21 +9689,14 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut clauses = Vec::with_capacity(lowered_clauses.len());
-    for lowered in lowered_clauses {
-        let mut clause = Clause::alloc(lowered.literals);
-        if lowered.origin == SimpleFofLoweredClauseOrigin::InputFormula {
-            clause.set_tptp_type(clause_type);
-            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
-            clause.set_info(Some(ClauseInfo::new(
-                Some(name.as_str()),
-                Some(start_source.as_str()),
-                start_line,
-                start_column,
-            )));
-        }
-        clauses.push(clause);
-    }
+    let clauses = simple_fof_lowered_clauses_to_clauses(
+        lowered_clauses,
+        clause_type,
+        &name,
+        &start_source,
+        start_line,
+        start_column,
+    );
     let raw_formula_features =
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
@@ -9759,6 +9749,32 @@ fn simple_fof_raw_formula_features_with_lowered_clauses(
         }
     }
     features
+}
+
+fn simple_fof_lowered_clauses_to_clauses(
+    lowered_clauses: Vec<SimpleFofLoweredClause>,
+    clause_type: FormulaProperties,
+    name: &str,
+    start_source: &str,
+    start_line: i64,
+    start_column: i64,
+) -> Vec<Clause> {
+    let mut clauses = Vec::with_capacity(lowered_clauses.len());
+    for lowered in lowered_clauses {
+        let mut clause = Clause::alloc(lowered.literals);
+        if lowered.origin == SimpleFofLoweredClauseOrigin::InputFormula {
+            clause.set_tptp_type(clause_type);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            clause.set_info(Some(ClauseInfo::new(
+                Some(name),
+                Some(start_source),
+                start_line,
+                start_column,
+            )));
+        }
+        clauses.push(clause);
+    }
+    clauses
 }
 
 fn simple_fof_formulas_standard_weight(formulas: &[SimpleFofFormula], bank: &TermBank) -> i64 {
