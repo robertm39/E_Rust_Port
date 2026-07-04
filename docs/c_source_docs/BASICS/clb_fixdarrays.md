@@ -100,6 +100,7 @@ Source files reviewed: `BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`.
 - `FixedDArrayAlloc` allocates the flexible-array payload and stores the size but does not initialize element values; callers are expected to call `FixedDArrayInitialize` or fill every slot before reading.
 - `FixedDArrayAdd`, `FixedDArrayMulAdd`, `FixedDArrayMax`, and `FixedDArrayMin` assert that all source arrays and the destination are non-null and have equal sizes before component-wise operations. Rust compatibility helpers should keep size mismatches as invariant failures rather than recoverable `false` results.
 - Element reads and writes in C use direct `array[i]` payload access through callers rather than checked exported accessors, so Rust's compatibility-shaped indexed helpers should treat out-of-range indices as invariant violations.
+- `FixedDArrayCopy(NULL)` returns `NULL` instead of asserting. Rust keeps that public branch in an optional compatibility helper while retaining the value-level `copy_array` method for known arrays.
 
 ### Porting Focus
 
@@ -111,4 +112,5 @@ Source files reviewed: `BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`.
 
 - `FixedDArrayAlloc` exposes uninitialized payload storage. Rust's safe constructor zero-fills instead; if performance-sensitive callers need allocation without initialization later, that should be a narrowly scoped internal builder with explicit fill-before-read invariants rather than the default public API.
 - `FixedDArray` is used as an invariant-backed feature vector in C. Keep assertion-shaped size and index contracts for drop-in compatibility, but future Rust-only APIs fed by user-derived dimensions may want explicit checked constructors or `try_` component-wise operations.
+- `FixedDArrayCopy` has a nullable pointer-shaped API even though most Rust callers own concrete arrays. Prefer the non-null value method in new Rust code and reserve the optional helper for preserving C call boundaries.
 <!-- END MANUAL REVIEW: c_source_docs -->

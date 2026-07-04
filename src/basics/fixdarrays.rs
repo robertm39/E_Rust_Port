@@ -137,6 +137,11 @@ impl FixedDArray {
         self.clone()
     }
 
+    #[must_use]
+    pub fn copy_array_c(array: Option<&Self>) -> Option<Self> {
+        array.cloned()
+    }
+
     fn assert_compatible_with(&self, s1: &Self, s2: &Self, caller: &str) {
         assert!(
             s1.size() == self.size(),
@@ -235,5 +240,18 @@ mod tests {
 
         assert_eq!(copy.as_slice(), &[1, 20, -3]);
         assert_eq!(copy.print_string(), "% Size 3:    1   20   -3\n");
+    }
+
+    #[test]
+    fn c_copy_helper_preserves_null_branch() {
+        let original = array(&[1, 2, 3]);
+
+        assert_eq!(
+            FixedDArray::copy_array_c(Some(&original))
+                .as_ref()
+                .map(FixedDArray::as_slice),
+            Some(&[1, 2, 3][..])
+        );
+        assert_eq!(FixedDArray::copy_array_c(None), None);
     }
 }
