@@ -122,6 +122,7 @@ use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, named_to_db, set_eta_normalizer,
 };
+use crate::terms::match_mgu::term_has_higher_order_unification_surface;
 use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
@@ -6536,6 +6537,7 @@ fn parse_input_files_into_axioms(
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
     let mut input_owner_seen = false;
+    let mut parsed_problem_type = ProblemType::FirstOrder;
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
     for file in &files {
@@ -6555,6 +6557,7 @@ fn parse_input_files_into_axioms(
         }
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         input_owner_seen |= parsed_file.input_owner_seen;
+        parsed_problem_type = combine_problem_types(parsed_problem_type, parsed_file.problem_type);
         let parsed_count = parsed.len();
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.add_raw_formula_features(parsed_file.raw_formula_features);
@@ -6577,6 +6580,9 @@ fn parse_input_files_into_axioms(
         }
         debug_assert_eq!(state.axioms().len(), before + parsed_count);
     }
+
+    reset_problem_type();
+    set_problem_type(parsed_problem_type)?;
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
         return Err(Diagnostic::new(
@@ -6962,7 +6968,7 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
     max_occs: i32,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
-    if !enabled || problem_type() != ProblemType::FirstOrder {
+    if !enabled || !fo_only_clause_preprocessing_supported(state) {
         return Ok(0);
     }
 
@@ -6989,7 +6995,7 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     picosat_library: Option<&Path>,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
-    if !config.enabled || problem_type() != ProblemType::FirstOrder {
+    if !config.enabled || !fo_only_clause_preprocessing_supported(state) {
         return Ok(0);
     }
 
@@ -7030,6 +7036,21 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     );
     output.write_stdout_side_channel(pred_elim_output.as_bytes())?;
     Ok(result.eliminated_count)
+}
+
+fn fo_only_clause_preprocessing_supported(state: &crate::clauses::proofstate::ProofState) -> bool {
+    problem_type() == ProblemType::FirstOrder
+        || (state.f_axioms().is_empty()
+            && !clause_set_has_higher_order_unification_surface(state.axioms()))
+}
+
+fn clause_set_has_higher_order_unification_surface(clauses: &ClauseSet) -> bool {
+    clauses.iter().any(|clause| {
+        clause.literals().as_slice().iter().any(|literal| {
+            term_has_higher_order_unification_surface(literal.left())
+                || term_has_higher_order_unification_surface(literal.right())
+        })
+    })
 }
 
 fn apply_goal_definition_transformation(
@@ -26546,6 +26567,43 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_auto_classifies_thf_input_as_higher_order() {
+        let _guard = global_state_lock();
+        let path = temp_path("auto-thf-higher-order-class");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ a).\n\
+             thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--cnf",
+                "--output-level=0",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% Preprocessing class: H"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

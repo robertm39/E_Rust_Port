@@ -6,7 +6,7 @@ use crate::terms::fixpoint_unif::subst_compute_fixpoint_mgu;
 use crate::terms::functypes::FunCode;
 use crate::terms::ho_bindings::compute_next_binding;
 use crate::terms::lambda::whnf_deref;
-use crate::terms::match_mgu::{subst_mgu_complete, OracleUnifResult};
+use crate::terms::match_mgu::{subst_mgu_complete_with_bank, OracleUnifResult};
 use crate::terms::pattern_match_mgu::{prune_lambda_prefix, subst_compute_mgu_pattern};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -115,7 +115,7 @@ impl CsuIterator {
             if self.should_use_first_order_mgu(params) {
                 let lhs = self.constraints.get_last();
                 let rhs = self.constraints.get_last();
-                result = subst_mgu_complete(&lhs, &rhs, subst);
+                result = subst_mgu_complete_with_bank(bank, &lhs, &rhs, subst)?;
                 self.backtrack_info.clear();
                 self.unifiers_returned = 1;
             } else {
@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn iterator_uses_first_order_mgu_outside_higher_order_multi_mode() {
+    fn iterator_uses_complete_mgu_shortcut_for_first_order_problem() {
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = test_bank();
         let type_ = bank.signature().type_bank().default_type();
@@ -682,6 +682,35 @@ mod tests {
             .next_csu_element_with_params(&mut bank, &mut subst, &ho_params(UnifMode::Multi))
             .unwrap());
         assert!(variable.binding().is_none());
+    }
+
+    #[test]
+    fn iterator_uses_higher_order_complete_mgu_for_single_mode() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let left_arg = typed_const(&mut bank, "csu_ho_left_arg", &type_);
+        let right_arg = typed_const(&mut bank, "csu_ho_right_arg", &type_);
+        let f_code = bank.signature_mut().insert_id("csu_ho_same_head", 2, false);
+
+        let left = Term::top_alloc(f_code, 2);
+        left.set_type(Some(type_.clone()));
+        left.set_argument(0, left_arg.clone());
+        left.set_argument(1, right_arg.clone());
+        let left = bank.term_top_insert(left).unwrap();
+
+        let right = Term::top_alloc(f_code, 1);
+        right.set_type(Some(type_));
+        right.set_argument(0, left_arg);
+        let right = bank.term_top_insert(right).unwrap();
+
+        let mut subst = Substitution::new();
+        let mut iter = CsuIterator::new(&left, &right, &subst);
+
+        assert!(!iter
+            .next_csu_element_with_params(&mut bank, &mut subst, &ho_params(UnifMode::Single))
+            .unwrap());
+        assert!(subst.is_empty());
     }
 
     #[test]

@@ -99,6 +99,10 @@ Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `TermTopCompare` switches from a first-order type-pointer equality assertion to higher-order type-pointer ordering through the process-global `problemType`. Rust preserves that assertion boundary and activates the parsed problem dialect before proof-search term indexing, but a cleaned term-bank API should pass the problem type explicitly into top-cell comparison instead of relying on parser-global residue.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

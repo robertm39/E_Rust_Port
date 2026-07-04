@@ -1,9 +1,18 @@
 #[cfg(feature = "measure-unification")]
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use crate::basics::error::Diagnostic;
 use crate::basics::pqueue::PQueue;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::terms::lambda::{lambda_eta_reduce_db, whnf_deref};
+use crate::terms::pattern_match_mgu::{prune_lambda_prefix, subst_compute_mgu_pattern};
+use crate::terms::signature::{SIG_ITE_CODE, SIG_LET_CODE, SIG_PHONY_APP_CODE};
+use crate::terms::simpletypes::{type_drop_first_arg, Type};
 use crate::terms::subst::Substitution;
-use crate::terms::termfunc::{term_standard_weight, term_struct_equal_deref};
+use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::{
+    term_is_db_closed, term_standard_weight, term_struct_equal_deref, term_struct_prefix_equal,
+};
 use crate::terms::termtypes::{term_deref, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS};
 
 #[cfg(feature = "measure-unification")]
@@ -258,6 +267,273 @@ pub fn subst_match_complete(pattern: &Term, target: &Term, subst: &mut Substitut
 /// Panics under the same conditions as [`subst_compute_mgu`].
 pub fn subst_mgu_complete(t: &Term, s: &Term, subst: &mut Substitution) -> bool {
     subst_compute_mgu(t, s, subst)
+}
+
+/// C `SubstMguComplete`, with the owning term bank passed explicitly for the
+/// LFHO branch that C obtains through `TermGetBank`.
+///
+/// # Errors
+///
+/// Returns diagnostics from weak-head normalization, eta reduction, prefix
+/// binding construction, or the pattern-unification fallback.
+///
+/// # Panics
+///
+/// Panics on malformed higher-order term cells or missing type metadata,
+/// matching the C implementation's internal assertions.
+pub fn subst_mgu_complete_with_bank(
+    bank: &mut TermBank,
+    t: &Term,
+    s: &Term,
+    subst: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder {
+        return Ok(subst_compute_mgu(t, s, subst));
+    }
+
+    let backtrack = subst.len();
+    let reduced_t = lambda_eta_reduce_db(bank, t)?;
+    let reduced_s = lambda_eta_reduce_db(bank, s)?;
+    let mut result = subst_compute_mgu_ho(bank, &reduced_t, &reduced_s, subst)?;
+
+    if !result && t.is_non_fo_pattern() && s.is_non_fo_pattern() {
+        subst.backtrack_to_pos(backtrack);
+        result = subst_compute_mgu_pattern(bank, t, s, subst)? == OracleUnifResult::Unifiable;
+        if !result {
+            subst.backtrack_to_pos(backtrack);
+        }
+    }
+
+    Ok(result)
+}
+
+/// C `SubstComputeMguHO`.
+fn subst_compute_mgu_ho(
+    bank: &mut TermBank,
+    t1: &Term,
+    t2: &Term,
+    subst: &mut Substitution,
+) -> Result<UnificationResult, Diagnostic> {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::MguTimer);
+    #[cfg(feature = "measure-unification")]
+    record_unification_attempt();
+
+    if t1.type_() != t2.type_() {
+        return Ok(UNIF_FAILED);
+    }
+
+    let backtrack = subst.len();
+    let mut jobs = PQueue::new();
+    jobs.store(t1.clone());
+    jobs.store(t2.clone());
+
+    let mut result = UNIF_SUCC;
+    while !jobs.is_empty() {
+        let mut right = whnf_deref(bank, &jobs.get_last())?;
+        let mut left = whnf_deref(bank, &jobs.get_last())?;
+
+        if left.is_free_var() && term_is_db_closed(&right) && !occur_check(&right, &left) {
+            subst.add_binding(&left, &right);
+            continue;
+        }
+        if right.is_free_var() && term_is_db_closed(&left) && !occur_check(&left, &right) {
+            subst.add_binding(&right, &left);
+            continue;
+        }
+
+        (left, right) = prune_lambda_prefix(bank, left, right)?;
+
+        if reorientation_needed(&left, &right) {
+            std::mem::swap(&mut left, &mut right);
+        }
+
+        let args_eaten = if left.is_top_level_free_var() {
+            let var = if left.is_applied_free_var() {
+                required_arg(&left, 0)
+            } else {
+                left.clone()
+            };
+            assert!(
+                !right.is_top_level_free_var() || left.arity() <= right.arity(),
+                "HO MGU reorientation orders top-level free-variable arities"
+            );
+
+            let Some(mut args_eaten) = partially_match_var(bank, &var, &right, true) else {
+                result = UNIF_FAILED;
+                break;
+            };
+
+            let subst_pos =
+                subst.bind_app_var(&var, &right, args_eaten, bank, ProblemType::HigherOrder)?;
+            if var.binding().as_ref() == Some(&var) {
+                subst.backtrack_to_pos(subst_pos);
+                args_eaten = 0;
+            }
+            args_eaten
+        } else {
+            if left.is_db_var() != right.is_db_var()
+                || left.is_applied_db_var() != right.is_applied_db_var()
+                || left.arity() != right.arity()
+            {
+                result = UNIF_FAILED;
+                break;
+            }
+
+            if left.f_code() != right.f_code()
+                || (!left.is_top_level_db_var()
+                    && bank.signature().is_polymorphic(left.f_code())
+                    && left.arity() != 0
+                    && required_arg(&left, 0).type_() != required_arg(&right, 0).type_())
+            {
+                result = UNIF_FAILED;
+                break;
+            }
+            0
+        };
+
+        schedule_ho_mgu_jobs(&mut jobs, &left, &right, args_eaten);
+    }
+
+    if result == UNIF_SUCC {
+        #[cfg(feature = "measure-unification")]
+        record_unification_success();
+        debug_assert!(term_struct_prefix_equal(
+            t1,
+            t2,
+            DerefType::Always,
+            DerefType::Always,
+            0,
+        ));
+    } else {
+        subst.backtrack_to_pos(backtrack);
+    }
+
+    Ok(result)
+}
+
+fn reorientation_needed(left: &Term, right: &Term) -> bool {
+    (right.is_top_level_free_var() && !left.is_top_level_free_var())
+        || (left.is_top_level_free_var()
+            && right.is_top_level_free_var()
+            && left.arity() > right.arity())
+}
+
+fn partially_match_var(
+    bank: &mut TermBank,
+    var_matcher: &Term,
+    to_match: &Term,
+    perform_occur_check: bool,
+) -> Option<usize> {
+    assert!(
+        var_matcher.is_free_var() && var_matcher.binding().is_none(),
+        "partial variable matching expects an unbound free variable"
+    );
+    assert!(
+        problem_type() == ProblemType::HigherOrder
+            || !var_matcher.type_().is_some_and(|type_| type_.is_arrow()),
+        "first-order variable matching does not consume arrow-typed variables"
+    );
+    assert!(
+        !to_match.is_lambda(),
+        "partial variable matching expects a non-lambda target"
+    );
+
+    let term_head_type = head_type(bank, to_match)?;
+    if to_match.is_top_level_db_var() {
+        return None;
+    }
+
+    let matcher_type = var_matcher
+        .type_()
+        .expect("partial variable matcher has a type");
+    let target_type = to_match
+        .type_()
+        .expect("partial variable target has a type");
+    let args_to_eat = if matcher_type == target_type {
+        to_match.arg_num()
+    } else if term_head_type.is_arrow()
+        && matcher_type.is_arrow()
+        && matcher_type.arity() <= term_head_type.arity()
+    {
+        let start = term_head_type.arity() - matcher_type.arity();
+        for index in start..term_head_type.arity() {
+            if matcher_type.args()[index - start] != term_head_type.args()[index] {
+                return None;
+            }
+        }
+        assert!(
+            start != 0 || matcher_type == term_head_type,
+            "zero consumed arguments imply shared head and matcher types"
+        );
+        start
+    } else {
+        return None;
+    };
+
+    if args_to_eat > to_match.arg_num() {
+        return None;
+    }
+
+    let checked_args = args_to_eat + usize::from(to_match.is_applied_any_var());
+    for index in 0..checked_args {
+        let arg = required_arg(to_match, index);
+        if !term_is_db_closed(&arg) || (perform_occur_check && occur_check(&arg, var_matcher)) {
+            return None;
+        }
+    }
+
+    Some(args_to_eat)
+}
+
+fn head_type(bank: &mut TermBank, term: &Term) -> Option<Type> {
+    let f_code = term.f_code();
+    if f_code == SIG_ITE_CODE || f_code == SIG_LET_CODE {
+        return term.type_();
+    }
+
+    if f_code == bank.signature().qex_code() || f_code == bank.signature().qall_code() {
+        return Some(bank.signature().type_bank().bool_type());
+    }
+
+    if term.is_applied_any_var() {
+        return required_arg(term, 0).type_();
+    }
+    if term.is_any_var() || term.is_lambda() {
+        assert!(
+            !term.is_any_var() || term.arity() == 0,
+            "unapplied variables have no visible arguments"
+        );
+        return term.type_();
+    }
+    if f_code == SIG_PHONY_APP_CODE {
+        let head = required_arg(term, 0);
+        let head_type = head_type(bank, &head)?;
+        assert!(head_type.is_arrow(), "phony-app head type must be an arrow");
+        return Some(
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(type_drop_first_arg(&head_type)),
+        );
+    }
+
+    bank.signature().get_type(f_code).cloned()
+}
+
+fn schedule_ho_mgu_jobs(jobs: &mut PQueue<Term>, left: &Term, right: &Term, args_eaten: usize) {
+    let left_offset = usize::from(left.is_applied_free_var());
+    let right_offset = args_eaten + usize::from(right.is_applied_free_var());
+    for index in 0..left.arity().saturating_sub(left_offset) {
+        let left_arg = required_arg(left, index + left_offset);
+        let right_arg = required_arg(right, index + right_offset);
+        if left_arg.is_top_level_free_var() || right_arg.is_top_level_free_var() {
+            jobs.bury(right_arg);
+            jobs.bury(left_arg);
+        } else {
+            jobs.store(left_arg);
+            jobs.store(right_arg);
+        }
+    }
 }
 
 /// Returns whether a term contains syntax that needs the higher-order CSU path.
