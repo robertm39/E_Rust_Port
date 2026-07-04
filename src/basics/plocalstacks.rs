@@ -45,6 +45,14 @@ impl<T> PLocalStack<T> {
         self.data.len()
     }
 
+    /// Return the current stack pointer/count, matching C `PLocalStackTop`.
+    ///
+    /// Despite the C macro name, this is not the top element value.
+    #[must_use]
+    pub fn top_c(&self) -> usize {
+        self.current()
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
@@ -314,6 +322,7 @@ mod tests {
         assert_eq!(stack.allocated_size(), PLOCALSTACK_DEFAULT_SIZE);
         assert!(stack.is_empty());
         assert_eq!(stack.current(), 0);
+        assert_eq!(stack.top_c(), 0);
     }
 
     #[test]
@@ -327,6 +336,7 @@ mod tests {
         stack.ensure_space(1);
         assert_eq!(stack.allocated_size(), 4);
         stack.push(3);
+        assert_eq!(stack.top_c(), 3);
         assert_eq!(stack.as_slice(), &[1, 2, 3]);
     }
 

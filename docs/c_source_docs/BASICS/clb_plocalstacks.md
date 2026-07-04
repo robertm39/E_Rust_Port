@@ -101,6 +101,7 @@ Source files reviewed: `BASICS/clb_plocalstacks.h`, `BASICS/clb_plocalstacks.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PLocalStackPush`, `PLocalStackPop`, and `PLocalTaggedStackPop` are raw macros without recoverable error returns; callers are expected to ensure capacity/non-emptiness before use. Rust compatibility methods keep the same non-optional surface and panic when safe Rust detects a missed precondition.
+- `PLocalStackTop` returns the current stack pointer/count rather than a top element; Rust exposes this as an explicit C-shaped alias beside the clearer `current` count helper.
 - `PLocalTaggedStackPush` has two C variants. The raw low-bit `TAGGED_POINTERS` branch asserts pointer alignment and tag width before packing the tag into the value pointer; the portable branch stores value and tag in two pointer slots. Rust currently models the portable two-slot accounting instead of raw pointer tagging.
 
 ### Porting Focus
