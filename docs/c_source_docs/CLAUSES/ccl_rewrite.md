@@ -156,6 +156,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - Plain `ClauseComputeLINormalform` behavior is ported in `src/clauses/rewrite.rs` as `clause_compute_li_normalform_plain`. It normalizes literal sides with the same limited-rewrite retry condition, recovers compact rewrite derivation entries with `term_compute_rw_sequence`, clears `CP_INITIAL` only when the derivation delta records rewrite steps, and propagates `CP_IS_SOS` from followed rewrite links.
 - `clause_compute_li_normalform_plain_with_docs` adds the C `OutputLevel >= 4` `DocClauseRewriteDefault` side effect for callers that provide a proof-documentation session and output sink. It emits a documentation step immediately after each rewritten side, preserves the live-clause identifier mutation chain, and leaves lower output levels identical to the non-documenting normalizer.
 - Plain `ClauseSetComputeLINormalform` behavior is ported as `clause_set_compute_li_normalform_plain`. It preserves set iteration order, sums per-clause rewrite counts, refreshes cached standard weight only on clauses with nonzero rewrite steps, and records the demodulator-index `match_count` when the plain selector stands in for C `indexed_find_demodulator` on an indexed set.
+- The C global `RewriteUncached` counter is represented by Rust's `REWRITE_UNCACHED` atomic and is used by proof-state statistics to print cached rewrite steps with C's `MAX(0, rw_count - RewriteUncached)` correction.
 
 ### Change Later
 

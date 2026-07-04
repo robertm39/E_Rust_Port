@@ -19,6 +19,7 @@ use crate::clauses::fcvindexing::{
 };
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvCollect;
+use crate::clauses::rewrite::REWRITE_UNCACHED;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
@@ -30,6 +31,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     path::Path,
+    sync::atomic::Ordering,
 };
 
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
@@ -1553,6 +1555,10 @@ impl ProofState {
 
     fn write_generation_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
         let statistics = self.statistics();
+        let cached_rewrite_steps = cached_rewrite_steps(
+            statistics.rw_count,
+            REWRITE_UNCACHED.load(Ordering::Relaxed),
+        );
         writeln!(
             output,
             "{DEFAULT_COMCHAR_RAW} Generated clauses                    : {}",
@@ -1607,8 +1613,7 @@ impl ProofState {
         )?;
         writeln!(
             output,
-            "{DEFAULT_COMCHAR_RAW} ...of those cached                   : {}",
-            statistics.rw_count
+            "{DEFAULT_COMCHAR_RAW} ...of those cached                   : {cached_rewrite_steps}"
         )
     }
 
@@ -1923,6 +1928,10 @@ fn dummy_quote_parent_ref(clause: &Clause) -> Option<ClauseDerivationRef> {
     }
 }
 
+fn cached_rewrite_steps(rw_count: u64, rewrite_uncached: u64) -> u64 {
+    rw_count.saturating_sub(rewrite_uncached)
+}
+
 pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofState, Diagnostic> {
     ProofState::new(free_symbol_props)
 }
@@ -1937,8 +1946,8 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        proof_state_alloc, ProofObjectAnalysis, ProofObjectGraphEdge, ProofState,
-        ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
+        cached_rewrite_steps, proof_state_alloc, ProofObjectAnalysis, ProofObjectGraphEdge,
+        ProofState, ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2466,6 +2475,12 @@ mod tests {
         assert!(state
             .statistics_string(false)
             .contains("Current number of archived formulas  : 1"));
+    }
+
+    #[test]
+    fn proof_state_cached_rewrite_steps_follow_c_max_correction() {
+        assert_eq!(cached_rewrite_steps(7, 3), 4);
+        assert_eq!(cached_rewrite_steps(3, 7), 0);
     }
 
     #[test]
