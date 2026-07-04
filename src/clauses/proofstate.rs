@@ -1487,8 +1487,7 @@ impl ProofState {
     /// Prints proof-state counters like C `ProofStateStatisticsPrint`.
     ///
     /// The represented detailed-statistics subset currently covers generated
-    /// literal and demodulator-index counters. Remaining term-bank detail lines
-    /// stay with the later global proof-output integration.
+    /// literal, term-node, and demodulator-index counters.
     ///
     /// # Errors
     ///
@@ -1765,6 +1764,16 @@ impl ProofState {
         )?;
         writeln!(
             output,
+            "{DEFAULT_COMCHAR_RAW} Shared term nodes                    : {}",
+            self.terms.term_nodes()
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} ...corresponding unshared nodes      : {}",
+            self.detailed_unshared_term_nodes()
+        )?;
+        writeln!(
+            output,
             "{DEFAULT_COMCHAR_RAW} Match attempts with oriented units   : {}",
             self.processed_pos_rules.demod_index_match_count()
         )?;
@@ -1773,6 +1782,21 @@ impl ProofState {
             "{DEFAULT_COMCHAR_RAW} Match attempts with unoriented units : {}",
             self.processed_pos_eqns.demod_index_match_count()
         )
+    }
+
+    fn detailed_unshared_term_nodes(&self) -> i64 {
+        [
+            &self.tmp_store,
+            &self.eval_store,
+            &self.processed_pos_rules,
+            &self.processed_pos_eqns,
+            &self.processed_neg_units,
+            &self.processed_non_units,
+            &self.unprocessed,
+        ]
+        .into_iter()
+        .map(|set| set.term_nodes(&self.terms))
+        .sum()
     }
 
     #[must_use]
@@ -2532,6 +2556,14 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         state.statistics_mut().generated_lit_count = 7;
         state.statistics_mut().backward_rewritten_lit_count = 3;
+        let included = simple_clause(&mut state, "stats_included_unshared", 70_001);
+        state.unprocessed_mut().insert(included);
+        let included_unshared = state.unprocessed().term_nodes(state.terms());
+        let excluded = simple_clause(&mut state, "stats_excluded_unshared", 70_002);
+        state.archive_mut().insert(excluded);
+        let included_plus_excluded_unshared =
+            included_unshared + state.archive().term_nodes(state.terms());
+        let shared_term_nodes = state.terms().term_nodes();
 
         state
             .processed_pos_rules()
@@ -2545,11 +2577,22 @@ mod tests {
 
         let ordinary_statistics = state.statistics_string(false, false);
         assert!(!ordinary_statistics.contains("Total literals in generated clauses"));
+        assert!(!ordinary_statistics.contains("Shared term nodes"));
+        assert!(!ordinary_statistics.contains("...corresponding unshared nodes"));
         assert!(!ordinary_statistics.contains("Match attempts with oriented units"));
         assert!(!ordinary_statistics.contains("Match attempts with unoriented units"));
 
         let detailed_statistics = state.statistics_string(false, true);
         assert!(detailed_statistics.contains("Total literals in generated clauses  : 4"));
+        assert!(detailed_statistics.contains(&format!(
+            "Shared term nodes                    : {shared_term_nodes}"
+        )));
+        assert!(detailed_statistics.contains(&format!(
+            "...corresponding unshared nodes      : {included_unshared}"
+        )));
+        assert!(!detailed_statistics.contains(&format!(
+            "...corresponding unshared nodes      : {included_plus_excluded_unshared}"
+        )));
         assert!(detailed_statistics.contains("Match attempts with oriented units   : 1"));
         assert!(detailed_statistics.contains("Match attempts with unoriented units : 2"));
     }
