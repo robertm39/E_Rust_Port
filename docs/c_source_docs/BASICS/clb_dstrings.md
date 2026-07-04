@@ -119,6 +119,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DStrAlloc` initializes `refs` to 1. `DStrGetRef(NULL)` and `DStrReleaseRef(NULL)` are no-ops, while `DStrFree` asserts a non-NULL descriptor with `refs >= 1`, decrements the count, and frees the descriptor and backing buffer at zero. Rust keeps the counter surface explicit and returns whether C would have freed the descriptor on release.
 - `DStrAppendStr` measures `newpart` with `strlen` and appends with `strcat`, so embedded NUL bytes truncate the appended content. Rust preserves this C-string boundary for `append_str` and exposes a byte-oriented C-string helper for non-UTF-8 external data.
 - `DStrAppendBuffer` takes a signed `int len` and uses a plain `for(i=0; i<len; i++)` loop, so zero and negative lengths append nothing. Rust keeps that loop surface in a signed compatibility helper while checking that the requested prefix fits the provided slice.
 - `DStrAppendStrArray` consumes a NULL-terminated `char*[]`, appends separators only between entries before the first NULL, and leaves the descriptor untouched when the first entry is NULL. Rust keeps this sentinel-array behavior in an explicit compatibility helper.
@@ -133,6 +134,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 
 ### Change Later
 
+- `DStrGetRef` and `DStrFree` implement pointer-alias lifetime management inside the string descriptor. Rust compatibility helpers expose the counter and final-release event, but a future cleaned API should use `Rc`/arena handles or owned string values instead of asking callers to remember that a final release means the C descriptor would be invalid.
 - `DStrAddress` accepts a signed `int` and checks only `index > len`; negative indices can produce a pointer before the string buffer in C. Rust intentionally does not expose negative indexes. If a byte-for-byte compatibility test ever exercises this, decide whether to reject it at the parser/caller boundary or add a narrowly named compatibility helper.
 - `DStrAppendStr`, `DStrSet`, `DStrAppendDStr`, and separator handling in `DStrAppendStrArray` all inherit C-string truncation at the first embedded NUL. Rust preserves this for drop-in compatibility, but cleaned high-level APIs should reject embedded NULs explicitly or route binary payloads through length-based buffer helpers.
 - `DStrAppendBuffer` trusts its raw pointer/length pair and can read past the supplied buffer when `len` is too large. Rust reports that as an invariant failure at the slice boundary; a cleaned API should keep accepting ordinary slices instead of raw pointer/length pairs.

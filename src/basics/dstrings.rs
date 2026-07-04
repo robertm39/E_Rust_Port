@@ -4,11 +4,36 @@ use std::io::{self, BufRead};
 pub const DSTR_GROW: usize = 64;
 pub const DSTR_GETS_CHUNK: usize = 256;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct DynamicString {
     bytes: Vec<u8>,
     mem: usize,
+    refs: usize,
 }
+
+impl Clone for DynamicString {
+    fn clone(&self) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            mem: self.mem,
+            refs: 1,
+        }
+    }
+}
+
+impl Default for DynamicString {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for DynamicString {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes == other.bytes && self.mem == other.mem
+    }
+}
+
+impl Eq for DynamicString {}
 
 impl DynamicString {
     #[must_use]
@@ -16,7 +41,59 @@ impl DynamicString {
         Self {
             bytes: Vec::new(),
             mem: 0,
+            refs: 1,
         }
+    }
+
+    #[must_use]
+    pub const fn ref_count(&self) -> usize {
+        self.refs
+    }
+
+    /// Increment the C reference count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reference count would overflow.
+    pub fn get_ref_c(&mut self) {
+        assert!(
+            self.refs < usize::MAX,
+            "DStrGetRef reference count overflow"
+        );
+        self.refs += 1;
+    }
+
+    #[must_use]
+    pub fn get_ref_option_c(strdes: Option<&mut Self>) -> Option<&mut Self> {
+        match strdes {
+            Some(string) => {
+                string.get_ref_c();
+                Some(string)
+            }
+            None => None,
+        }
+    }
+
+    /// Release one C reference.
+    ///
+    /// C `DStrFree` decrements `refs` and frees the descriptor when the count
+    /// reaches zero. Rust value methods cannot free `self`, so this returns
+    /// `true` exactly when C would have freed the descriptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the descriptor has already reached zero references,
+    /// matching the C assertion that `refs >= 1`.
+    #[must_use]
+    pub fn release_ref_c(&mut self) -> bool {
+        assert!(self.refs >= 1, "DStrFree requires at least one reference");
+        self.refs -= 1;
+        self.refs == 0
+    }
+
+    #[must_use]
+    pub fn release_ref_option_c(strdes: Option<&mut Self>) -> bool {
+        strdes.is_some_and(Self::release_ref_c)
     }
 
     pub fn append_str(&mut self, new_part: &str) {
@@ -244,8 +321,55 @@ mod tests {
         assert_eq!(string.len(), 0);
         assert!(string.is_empty());
         assert_eq!(string.allocated_mem(), 0);
+        assert_eq!(string.ref_count(), 1);
         assert_eq!(string.view(), "");
         assert_eq!(string.view_bytes(), b"");
+    }
+
+    #[test]
+    fn reference_helpers_preserve_c_counter_contract() {
+        let mut string = DynamicString::new();
+
+        string.get_ref_c();
+        assert_eq!(string.ref_count(), 2);
+        assert!(!string.release_ref_c());
+        assert_eq!(string.ref_count(), 1);
+        assert!(string.release_ref_c());
+        assert_eq!(string.ref_count(), 0);
+    }
+
+    #[test]
+    fn nullable_reference_helpers_preserve_null_noop() {
+        assert!(DynamicString::get_ref_option_c(None).is_none());
+        assert!(!DynamicString::release_ref_option_c(None));
+
+        let mut string = DynamicString::new();
+        assert!(DynamicString::get_ref_option_c(Some(&mut string)).is_some());
+        assert_eq!(string.ref_count(), 2);
+        assert!(!DynamicString::release_ref_option_c(Some(&mut string)));
+        assert_eq!(string.ref_count(), 1);
+    }
+
+    #[test]
+    fn clone_creates_independent_descriptor_refcount() {
+        let mut string = DynamicString::new();
+        string.append_str("abc");
+        string.get_ref_c();
+
+        let clone = string.clone();
+
+        assert_eq!(clone, string);
+        assert_eq!(string.ref_count(), 2);
+        assert_eq!(clone.ref_count(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "DStrFree requires at least one reference")]
+    fn releasing_after_final_reference_preserves_c_assertion() {
+        let mut string = DynamicString::new();
+
+        assert!(string.release_ref_c());
+        let _ = string.release_ref_c();
     }
 
     #[test]
