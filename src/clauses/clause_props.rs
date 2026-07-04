@@ -38,6 +38,11 @@ impl FormulaProperties {
         (self.0 & prop.0) != 0
     }
 
+    #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
     pub fn set_tptp_type(&mut self, type_: Self) {
         self.delete(CP_TYPE_MASK);
         self.set(type_);
@@ -260,6 +265,7 @@ mod tests {
 
         assert!(props.query(CP_INITIAL | CP_IS_SOS));
         assert!(props.is_any_set(CP_IS_SOS | CP_IS_DEAD));
+        assert_eq!(props.any_set(CP_IS_SOS | CP_IS_DEAD), CP_IS_SOS);
         assert_eq!(props.give(CP_INITIAL | CP_IS_DEAD), CP_INITIAL);
 
         props.delete(CP_INITIAL);

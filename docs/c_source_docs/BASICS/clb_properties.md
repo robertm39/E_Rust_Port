@@ -79,10 +79,15 @@ Source files reviewed: `BASICS/clb_properties.h`.
 - Foundation code. Preserve allocation, container, assertion, and fatal-error conventions before trying to make the Rust version more idiomatic.
 - SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- `IsAnyPropSet(obj, prop)` returns the masked property word, not a canonical boolean, even though most C callers use it in truth contexts. Rust now exposes both a raw masked helper and a bool convenience helper.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `IsAnyPropSet` and `GiveProps` have identical masked-bit implementations but different names and intended use. Future Rust-only APIs should keep boolean predicates and masked extraction deliberately separate so callers do not accidentally feed a truth value back into property mutation.
 <!-- END MANUAL REVIEW: c_source_docs -->

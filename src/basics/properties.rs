@@ -44,6 +44,11 @@ impl Properties {
     }
 
     #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
+    #[must_use]
     pub const fn give(self, prop: Self) -> Self {
         Self(self.0 & prop.0)
     }
@@ -103,6 +108,7 @@ mod tests {
         assert!(props.query(A | B));
         assert!(props.query(Properties::NONE));
         assert!(props.is_any_set(B | C));
+        assert_eq!(props.any_set(B | C), B);
 
         props.delete(A);
         assert_eq!(props.bits(), 0b0010);

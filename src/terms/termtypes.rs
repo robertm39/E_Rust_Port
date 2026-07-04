@@ -71,6 +71,11 @@ impl TermProperties {
     }
 
     #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
+    #[must_use]
     pub const fn give(self, prop: Self) -> Self {
         Self(self.0 & prop.0)
     }
@@ -981,6 +986,11 @@ mod tests {
         assert_eq!(TP_IS_SHARED.bits(), 16_384);
         assert_eq!(TP_HAS_ETA_EXPANDABLE_SUBTERM.bits(), 1_u64 << 25);
         assert_eq!(TP_HAS_BOOL_SUBTERM.bits(), 1_u64 << 30);
+
+        let props = TP_PRED_POS | TP_IS_SHARED;
+        assert!(props.is_any_set(TP_IS_SHARED | TP_OUTPUT_FLAG));
+        assert_eq!(props.any_set(TP_IS_SHARED | TP_OUTPUT_FLAG), TP_IS_SHARED);
+        assert_eq!(props.give(TP_PRED_POS | TP_OUTPUT_FLAG), TP_PRED_POS);
     }
 
     #[test]

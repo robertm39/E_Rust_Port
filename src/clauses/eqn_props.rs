@@ -42,6 +42,11 @@ impl EqnProperties {
     }
 
     #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
+    #[must_use]
     pub const fn are_equiv(left: Self, right: Self, prop: Self) -> bool {
         (left.0 & prop.0) == (right.0 & prop.0)
     }
@@ -206,6 +211,7 @@ mod tests {
         let overlap = EP_IS_STRICTLY_MAXIMAL | EP_MAX_IS_UP_TO_DATE | EP_HAS_EQUIV;
 
         assert_eq!(EP_IS_SPLIT_LIT.give(overlap), overlap);
+        assert_eq!(EP_IS_SPLIT_LIT.any_set(overlap), overlap);
         assert!(EP_IS_SPLIT_LIT.is_any_set(overlap));
     }
 
@@ -216,6 +222,10 @@ mod tests {
 
         assert!(props.query(EP_IS_POSITIVE | EP_IS_EQU_LITERAL));
         assert!(props.is_any_set(EP_IS_EQU_LITERAL | EP_IS_ORIENTED));
+        assert_eq!(
+            props.any_set(EP_IS_EQU_LITERAL | EP_IS_ORIENTED),
+            EP_IS_EQU_LITERAL
+        );
         assert_eq!(props.give(EP_IS_POSITIVE | EP_IS_ORIENTED), EP_IS_POSITIVE);
 
         props.flip(EP_IS_POSITIVE | EP_IS_ORIENTED);

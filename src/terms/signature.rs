@@ -71,6 +71,11 @@ impl FunctionProperties {
         (self.0 & properties.0) != 0
     }
 
+    #[must_use]
+    pub const fn intersection(self, properties: Self) -> Self {
+        Self(self.0 & properties.0)
+    }
+
     pub fn insert(&mut self, properties: Self) {
         self.0 |= properties.0;
     }
@@ -1717,6 +1722,10 @@ mod tests {
         let mut props = FunctionProperties::TYPE_FIXED | FunctionProperties::SPECIAL;
         assert!(props.contains_all(FP_TYPE_FIXED));
         assert!(props.intersects(FP_TYPE_FIXED | FP_INTERPRETED));
+        assert_eq!(
+            props.intersection(FP_TYPE_FIXED | FP_INTERPRETED),
+            FP_TYPE_FIXED
+        );
         props.remove(FP_TYPE_FIXED);
         assert!(!props.contains_all(FP_TYPE_FIXED));
     }

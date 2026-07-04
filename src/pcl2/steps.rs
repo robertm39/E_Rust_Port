@@ -73,6 +73,11 @@ impl PclStepProperties {
         (self.0 & prop.0) != 0
     }
 
+    #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
     pub fn set_type(&mut self, type_: Self) {
         self.delete(PCL_TYPE_MASK);
         self.set(type_);
@@ -1083,6 +1088,10 @@ mod tests {
         props.set(PCL_IS_INITIAL | PCL_IS_FOF_STEP | PCL_TYPE_AXIOM);
         assert!(props.query(PCL_IS_INITIAL | PCL_IS_FOF_STEP));
         assert!(props.is_any_set(PCL_IS_SHELL_STEP | PCL_IS_FOF_STEP));
+        assert_eq!(
+            props.any_set(PCL_IS_SHELL_STEP | PCL_IS_FOF_STEP),
+            PCL_IS_FOF_STEP
+        );
         assert!(props.is_fof());
         assert!(!props.is_clausal());
         assert!(!props.is_shell());
