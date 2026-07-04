@@ -245,8 +245,12 @@ impl DynamicString {
     }
 
     pub fn set(&mut self, value: &str) {
+        self.set_c_str_bytes(value.as_bytes());
+    }
+
+    pub fn set_c_str_bytes(&mut self, value: &[u8]) {
         self.reset();
-        self.append_str(value);
+        self.append_c_str_bytes(value);
     }
 
     #[must_use]
@@ -533,6 +537,23 @@ mod tests {
 
         assert_eq!(string.view_bytes(), b"");
         assert_eq!(string.allocated_mem(), 0);
+    }
+
+    #[test]
+    fn set_c_str_bytes_accepts_raw_c_string_input() {
+        let mut string = DynamicString::new();
+        string.append_str(&"x".repeat(DSTR_GROW + 5));
+        let allocated = string.allocated_mem();
+
+        string.set_c_str_bytes(&[0xff, b'a', 0, b'b']);
+
+        assert_eq!(string.view_bytes(), &[0xff, b'a']);
+        assert_eq!(string.allocated_mem(), allocated);
+
+        string.set("text\0hidden");
+
+        assert_eq!(string.view_bytes(), b"text");
+        assert_eq!(string.allocated_mem(), allocated);
     }
 
     #[test]
