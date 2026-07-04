@@ -2635,30 +2635,22 @@ pub fn proof_control_clause_set_filter_reweight_with_bank(
 
 /// Returns a Rust-side estimate for C `ProofStateStorage`.
 ///
-/// The C macro is a byte estimate over selected clause sets plus `TBStorage`.
-/// Rust does not expose the C allocator cell sizes, so this keeps the same
-/// proof-state domains and uses maintained clause/literal/evaluation counts
-/// plus non-variable term-bank nodes as the currently available proxy.
+/// This keeps the same selected proof-state domains as C and uses the
+/// constant-memory `ClauseSetStorage`/`TBStorage` estimates exposed by the
+/// Rust owners.
 #[must_use]
 pub fn proof_state_storage_estimate(state: &ProofState) -> i64 {
     [
-        clause_set_storage_estimate(state.unprocessed()),
-        clause_set_storage_estimate(state.processed_pos_rules()),
-        clause_set_storage_estimate(state.processed_pos_eqns()),
-        clause_set_storage_estimate(state.processed_neg_units()),
-        clause_set_storage_estimate(state.processed_non_units()),
-        clause_set_storage_estimate(state.archive()),
-        state.terms().non_var_term_nodes(),
+        state.unprocessed().storage_estimate(),
+        state.processed_pos_rules().storage_estimate(),
+        state.processed_pos_eqns().storage_estimate(),
+        state.processed_neg_units().storage_estimate(),
+        state.processed_non_units().storage_estimate(),
+        state.archive().storage_estimate(),
+        state.terms().storage_estimate(),
     ]
     .into_iter()
     .fold(0_i64, i64::saturating_add)
-}
-
-fn clause_set_storage_estimate(set: &ClauseSet) -> i64 {
-    let eval_slots = i64::try_from(set.eval_no()).unwrap_or(i64::MAX);
-    set.members()
-        .saturating_mul(1_i64.saturating_add(eval_slots))
-        .saturating_add(set.literals())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -10669,6 +10661,30 @@ mod tests {
         assert!(state.unprocessed().find_by_id(4_118).is_none());
         assert!(state.unprocessed().find_by_id(4_119).is_some());
         assert_eq!(state.statistics().other_redundant_count, 1);
+    }
+
+    #[test]
+    fn proof_state_storage_estimate_aggregates_c_storage_domains() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let unprocessed = unit_clause_with_id(state.terms_mut(), "pc_storage_unprocessed", 4_120);
+        let archive = unit_clause_with_id(state.terms_mut(), "pc_storage_archive", 4_121);
+        state.unprocessed_mut().insert(unprocessed);
+        state.archive_mut().insert(archive);
+
+        let expected = [
+            state.unprocessed().storage_estimate(),
+            state.processed_pos_rules().storage_estimate(),
+            state.processed_pos_eqns().storage_estimate(),
+            state.processed_neg_units().storage_estimate(),
+            state.processed_non_units().storage_estimate(),
+            state.archive().storage_estimate(),
+            state.terms().storage_estimate(),
+        ]
+        .into_iter()
+        .fold(0_i64, i64::saturating_add);
+
+        assert_eq!(proof_state_storage_estimate(&state), expected);
+        assert!(proof_state_storage_estimate(&state) > state.terms().non_var_term_nodes());
     }
 
     #[test]

@@ -257,11 +257,13 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 - `ClauseSetFVIndexify` extracts clauses from the front into a stack and then pops them back into the set as indexed clauses, so the final set order is reversed. Rust preserves that LIFO reinsertion and `CPIsSIndexed` marking for both the transition explicit-anchor helper and the owned optional FV-anchor path.
 - `ClauseSetIndexedInsertClauseSet` recomputes each source clause's standard weight before indexed insertion and keeps source iteration order. Rust preserves that behavior through explicit-anchor wrappers and the owned optional FV-anchor API.
 - `ClauseSetExtractEntry` deletes `CPIsSIndexed` clauses from `set->fvindex` and clears the property during extraction. Rust mirrors that lifecycle for owned FV anchors while keeping the explicit-anchor helpers as transition APIs until full proof-state set ownership is wired.
+- `ClauseSetStorage` estimates clause cells, evaluation cells, literal cells, demodulator-index storage, and FV-index storage with C's constant-memory branch. Rust now preserves the clause/evaluation/literal/FV-index portions for cleanup-limit accounting.
 - `ClauseSetPropDocQuote` filters with the same all-bits property query as `ClauseQueryProp`, so `CPIgnoreProps` intentionally quotes every clause. Rust mirrors that filter for supported final proof-search documentation quotes before the result banner.
 
 ### Change Later
 
 - `ClauseSetExtractEntry` assumes `CPIsSIndexed` implies `clause->set->fvindex` is valid and calls `FVIndexDelete` unconditionally. Rust preserves the indexed-clause lifecycle for owned anchors, but later stable clause-handle APIs should make index membership explicit enough to prevent stale indexed bits, double deletes, or missing anchors from corrupting index counts.
+- Rust `ClauseSetStorage` currently reports zero for C's `PDTreeStorage(set->demod_index)` component because `ClauseSet` does not yet own the demodulator index. Add that component when the demodulator-index lifecycle is represented on clause sets.
 - C clause sets reach each clause's owner bank implicitly through the literals. Rust currently has immutable-bank and mutable-bank maximal-marking entry points; collapse that split only after clause ownership can provide the same owner-bank context without passing it through every caller.
 
 ### Porting Focus

@@ -35,6 +35,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 const INSERT_NO_PROPS_CACHE_THRESHOLD: u32 = 8096;
+const TERMCELL_MEM: i64 = 48;
+const TERMARG_MEM: i64 = 4;
+const TERMP_MEM: i64 = 4;
+const TERMCELL_DYN_MEM: i64 = TERMCELL_MEM + 4 * TERMARG_MEM;
 
 #[derive(Clone, Debug)]
 pub struct TermBank {
@@ -159,6 +163,23 @@ impl TermBank {
     #[must_use]
     pub const fn non_var_term_nodes(&self) -> i64 {
         self.term_store.entries()
+    }
+
+    #[must_use]
+    pub const fn term_arg_count(&self) -> i64 {
+        self.term_store.arg_count()
+    }
+
+    /// Returns the C `TBStorage` constant-memory estimate.
+    ///
+    /// This mirrors the `CONSTANT_MEM_ESTIMATE` branch used by C storage
+    /// accounting: one dynamic term-cell estimate per shared non-variable
+    /// term plus one term-pointer estimate per stored argument.
+    #[must_use]
+    pub fn storage_estimate(&self) -> i64 {
+        TERMCELL_DYN_MEM
+            .saturating_mul(self.term_store.entries())
+            .saturating_add(TERMP_MEM.saturating_mul(self.term_store.arg_count()))
     }
 
     #[must_use]
@@ -3423,7 +3444,7 @@ mod tests {
     use super::{
         tb_cell_ident, tb_term_collect_subterms, tb_term_del_prop_count, tb_term_is_ground,
         tb_term_set_prop_count, term_is_false_term, term_is_true_term, TermBank,
-        INSERT_NO_PROPS_CACHE_THRESHOLD,
+        INSERT_NO_PROPS_CACHE_THRESHOLD, TERMCELL_DYN_MEM, TERMP_MEM,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::pstacks::PStack;
@@ -3833,6 +3854,8 @@ mod tests {
         assert_eq!(bank.insertions(), 2);
         assert_eq!(bank.non_var_term_nodes(), 2);
         assert_eq!(bank.term_nodes(), 2);
+        assert_eq!(bank.term_arg_count(), 0);
+        assert_eq!(bank.storage_estimate(), 2 * TERMCELL_DYN_MEM);
         assert!(term_is_true_term(bank.true_term()));
         assert!(term_is_false_term(bank.false_term()));
         assert_eq!(bank.true_term().f_code(), SIG_TRUE_CODE);
@@ -3841,6 +3864,24 @@ mod tests {
             .true_term()
             .query_prop(TP_IS_SHARED | TP_IS_GROUND | TP_PRED_POS));
         assert_eq!(bank.true_term().weight(), DEFAULT_FWEIGHT);
+    }
+
+    #[test]
+    fn storage_estimate_matches_c_tb_storage_shape() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let f_code = declare_unary_i_fun(&mut bank, "storage_unary");
+        let arg_code = declare_i_const(&mut bank, "storage_arg");
+        let arg = bank.create_const_term(arg_code).unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_argument(0, arg);
+
+        let inserted = bank.insert(&term, DerefType::Never).unwrap();
+
+        assert_eq!(inserted.arity(), 1);
+        assert_eq!(bank.non_var_term_nodes(), 4);
+        assert_eq!(bank.term_arg_count(), 1);
+        assert_eq!(bank.storage_estimate(), 4 * TERMCELL_DYN_MEM + TERMP_MEM);
     }
 
     #[test]

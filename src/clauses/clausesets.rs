@@ -14,7 +14,7 @@ use crate::clauses::clausepos::ClausePos;
 use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EqnSide;
-use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
+use crate::clauses::fcvindexing::{fv_index_pack_clause, fv_index_storage, FvIndexAnchor};
 use crate::clauses::freqvectors::{
     fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
     FvIndexType, PermVector,
@@ -31,6 +31,11 @@ use crate::terms::termtypes::TermProperties;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+
+const CLAUSECELL_MEM: i64 = 68;
+const PTREE_CELL_MEM: i64 = 16;
+const CLAUSECELL_DYN_MEM: i64 = CLAUSECELL_MEM + 3 * PTREE_CELL_MEM;
+const EQN_CELL_MEM: i64 = 24;
 
 #[derive(Clone, Copy, Debug)]
 struct EvalIndexEntry {
@@ -190,6 +195,19 @@ impl ClauseSet {
     #[must_use]
     pub const fn eval_no(&self) -> usize {
         self.eval_no
+    }
+
+    /// Returns the C `ClauseSetStorage` constant-memory estimate.
+    ///
+    /// Demodulator `PDTreeStorage` is currently zero because this Rust owner
+    /// does not yet store the demodulator index in `ClauseSet`.
+    #[must_use]
+    pub fn storage_estimate(&self) -> i64 {
+        let clause_cell_mem = CLAUSECELL_DYN_MEM.saturating_add(eval_mem(self.eval_no));
+        clause_cell_mem
+            .saturating_mul(self.members())
+            .saturating_add(EQN_CELL_MEM.saturating_mul(self.literals()))
+            .saturating_add(usize_to_i64(fv_index_storage(self.fv_anchor())))
     }
 
     #[must_use]
@@ -1440,6 +1458,10 @@ fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn eval_mem(eval_no: usize) -> i64 {
+    32_i64.saturating_add(usize_to_i64(eval_no).saturating_mul(4))
+}
+
 fn f_code_index(f_code: FunCode) -> Option<usize> {
     usize::try_from(f_code).ok()
 }
@@ -1611,7 +1633,8 @@ fn tptp_eq_pred_axiom_write(
 mod tests {
     use super::{
         clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
-        clause_set_stack_cardinality, eq_axioms_print_string, ClauseSet,
+        clause_set_stack_cardinality, eq_axioms_print_string, eval_mem, ClauseSet,
+        CLAUSECELL_DYN_MEM, EQN_CELL_MEM,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -1806,6 +1829,50 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn storage_estimate_uses_c_clause_set_storage_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "storage_a");
+        let b = typed_const(&mut bank, "storage_b");
+        let c = typed_const(&mut bank, "storage_c");
+        let first = clause_with_evaluations(
+            clause_from(vec![literal(&mut bank, &a, &b, true)]),
+            &[(10, 1.0), (20, 2.0)],
+        );
+        let second = clause_from(vec![
+            literal(&mut bank, &b, &c, true),
+            literal(&mut bank, &c, &a, false),
+        ]);
+        let mut set = ClauseSet::new();
+
+        set.insert(first);
+        set.insert(second);
+
+        assert_eq!(set.eval_no(), 2);
+        assert_eq!(
+            set.storage_estimate(),
+            (CLAUSECELL_DYN_MEM + eval_mem(2)) * 2 + EQN_CELL_MEM * 3
+        );
+    }
+
+    #[test]
+    fn storage_estimate_includes_owned_fv_index_storage() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "storage_idx_a");
+        let b = typed_const(&mut bank, "storage_idx_b");
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        let mut set = ClauseSet::new();
+        set.set_fv_anchor(Some(ac_anchor(max_symbols)));
+
+        set.indexed_insert_clause_owned(clause_from(vec![literal(&mut bank, &a, &b, true)]), &bank);
+
+        let fv_storage = i64::try_from(set.fv_anchor().unwrap().storage_estimate()).unwrap();
+        assert_eq!(
+            set.storage_estimate(),
+            CLAUSECELL_DYN_MEM + eval_mem(0) + EQN_CELL_MEM + fv_storage
+        );
     }
 
     #[test]
