@@ -1486,9 +1486,9 @@ impl ProofState {
 
     /// Prints proof-state counters like C `ProofStateStatisticsPrint`.
     ///
-    /// The represented detailed-statistics subset currently covers
-    /// demodulator-index counters. Remaining term-bank detail lines stay with
-    /// the later global proof-output integration.
+    /// The represented detailed-statistics subset currently covers generated
+    /// literal and demodulator-index counters. Remaining term-bank detail lines
+    /// stay with the later global proof-output integration.
     ///
     /// # Errors
     ///
@@ -1504,7 +1504,7 @@ impl ProofState {
         self.write_satcheck_statistics(output)?;
         self.write_clause_set_statistics(output, record_gc_selection)?;
         if print_details {
-            self.write_demod_index_statistics(output)?;
+            self.write_detailed_statistics(output)?;
         }
         Ok(())
     }
@@ -1753,7 +1753,16 @@ impl ProofState {
         Ok(())
     }
 
-    fn write_demod_index_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+    fn write_detailed_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let statistics = self.statistics();
+        let generated_lit_count = generated_literal_statistics_count(
+            statistics.generated_lit_count,
+            statistics.backward_rewritten_lit_count,
+        );
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Total literals in generated clauses  : {generated_lit_count}"
+        )?;
         writeln!(
             output,
             "{DEFAULT_COMCHAR_RAW} Match attempts with oriented units   : {}",
@@ -1938,12 +1947,19 @@ fn cached_rewrite_steps(rw_count: u64, rewrite_uncached: u64) -> u64 {
     rw_count.saturating_sub(rewrite_uncached)
 }
 
+fn c_signed_wrapping_difference(left: u64, right: u64) -> i64 {
+    i64::from_ne_bytes(left.wrapping_sub(right).to_ne_bytes())
+}
+
 fn generated_clause_statistics_count(generated_count: u64, backward_rewritten_count: u64) -> i64 {
-    i64::from_ne_bytes(
-        generated_count
-            .wrapping_sub(backward_rewritten_count)
-            .to_ne_bytes(),
-    )
+    c_signed_wrapping_difference(generated_count, backward_rewritten_count)
+}
+
+fn generated_literal_statistics_count(
+    generated_lit_count: u64,
+    backward_rewritten_lit_count: u64,
+) -> i64 {
+    c_signed_wrapping_difference(generated_lit_count, backward_rewritten_lit_count)
 }
 
 pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofState, Diagnostic> {
@@ -1960,9 +1976,10 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_rewrite_steps, generated_clause_statistics_count, proof_state_alloc,
-        ProofObjectAnalysis, ProofObjectGraphEdge, ProofState, ProofStateGcAnalysis,
-        ProofStateStatistics, WatchlistSource,
+        cached_rewrite_steps, generated_clause_statistics_count,
+        generated_literal_statistics_count, proof_state_alloc, ProofObjectAnalysis,
+        ProofObjectGraphEdge, ProofState, ProofStateGcAnalysis, ProofStateStatistics,
+        WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2505,8 +2522,16 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_statistics_reports_demod_index_match_attempts() {
-        let state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+    fn proof_state_generated_literal_statistics_use_c_signed_display() {
+        assert_eq!(generated_literal_statistics_count(7, 3), 4);
+        assert_eq!(generated_literal_statistics_count(3, 7), -4);
+    }
+
+    #[test]
+    fn proof_state_statistics_reports_detailed_generated_literals_and_demod_index_attempts() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().generated_lit_count = 7;
+        state.statistics_mut().backward_rewritten_lit_count = 3;
 
         state
             .processed_pos_rules()
@@ -2519,10 +2544,12 @@ mod tests {
             .record_demod_index_search_attempt();
 
         let ordinary_statistics = state.statistics_string(false, false);
+        assert!(!ordinary_statistics.contains("Total literals in generated clauses"));
         assert!(!ordinary_statistics.contains("Match attempts with oriented units"));
         assert!(!ordinary_statistics.contains("Match attempts with unoriented units"));
 
         let detailed_statistics = state.statistics_string(false, true);
+        assert!(detailed_statistics.contains("Total literals in generated clauses  : 4"));
         assert!(detailed_statistics.contains("Match attempts with oriented units   : 1"));
         assert!(detailed_statistics.contains("Match attempts with unoriented units : 2"));
     }

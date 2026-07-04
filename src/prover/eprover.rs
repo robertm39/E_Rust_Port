@@ -21398,6 +21398,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("% Processed clauses                    : 1\n"));
+        assert!(!printed.contains("% Total literals in generated clauses"));
         assert!(!printed.contains("% Match attempts with oriented units"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
         assert!(stderr.is_empty());
@@ -21428,6 +21429,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(printed.contains("% Total literals in generated clauses  : "));
         assert!(printed.contains("% Match attempts with oriented units   : "));
         assert!(printed.contains("% Match attempts with unoriented units : "));
         assert!(stderr.is_empty());
