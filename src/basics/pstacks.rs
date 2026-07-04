@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt};
 
 pub const PSTACK_DEFAULT_SIZE: usize = 128;
 
@@ -282,6 +282,17 @@ impl<T> PStack<T> {
         }
     }
 
+    pub fn write_elements_with<W, F>(&self, output: &mut W, mut render: F) -> fmt::Result
+    where
+        W: fmt::Write + ?Sized,
+        F: FnMut(&mut W, &T) -> fmt::Result,
+    {
+        for value in &self.stack {
+            render(output, value)?;
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn copy_stack(&self) -> Self
     where
@@ -331,6 +342,25 @@ impl PStack<PStackInt> {
 
         (average, variance.sqrt())
     }
+
+    pub fn write_ints_c_width4_dot<W>(&self, output: &mut W) -> fmt::Result
+    where
+        W: fmt::Write + ?Sized,
+    {
+        self.write_elements_with(output, |output, value| {
+            let value = *value;
+            write!(output, "{value:4}.")
+        })
+    }
+
+    #[must_use]
+    pub fn format_ints_c_width4_dot(&self) -> String {
+        let mut output = String::new();
+        match self.write_ints_c_width4_dot(&mut output) {
+            Ok(()) => output,
+            Err(error) => unreachable!("writing to String failed: {error}"),
+        }
+    }
 }
 
 impl<T> PStack<&T> {
@@ -367,6 +397,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{PStack, PStackInt, PSTACK_DEFAULT_SIZE};
+    use std::fmt::Write as _;
 
     #[test]
     fn push_pop_and_reset_use_c_growth_rules() {
@@ -541,6 +572,7 @@ mod tests {
         let (average, deviation) = stack.compute_average();
         assert!((average - 2.0).abs() < f64::EPSILON);
         assert!((deviation - (2.0_f64 / 3.0).sqrt()).abs() < f64::EPSILON);
+        assert_eq!(stack.format_ints_c_width4_dot(), "   1.   2.   3.");
     }
 
     #[test]
@@ -553,6 +585,12 @@ mod tests {
         assert!(stack.find_pointer(first.as_ref()));
         assert!(!stack.find_pointer(second.as_ref()));
         assert!(stack.contains_value(&second.as_ref()));
+
+        let mut output = String::new();
+        let print_result =
+            stack.write_elements_with(&mut output, |output, value| write!(output, "{:p};", *value));
+        assert!(print_result.is_ok());
+        assert_eq!(output, format!("{:p};", first.as_ref()));
     }
 
     #[test]
