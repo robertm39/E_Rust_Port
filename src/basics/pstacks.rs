@@ -363,6 +363,30 @@ impl PStack<PStackInt> {
     }
 }
 
+impl<T> PStack<T>
+where
+    T: Copy + fmt::Pointer,
+{
+    pub fn write_pointers_c_percent_p<W>(&self, output: &mut W) -> fmt::Result
+    where
+        W: fmt::Write + ?Sized,
+    {
+        self.write_elements_with(output, |output, value| {
+            let pointer = *value;
+            write!(output, "{pointer:p}")
+        })
+    }
+
+    #[must_use]
+    pub fn format_pointers_c_percent_p(&self) -> String {
+        let mut output = String::new();
+        match self.write_pointers_c_percent_p(&mut output) {
+            Ok(()) => output,
+            Err(error) => unreachable!("writing to String failed: {error}"),
+        }
+    }
+}
+
 impl<T> PStack<&T> {
     #[must_use]
     pub fn find_pointer(&self, value: &T) -> bool {
@@ -591,6 +615,25 @@ mod tests {
             stack.write_elements_with(&mut output, |output, value| write!(output, "{:p};", *value));
         assert!(print_result.is_ok());
         assert_eq!(output, format!("{:p};", first.as_ref()));
+        assert_eq!(
+            stack.format_pointers_c_percent_p(),
+            format!("{:p}", first.as_ref())
+        );
+    }
+
+    #[test]
+    fn raw_pointer_printing_keeps_c_percent_p_shape_without_dereferencing() {
+        let value = 7_i32;
+        let value_ptr = std::ptr::from_ref(&value);
+        let null_ptr = std::ptr::null::<i32>();
+        let mut stack = PStack::new();
+        stack.push(value_ptr);
+        stack.push(null_ptr);
+
+        assert_eq!(
+            stack.format_pointers_c_percent_p(),
+            format!("{value_ptr:p}{null_ptr:p}")
+        );
     }
 
     #[test]
