@@ -269,15 +269,15 @@ impl DynamicString {
     }
 
     pub fn minimize(&mut self) {
-        if self.bytes.is_empty() {
+        if self.mem == 0 {
             self.bytes = Vec::new();
-            self.mem = 0;
-        } else {
-            self.mem = self.bytes.len() + 1;
-            self.bytes.shrink_to_fit();
-            if self.bytes.capacity() < self.mem {
-                self.bytes.reserve_exact(self.mem - self.bytes.capacity());
-            }
+            return;
+        }
+
+        self.mem = self.bytes.len() + 1;
+        self.bytes.shrink_to_fit();
+        if self.bytes.capacity() < self.mem {
+            self.bytes.reserve_exact(self.mem - self.bytes.capacity());
         }
     }
 
@@ -575,6 +575,17 @@ mod tests {
         assert_eq!(string.address(0), Some(0));
 
         string.minimize();
+        assert_eq!(string.allocated_mem(), 1);
+        assert_eq!(string.address(0), Some(0));
+    }
+
+    #[test]
+    fn minimize_keeps_never_allocated_empty_descriptor_unallocated() {
+        let mut string = DynamicString::new();
+
+        string.minimize();
+
+        assert_eq!(string.allocated_mem(), 0);
         assert_eq!(string.address(0), None);
     }
 
@@ -593,7 +604,8 @@ mod tests {
         assert_eq!(string.allocated_mem(), allocated);
 
         string.minimize();
-        assert_eq!(string.allocated_mem(), 0);
+        assert_eq!(string.allocated_mem(), 1);
+        assert_eq!(string.address(0), Some(0));
     }
 
     #[test]
