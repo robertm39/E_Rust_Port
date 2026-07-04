@@ -1,8 +1,11 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+use crate::basics::simple_stuff::{
+    problem_type, reset_problem_type, set_problem_type, ProblemType,
+};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausefunc::clause_set_archive_copy;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::FormulaSetCnfOptions;
 use crate::clauses::proofstate::{proof_state_alloc, ProofState};
 use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
 use crate::heuristics::clausesetfeatures::{
@@ -1030,6 +1033,8 @@ fn preprocess_real_input_clauses(
     config: &ClassifyProblemConfig,
     state: &mut ProofState,
 ) -> Result<(), Diagnostic> {
+    clausify_real_input_formula_axioms(config, state)?;
+
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     {
         let (bank, axioms, ax_archive) = state.terms_axioms_ax_archive_mut();
@@ -1056,6 +1061,19 @@ fn preprocess_real_input_clauses(
         config.eqdef_incrlimit,
         config.eqdef_maxclauses,
     )?;
+    Ok(())
+}
+
+fn clausify_real_input_formula_axioms(
+    config: &ClassifyProblemConfig,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let fresh_vars = state.fresh_vars().clone();
+    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type())
+        .with_def_limit(config.formula_def_limit);
+    let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_cnf_mut();
+    let _preprocessed = f_axioms.preproc_conjectures(bank, false, false)?;
+    let _cnf = f_axioms.cnf2_into(f_ax_archive, axioms, bank, &fresh_vars, options)?;
     Ok(())
 }
 
@@ -1459,12 +1477,17 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_feature_line, parse_raw_feature_line, process_options, run, ClassifyProblemConfig,
-        RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        clausify_real_input_formula_axioms, parse_feature_line, parse_raw_feature_line,
+        process_options, run, ClassifyProblemConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::basics::verbose::verbose_level;
+    use crate::clauses::clause_props::CP_TYPE_AXIOM;
+    use crate::clauses::clausefunc::tformula_lit_alloc;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::formulasets::WrappedFormula;
+    use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::clausesetfeatures::{
         spec_features_add_eval, spec_features_print_string, spec_type_string_for_problem,
     };
@@ -1473,7 +1496,11 @@ mod tests {
     };
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::prover::version::VERSION;
-    use crate::terms::signature::{FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL};
+    use crate::terms::signature::{
+        FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    };
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -1510,6 +1537,16 @@ mod tests {
 
     fn raw_feature_line(name: &str) -> String {
         format!("{name} : (1, 2, 3, 4, 5, 6, 7, 8, 0.125, 9, true, 2, 0, false): FSSMMLLCCSSNAA\n")
+    }
+
+    fn object_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().i_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .expect("test symbol type declaration succeeds");
+        bank.create_const_term(f_code)
+            .expect("test constant term is shared")
     }
 
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> Result<(u8, String, String), ErrorCode> {
@@ -1921,6 +1958,33 @@ mod tests {
         assert!(error.message().contains("Colon"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn formula_axioms_are_clausified_before_standard_clause_preprocessing() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let formula = {
+            let bank = state.terms_mut();
+            let left = object_const(bank, "classify_formula_left");
+            let right = object_const(bank, "classify_formula_right");
+            let literal = Eqn::alloc(left, right, bank, true).expect("literal allocation succeeds");
+            tformula_lit_alloc(bank, &literal, ProblemType::FirstOrder)
+                .expect("formula literal allocation succeeds")
+        };
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_properties(CP_TYPE_AXIOM);
+        state.f_axioms_mut().insert(wrapped);
+
+        clausify_real_input_formula_axioms(&ClassifyProblemConfig::default(), &mut state)
+            .expect("formula clausification succeeds");
+
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+        assert_eq!(state.f_ax_archive().cardinality(), 2);
     }
 
     #[test]

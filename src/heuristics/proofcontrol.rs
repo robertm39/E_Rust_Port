@@ -14015,6 +14015,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_with_output_reports_dynamic_watchlist_reduction() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected, watched) =
             watchlist_subsumption_pair(state.terms_mut(), "pc_saturate_watch_output", 4_157, 4_158);
