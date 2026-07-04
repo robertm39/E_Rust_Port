@@ -18,6 +18,7 @@ pub mod os_wrapper;
 pub mod partial_orderings;
 pub mod pdarrays;
 pub mod pdrangearrays;
+pub mod perf_counters;
 pub mod permastrings;
 pub mod plist;
 pub mod plocalstacks;

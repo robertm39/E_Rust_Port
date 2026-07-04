@@ -93,6 +93,8 @@ pub fn occur_check(term: &Term, var: &Term) -> bool {
 /// Panics if matching reaches untyped variables/terms or uninitialized
 /// arguments. The C routine asserts these as internal preconditions.
 pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitution) -> bool {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::MguTimer);
     let mut matcher_weight = term_standard_weight(matcher);
     let to_match_weight = term_standard_weight(to_match);
     if matcher_weight > to_match_weight
@@ -166,6 +168,8 @@ pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitu
 /// arity/type metadata, if variable bindings would be untyped, if a traversed
 /// argument is uninitialized.
 pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::MguTimer);
     #[cfg(feature = "measure-unification")]
     record_unification_attempt();
 

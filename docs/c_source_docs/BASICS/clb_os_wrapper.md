@@ -123,6 +123,7 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - Rust may use narrowly scoped unsafe external DLL/shared-library interop for this unit when a native platform API is required; keep those calls behind safe wrappers and document pointer/initialization invariants at the boundary.
+- The C performance-counter macros expand to process-global microsecond accumulators only when `INSTRUMENT_PERF_CTR` is defined. Rust maps that debug surface to the non-default `instrument-perf-ctr` Cargo feature in `src/basics/perf_counters.rs`, with same-shaped `% PC(...)` statistics lines for represented call sites.
 
 ### Porting Focus
 
@@ -138,4 +139,5 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 - Rust's Linux resource-usage path now uses a narrow `getrusage` boundary for the C-shaped resource footer, with `/proc/self/stat` and `/proc/self/status` retained only as fallback. Exact target units for maximum resident set size remain a compatibility detail to keep visible in output tests.
 - Rust's Linux `GetUSecClock` path now uses C `clock()` semantics for process CPU time. Unsupported targets still fall back to a monotonic process-relative wall clock, which should remain documented as a portability fallback rather than exact C behavior.
 - Rust's Linux `GetCoreNumber`, `GetSystemPageSize`, and `GetSystemPhysMemory` paths now prefer C-shaped `sysconf` queries, with safe Rust or `/proc` fallbacks if those calls fail. The hard-coded Linux/glibc selector values should be revisited if non-glibc Linux targets become supported.
+- `PERF_CTR_ENTRY` stores one start timestamp slot per counter name and `PERF_CTR_EXIT` consumes that slot, so nested or overlapping entries for the same C counter can overwrite the earlier start time. Rust's `instrument-perf-ctr` guards accumulate elapsed spans with RAII and atomics for represented call sites instead; revisit only if byte-level compatibility with the single-slot overwrite behavior becomes observable, and keep adding missing guards as the remaining proof-search owners are ported.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -392,6 +392,9 @@ pub fn clause_is_subsume_ordered(clause: &Clause, bank: &TermBank) -> bool {
 /// preconditions on `ClauseSubsumesClause`.
 #[must_use]
 pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &TermBank) -> bool {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SubsumeTimer,
+    );
     assert!(clause_is_subsume_ordered(subsumer, bank));
     assert!(clause_is_subsume_ordered(sub_candidate, bank));
     assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
@@ -449,6 +452,9 @@ pub fn clause_set_subsumes_clause<'set>(
     sub_candidate: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     assert!(
         sub_candidate.literal_number() > 1,
         "plain ClauseSetSubsumesClause expects a non-unit candidate"
@@ -474,6 +480,9 @@ pub fn clause_set_find_subsumed_clause<'set>(
     subsumer: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     assert_eq!(subsumer.weight(), subsumer.standard_weight());
     set.iter()
         .skip(start_index)
@@ -495,6 +504,9 @@ pub fn clause_set_find_subsumed_clauses<'set>(
     result: &mut PStack<&'set Clause>,
     bank: &TermBank,
 ) -> i64 {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     let old_len = result.len();
     assert_eq!(subsumer.weight(), subsumer.standard_weight());
     for candidate in set.iter() {
@@ -517,6 +529,9 @@ pub fn clause_set_find_first_subsumed_clause<'set>(
     subsumer: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     clause_set_find_subsumed_clause(set, 0, subsumer, bank)
 }
 
@@ -539,6 +554,9 @@ pub fn clause_set_subsumes_clause_with_index<'set>(
     sub_candidate: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     assert!(
         sub_candidate.literal_number() > 1,
         "ClauseSetSubsumesClause expects a non-unit candidate"
@@ -568,6 +586,9 @@ pub fn clause_set_find_subsumed_clauses_with_index<'set>(
     result: &mut PStack<&'set Clause>,
     bank: &TermBank,
 ) -> i64 {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     let Some(index) = index else {
         return clause_set_find_subsumed_clauses(set, subsumer, result, bank);
     };
@@ -592,6 +613,9 @@ pub fn clause_set_find_first_subsumed_clause_with_index<'set>(
     subsumer: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
     let Some(index) = index else {
         return clause_set_find_first_subsumed_clause(set, subsumer, bank);
     };
@@ -634,6 +658,9 @@ pub fn fv_index_subsumes_packed_clause<'index>(
     sub_candidate: &FvPackedClause,
     bank: &TermBank,
 ) -> Option<&'index Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
     let vector = sub_candidate
         .vector()
         .expect("FV-index subsumption requires a packed frequency vector");
@@ -660,6 +687,9 @@ pub fn fv_index_find_subsumed_clauses<'index>(
     result: &mut PStack<&'index Clause>,
     bank: &TermBank,
 ) -> i64 {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
     let old_len = result.len();
     let vector = subsumer
         .vector()
@@ -692,6 +722,9 @@ pub fn fv_index_find_first_subsumed_clause<'index>(
     subsumer: &FvPackedClause,
     bank: &TermBank,
 ) -> Option<&'index Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
     let vector = subsumer
         .vector()
         .expect("FV-index first-subsumed lookup requires a packed frequency vector");
@@ -715,6 +748,9 @@ pub fn fv_index_find_variant_clause<'index>(
     clause: &FvPackedClause,
     bank: &TermBank,
 ) -> Option<&'index Clause> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
     let vector = clause
         .vector()
         .expect("FV-index variant lookup requires a packed frequency vector");

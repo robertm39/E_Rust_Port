@@ -8520,6 +8520,8 @@ fn write_proof_statistics(
             state.terms().term_nodes()
         )?;
     }
+    #[cfg(feature = "instrument-perf-ctr")]
+    output.write_all(crate::basics::perf_counters::statistics_string().as_bytes())?;
     #[cfg(feature = "print-index-stats")]
     if let Some(indices) = global_indices {
         output.write_all(indices.index_statistics_string(state.terms()).as_bytes())?;
@@ -21527,6 +21529,34 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% BW rewrite match successes           : 13\n"));
         assert!(printed.contains("% Clause-clause subsumption calls (NU) : "));
         assert!(printed.contains("% Condensation attempts                : "));
+    }
+
+    #[cfg(feature = "instrument-perf-ctr")]
+    #[test]
+    fn write_proof_statistics_reports_perf_counter_lines() {
+        let _guard = global_state_lock();
+        let mut config = EProverConfig::default();
+        config.flags.set(EProverFlag::PrintStatistics);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut stdout = Vec::new();
+        write_proof_statistics(
+            &mut stdout,
+            &config,
+            &mut state,
+            None,
+            ProofStatisticsInput {
+                parsed_ax_no: 1,
+                relevancy_pruned: 2,
+                raw_clause_no: 3,
+                preproc_removed: 4,
+            },
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% PC(MguTimer)"));
+        assert!(printed.contains("% PC(SatTimer)"));
+        assert!(printed.contains("% PC(ClauseEvalTimer)"));
     }
 
     #[test]

@@ -554,6 +554,9 @@ pub fn optimized_var_freq_vector_compute(
     perm: Option<&PermVector>,
     cspec: &FvCollect,
 ) -> FreqVector {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FreqVecTimer,
+    );
     let vec = var_freq_vector_compute(clause, cspec);
     let Some(perm) = perm else {
         return vec;

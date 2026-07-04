@@ -320,9 +320,15 @@ impl<'sig> GlobalIndices<'sig> {
         );
         clause.set_prop(CP_IS_GLOBAL_INDEXED);
         if let Some(index) = self.bw_rw_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::BwrwIndexTimer,
+            );
             index.insert_clause(clause, lambda_demod);
         }
         if let Some(pm_into_index) = self.pm_into_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::PmIndexTimer,
+            );
             let pm_negp_index = self
                 .pm_negp_index
                 .as_mut()
@@ -330,6 +336,9 @@ impl<'sig> GlobalIndices<'sig> {
             overlap_index_insert_into_clause2(pm_into_index, pm_negp_index, clause, bank);
         }
         if let Some(index) = self.pm_from_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::PmIndexTimer,
+            );
             index.insert_from_clause(clause);
         }
         if let Some(index) = self.ext_sup_into_index.as_mut() {
@@ -351,9 +360,15 @@ impl<'sig> GlobalIndices<'sig> {
         );
         clause.del_prop(CP_IS_GLOBAL_INDEXED);
         if let Some(index) = self.bw_rw_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::BwrwIndexTimer,
+            );
             index.delete_clause(clause, lambda_demod);
         }
         if let Some(pm_into_index) = self.pm_into_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::PmIndexTimer,
+            );
             let pm_negp_index = self
                 .pm_negp_index
                 .as_mut()
@@ -361,6 +376,9 @@ impl<'sig> GlobalIndices<'sig> {
             overlap_index_delete_into_clause2(pm_into_index, pm_negp_index, clause, bank);
         }
         if let Some(index) = self.pm_from_index.as_mut() {
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::PmIndexTimer,
+            );
             index.delete_from_clause(clause);
         }
         if let Some(index) = self.ext_sup_into_index.as_mut() {

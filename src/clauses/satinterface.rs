@@ -472,6 +472,8 @@ pub fn sat_check_proof_state(
     norm_const: bool,
     decision_limit: i32,
 ) -> Result<SatCheckReport, Diagnostic> {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::SatTimer);
     let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
     let solver_start = Instant::now();
     let (result, empty) = satset.check_unsat(decision_limit);
@@ -493,6 +495,8 @@ pub fn sat_check_proof_state_with_picosat(
     decision_limit: i32,
     solver: &mut PicoSat,
 ) -> Result<SatCheckReport, Diagnostic> {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::SatTimer);
     let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
     let solver_start = Instant::now();
     let (result, empty) = satset

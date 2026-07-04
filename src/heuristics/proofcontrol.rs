@@ -3616,6 +3616,8 @@ fn proof_state_backward_simplify_impl<W: fmt::Write>(
     mut indices: Option<&mut GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::BwrwTimer);
     let mut outcome = BackwardSimplificationOutcome::default();
 
     let old_lit_count = state.tmp_store().literals();
@@ -5702,6 +5704,9 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
                     "selected-clause generation requires initialized proof-control ordering",
                 ));
             };
+            let _timer = crate::basics::perf_counters::start(
+                crate::basics::perf_counters::PerfCounter::ParamodTimer,
+            );
             outcome.paramodulants = compute_selected_paramodulants(
                 terms,
                 ocb,

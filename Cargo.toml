@@ -9,6 +9,7 @@ publish = false
 default = []
 measure-expensive = []
 measure-unification = []
+instrument-perf-ctr = []
 print-index-stats = []
 
 [[bin]]

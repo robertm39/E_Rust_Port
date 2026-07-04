@@ -868,6 +868,9 @@ pub fn hcb_clause_evaluate_into<Data>(
     bank: &TermBank,
     clause: &Clause,
 ) {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::ClauseEvalTimer,
+    );
     assert_eq!(
         evaluations.eval_no(),
         hcb.wfcb_no(),
@@ -902,6 +905,9 @@ pub fn hcb_clause_evaluate_into_with_bank<Data>(
     bank: &mut TermBank,
     clause: &mut Clause,
 ) -> Result<(), Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::ClauseEvalTimer,
+    );
     assert_eq!(
         evaluations.eval_no(),
         hcb.wfcb_no(),

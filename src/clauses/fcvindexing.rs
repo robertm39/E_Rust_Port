@@ -700,6 +700,9 @@ impl FvIndexAnchor {
     /// Panics if `packed` does not contain a vector, or if an existing final
     /// node is encountered before all vector coordinates are consumed.
     pub fn insert(&mut self, packed: &mut FvPackedClause, bank: &TermBank) -> bool {
+        let _timer = crate::basics::perf_counters::start(
+            crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+        );
         let vector = packed
             .vector()
             .expect("FV-index insertion requires a packed frequency vector")
@@ -739,6 +742,9 @@ impl FvIndexAnchor {
     pub fn delete(&mut self, clause: &Clause) -> bool {
         let vector =
             optimized_var_freq_vector_compute(clause, self.perm_vector.as_ref(), &self.cspec);
+        let _timer = crate::basics::perf_counters::start(
+            crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+        );
         self.index.delete_vector_clause(&vector, clause)
     }
 

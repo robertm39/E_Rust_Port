@@ -622,6 +622,9 @@ where
         term: &Term,
         collect: &mut Vec<Option<&'b ObjTree<T>>>,
     ) -> usize {
+        let _timer = crate::basics::perf_counters::start(
+            crate::basics::perf_counters::PerfCounter::IndexUnifTimer,
+        );
         let key = (self.fp_fun)(term);
         if self.discrimination_tree {
             self.index.find_dt_unifiable(&key, self.sig, collect)
@@ -635,6 +638,9 @@ where
         term: &Term,
         collect: &mut Vec<Option<&'b ObjTree<T>>>,
     ) -> usize {
+        let _timer = crate::basics::perf_counters::start(
+            crate::basics::perf_counters::PerfCounter::IndexMatchTimer,
+        );
         let key = (self.fp_fun)(term);
         if self.discrimination_tree {
             self.index.find_dt_matchable(&key, self.sig, collect)
