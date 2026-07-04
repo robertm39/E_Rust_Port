@@ -81,8 +81,10 @@ fn input_open_required(name: Option<&Path>) -> Result<InputSource, Diagnostic> {
 pub fn input_close(input: InputSource) -> Result<(), Diagnostic> {
     match input {
         InputSource::Stdin => Ok(()),
-        InputSource::File(file) => close_file(file)
-            .map_err(|error| io_diagnostic(format!("Error while closing file: {error}"))),
+        InputSource::File(file) => {
+            drop(file);
+            Ok(())
+        }
     }
 }
 
@@ -150,68 +152,6 @@ pub fn file_print(output: &mut impl Write, name: &Path) -> Result<(), Diagnostic
         .map_err(|error| io_diagnostic(format!("Cannot print file {}: {error}", name.display())))?;
     input_close(input)?;
     Ok(())
-}
-
-fn close_file(file: File) -> io::Result<()> {
-    platform_close::close_file(file)
-}
-
-#[cfg(unix)]
-#[allow(unsafe_code)]
-mod platform_close {
-    use std::fs::File;
-    use std::io;
-    use std::os::fd::IntoRawFd;
-
-    extern "C" {
-        fn close(fd: i32) -> i32;
-    }
-
-    pub(super) fn close_file(file: File) -> io::Result<()> {
-        let fd = file.into_raw_fd();
-        // SAFETY: into_raw_fd transfers ownership of a valid file descriptor.
-        // close consumes that descriptor exactly once and has no Rust aliases.
-        if unsafe { close(fd) } == -1 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code)]
-mod platform_close {
-    use std::ffi::c_void;
-    use std::fs::File;
-    use std::io;
-    use std::os::windows::io::IntoRawHandle;
-
-    extern "system" {
-        fn CloseHandle(handle: *mut c_void) -> i32;
-    }
-
-    pub(super) fn close_file(file: File) -> io::Result<()> {
-        let handle = file.into_raw_handle();
-        // SAFETY: into_raw_handle transfers ownership of a valid OS handle.
-        // CloseHandle consumes that handle exactly once and has no Rust aliases.
-        if unsafe { CloseHandle(handle.cast()) } == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-mod platform_close {
-    use std::fs::File;
-    use std::io;
-
-    pub(super) fn close_file(file: File) -> io::Result<()> {
-        drop(file);
-        Ok(())
-    }
 }
 
 #[must_use]
