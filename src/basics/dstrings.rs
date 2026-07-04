@@ -185,8 +185,20 @@ impl DynamicString {
         }
     }
 
+    /// Delete and return the last byte.
+    ///
+    /// Returns `0` for an empty descriptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics when deleting a NUL byte from a non-empty descriptor, matching
+    /// the C `DStrDeleteLastChar` assertion.
     pub fn delete_last_char(&mut self) -> u8 {
-        self.bytes.pop().unwrap_or(0)
+        let Some(deleted) = self.bytes.pop() else {
+            return 0;
+        };
+        assert!(deleted != 0, "DStrDeleteLastChar deleted NUL byte");
+        deleted
     }
 
     #[must_use]
@@ -214,7 +226,7 @@ impl DynamicString {
 
     #[must_use]
     pub fn copy(&self) -> Vec<u8> {
-        self.bytes.clone()
+        c_string_prefix(&self.bytes).to_vec()
     }
 
     /// Copy the bytes excluding the first and last byte.
@@ -229,7 +241,7 @@ impl DynamicString {
             self.bytes.len() >= 2,
             "DStrCopyCore requires at least two bytes"
         );
-        self.bytes[1..self.bytes.len() - 1].to_vec()
+        c_string_prefix(&self.bytes[1..self.bytes.len() - 1]).to_vec()
     }
 
     pub fn set(&mut self, value: &str) {
@@ -585,11 +597,33 @@ mod tests {
     }
 
     #[test]
+    fn copy_helpers_return_c_string_prefixes() {
+        let mut string = DynamicString::new();
+        string.append_buffer(b"ab\0hidden");
+
+        assert_eq!(string.copy(), b"ab".to_vec());
+
+        string.set("\"ab");
+        string.append_buffer(b"\0hidden\"");
+
+        assert_eq!(string.copy_core(), b"ab".to_vec());
+    }
+
+    #[test]
     #[should_panic(expected = "DStrCopyCore requires at least two bytes")]
     fn copy_core_panics_on_short_string_like_c_assertion() {
         let string = DynamicString::new();
 
         let _ = string.copy_core();
+    }
+
+    #[test]
+    #[should_panic(expected = "DStrDeleteLastChar deleted NUL byte")]
+    fn delete_last_char_panics_when_c_assert_would_fail() {
+        let mut string = DynamicString::new();
+        string.append_buffer(b"tail\0");
+
+        let _ = string.delete_last_char();
     }
 
     #[test]
