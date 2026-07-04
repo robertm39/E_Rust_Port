@@ -35,6 +35,30 @@ impl DynamicString {
         }
     }
 
+    /// Append the first `len` bytes of `buffer` using the C `int len` loop shape.
+    ///
+    /// C `DStrAppendBuffer` uses `for(i=0; i<len; i++)`, so zero and negative
+    /// lengths perform no work. The C helper trusts the raw pointer/length
+    /// pair; Rust treats a length beyond the provided slice as an invariant
+    /// failure instead of reading past the buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `len` is larger than the provided buffer.
+    pub fn append_buffer_c(&mut self, buffer: &[u8], len: i32) {
+        if len <= 0 {
+            return;
+        }
+        let Ok(len) = usize::try_from(len) else {
+            return;
+        };
+        assert!(
+            len <= buffer.len(),
+            "DStrAppendBuffer length exceeds buffer"
+        );
+        self.append_buffer(&buffer[..len]);
+    }
+
     pub fn append_bytes_with_str_growth(&mut self, buffer: &[u8]) {
         self.ensure_for_str_append(buffer.len());
         self.bytes.extend_from_slice(buffer);
@@ -240,6 +264,30 @@ mod tests {
         assert_eq!(string.address(2), Some(b'c'));
         assert_eq!(string.address(string.len()), Some(0));
         assert_eq!(string.address(99), None);
+    }
+
+    #[test]
+    fn signed_append_buffer_preserves_c_nonpositive_len_noop() {
+        let mut string = DynamicString::new();
+
+        string.append_buffer_c(b"ignored", 0);
+        string.append_buffer_c(b"ignored", -3);
+
+        assert_eq!(string.view_bytes(), b"");
+        assert_eq!(string.allocated_mem(), 0);
+
+        string.append_buffer_c(b"abcdef", 3);
+
+        assert_eq!(string.view_bytes(), b"abc");
+        assert_eq!(string.allocated_mem(), DSTR_GROW);
+    }
+
+    #[test]
+    #[should_panic(expected = "DStrAppendBuffer length exceeds buffer")]
+    fn signed_append_buffer_rejects_read_past_buffer_boundary() {
+        let mut string = DynamicString::new();
+
+        string.append_buffer_c(b"abc", 4);
     }
 
     #[test]

@@ -119,6 +119,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DStrAppendBuffer` takes a signed `int len` and uses a plain `for(i=0; i<len; i++)` loop, so zero and negative lengths append nothing. Rust keeps that loop surface in a signed compatibility helper while checking that the requested prefix fits the provided slice.
 - `DStrAddress` checks only `index > len`, so `index == len` returns the address of the trailing NUL for allocated strings. Rust preserves this as `Some(0)` for allocated buffers while keeping a never-allocated empty string as no address.
 - `DStrCopyCore` asserts that the descriptor has allocated string data and that `len >= 2` before copying the interior bytes. Rust preserves this as a panic on strings shorter than two bytes rather than returning an optional value.
 
@@ -131,6 +132,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 ### Change Later
 
 - `DStrAddress` accepts a signed `int` and checks only `index > len`; negative indices can produce a pointer before the string buffer in C. Rust intentionally does not expose negative indexes. If a byte-for-byte compatibility test ever exercises this, decide whether to reject it at the parser/caller boundary or add a narrowly named compatibility helper.
+- `DStrAppendBuffer` trusts its raw pointer/length pair and can read past the supplied buffer when `len` is too large. Rust reports that as an invariant failure at the slice boundary; a cleaned API should keep accepting ordinary slices instead of raw pointer/length pairs.
 - `DStrView` exposes a mutable C buffer pointer and relies on callers not changing its length. Rust keeps immutable byte/string views; later APIs that need writable buffer access should make length preservation explicit.
 - `DStrCopyCore` is specialized for quoted strings but only checks length, not matching quote delimiters. A later high-level string-literal API should validate delimiters before stripping them.
 <!-- END MANUAL REVIEW: c_source_docs -->
