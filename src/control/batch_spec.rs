@@ -1,5 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{set_problem_type, ProblemType, ProverResult};
+use crate::basics::simple_stuff::{
+    reset_problem_type, set_problem_type, ProblemType, ProverResult,
+};
 use crate::basics::stringtrees::StrTree;
 use crate::clauses::clause::{clause_parse, Clause};
 use crate::clauses::clause_props::{
@@ -174,6 +176,7 @@ pub struct BatchProcessProblemRecord {
 pub struct BatchProblemData {
     pub clauses: ClauseSet,
     pub formulas: FormulaSet,
+    pub problem_type: ProblemType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -787,7 +790,7 @@ impl BatchSpec {
         ctrl: &StructFofSpec,
         scanner: &mut Scanner,
     ) -> Result<BatchProblemData, Diagnostic> {
-        parse_batch_problem_entries(scanner, bank, ctrl, None)
+        parse_batch_problem_entries_root(scanner, bank, ctrl)
     }
 
     #[expect(
@@ -1287,6 +1290,10 @@ impl BatchSpec {
     {
         let filters = crate::heuristics::axfilter::AxFilterSet::default_set()?;
         let _pre_add_start = clock_seconds();
+        let problem_config = BatchRunnerProblemConfig {
+            problem_type: problem.problem_type,
+            ..problem_config
+        };
         ctrl.add_problem(bank.signature(), problem.clauses, problem.formulas, false);
 
         let mut spawn_count = 0;
@@ -1774,7 +1781,18 @@ fn load_include_problem_from_file<W: Write + ?Sized>(
     };
     writeln!(output, "% Parsing {}", request.source)
         .map_err(|error| batch_process_output_error(&error))?;
-    parse_batch_problem_entries(&mut scanner, bank, ctrl, None).map(Some)
+    parse_batch_problem_entries_root(&mut scanner, bank, ctrl).map(Some)
+}
+
+fn parse_batch_problem_entries_root(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    ctrl: &StructFofSpec,
+) -> Result<BatchProblemData, Diagnostic> {
+    reset_problem_type();
+    let mut problem = parse_batch_problem_entries(scanner, bank, ctrl, None)?;
+    problem.problem_type = normalize_batch_problem_type(problem.problem_type);
+    Ok(problem)
 }
 
 fn parse_batch_problem_entries(
@@ -1783,12 +1801,14 @@ fn parse_batch_problem_entries(
     ctrl: &StructFofSpec,
     mut selectors: Option<&mut StrTree<i64, i64>>,
 ) -> Result<BatchProblemData, Diagnostic> {
-    set_problem_type(ProblemType::FirstOrder)?;
     let mut clauses = ClauseSet::new();
     let mut formulas = FormulaSet::new();
+    let mut problem_type = ProblemType::NotInitialized;
 
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
+            set_problem_type(ProblemType::FirstOrder)?;
+            problem_type = combine_batch_problem_types(problem_type, ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             if batch_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
@@ -1796,8 +1816,9 @@ fn parse_batch_problem_entries(
             ) {
                 insert_batch_clause(bank, &mut clauses, &mut formulas, clause)?;
             }
-        } else if scanner.test_id("fof|tff|tcf") {
+        } else if scanner.test_id("fof|tff|tcf|thf") {
             let parsed = parse_batch_tstp_formula(scanner, bank)?;
+            problem_type = combine_batch_problem_types(problem_type, parsed.problem_type)?;
             if batch_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 insert_batch_formula(bank, &mut clauses, &mut formulas, parsed.formula)?;
             }
@@ -1813,16 +1834,16 @@ fn parse_batch_problem_entries(
                     ctrl,
                     Some(&mut include_selectors),
                 )?;
+                problem_type =
+                    combine_batch_problem_types(problem_type, included_data.problem_type)?;
                 clauses.insert_set(&mut included_data.clauses);
                 formulas.insert_set(&mut included_data.formulas);
             }
-        } else if scanner.test_id("thf") {
-            return Err(batch_thf_requires_hol_error(scanner));
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): LTB batch input currently supports cnf clauses, first-order fof/tff/tcf formula entries, and include directives",
+                    "{}(just read '{}'): LTB batch input currently supports cnf clauses, fof/tff/tcf/thf formula entries, and include directives",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -1834,7 +1855,42 @@ fn parse_batch_problem_entries(
         check_batch_include_selectors_found(scanner, selector_tree)?;
     }
 
-    Ok(BatchProblemData { clauses, formulas })
+    Ok(BatchProblemData {
+        clauses,
+        formulas,
+        problem_type,
+    })
+}
+
+fn batch_tstp_wrapper_problem_type(kind: &str) -> ProblemType {
+    if kind == "thf" {
+        ProblemType::HigherOrder
+    } else {
+        ProblemType::FirstOrder
+    }
+}
+
+fn combine_batch_problem_types(
+    current: ProblemType,
+    next: ProblemType,
+) -> Result<ProblemType, Diagnostic> {
+    match (current, next) {
+        (ProblemType::NotInitialized, next) => Ok(next),
+        (current, ProblemType::NotInitialized) => Ok(current),
+        (current, next) if current == next => Ok(current),
+        _ => Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Mixing of first order and higher order syntax is not allowed.",
+        )),
+    }
+}
+
+fn normalize_batch_problem_type(problem_type: ProblemType) -> ProblemType {
+    if problem_type == ProblemType::NotInitialized {
+        ProblemType::FirstOrder
+    } else {
+        problem_type
+    }
 }
 
 fn insert_batch_clause(
@@ -1877,6 +1933,7 @@ fn insert_batch_formula(
 struct ParsedBatchFormula {
     name: String,
     formula: WrappedFormula,
+    problem_type: ProblemType,
 }
 
 fn parse_batch_tstp_formula(
@@ -1887,9 +1944,12 @@ fn parse_batch_tstp_formula(
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
     let start_line = usize_to_i64_c(scanner.current_token().line());
     let start_column = usize_to_i64_c(scanner.current_token().column());
-    let is_tcf = scanner.test_id("tcf");
+    let formula_kind = scanner.current_token().literal();
+    let problem_type = batch_tstp_wrapper_problem_type(&formula_kind);
+    let is_tcf = formula_kind == "tcf";
 
-    scanner.accept_id("fof|tff|tcf")?;
+    set_problem_type(problem_type)?;
+    scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
@@ -1899,10 +1959,10 @@ fn parse_batch_tstp_formula(
         scanner.accept_id("type")?;
         scanner.accept_tok(TokenType::COMMA)?;
         bank.signature_mut()
-            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+            .parse_tff_type_declaration(scanner, problem_type)?;
         (
             bank.true_term().clone(),
-            clause_type_from_identifier("axiom", ProblemType::FirstOrder),
+            clause_type_from_identifier("axiom", problem_type),
         )
     } else {
         let roles = if is_tcf {
@@ -1914,12 +1974,12 @@ fn parse_batch_tstp_formula(
         let role = scanner.current_token().literal();
         scanner.accept_tok(TokenType::IDENT)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let type_ = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+        let type_ = clause_type_from_identifier(&role, problem_type);
         let formula_position = token_pos_rep(scanner.current_token());
         let formula = if scanner.test_id("$distinct") {
             bank.parse_tstp_distinct(scanner)?
         } else if is_tcf {
-            tcf_tstp_parse(scanner, bank, ProblemType::FirstOrder)?
+            tcf_tstp_parse(scanner, bank, problem_type)?
         } else {
             bank.parse_tformula_tstp(scanner)?
         };
@@ -1947,7 +2007,11 @@ fn parse_batch_tstp_formula(
         start_line,
         start_column,
     )));
-    Ok(ParsedBatchFormula { name, formula })
+    Ok(ParsedBatchFormula {
+        name,
+        formula,
+        problem_type,
+    })
 }
 
 fn parse_batch_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -2023,17 +2087,6 @@ fn check_batch_include_selectors_found(
     message.push_str("\"include\" statement cannot find requested clauses/formulae: ");
     message.push_str(&missing.join(", "));
     Err(Diagnostic::new(ErrorCode::SYNTAX_ERROR, message))
-}
-
-fn batch_thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
-    Diagnostic::new(
-        ErrorCode::SYNTAX_ERROR,
-        format!(
-            "{}(just read '{}'): To support HOL reasoning, rebuild with higher-order support",
-            token_pos_rep(scanner.current_token()),
-            scanner.current_token().literal()
-        ),
-    )
 }
 
 fn parse_output_line(
@@ -3045,6 +3098,7 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(problem.problem_type, ProblemType::FirstOrder);
         assert_eq!(problem.clauses.len(), 1);
         assert_eq!(problem.formulas.cardinality(), 2);
         let formulas = problem.formulas.iter().collect::<Vec<_>>();
@@ -3058,6 +3112,93 @@ mod tests {
             formulas[1].info().and_then(ClauseInfo::name),
             Some("goal_formula")
         );
+    }
+
+    #[test]
+    fn load_problem_from_file_accepts_supported_thf_entries() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let source = test_path("batch-load-thf.p");
+        fs::write(
+            &source,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(goal_formula, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(problem.problem_type, ProblemType::HigherOrder);
+        assert_eq!(problem.clauses.len(), 0);
+        assert_eq!(problem.formulas.cardinality(), 4);
+        assert!(problem
+            .formulas
+            .iter()
+            .any(|formula| formula.info().and_then(ClauseInfo::name) == Some("goal_formula")));
+    }
+
+    #[test]
+    fn process_file_with_runner_backend_renders_loaded_thf_problem() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let source = test_path("batch-real-thf.p");
+        let dest = test_path("batch-real-thf.out");
+        let _ = fs::remove_file(&dest);
+        fs::write(
+            &source,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(goal_formula, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut backend = FakeRunnerBackend::new(Some(theorem_completion("% thf proof\n")));
+        let source_name = source.to_string_lossy().into_owned();
+        let dest_name = dest.to_string_lossy().into_owned();
+
+        let report = spec
+            .process_file_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: &source_name,
+                    dest: &dest_name,
+                },
+                &mut global,
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        assert_eq!(backend.requests.len(), MAX_CORES);
+        assert!(backend.payloads[0].contains("thf("));
+        assert!(backend.payloads[0].contains("thf(goal_formula"));
+        assert!(!backend.payloads[0].contains("fof(goal_formula"));
+        assert!(!backend.payloads[0].contains("tff(goal_formula"));
     }
 
     #[test]
@@ -3863,6 +4004,7 @@ mod tests {
         BatchProblemData {
             clauses: ClauseSet::from_clauses([Clause::empty()]),
             formulas: FormulaSet::new(),
+            problem_type: ProblemType::FirstOrder,
         }
     }
 

@@ -1019,7 +1019,7 @@ mod tests {
         RUN_COMMAND, STAGE_COMMAND, UNSTAGE_COMMAND,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
-    use crate::basics::simple_stuff::ProverResult;
+    use crate::basics::simple_stuff::{ProblemType, ProverResult};
     use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
     use crate::control::batch_spec::{
         BatchCompletedRunner, BatchProblemData, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
@@ -1053,6 +1053,7 @@ mod tests {
         BatchProblemData {
             clauses: ClauseSet::new(),
             formulas: FormulaSet::new(),
+            problem_type: ProblemType::FirstOrder,
         }
     }
 
