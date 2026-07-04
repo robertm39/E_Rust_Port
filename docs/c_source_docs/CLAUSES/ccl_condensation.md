@@ -90,7 +90,7 @@ Source files reviewed: `CLAUSES/ccl_condensation.h`, `CLAUSES/ccl_condensation.c
 
 ### Rust Port Status Notes
 
-- `src/clauses/condensation.rs` ports `CondenseOnce`, `Condense`, the process-wide attempt/success counters, and the candidate-replacement flow through one-way literal unification, duplicate/resolved cleanup, subsumption-order sorting, and candidate subsumption checking.
+- `src/clauses/condensation.rs` ports `CondenseOnce`, `Condense`, the process-wide attempt/success counters now read by executable statistics, and the candidate-replacement flow through one-way literal unification, duplicate/resolved cleanup, subsumption-order sorting, and candidate subsumption checking.
 - The Rust port preserves the C gate that only attempts full condensation when there are at least two positive literals or at least two negative literals, while still counting every `Condense` call as an attempt.
 - The `DCCondense` derivation-stack side effect is ported when at least one condensation step changes the clause. An opt-in documenting helper emits the represented `DocClauseModificationDefault(..., inf_condense, NULL)` step before pushing `DCCondense`, matching C side-effect order for proof-control callers with a `ProofDocSession`.
 

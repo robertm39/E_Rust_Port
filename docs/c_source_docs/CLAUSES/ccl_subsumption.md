@@ -163,7 +163,7 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 
 ### Rust Port Status Notes
 
-- `src/clauses/subsumption.rs` ports direct first-order subsumption helpers, unit subsumption helpers, plain-set positive and negative simplify-reflect, optional strong positive unit simplify-reflect, plain and FV-indexed subsumed-clause discovery, variant lookup, and the process-global subsumption counters.
+- `src/clauses/subsumption.rs` ports direct first-order subsumption helpers, unit subsumption helpers, plain-set positive and negative simplify-reflect, optional strong positive unit simplify-reflect, plain and FV-indexed subsumed-clause discovery, variant lookup, and the process-global subsumption counters now read by executable statistics.
 - Positive and negative simplify-reflect now record `DCSR` derivation entries with compact references to the simplifying unit clause when a literal is removed. Opt-in documenting helpers emit represented `DocClauseModificationDefault(..., inf_simplify_reflect, ...)` output before pushing the matching `DCSR` entry.
 - Indexed simplify-reflect lookup, executable-wide proof-output/session ownership, and proof-object traversal remain pending. Rust stores C's process-global `StrongUnitForwardSubsumption` as proof-control session configuration for forward subsumption and positive simplify-reflect callers.
 

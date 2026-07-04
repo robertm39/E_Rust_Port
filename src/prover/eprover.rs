@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
@@ -8463,42 +8464,7 @@ fn write_proof_statistics(
             )
             .as_bytes(),
     )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Clause-clause subsumption calls (NU) : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Rec. Clause-clause subsumption calls : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Non-unit clause-clause subsumptions  : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Unit Clause-clause subsumption calls : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Rewrite failures with RHS unbound    : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} BW rewrite match attempts            : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} BW rewrite match successes           : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Condensation attempts                : 0"
-    )?;
-    writeln!(
-        output,
-        "{DEFAULT_COMCHAR_RAW} Condensation successes               : 0"
-    )?;
+    write_subsystem_proof_statistics(output)?;
     #[cfg(feature = "measure-unification")]
     {
         writeln!(
@@ -8535,6 +8501,55 @@ fn write_proof_statistics(
             state.terms().term_nodes()
         )?;
     }
+    Ok(())
+}
+
+fn write_subsystem_proof_statistics(output: &mut impl Write) -> Result<(), EProverError> {
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Clause-clause subsumption calls (NU) : {}",
+        crate::clauses::subsumption::clause_clause_subsumption_calls()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Rec. Clause-clause subsumption calls : {}",
+        crate::clauses::subsumption::clause_clause_subsumption_calls_rec()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Non-unit clause-clause subsumptions  : {}",
+        crate::clauses::subsumption::clause_clause_subsumption_successes()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Unit Clause-clause subsumption calls : {}",
+        crate::clauses::subsumption::unit_clause_clause_subsumption_calls()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Rewrite failures with RHS unbound    : {}",
+        crate::clauses::rewrite::REWRITE_UNBOUND_VAR_FAILS.load(AtomicOrdering::Relaxed)
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} BW rewrite match attempts            : {}",
+        crate::clauses::rewrite::BWRW_MATCH_ATTEMPTS.load(AtomicOrdering::Relaxed)
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} BW rewrite match successes           : {}",
+        crate::clauses::rewrite::BWRW_MATCH_SUCCESSES.load(AtomicOrdering::Relaxed)
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Condensation attempts                : {}",
+        crate::clauses::condensation::condensation_attempts()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Condensation successes               : {}",
+        crate::clauses::condensation::condensation_successes()
+    )?;
     Ok(())
 }
 
@@ -12792,7 +12807,7 @@ mod tests {
         proof_object_list_display_clauses, resource_limit_warning_from_outcome,
         resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
         schedule_heuristic_selection, simple_app_encoded_formula_set,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_statistics,
         write_resource_setup_messages, write_saturation_proof_object_clause,
         write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
         EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
@@ -12819,6 +12834,9 @@ mod tests {
     use crate::clauses::formulasets::WrappedFormula;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
+    use crate::clauses::rewrite::{
+        BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
+    };
     use crate::heuristics::new_autoschedule::ScheduleCell;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
@@ -12844,6 +12862,7 @@ mod tests {
     use std::fmt::Write as _;
     use std::io::Write as _;
     use std::path::PathBuf;
+    use std::sync::atomic::Ordering as AtomicOrdering;
 
     struct EnvGuard {
         name: &'static str,
@@ -21445,6 +21464,34 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Termbank termtop insertions          : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn write_proof_statistics_reports_maintained_rewrite_counters() {
+        let _guard = global_state_lock();
+        let previous_unbound = REWRITE_UNBOUND_VAR_FAILS.load(AtomicOrdering::Relaxed);
+        let previous_attempts = BWRW_MATCH_ATTEMPTS.load(AtomicOrdering::Relaxed);
+        let previous_successes = BWRW_MATCH_SUCCESSES.load(AtomicOrdering::Relaxed);
+        REWRITE_UNBOUND_VAR_FAILS.store(7, AtomicOrdering::Relaxed);
+        BWRW_MATCH_ATTEMPTS.store(11, AtomicOrdering::Relaxed);
+        BWRW_MATCH_SUCCESSES.store(13, AtomicOrdering::Relaxed);
+
+        let mut config = EProverConfig::default();
+        config.flags.set(EProverFlag::PrintStatistics);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut stdout = Vec::new();
+        write_proof_statistics(&mut stdout, &config, &mut state, 1, 2, 3, 4).unwrap();
+
+        REWRITE_UNBOUND_VAR_FAILS.store(previous_unbound, AtomicOrdering::Relaxed);
+        BWRW_MATCH_ATTEMPTS.store(previous_attempts, AtomicOrdering::Relaxed);
+        BWRW_MATCH_SUCCESSES.store(previous_successes, AtomicOrdering::Relaxed);
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% Rewrite failures with RHS unbound    : 7\n"));
+        assert!(printed.contains("% BW rewrite match attempts            : 11\n"));
+        assert!(printed.contains("% BW rewrite match successes           : 13\n"));
+        assert!(printed.contains("% Clause-clause subsumption calls (NU) : "));
+        assert!(printed.contains("% Condensation attempts                : "));
     }
 
     #[test]
