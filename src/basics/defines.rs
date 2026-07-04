@@ -32,6 +32,23 @@ pub fn c_cmp<T: Ord + ?Sized>(left: &T, right: &T) -> i32 {
     }
 }
 
+/// Return the C `ABS` macro value for a signed `long`-shaped integer.
+///
+/// # Panics
+///
+/// Panics for `i64::MIN`. The C macro negates that value with signed overflow,
+/// which is undefined behavior.
+#[must_use]
+pub fn c_abs(value: IntOrPInt) -> IntOrPInt {
+    if value > 0 {
+        value
+    } else {
+        value
+            .checked_neg()
+            .unwrap_or_else(|| panic!("ABS overflow for minimum signed value"))
+    }
+}
+
 #[must_use]
 pub const fn logical_xor(left: bool, right: bool) -> bool {
     left != right
@@ -103,8 +120,8 @@ impl<P> IntOrP<P> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_to_str, c_cmp, logical_equiv, logical_xor, IntOrP, IntOrPInt, INT_OR_P_MEM, KILO,
-        LONG_MEM, MEGA,
+        bool_to_str, c_abs, c_cmp, logical_equiv, logical_xor, IntOrP, IntOrPInt, INT_OR_P_MEM,
+        KILO, LONG_MEM, MEGA,
     };
     use std::mem::size_of;
 
@@ -123,10 +140,19 @@ mod tests {
         assert_eq!(c_cmp(&1, &2), -1);
         assert_eq!(c_cmp(&2, &2), 0);
         assert_eq!(c_cmp(&3, &2), 1);
+        assert_eq!(c_abs(5), 5);
+        assert_eq!(c_abs(0), 0);
+        assert_eq!(c_abs(-5), 5);
         assert!(logical_xor(true, false));
         assert!(!logical_xor(true, true));
         assert!(logical_equiv(false, false));
         assert!(!logical_equiv(false, true));
+    }
+
+    #[test]
+    #[should_panic(expected = "ABS overflow for minimum signed value")]
+    fn c_abs_panics_on_minimum_signed_value_instead_of_importing_undefined_behavior() {
+        let _value = c_abs(IntOrPInt::MIN);
     }
 
     #[test]
