@@ -22,6 +22,8 @@ use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBan
 pub const PROGRAM_NAME: &str = "e_deduction_server";
 const DEFAULT_PROVER: &str = "eprover";
 const DEFAULT_TOTAL_WTC_LIMIT: i64 = 30;
+const STDOUT_SERVER_UNIMPLEMENTED_MESSAGE: &str =
+    "e_deduction_server: Server mode not implemented yet for stdout\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -217,7 +219,7 @@ where
 
 fn execute_config<R, W>(
     config: &DeductionServerConfig,
-    stdin: &mut R,
+    _stdin: &mut R,
     stdout: &mut W,
 ) -> Result<u8, Diagnostic>
 where
@@ -229,29 +231,7 @@ where
     if let Some(port) = config.port {
         serve_tcp(port, &config.server_lib, &spec, stdout)?;
     } else {
-        let mut bank = new_term_bank()?;
-        let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut backend = BatchProcCtrlRunnerSet::new();
-        run_text_server_with(
-            stdin,
-            stdout,
-            &config.server_lib,
-            &spec,
-            &mut bank,
-            &mut ctrl,
-            |spec, bank, ctrl, job_name, input_axioms| {
-                run_command_with_runner_backend(
-                    job_name,
-                    input_axioms,
-                    spec,
-                    bank,
-                    ctrl,
-                    current_time_seconds,
-                    &mut backend,
-                )
-                .map(|report| report.command)
-            },
-        )?;
+        write_all(stdout, STDOUT_SERVER_UNIMPLEMENTED_MESSAGE.as_bytes())?;
     }
     Ok(ErrorCode::NO_ERROR.exit_status())
 }
@@ -459,6 +439,7 @@ mod tests {
     use super::{
         deduction_batch_spec, parse_port, print_help, process_options, run, run_text_server_with,
         DeductionServerConfig, RunCommand, DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, PROGRAM_NAME,
+        STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -683,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn run_applies_output_and_verbose_globals_for_text_session() {
+    fn run_applies_output_and_verbose_globals_for_stdout_unimplemented_path() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(b"QUIT\n".to_vec());
         let mut stdout = Vec::new();
@@ -700,7 +681,10 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(verbose_level(), 3);
         assert_eq!(output_level(), 4);
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            STDOUT_SERVER_UNIMPLEMENTED_MESSAGE
+        );
     }
 
     #[test]

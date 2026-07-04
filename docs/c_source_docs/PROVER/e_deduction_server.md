@@ -89,13 +89,13 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, stdin/stdout mode when `-p` is absent, TCP-string mode when `-p` is present, and temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend.
+- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, and temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend.
 - The Rust TCP server currently serves accepted clients sequentially but creates fresh term/control state per accepted client to approximate the C child-process snapshot.
 - The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under “E Server Sessions”.
 
 ### Change Later
 
-- The usage string says `-p <port>` even though the no-port path is real behavior: it calls `StartDeductionServer(spec, ctrl, server_lib, stdout, -1)` and uses stdin/stdout instead of TCP. Keep this for compatibility, but a cleaned CLI should make transport choice explicit.
+- The usage string and option help say stdin/stdout will be used when `-p` is absent, but the C path calls `StartDeductionServer(spec, ctrl, server_lib, stdout, -1)`, prints `e_deduction_server: Server mode not implemented yet for stdout`, and exits without processing commands. Rust preserves this no-port message for the executable while keeping its reusable text-session helper internal; a cleaned CLI should either implement stdin/stdout mode deliberately or require `-p`.
 - The executable assigns `total_wtc_limit = 30` before option parsing, so `-w 0` later overwrites the default and disables the fallback. A future configuration API should distinguish omitted limits from explicit zero.
 - `outname` is passed to `OpenGlobalOut(outname)` but no command-line option sets it; `app_encode` is file-global and unused; `OPT_PRINT_STATISTICS` remains in the enum without an option-table entry. These look like stale or anticipatory C surfaces that should not be reproduced beyond observable compatibility.
 - The first remaining argument is treated as the prover executable and later positional arguments are ignored, despite the help text saying `[files]`. A stricter Rust CLI should wait until drop-in compatibility tests cover this behavior.
