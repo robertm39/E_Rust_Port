@@ -210,6 +210,25 @@ impl<T: Clone> PDPointerArray<T> {
         index
     }
 
+    /// Clear an already allocated pointer slot without growing the array.
+    ///
+    /// This mirrors the raw C `PDArrayElementClear` macro, which writes
+    /// directly to `array[idx].p_val` instead of going through
+    /// `PDArrayElementRef`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative or outside the current allocation. The C
+    /// macro has no bounds check for those cases and would perform an invalid
+    /// raw memory write.
+    pub fn element_clear_c_raw(&mut self, idx: PDArrayIndex) {
+        let index = index_or_panic(idx, "PDArrayElementClear");
+        let Some(element) = self.array.get_mut(index) else {
+            panic!("PDArrayElementClear index out of range");
+        };
+        *element = None;
+    }
+
     pub fn delete_pointer(&mut self, idx: PDArrayIndex) -> bool {
         self.delete(idx)
     }
@@ -372,6 +391,25 @@ mod tests {
         assert_eq!(array.size(), 2);
         assert!(array.delete_pointer(1));
         assert_eq!(array.existing_element(1), Some(&None));
+    }
+
+    #[test]
+    fn raw_element_clear_clears_existing_slot_without_growing() {
+        let mut array = PDPointerArray::new_pointer(2, GROW_EXPONENTIAL);
+        array.assign(1, Some("value"));
+
+        array.element_clear_c_raw(1);
+
+        assert_eq!(array.size(), 2);
+        assert_eq!(array.existing_element(1), Some(&None));
+    }
+
+    #[test]
+    #[should_panic(expected = "PDArrayElementClear index out of range")]
+    fn raw_element_clear_panics_on_uncovered_index_instead_of_c_out_of_bounds_write() {
+        let mut array = PDPointerArray::<usize>::new_pointer(2, GROW_EXPONENTIAL);
+
+        array.element_clear_c_raw(2);
     }
 
     #[test]
