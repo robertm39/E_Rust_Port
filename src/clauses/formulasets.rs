@@ -118,6 +118,22 @@ impl FormulaTstpPrintOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormulaProofDocRenderOptions {
+    pub full_terms: bool,
+    pub problem_type: ProblemType,
+}
+
+impl FormulaProofDocRenderOptions {
+    #[must_use]
+    pub const fn new(full_terms: bool, problem_type: ProblemType) -> Self {
+        Self {
+            full_terms,
+            problem_type,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WrappedFormulaCnfResult {
     pub clauses_generated: i64,
@@ -846,6 +862,12 @@ pub struct FormulaSetPreprocessConjecturesResult {
     pub conjectures_negated: i64,
     pub questions_annotated: i64,
     pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetPreprocessConjecturesDocResult {
+    pub preprocess: FormulaSetPreprocessConjecturesResult,
+    pub write_results: Vec<ProofDocWriteResult>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -2374,6 +2396,105 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `FormulaSetPreprocConjectures` and emits its proof-document
+    /// modification steps.
+    ///
+    /// This mirrors `preproc_conjectures` but also ports the
+    /// `DocFormulaModificationDefault` calls performed by
+    /// `WFormulaAnnotateQuestion` and `WFormulaConjectureNegate`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if answer-literal allocation, conjecture negation,
+    /// formula rendering, or proof-document writing fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any preprocessed wrapper has no formula term.
+    pub fn preproc_conjectures_with_docs<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+        add_answer_lits: bool,
+        conjectures_are_questions: bool,
+    ) -> Result<FormulaSetPreprocessConjecturesDocResult, Diagnostic> {
+        let mut result = FormulaSetPreprocessConjecturesDocResult::default();
+
+        for index in 0..self.formulas.len() {
+            let annotated = {
+                let formula = &mut self.formulas[index];
+                formula.annotate_question(bank, add_answer_lits, conjectures_are_questions)?
+            };
+            if annotated {
+                result.preprocess.questions_annotated += 1;
+                result
+                    .preprocess
+                    .formula_derivation_ops
+                    .push(DC_ANNO_QUESTION);
+                let (write_result, new_ident, new_properties) = {
+                    let formula = &self.formulas[index];
+                    let rendered = formula.proof_doc_formula_body_string(
+                        bank,
+                        render_options.full_terms,
+                        render_options.problem_type,
+                    )?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = session.doc_formula_modification(
+                        output,
+                        &mut view,
+                        FormulaModificationInference::AnnotateQuestion,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                {
+                    let formula = &mut self.formulas[index];
+                    formula.ident = new_ident;
+                    formula.set_properties(new_properties);
+                }
+                result.write_results.push(write_result);
+            }
+
+            let negated = {
+                let formula = &mut self.formulas[index];
+                formula.conjecture_negate(bank)?
+            };
+            if negated {
+                result.preprocess.conjectures_negated += 1;
+                result
+                    .preprocess
+                    .formula_derivation_ops
+                    .push(DC_NEGATE_CONJECTURE);
+                let (write_result, new_ident, new_properties) = {
+                    let formula = &self.formulas[index];
+                    let rendered = formula.proof_doc_formula_body_string(
+                        bank,
+                        render_options.full_terms,
+                        render_options.problem_type,
+                    )?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = session.doc_formula_modification(
+                        output,
+                        &mut view,
+                        FormulaModificationInference::NegConjecture,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                {
+                    let formula = &mut self.formulas[index];
+                    formula.ident = new_ident;
+                    formula.set_properties(new_properties);
+                }
+                result.write_results.push(write_result);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Applies C `WFormulaSetUnrollFOOL` in insertion order.
     ///
     /// Each formula first runs `WFormulaReplaceEqnWithEquiv`, then
@@ -3345,8 +3466,9 @@ fn formula_set_write_error(message: &'static str) -> Diagnostic {
 mod tests {
     use super::{
         clause_set_lift_lambdas, formula_set_definition_statistics, formula_set_stack_cardinality,
-        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat, FormulaSet,
-        FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
+        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat,
+        FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, FormulaTstpClauseMode,
+        FormulaTstpPrintOptions, WrappedFormula,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -4643,6 +4765,131 @@ mod tests {
         assert_eq!(formulas[2].query_tptp_type(), CP_TYPE_AXIOM);
         assert_eq!(formulas[2].formula(), &axiom_formula);
         assert_eq!(formulas[2].derivation_entries(), &[]);
+    }
+
+    #[test]
+    fn formula_set_preproc_conjectures_with_docs_prints_annotation_then_negation() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "set_preproc_doc_question_left");
+        let right = typed_const(&mut bank, "set_preproc_doc_question_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let question_formula = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut question = WrappedFormula::wt_formula_alloc(question_formula.clone());
+        question.set_tptp_type(CP_TYPE_QUESTION);
+        question.set_prop(CP_INPUT_FORMULA);
+        let old_ident = question.ident();
+        let question_body = question
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let mut set = FormulaSet::new();
+        set.insert(question);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .preproc_conjectures_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+                false,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.questions_annotated, 1);
+        assert_eq!(result.preprocess.conjectures_negated, 1);
+        assert_eq!(
+            result.preprocess.formula_derivation_ops,
+            vec![DC_ANNO_QUESTION, DC_NEGATE_CONJECTURE]
+        );
+        assert_eq!(
+            result.write_results,
+            vec![
+                ProofDocWriteResult::printed(),
+                ProofDocWriteResult::printed()
+            ]
+        );
+        let formula = set.iter().next().unwrap();
+        let final_body = formula
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(
+            rendered,
+            format!(
+                "     1 : conj:{question_body} : add_answer_literal({old_ident})\n     2 : neg:{final_body} : assume_negation(1)\n"
+            )
+        );
+        assert_eq!(formula.ident(), 2);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            formula.derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_ANNO_QUESTION),
+                DerivationEntry::Operation(DC_NEGATE_CONJECTURE)
+            ]
+        );
+        assert_eq!(
+            formula.formula().argument(0).as_ref(),
+            Some(&question_formula)
+        );
+        assert_eq!(session.id_source.current_ident(), 2);
+    }
+
+    #[test]
+    fn formula_set_preproc_conjectures_with_docs_suppresses_but_keeps_property_side_effects() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "set_preproc_doc_suppress_left");
+        let right = typed_const(&mut bank, "set_preproc_doc_suppress_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let conjecture_formula = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut conjecture = WrappedFormula::wt_formula_alloc(conjecture_formula.clone());
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        conjecture.set_prop(CP_INPUT_FORMULA);
+        let old_ident = conjecture.ident();
+        let mut set = FormulaSet::new();
+        set.insert(conjecture);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .preproc_conjectures_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+                false,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.questions_annotated, 0);
+        assert_eq!(result.preprocess.conjectures_negated, 1);
+        assert_eq!(
+            result.preprocess.formula_derivation_ops,
+            vec![DC_NEGATE_CONJECTURE]
+        );
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        let formula = set.iter().next().unwrap();
+        assert_eq!(formula.ident(), old_ident);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            formula.derivation_entries(),
+            &[DerivationEntry::Operation(DC_NEGATE_CONJECTURE)]
+        );
+        assert_eq!(
+            formula.formula().argument(0).as_ref(),
+            Some(&conjecture_formula)
+        );
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
