@@ -48,6 +48,12 @@ impl<'sig> SubtermIndex<'sig> {
         self.index.collect_leaves(result)
     }
 
+    #[cfg(feature = "print-index-stats")]
+    #[must_use]
+    pub fn distrib_data_string(&self) -> String {
+        self.index.collect_distrib().data_string()
+    }
+
     pub fn collect_matchable_occurrences<'idx>(
         &'idx self,
         term: &Term,

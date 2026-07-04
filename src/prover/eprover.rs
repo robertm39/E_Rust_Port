@@ -5771,10 +5771,13 @@ fn run_proof_search<W: Write + ?Sized>(
             output,
             config,
             &mut state,
-            parsed_ax_no,
-            relevancy_pruned,
-            raw_clause_no,
-            preproc_removed,
+            None,
+            ProofStatisticsInput {
+                parsed_ax_no,
+                relevancy_pruned,
+                raw_clause_no,
+                preproc_removed,
+            },
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
@@ -5841,10 +5844,13 @@ fn run_proof_search<W: Write + ?Sized>(
         output,
         config,
         &mut state,
-        parsed_ax_no,
-        relevancy_pruned,
-        raw_clause_no,
-        preproc_removed,
+        Some(&global_indices),
+        ProofStatisticsInput {
+            parsed_ax_no,
+            relevancy_pruned,
+            raw_clause_no,
+            preproc_removed,
+        },
     )?;
     Ok(saturate_outcome_exit_status(
         &outcome,
@@ -8428,33 +8434,46 @@ fn clause_print_for_output_format(
     }
 }
 
-fn write_proof_statistics(
-    output: &mut impl Write,
-    config: &EProverConfig,
-    state: &mut crate::clauses::proofstate::ProofState,
+#[derive(Clone, Copy, Debug)]
+struct ProofStatisticsInput {
     parsed_ax_no: i64,
     relevancy_pruned: i64,
     raw_clause_no: i64,
     preproc_removed: i64,
+}
+
+fn write_proof_statistics(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    global_indices: Option<&GlobalIndices<'_>>,
+    input: ProofStatisticsInput,
 ) -> Result<(), EProverError> {
+    #[cfg(not(feature = "print-index-stats"))]
+    let _ = global_indices;
+
     if config.output_level <= 1 && !config.flags.contains(EProverFlag::PrintStatistics) {
         return Ok(());
     }
     writeln!(
         output,
-        "{DEFAULT_COMCHAR_RAW} Parsed axioms                        : {parsed_ax_no}"
+        "{DEFAULT_COMCHAR_RAW} Parsed axioms                        : {}",
+        input.parsed_ax_no
     )?;
     writeln!(
         output,
-        "{DEFAULT_COMCHAR_RAW} Removed by relevancy pruning/SinE    : {relevancy_pruned}"
+        "{DEFAULT_COMCHAR_RAW} Removed by relevancy pruning/SinE    : {}",
+        input.relevancy_pruned
     )?;
     writeln!(
         output,
-        "{DEFAULT_COMCHAR_RAW} Initial clauses                      : {raw_clause_no}"
+        "{DEFAULT_COMCHAR_RAW} Initial clauses                      : {}",
+        input.raw_clause_no
     )?;
     writeln!(
         output,
-        "{DEFAULT_COMCHAR_RAW} Removed in clause preprocessing      : {preproc_removed}"
+        "{DEFAULT_COMCHAR_RAW} Removed in clause preprocessing      : {}",
+        input.preproc_removed
     )?;
     output.write_all(
         state
@@ -8500,6 +8519,10 @@ fn write_proof_statistics(
             "{DEFAULT_COMCHAR_RAW} Final shared term nodes              : {}",
             state.terms().term_nodes()
         )?;
+    }
+    #[cfg(feature = "print-index-stats")]
+    if let Some(indices) = global_indices {
+        output.write_all(indices.index_statistics_string(state.terms()).as_bytes())?;
     }
     Ok(())
 }
@@ -12812,9 +12835,9 @@ mod tests {
         write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
         EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput,
+        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
         THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -21480,7 +21503,19 @@ input_clause(c2,axiom,[++q(X)]).
         config.flags.set(EProverFlag::PrintStatistics);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut stdout = Vec::new();
-        write_proof_statistics(&mut stdout, &config, &mut state, 1, 2, 3, 4).unwrap();
+        write_proof_statistics(
+            &mut stdout,
+            &config,
+            &mut state,
+            None,
+            ProofStatisticsInput {
+                parsed_ax_no: 1,
+                relevancy_pruned: 2,
+                raw_clause_no: 3,
+                preproc_removed: 4,
+            },
+        )
+        .unwrap();
 
         REWRITE_UNBOUND_VAR_FAILS.store(previous_unbound, AtomicOrdering::Relaxed);
         BWRW_MATCH_ATTEMPTS.store(previous_attempts, AtomicOrdering::Relaxed);

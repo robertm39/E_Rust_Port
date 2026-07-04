@@ -1,3 +1,5 @@
+#[cfg(feature = "print-index-stats")]
+use crate::basics::objtrees::ObjTree;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausecpos::{clause_cpos_get_subterm, CompactPos};
 use crate::clauses::eqn::Eqn;
@@ -86,6 +88,21 @@ impl<'sig> OverlapIndex<'sig> {
     #[must_use]
     pub fn collect_leaves<'idx>(&'idx self, result: &mut Vec<&'idx FPTree<SubtermOcc>>) -> usize {
         self.index.collect_leaves(result)
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    #[must_use]
+    pub fn distrib_data_string(&self) -> String {
+        self.index.collect_distrib().data_string()
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    #[must_use]
+    pub fn dot_string<F>(&self, name: &str, print_payload: F) -> String
+    where
+        F: FnMut(&ObjTree<SubtermOcc>, &Signature) -> String,
+    {
+        self.index.dot_string(name, print_payload)
     }
 
     pub fn insert_pos(&mut self, clause: &Clause, pos: CompactPos, term: Option<&Term>) -> bool {

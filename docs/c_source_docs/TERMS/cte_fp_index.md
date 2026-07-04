@@ -164,6 +164,7 @@ Source files reviewed: `TERMS/cte_fp_index.h`, `TERMS/cte_fp_index.c`.
 - `FPIndexPrintDot` uses raw pointer addresses as DOT node identifiers and does not escape symbol labels; this is useful for C-debug parity but should not become the final reproducible user-facing graph format without a compatibility decision.
 - `FPIndexPrintDot` connects payload boxes only for structural leaves collected by `FPIndexCollectLeaves`, while `FPIndexDistribPrint`/`FPIndexPrint` visit every node with a payload. Preserve that split for compatibility, but consider a clearer diagnostic renderer after the clause/subterm payload printers are integrated.
 - `FPIndexDistribPrint` computes `entries/leaves` directly, so an empty index is an unguarded floating-point division. A cleaned wrapper should handle empty indexes explicitly once callers are known.
+- Rust now uses the generic DOT scaffolding plus a term-bank-backed flattened subterm payload renderer for `eprover`'s optional `PRINT_INDEX_STATS`/`print-index-stats` path; other payload renderers should still be added only when a C diagnostic path needs them.
 
 ### Porting Focus
 

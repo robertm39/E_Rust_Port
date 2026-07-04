@@ -118,6 +118,7 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - `GlobalIndicesInsertClause` calls `OverlapIndexInsertIntoClause2` when `pm_into_index` exists, so the matching negative-atom index is expected to exist too. Rust preserves that invariant with a paired `pm_negp_index` allocation and assertion.
 - Extension index insertion runs after backward-rewrite and PM indexes, applies the configured max-depth gate inside `ExtIndexInsert*Clause`, and deletes without a depth gate. Rust preserves that call order and gating.
 - `GlobalIndicesInsertClauseSet` returns immediately if `bw_rw_index` is null, so a PM-only configuration would not mark or insert the set through this helper. Rust preserves that no-op gate.
+- Rust's optional `print-index-stats` Cargo feature exposes C-shaped distribution lines for the four proof-search global indexes and the `pm_from_index` DOT graph over the caller-owned executable global-index bridge.
 
 ### Change Later
 

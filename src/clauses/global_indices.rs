@@ -1,3 +1,7 @@
+#[cfg(feature = "print-index-stats")]
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+#[cfg(feature = "print-index-stats")]
+use crate::basics::objtrees::ObjTree;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
@@ -384,11 +388,94 @@ impl<'sig> GlobalIndices<'sig> {
         }
         inserted
     }
+
+    #[cfg(feature = "print-index-stats")]
+    #[must_use]
+    pub fn index_statistics_string(&self, bank: &TermBank) -> String {
+        use std::fmt::Write as _;
+
+        let mut output = String::new();
+        let _ = writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Backwards rewriting index : {}",
+            subterm_index_distrib_data_string(self.bw_rw_index.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Paramod-from index        : {}",
+            overlap_index_distrib_data_string(self.pm_from_index.as_ref())
+        );
+        if let Some(index) = &self.pm_from_index {
+            output.push_str(&index.dot_string("pm_from_index", |payload, _signature| {
+                subterm_payload_dot_string(payload, bank)
+            }));
+        }
+        let _ = writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Paramod-into index        : {}",
+            overlap_index_distrib_data_string(self.pm_into_index.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Paramod-neg-atom index    : {}",
+            overlap_index_distrib_data_string(self.pm_negp_index.as_ref())
+        );
+        output
+    }
 }
 
 #[must_use]
 pub fn global_indices_null<'sig>() -> GlobalIndices<'sig> {
     GlobalIndices::null()
+}
+
+#[cfg(feature = "print-index-stats")]
+fn subterm_index_distrib_data_string(index: Option<&SubtermIndex<'_>>) -> String {
+    index.map_or_else(
+        null_fp_index_distrib_data_string,
+        SubtermIndex::distrib_data_string,
+    )
+}
+
+#[cfg(feature = "print-index-stats")]
+fn overlap_index_distrib_data_string(index: Option<&OverlapIndex<'_>>) -> String {
+    index.map_or_else(
+        null_fp_index_distrib_data_string,
+        OverlapIndex::distrib_data_string,
+    )
+}
+
+#[cfg(feature = "print-index-stats")]
+fn null_fp_index_distrib_data_string() -> String {
+    crate::terms::fp_index::FPIndexDistrib {
+        nodes: 0,
+        leaves: 0,
+        average: 0.0,
+        stddev: 0.0,
+    }
+    .data_string()
+}
+
+#[cfg(feature = "print-index-stats")]
+fn subterm_payload_dot_string(payload: &ObjTree<SubtermOcc>, bank: &TermBank) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "     subgraph g{payload:p}{{");
+    output.push_str("     nodesep=0.05\n");
+    output.push_str(
+        "     node [shape=record,width=1.9,height=.1, penwidth=0, style=filled, fillcolor=gray80]\n",
+    );
+    let _ = write!(output, "     t{payload:p} [label=\"{{|{{");
+    let mut sep = "";
+    for occurrence in payload.iter() {
+        output.push_str(sep);
+        sep = "|";
+        let _ = bank.write_term(&mut output, occurrence.term(), true);
+    }
+    output.push_str("}}\"]\n");
+    output.push_str("     }\n");
+    output
 }
 
 #[cfg(test)]
@@ -785,5 +872,26 @@ mod tests {
         assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
         assert!(indices.find_ext_into_symbol(left.f_code()).is_none());
         assert!(indices.find_ext_from_symbol(left.f_code()).is_none());
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    #[test]
+    fn index_statistics_string_prints_c_optional_index_stats_block() {
+        let mut bank = test_bank();
+        let (mut clause, _, _) = maximal_unit_clause(&mut bank, "gidx_stats", 70);
+        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "FP1", "FP1", 0);
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        let stats = indices.index_statistics_string(&bank);
+        assert!(stats.contains("% Backwards rewriting index :"));
+        assert!(stats.contains("% Paramod-from index        :"));
+        assert!(stats.contains("graph pm_from_index{\n   rankdir=LR\n   nodesep=0.05\n"));
+        assert!(stats.contains("subgraph g"));
+        assert!(stats.contains("shape=record"));
+        assert!(stats.contains("gidx_stats"));
+        assert!(stats.contains("-- t"));
+        assert!(stats.contains("% Paramod-into index        :"));
+        assert!(stats.contains("% Paramod-neg-atom index    :"));
     }
 }
