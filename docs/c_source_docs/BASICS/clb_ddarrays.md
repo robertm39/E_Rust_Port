@@ -97,12 +97,14 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - `DDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment macros inherit that assertion while always succeeding for nonnegative indices.
 - `DDArraySelectPart` asserts that `part` is in the inclusive `[0, 1]` range, `size` is positive, and the allocated array already covers the requested prefix before partitioning the backing array in place.
 - `DDArayEnlarge` is exported with the historical misspelling and is normally reached through `DDArrayElementRef` only for uncovered indices. A direct call on an already covered index can compute a smaller target size before copying the old allocation. Rust exposes an explicit raw compatibility helper for the target-size calculation, but reports that under-allocation case as a panic instead of reproducing the C buffer overrun.
+- `DDArrayAdd` takes a signed `long limit` and uses a plain `for(i=0; i<limit; i++)` loop, so zero and negative limits perform no work. Rust keeps that exact loop surface in a signed compatibility helper while leaving the existing `usize` helper for ordinary prefix addition.
 
 ### Change Later
 
 - Negative `DDArray` access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while future Rust-only checked accessors should be separate wrappers instead of weakening the C-shaped array API.
 - `DDArraySelectPart` treats invalid percentile/range requests as assertion failures. The compatibility-shaped Rust method should keep panicking, while user-facing statistics APIs should validate inputs before calling it or expose a separate checked wrapper.
 - Direct `DDArayEnlarge` calls rely on an implicit uncovered-index precondition that the function itself does not assert. A cleaned API should hide the misspelled helper, assert the precondition, or route all growth through the element-ref/accessor path instead of preserving the hazardous direct-call shape.
+- `DDArrayAdd` silently treats nonpositive limits as empty prefixes because of its signed loop condition. A cleaned Rust-facing API should keep using an unsigned prefix length or return a validation error for negative caller input.
 
 ### Porting Focus
 

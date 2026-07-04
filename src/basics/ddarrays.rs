@@ -148,6 +148,25 @@ impl DDArray {
         }
     }
 
+    /// Add the first `limit` elements using the C `long` loop shape.
+    ///
+    /// C `DDArrayAdd` uses `for(i=0; i<limit; i++)`, so zero and negative
+    /// limits perform no work.
+    pub fn add_prefix_c(&mut self, data: &mut Self, limit: DDArrayIndex) {
+        if limit <= 0 {
+            return;
+        }
+        let Ok(limit) = usize::try_from(limit) else {
+            return;
+        };
+        for index in 0..limit {
+            let idx = index_to_dd(index);
+            let old = self.element(idx);
+            let new = data.element(idx);
+            self.assign(idx, old + new);
+        }
+    }
+
     #[must_use]
     pub fn debug_print_string(&mut self, size: usize) -> String {
         let mut result = String::new();
@@ -309,6 +328,25 @@ mod tests {
         assert_eq!(collect.existing_element(4), Some(4.0));
         assert_eq!(collect.size(), 6);
         assert_eq!(data.size(), 6);
+    }
+
+    #[test]
+    fn signed_add_prefix_preserves_c_nonpositive_limit_noop() {
+        let mut collect = DDArray::new(2, 3);
+        let mut data = DDArray::new(2, 3);
+        collect.assign(0, 1.5);
+        data.assign(4, 4.0);
+
+        collect.add_prefix_c(&mut data, 0);
+        collect.add_prefix_c(&mut data, -3);
+
+        assert_same_f64(collect.element(0), 1.5);
+        assert_eq!(collect.size(), 2);
+        assert_eq!(data.size(), 6);
+
+        collect.add_prefix_c(&mut data, 5);
+        assert_same_f64(collect.element(4), 4.0);
+        assert_eq!(collect.size(), 6);
     }
 
     #[test]

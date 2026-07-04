@@ -249,6 +249,25 @@ impl PDIntArray {
         }
     }
 
+    /// Add the first `limit` integer elements using the C `long` loop shape.
+    ///
+    /// C `PDArrayAdd` uses `for(i=0; i<limit; i++)`, so zero and negative
+    /// limits perform no work.
+    pub fn add_prefix_c(&mut self, data: &mut Self, limit: PDArrayIndex) {
+        if limit <= 0 {
+            return;
+        }
+        let Ok(limit) = usize::try_from(limit) else {
+            return;
+        };
+        for index in 0..limit {
+            let idx = index_to_pd(index);
+            let old = self.element_int(idx);
+            let new = data.element_int(idx);
+            self.assign(idx, old + new);
+        }
+    }
+
     /// Increment the integer element at `idx`, enlarging the array if needed.
     ///
     /// # Panics
@@ -381,6 +400,25 @@ mod tests {
         assert_eq!(collect.element_int(4), 9);
         assert_eq!(collect.size(), 8);
         assert_eq!(data.size(), 8);
+    }
+
+    #[test]
+    fn signed_add_prefix_preserves_c_nonpositive_limit_noop() {
+        let mut collect = PDIntArray::new_int(2, GROW_EXPONENTIAL);
+        let mut data = PDIntArray::new_int(2, GROW_EXPONENTIAL);
+        collect.assign(0, 3);
+        data.assign(3, 9);
+
+        collect.add_prefix_c(&mut data, 0);
+        collect.add_prefix_c(&mut data, -4);
+
+        assert_eq!(collect.element_int(0), 3);
+        assert_eq!(collect.size(), 2);
+        assert_eq!(data.size(), 4);
+
+        collect.add_prefix_c(&mut data, 4);
+        assert_eq!(collect.element_int(3), 9);
+        assert_eq!(collect.size(), 4);
     }
 
     #[test]
