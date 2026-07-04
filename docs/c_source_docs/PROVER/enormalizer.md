@@ -94,7 +94,7 @@ Source files reviewed: `PROVER/enormalizer.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `src/prover/enormalizer.rs` and `src/bin/enormalizer.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin rule file, LOP/TPTP/TSTP parse/print aliases, left-to-right demodulator orientation, non-rule warnings, term/clause/formula normalization, output-file routing including `-o -`, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, resource-limit parsing, and resource-usage printing.
+- `src/prover/enormalizer.rs` and `src/bin/enormalizer.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin rule file, LOP/TPTP/TSTP parse/print aliases, represented formula-owner preprocessing/CNF for rule files, left-to-right demodulator orientation, non-rule warnings, term/clause/formula normalization, output-file routing including `-o -`, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, resource-limit parsing, and resource-usage printing.
 
 ### Porting Focus
 
@@ -109,5 +109,5 @@ Source files reviewed: `PROVER/enormalizer.c`.
 - `OpenGlobalOut(outname)` runs before the default `-` rule file is inserted and before rule or target scanners are created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
 - `build_rw_system()` treats any positive unit as a demodulator and force-sets `EPIsOriented` in the natural left-to-right direction, independent of ordering. Keep this for compatibility, but a future rewrite-rule API should make trusted orientation explicit.
 - Missing `--terms`, `--clauses`, and `--formulas` targets are not an error; the program can parse rules and exit without normalizing anything. A user-facing cleanup should require at least one target outside drop-in compatibility mode.
-- The C driver allocates dummy clause/formula containers and runs the broad `FormulaAndClauseSetParse`/preprocess/CNF path to extract rewrite rules. Once formula ownership is stable, a direct rewrite-rule loader would make this boundary clearer.
+- The C driver allocates dummy clause/formula/watchlist containers and runs the broad `FormulaAndClauseSetParse`/preprocess/CNF path to extract rewrite rules. Rust now mirrors that path through represented formula-owner preprocessing/CNF for supported inputs; once formula ownership is stable, a direct rewrite-rule loader would make this boundary clearer.
 <!-- END MANUAL REVIEW: c_source_docs -->

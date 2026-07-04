@@ -4,7 +4,9 @@ use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
-use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+use crate::basics::simple_stuff::{
+    problem_type, reset_problem_type, set_problem_type, ProblemType,
+};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
@@ -18,7 +20,9 @@ use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EP_IS_ORIENTED;
-use crate::clauses::formulasets::{FormulaPrintFormat, WrappedFormula};
+use crate::clauses::formulasets::{
+    FormulaPrintFormat, FormulaSet, FormulaSetCnfOptions, WrappedFormula,
+};
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, term_li_normalform_plain};
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -28,11 +32,14 @@ use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::orderings::ocb::OrderControlBlock;
-use crate::prover::eprover::{parse_clause_scanner_into_sets, FoolUnroll, FormulaPreprocessing};
+use crate::prover::eprover::{
+    parse_clause_scanner_into_formula_set_with_options, FoolUnroll, FormulaPreprocessing,
+};
 use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{RewriteLevel, Term};
+use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use crate::{heuristics::to_params::TermOrdering, terms::termfunc::term_is_untyped};
 use std::fs::File;
@@ -40,6 +47,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "enormalizer";
+const ENORMALIZER_CNF_MINISCOPE_LIMIT: i64 = 1000;
+const ENORMALIZER_CNF_DEF_LIMIT: i64 = 24;
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -493,21 +502,24 @@ fn execute_config(
     let _ = set_output_level(config.output_level);
 
     let mut output = EnormalizerOutput::open(config.output_file.as_deref(), stdout)?;
-    let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut bank = new_term_bank()?;
     let mut clauses = ClauseSet::new();
-    let mut dummy = ClauseSet::new();
+    let mut formulas = FormulaSet::new();
+    let mut ignored_watchlist = ClauseSet::new();
 
     for file in &config.rule_files {
         let mut scanner = scanner_for_input(file, stdin)?;
-        parse_clause_scanner_into_sets(
+        parse_clause_scanner_into_formula_set_with_options(
             &mut scanner,
             config.parse_format,
             FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+            Default::default(),
             &mut bank,
-            &mut clauses,
-            &mut dummy,
+            &mut formulas,
+            &mut ignored_watchlist,
         )?;
     }
+    clausify_rule_formulas(&mut bank, &mut formulas, &mut clauses)?;
 
     let demodulators = build_rw_system(&mut clauses, &bank, config, stderr)?;
     let mut ocb = OrderControlBlock::alloc(
@@ -560,6 +572,26 @@ fn execute_config(
         .flush()
         .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(0)
+}
+
+fn new_term_bank() -> Result<TermBank, Diagnostic> {
+    let mut signature = Signature::new(TypeBank::new());
+    signature.insert_internal_codes()?;
+    TermBank::new(signature)
+}
+
+fn clausify_rule_formulas(
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    clauses: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    let mut archive = FormulaSet::new();
+    let _preprocessed = formulas.preproc_conjectures(bank, false, false)?;
+    let fresh_vars = VarBank::new(bank.signature().type_bank());
+    let options = FormulaSetCnfOptions::new(ENORMALIZER_CNF_MINISCOPE_LIMIT, true, problem_type())
+        .with_def_limit(ENORMALIZER_CNF_DEF_LIMIT);
+    let _cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
+    Ok(())
 }
 
 fn build_rw_system(
@@ -1248,6 +1280,39 @@ mod tests {
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(clause_path);
+    }
+
+    #[test]
+    fn normalizes_terms_with_tstp_formula_rule_file() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("formula_owner_rules");
+        let term_path = temp_path("formula_owner_terms");
+        fs::write(&rule_path, "fof(rule, axiom, ! [X] : (f(X)=a)).\n").expect("rules written");
+        fs::write(&term_path, "f(b)\n").expect("terms written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-t",
+                term_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(String::from_utf8(stdout).expect("utf8"), "f(b) ==> a\n");
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(term_path);
     }
 
     #[test]
