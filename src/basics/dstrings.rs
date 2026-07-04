@@ -20,8 +20,13 @@ impl DynamicString {
     }
 
     pub fn append_str(&mut self, new_part: &str) {
-        self.ensure_for_str_append(new_part.len());
-        self.bytes.extend_from_slice(new_part.as_bytes());
+        self.append_c_str_bytes(new_part.as_bytes());
+    }
+
+    pub fn append_c_str_bytes(&mut self, new_part: &[u8]) {
+        let prefix = c_string_prefix(new_part);
+        self.ensure_for_str_append(prefix.len());
+        self.bytes.extend_from_slice(prefix);
     }
 
     pub fn append_byte(&mut self, new_byte: u8) {
@@ -219,6 +224,14 @@ impl DynamicString {
     }
 }
 
+fn c_string_prefix(bytes: &[u8]) -> &[u8] {
+    let nul_pos = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    &bytes[..nul_pos]
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -249,6 +262,27 @@ mod tests {
         string.append_str("y");
         assert_eq!(string.len(), DSTR_GROW);
         assert_eq!(string.allocated_mem(), DSTR_GROW * 2);
+    }
+
+    #[test]
+    fn append_str_stops_at_first_nul_like_c_string() {
+        let mut string = DynamicString::new();
+
+        string.append_str("ab\0hidden");
+        string.append_str("");
+
+        assert_eq!(string.view_bytes(), b"ab");
+        assert_eq!(string.allocated_mem(), DSTR_GROW);
+    }
+
+    #[test]
+    fn append_c_str_bytes_accepts_non_utf8_and_stops_at_nul() {
+        let mut string = DynamicString::new();
+
+        string.append_c_str_bytes(&[0xff, b'a', 0, b'b']);
+
+        assert_eq!(string.view_bytes(), &[0xff, b'a']);
+        assert_eq!(string.allocated_mem(), DSTR_GROW);
     }
 
     #[test]
@@ -285,7 +319,10 @@ mod tests {
     fn append_str_array_c_stops_at_first_null_sentinel() {
         let mut string = DynamicString::new();
 
-        string.append_str_array_c(&[Some("alpha"), Some("beta"), None, Some("ignored")], "::");
+        string.append_str_array_c(
+            &[Some("alpha"), Some("beta\0suffix"), None, Some("ignored")],
+            "::\0ignored",
+        );
 
         assert_eq!(string.view_bytes(), b"alpha::beta");
     }
