@@ -1386,6 +1386,45 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_old_tptp_formula_targets() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("old_tptp_formula_rules");
+        let formula_path = temp_path("old_tptp_formulas");
+        fs::write(&rule_path, "input_clause(rule,axiom,[++equal(f(X),a)]).\n")
+            .expect("rules written");
+        fs::write(&formula_path, "input_formula(form1,axiom,p(f(b))).\n")
+            .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tptp-in",
+                "--tptp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("utf8"),
+            "input_formula(form1,axiom,p(f(b))). ==> input_formula(form1,axiom,p(a)).\n"
+        );
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
     fn output_file_redirects_results() {
         let _guard = global_state_lock();
         let rule_path = temp_path("out_rules");
