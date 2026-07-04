@@ -6339,7 +6339,7 @@ fn proof_search_global_indices<'sig>(
         params.pm_from_index_type.as_str(),
         params.pm_into_index_type.as_str(),
         params.ext_rules_max_depth,
-        ProblemType::FirstOrder,
+        problem_type(),
     )
 }
 
@@ -13350,19 +13350,19 @@ mod tests {
         order_parms_from_config, parse_app_encode_file,
         parse_clause_scanner_into_sets_with_options, preprocessing_config_debug_line,
         process_options, proof_control_from_config, proof_object_list_display_clauses,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, simple_app_encoded_formula_set,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_statistics,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
-        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        proof_search_global_indices, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        runtime_picosat_library_from_env, schedule_heuristic_selection,
+        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_proof_statistics, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
+        LiteralComparison, ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag,
+        PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -13385,6 +13385,7 @@ mod tests {
         BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
     };
     use crate::heuristics::new_autoschedule::ScheduleCell;
+    use crate::heuristics::proofcontrol::ProofControl;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -14919,6 +14920,24 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(params.eliminate_uninformative());
         assert_eq!(params.max_symbols(), 200);
         assert_eq!(params.symbol_slack(), 3);
+    }
+
+    #[test]
+    fn proof_search_global_indices_follow_current_problem_type() {
+        let _lock = global_state_lock();
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let control = ProofControl::new();
+
+        set_problem_type(ProblemType::FirstOrder).unwrap();
+        let first_order = proof_search_global_indices(bank.signature(), &control);
+        assert_eq!(first_order.problem_type(), ProblemType::FirstOrder);
+        drop(first_order);
+
+        reset_problem_type();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let higher_order = proof_search_global_indices(bank.signature(), &control);
+
+        assert_eq!(higher_order.problem_type(), ProblemType::HigherOrder);
     }
 
     #[test]
