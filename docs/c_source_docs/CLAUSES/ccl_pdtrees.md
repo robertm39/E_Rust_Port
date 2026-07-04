@@ -173,7 +173,7 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- Initial Rust status: `src/clauses/pdtrees.rs` ports the `TermLRTraverseNext` key sequence plus an owned trie for `PDTreeInsertTerm`-style insertion, `PDTreeMatchPrefix` match/remains counting, and code/term deletion with C-shaped prefix ref-count decrementing plus dead-child pruning. `che_prefixweight` now stores its lazy conjecture-prefix terms in that trie, and `che_tfidfweight` stores document-frequency terms in the same trie subset so IDF can use node ref-counts.
+- Initial Rust status: `src/clauses/pdtrees.rs` ports the `TermLRTraverseNext` key sequence plus an owned trie for `PDTreeInsertTerm`-style insertion, `PDTreeMatchPrefix` match/remains counting, C-shaped `PDTreeStorage` constant-memory accounting for the represented trie subset, and code/term deletion with C-shaped prefix ref-count decrementing plus dead-child pruning. `che_prefixweight` now stores its lazy conjecture-prefix terms in that trie, and `che_tfidfweight` stores document-frequency terms in the same trie subset so IDF can use node ref-counts.
 
 ### Porting Focus
 
@@ -185,5 +185,6 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 
 - C `PDTreeInsertTerm` eta-expands non-FO patterns or eta-reduces other terms before indexing, and full search mutates tree-local traversal state while relying on `ClausePos` leaves, substitution backtracking, age/size constraints, and a process-global traversal order switch. Keep those compatibility surfaces visible before replacing the remaining plain scans with full PDTree ownership.
 - C `PDTreeDelete` deletes clause-position entries at the leaf, subtracts the number of removed entries from every traversed node, physically frees dead nodes, and invalidates cached size/age constraints for later recomputation. Rust now mirrors the ref-count and child-pruning shape for the current trie-only term/code subset, but leaf `ClausePos` payload deletion and constraint invalidation still belong with the full demodulator/search index owner.
+- C `PDTreeDelete` removes function alternatives from the parent `IntMap`, but the `arr_storage_est` adjustment subtracts and re-adds the deleted child's function-alternative storage instead of the parent's changed storage. Rust preserves that stale estimate for `PDTreeStorage`; clean accounting should be considered only after compatibility tests cover demodulator-index memory reporting.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

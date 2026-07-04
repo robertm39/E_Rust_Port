@@ -1,7 +1,13 @@
 use std::collections::BTreeMap;
 
+use crate::basics::intmap::{IntMap, IntMapKey};
+use crate::basics::objmaps::size_of_obj_map_node_estimate;
 use crate::terms::functypes::FunCode;
 use crate::terms::termtypes::{term_identity_id, Term};
+
+pub const PDTREE_CELL_MEM: usize = 16;
+pub const PDTNODE_MEM: usize = 52;
+pub const CLAUSEPOSCELL_MEM: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
@@ -21,11 +27,13 @@ pub struct PdTree {
     nodes: Vec<PdNode>,
     term_count: usize,
     live_node_count: usize,
+    arr_storage_estimate: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 struct PdNode {
     children: BTreeMap<PrefixToken, usize>,
+    fun_alternatives: IntMap<()>,
     ref_count: usize,
     terminal_count: usize,
 }
@@ -43,6 +51,7 @@ impl PdTree {
             nodes: vec![PdNode::default()],
             term_count: 0,
             live_node_count: 0,
+            arr_storage_estimate: 0,
         }
     }
 
@@ -69,6 +78,22 @@ impl PdTree {
         self.term_count
     }
 
+    #[must_use]
+    pub const fn arr_storage_estimate(&self) -> usize {
+        self.arr_storage_estimate
+    }
+
+    #[must_use]
+    pub fn storage_estimate(&self) -> usize {
+        self.live_node_count
+            .saturating_mul(PDTNODE_MEM)
+            .saturating_add(self.arr_storage_estimate)
+            .saturating_add(
+                self.term_count
+                    .saturating_mul(PDTREE_CELL_MEM.saturating_add(CLAUSEPOSCELL_MEM)),
+            )
+    }
+
     pub fn insert_term(&mut self, term: &Term) -> bool {
         let code = term_lr_traverse_code(term);
         self.insert_code(&code)
@@ -79,6 +104,7 @@ impl PdTree {
         self.nodes[node_index].ref_count += 1;
 
         for token in code {
+            self.select_alt_ref_for_insert(node_index, *token);
             let next_index =
                 if let Some(existing) = self.nodes[node_index].children.get(token).copied() {
                     existing
@@ -87,6 +113,11 @@ impl PdTree {
                     self.nodes.push(PdNode::default());
                     self.nodes[node_index].children.insert(*token, created);
                     self.live_node_count += 1;
+                    self.arr_storage_estimate = self.arr_storage_estimate.saturating_add(
+                        self.nodes[created]
+                            .fun_alternatives
+                            .constant_mem_storage_estimate(),
+                    );
                     created
                 };
             node_index = next_index;
@@ -131,13 +162,70 @@ impl PdTree {
             if self.nodes[dead_index].ref_count != 0 {
                 break;
             }
+            self.arr_storage_estimate = self.arr_storage_estimate.saturating_sub(
+                self.nodes[dead_index]
+                    .fun_alternatives
+                    .constant_mem_storage_estimate(),
+            );
+            match token {
+                PrefixToken::Fun(code) => {
+                    let _ = self.nodes[parent_index]
+                        .fun_alternatives
+                        .del_key(fun_code_key(code));
+                }
+                PrefixToken::FreeVar(_) | PrefixToken::DbLike(_) => {
+                    self.arr_storage_estimate = self
+                        .arr_storage_estimate
+                        .saturating_sub(size_of_obj_map_node_estimate());
+                }
+            }
             self.nodes[parent_index].children.remove(&token);
             self.nodes[dead_index].children.clear();
+            self.nodes[dead_index].fun_alternatives = IntMap::new();
             self.nodes[dead_index].terminal_count = 0;
             self.live_node_count -= 1;
         }
 
         true
+    }
+
+    fn select_alt_ref_for_insert(&mut self, node_index: usize, token: PrefixToken) {
+        match token {
+            PrefixToken::Fun(code) => {
+                let before = self.nodes[node_index]
+                    .fun_alternatives
+                    .constant_mem_storage_estimate();
+                let slot = self.nodes[node_index]
+                    .fun_alternatives
+                    .get_ref(fun_code_key(code));
+                if slot.is_none() {
+                    *slot = Some(());
+                }
+                let after = self.nodes[node_index]
+                    .fun_alternatives
+                    .constant_mem_storage_estimate();
+                self.apply_arr_storage_delta(before, after);
+            }
+            PrefixToken::FreeVar(_) | PrefixToken::DbLike(_) => {
+                if !self.nodes[node_index].children.contains_key(&token) {
+                    self.arr_storage_estimate = self
+                        .arr_storage_estimate
+                        .saturating_add(size_of_obj_map_node_estimate());
+                }
+            }
+        }
+    }
+
+    fn apply_arr_storage_delta(&mut self, before: usize, after: usize) {
+        if after >= before {
+            self.arr_storage_estimate = self
+                .arr_storage_estimate
+                .saturating_add(after.saturating_sub(before));
+        } else {
+            self.arr_storage_estimate = self
+                .arr_storage_estimate
+                .saturating_sub(before.saturating_sub(after));
+        }
     }
 
     pub fn delete_code_occurrences(&mut self, code: &[PrefixToken]) -> usize {
@@ -188,6 +276,11 @@ impl PdTree {
         }
         self.nodes[node_index].ref_count
     }
+}
+
+fn fun_code_key(code: FunCode) -> IntMapKey {
+    IntMapKey::try_from(code)
+        .unwrap_or_else(|_| panic!("function code {code} does not fit an IntMap key"))
 }
 
 /// Extracts the C `TermLRTraverseNext` key sequence used by
@@ -267,7 +360,10 @@ fn prefix_token(term: &Term) -> PrefixToken {
 mod tests {
     use super::{
         prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree, PrefixToken,
+        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
     };
+    use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
+    use crate::basics::objmaps::size_of_obj_map_node_estimate;
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -332,6 +428,72 @@ mod tests {
         let prefix = prefix_compute_term_code(&parse_in_bank(&mut bank, "f(a)"));
 
         assert_eq!(prefix_code_ref_count(&prefix, &[first, second]), 2);
+    }
+
+    #[test]
+    fn storage_estimate_is_zero_for_empty_tree_like_c_macro() {
+        let tree = PdTree::new();
+
+        assert_eq!(tree.node_count(), 0);
+        assert_eq!(tree.arr_storage_estimate(), 0);
+        assert_eq!(tree.storage_estimate(), 0);
+    }
+
+    #[test]
+    fn storage_estimate_counts_nodes_function_arrays_and_clause_positions() {
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_code(&[PrefixToken::Fun(1), PrefixToken::Fun(2)]));
+
+        assert_eq!(tree.node_count(), 2);
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.arr_storage_estimate(), 2 * INTMAPCELL_MEM);
+        assert_eq!(
+            tree.storage_estimate(),
+            2 * PDTNODE_MEM + 2 * INTMAPCELL_MEM + PDTREE_CELL_MEM + CLAUSEPOSCELL_MEM
+        );
+    }
+
+    #[test]
+    fn storage_estimate_counts_variable_and_db_objmap_nodes() {
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_code(&[PrefixToken::FreeVar(7), PrefixToken::DbLike(3)]));
+
+        assert_eq!(tree.node_count(), 2);
+        assert_eq!(
+            tree.arr_storage_estimate(),
+            2 * INTMAPCELL_MEM + 2 * size_of_obj_map_node_estimate()
+        );
+    }
+
+    #[test]
+    fn function_delete_preserves_c_parent_alt_storage_estimate_quirk() {
+        let mut tree = PdTree::new();
+        let first = [PrefixToken::Fun(1)];
+        let second = [PrefixToken::Fun(100)];
+
+        assert!(tree.insert_code(&first));
+        assert!(tree.insert_code(&second));
+        let root_array_storage = INTMAPCELL_MEM + PDARRAYCELL_MEM + INTORP_MEM + 104 * INTORP_MEM;
+        let root_array_delta = root_array_storage - INTMAPCELL_MEM;
+        assert_eq!(
+            tree.arr_storage_estimate(),
+            root_array_delta + 2 * INTMAPCELL_MEM
+        );
+
+        assert!(tree.delete_code(&first));
+
+        assert_eq!(tree.node_count(), 1);
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(
+            tree.arr_storage_estimate(),
+            root_array_delta + INTMAPCELL_MEM
+        );
+        assert_eq!(
+            tree.storage_estimate(),
+            PDTNODE_MEM + root_array_delta + INTMAPCELL_MEM + PDTREE_CELL_MEM + CLAUSEPOSCELL_MEM
+        );
     }
 
     #[test]
