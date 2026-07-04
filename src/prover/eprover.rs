@@ -8457,7 +8457,10 @@ fn write_proof_statistics(
     )?;
     output.write_all(
         state
-            .statistics_string(config.flags.contains(EProverFlag::RecordGivenClauses))
+            .statistics_string(
+                config.flags.contains(EProverFlag::RecordGivenClauses),
+                config.flags.contains(EProverFlag::PrintDetailedStatistics),
+            )
             .as_bytes(),
     )?;
     writeln!(
@@ -21395,7 +21398,38 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("% Processed clauses                    : 1\n"));
+        assert!(!printed.contains("% Match attempts with oriented units"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_detailed_statistics_when_requested() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-detailed-statistics");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--print-detailed-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(printed.contains("% Match attempts with oriented units   : "));
+        assert!(printed.contains("% Match attempts with unoriented units : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

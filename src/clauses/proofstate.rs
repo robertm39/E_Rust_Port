@@ -1486,8 +1486,9 @@ impl ProofState {
 
     /// Prints proof-state counters like C `ProofStateStatisticsPrint`.
     ///
-    /// Term-bank detail mode is not represented here yet, so optional
-    /// term-detail lines stay with the later global proof-output integration.
+    /// The represented detailed-statistics subset currently covers
+    /// demodulator-index counters. Remaining term-bank detail lines stay with
+    /// the later global proof-output integration.
     ///
     /// # Errors
     ///
@@ -1496,12 +1497,16 @@ impl ProofState {
         &self,
         output: &mut impl fmt::Write,
         record_gc_selection: bool,
+        print_details: bool,
     ) -> fmt::Result {
         self.write_processed_statistics(output)?;
         self.write_generation_statistics(output)?;
         self.write_satcheck_statistics(output)?;
         self.write_clause_set_statistics(output, record_gc_selection)?;
-        self.write_demod_index_statistics(output)
+        if print_details {
+            self.write_demod_index_statistics(output)?;
+        }
+        Ok(())
     }
 
     fn write_processed_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
@@ -1762,9 +1767,9 @@ impl ProofState {
     }
 
     #[must_use]
-    pub fn statistics_string(&self, record_gc_selection: bool) -> String {
+    pub fn statistics_string(&self, record_gc_selection: bool, print_details: bool) -> String {
         let mut output = String::new();
-        let _ = self.write_statistics(&mut output, record_gc_selection);
+        let _ = self.write_statistics(&mut output, record_gc_selection, print_details);
         output
     }
 
@@ -2483,7 +2488,7 @@ mod tests {
         state.f_archive_mut().insert(archived);
 
         assert!(state
-            .statistics_string(false)
+            .statistics_string(false, false)
             .contains("Current number of archived formulas  : 1"));
     }
 
@@ -2513,9 +2518,13 @@ mod tests {
             .processed_pos_eqns()
             .record_demod_index_search_attempt();
 
-        let statistics = state.statistics_string(false);
-        assert!(statistics.contains("Match attempts with oriented units   : 1"));
-        assert!(statistics.contains("Match attempts with unoriented units : 2"));
+        let ordinary_statistics = state.statistics_string(false, false);
+        assert!(!ordinary_statistics.contains("Match attempts with oriented units"));
+        assert!(!ordinary_statistics.contains("Match attempts with unoriented units"));
+
+        let detailed_statistics = state.statistics_string(false, true);
+        assert!(detailed_statistics.contains("Match attempts with oriented units   : 1"));
+        assert!(detailed_statistics.contains("Match attempts with unoriented units : 2"));
     }
 
     #[test]
