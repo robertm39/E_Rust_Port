@@ -213,7 +213,8 @@ impl DDArray {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        clippy::manual_midpoint
     )]
     pub fn select_part(&mut self, part: f64, size: usize) -> f64 {
         assert!(
@@ -269,7 +270,8 @@ impl DDArray {
             minimum
         };
 
-        f64::midpoint(self.array[start], second)
+        // C computes `(arr[start] + tmp) / 2`; preserve overflow-visible behavior.
+        (self.array[start] + second) / 2.0
     }
 
     /// Return the C `DDArraySelectPart` partition value for a signed `long size`.
@@ -394,6 +396,14 @@ mod tests {
         let mut values = array.as_slice()[..6].to_vec();
         values.sort_by(f64::total_cmp);
         assert_eq!(values, vec![1.0, 3.0, 5.0, 7.0, 9.0, 11.0]);
+    }
+
+    #[test]
+    fn select_part_uses_c_sum_then_divide_average() {
+        let mut array = DDArray::new(1, 1);
+        array.assign(0, f64::MAX);
+
+        assert!(array.select_part(0.0, 1).is_infinite());
     }
 
     #[test]
