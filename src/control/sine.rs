@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::f_generality::GenDistrib;
@@ -17,6 +18,7 @@ use std::collections::BTreeSet;
 pub struct StructFofSpec {
     clause_sets: Vec<ClauseSet>,
     formula_sets: Vec<FormulaSet>,
+    problem_types: Vec<ProblemType>,
     parsed_includes: BTreeSet<String>,
     shared_ax_sp: usize,
     shared_ax_f_count: FunCode,
@@ -43,6 +45,7 @@ impl StructFofSpec {
         Self {
             clause_sets: Vec::new(),
             formula_sets: Vec::new(),
+            problem_types: Vec::new(),
             parsed_includes: BTreeSet::new(),
             shared_ax_sp: 0,
             shared_ax_f_count: signature.f_count(),
@@ -58,6 +61,14 @@ impl StructFofSpec {
     #[must_use]
     pub fn formula_set_count(&self) -> usize {
         self.formula_sets.len()
+    }
+
+    #[must_use]
+    pub fn problem_type(&self) -> ProblemType {
+        self.problem_types
+            .iter()
+            .copied()
+            .fold(ProblemType::NotInitialized, combine_struct_problem_types)
     }
 
     #[must_use]
@@ -119,21 +130,41 @@ impl StructFofSpec {
         formulas: FormulaSet,
         trim_implications: bool,
     ) {
+        self.add_problem_with_type(
+            signature,
+            clauses,
+            formulas,
+            trim_implications,
+            ProblemType::FirstOrder,
+        );
+    }
+
+    pub fn add_problem_with_type(
+        &mut self,
+        signature: &Signature,
+        clauses: ClauseSet,
+        formulas: FormulaSet,
+        trim_implications: bool,
+        problem_type: ProblemType,
+    ) {
         self.f_distrib.size_adjust(signature);
         self.f_distrib.add_clause_set(&clauses, 1);
         self.f_distrib
             .add_formula_set(signature, &formulas, trim_implications, 1);
         self.clause_sets.push(clauses);
         self.formula_sets.push(formulas);
+        self.problem_types.push(problem_type);
     }
 
-    pub(crate) fn push_problem_sets_without_distribution(
+    pub(crate) fn push_problem_sets_without_distribution_with_type(
         &mut self,
         clauses: ClauseSet,
         formulas: FormulaSet,
+        problem_type: ProblemType,
     ) {
         self.clause_sets.push(clauses);
         self.formula_sets.push(formulas);
+        self.problem_types.push(problem_type);
     }
 
     pub fn remove_problem_by_identifier(
@@ -142,14 +173,29 @@ impl StructFofSpec {
         identifier: &str,
     ) -> bool {
         debug_assert_eq!(self.clause_sets.len(), self.formula_sets.len());
+        debug_assert_eq!(self.clause_sets.len(), self.problem_types.len());
 
         let mut clause_spare_stack = Vec::new();
         let mut formula_spare_stack = Vec::new();
+        let mut problem_type_spare_stack = Vec::new();
         let mut found = false;
 
-        while let (Some(clauses), Some(formulas)) =
-            (self.clause_sets.pop(), self.formula_sets.pop())
+        while !self.clause_sets.is_empty()
+            && !self.formula_sets.is_empty()
+            && !self.problem_types.is_empty()
         {
+            let Some(clauses) = self.clause_sets.pop() else {
+                break;
+            };
+            let Some(formulas) = self.formula_sets.pop() else {
+                self.clause_sets.push(clauses);
+                break;
+            };
+            let Some(problem_type) = self.problem_types.pop() else {
+                self.clause_sets.push(clauses);
+                self.formula_sets.push(formulas);
+                break;
+            };
             debug_assert_eq!(clauses.identifier(), formulas.identifier());
             if clauses.identifier() == identifier {
                 self.f_distrib
@@ -161,13 +207,17 @@ impl StructFofSpec {
 
             clause_spare_stack.push(clauses);
             formula_spare_stack.push(formulas);
+            problem_type_spare_stack.push(problem_type);
         }
 
-        while let (Some(clauses), Some(formulas)) =
-            (clause_spare_stack.pop(), formula_spare_stack.pop())
-        {
+        while let (Some(clauses), Some(formulas), Some(problem_type)) = (
+            clause_spare_stack.pop(),
+            formula_spare_stack.pop(),
+            problem_type_spare_stack.pop(),
+        ) {
             self.clause_sets.push(clauses);
             self.formula_sets.push(formulas);
+            self.problem_types.push(problem_type);
         }
 
         self.shared_ax_sp = self.clause_sets.len();
@@ -190,6 +240,7 @@ impl StructFofSpec {
 
         self.clause_sets.truncate(self.shared_ax_sp);
         self.formula_sets.truncate(self.shared_ax_sp);
+        self.problem_types.truncate(self.shared_ax_sp);
 
         StructFofSpecBacktrackReport {
             removed_clause_sets,
@@ -287,6 +338,14 @@ impl StructFofSpec {
     }
 }
 
+fn combine_struct_problem_types(current: ProblemType, next: ProblemType) -> ProblemType {
+    match (current, next) {
+        (ProblemType::HigherOrder, _) | (_, ProblemType::HigherOrder) => ProblemType::HigherOrder,
+        (ProblemType::FirstOrder, _) | (_, ProblemType::FirstOrder) => ProblemType::FirstOrder,
+        (ProblemType::NotInitialized, ProblemType::NotInitialized) => ProblemType::NotInitialized,
+    }
+}
+
 fn clause_sine_params_from_filter(filter: &AxFilter) -> ClauseSineParams {
     ClauseSineParams {
         gen_measure: filter.gen_measure,
@@ -308,6 +367,7 @@ fn clause_sine_params_from_filter(filter: &AxFilter) -> ClauseSineParams {
 mod tests {
     use super::StructFofSpec;
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
@@ -331,6 +391,7 @@ mod tests {
 
         assert_eq!(spec.clause_set_count(), 0);
         assert_eq!(spec.formula_set_count(), 0);
+        assert_eq!(spec.problem_type(), ProblemType::NotInitialized);
         assert_eq!(spec.shared_ax_sp(), 0);
         assert_eq!(spec.shared_ax_f_count(), initial_f_count);
         assert!(spec.mark_include_parsed("Axioms/SET001.ax"));
@@ -339,6 +400,7 @@ mod tests {
 
         let shared = clause_set_with_clause(&mut bank, "shared", 1, CP_TYPE_AXIOM);
         spec.add_problem(bank.signature(), shared, FormulaSet::new(), false);
+        assert_eq!(spec.problem_type(), ProblemType::FirstOrder);
         spec.mark_shared_axioms(bank.signature());
         assert_eq!(spec.shared_ax_sp(), 1);
 
@@ -479,7 +541,14 @@ mod tests {
         let signature_target = spec.shared_ax_f_count();
 
         let problem = clause_set_with_clause(&mut bank, "backtrack_problem", 2, CP_TYPE_AXIOM);
-        spec.add_problem(bank.signature(), problem, FormulaSet::new(), false);
+        spec.add_problem_with_type(
+            bank.signature(),
+            problem,
+            FormulaSet::new(),
+            false,
+            ProblemType::HigherOrder,
+        );
+        assert_eq!(spec.problem_type(), ProblemType::HigherOrder);
 
         let report = spec.backtrack_to_spec(bank.signature());
 
@@ -488,6 +557,7 @@ mod tests {
         assert_eq!(report.signature_backtrack_to, signature_target);
         assert_eq!(spec.clause_set_count(), 1);
         assert_eq!(spec.formula_set_count(), 1);
+        assert_eq!(spec.problem_type(), ProblemType::FirstOrder);
     }
 
     #[test]
@@ -499,14 +569,21 @@ mod tests {
             clauses.set_identifier(name);
             let mut formulas = FormulaSet::new();
             formulas.set_identifier(name);
-            spec.add_problem(bank.signature(), clauses, formulas, false);
+            let problem_type = if name == "remove_me" {
+                ProblemType::HigherOrder
+            } else {
+                ProblemType::FirstOrder
+            };
+            spec.add_problem_with_type(bank.signature(), clauses, formulas, false, problem_type);
         }
+        assert_eq!(spec.problem_type(), ProblemType::HigherOrder);
         spec.mark_current_problem_stack_shared();
 
         assert!(spec.remove_problem_by_identifier(bank.signature(), "remove_me"));
 
         assert_eq!(spec.clause_set_count(), 2);
         assert_eq!(spec.formula_set_count(), 2);
+        assert_eq!(spec.problem_type(), ProblemType::FirstOrder);
         assert_eq!(spec.shared_ax_sp(), 2);
         let selection = spec
             .get_problem(bank.signature(), &AxFilter::threshold(10))

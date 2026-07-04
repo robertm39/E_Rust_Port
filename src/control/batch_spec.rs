@@ -749,7 +749,11 @@ impl BatchSpec {
                 )));
             }
             parsed += problem.formulas.cardinality();
-            ctrl.push_problem_sets_without_distribution(problem.clauses, problem.formulas);
+            ctrl.push_problem_sets_without_distribution_with_type(
+                problem.clauses,
+                problem.formulas,
+                problem.problem_type,
+            );
             ctrl.mark_include_parsed(include);
         }
         ctrl.mark_shared_axioms(bank.signature());
@@ -1290,11 +1294,17 @@ impl BatchSpec {
     {
         let filters = crate::heuristics::axfilter::AxFilterSet::default_set()?;
         let _pre_add_start = clock_seconds();
+        ctrl.add_problem_with_type(
+            bank.signature(),
+            problem.clauses,
+            problem.formulas,
+            false,
+            problem.problem_type,
+        );
         let problem_config = BatchRunnerProblemConfig {
-            problem_type: problem.problem_type,
+            problem_type: normalize_batch_problem_type(ctrl.problem_type()),
             ..problem_config
         };
-        ctrl.add_problem(bank.signature(), problem.clauses, problem.formulas, false);
 
         let mut spawn_count = 0;
         let process_result = (|| {
@@ -1386,7 +1396,13 @@ impl BatchSpec {
     {
         let filters = crate::heuristics::axfilter::AxFilterSet::default_set()?;
         let _pre_add_start = clock_seconds();
-        ctrl.add_problem(signature, problem.clauses, problem.formulas, false);
+        ctrl.add_problem_with_type(
+            signature,
+            problem.clauses,
+            problem.formulas,
+            false,
+            problem.problem_type,
+        );
 
         let mut active = Vec::new();
         let mut spawn_count = 0;
@@ -3199,6 +3215,74 @@ mod tests {
         assert!(backend.payloads[0].contains("thf(goal_formula"));
         assert!(!backend.payloads[0].contains("fof(goal_formula"));
         assert!(!backend.payloads[0].contains("tff(goal_formula"));
+    }
+
+    #[test]
+    fn process_file_with_runner_backend_renders_higher_order_shared_problem() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let include_name = format!("batch-shared-thf-{}.ax", std::process::id());
+        let source = test_path("batch-shared-thf-concrete.p");
+        let dest = test_path("batch-shared-thf-concrete.out");
+        let _ = fs::remove_file(&dest);
+        fs::write(
+            temp_dir.join(&include_name),
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(shared_formula, axiom, p @ a).\n",
+        )
+        .unwrap();
+        fs::write(&source, "cnf(goal_clause, axiom, $false).\n").unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.includes = vec![include_name.clone()];
+        let default_dir = format!("{}/", temp_dir.to_string_lossy().replace('\\', "/"));
+        let mut init_output = Vec::new();
+
+        let parsed = spec
+            .init_struct_fof_spec_from_files(
+                &mut bank,
+                &mut ctrl,
+                Some(&default_dir),
+                &mut init_output,
+            )
+            .unwrap();
+
+        assert_eq!(parsed, 4);
+        assert_eq!(ctrl.problem_type(), ProblemType::HigherOrder);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+        let mut global = Vec::new();
+        let mut backend = FakeRunnerBackend::new(Some(theorem_completion("% shared thf proof\n")));
+        let source_name = source.to_string_lossy().into_owned();
+        let dest_name = dest.to_string_lossy().into_owned();
+
+        let report = spec
+            .process_file_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: &source_name,
+                    dest: &dest_name,
+                },
+                &mut global,
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        assert_eq!(backend.requests.len(), MAX_CORES);
+        let payload = &backend.payloads[0];
+        assert!(payload.contains("thf(shared_formula"));
+        assert!(payload.contains("thf(goal_clause"));
+        assert!(!payload.contains("fof(shared_formula"));
+        assert!(!payload.contains("tff(shared_formula"));
+        assert_eq!(ctrl.problem_type(), ProblemType::HigherOrder);
     }
 
     #[test]

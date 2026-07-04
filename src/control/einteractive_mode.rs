@@ -10,6 +10,7 @@ use std::{
 
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
 use crate::control::batch_spec::{
     BatchCompletedRunner, BatchProblemData, BatchProcessProblemConfig, BatchProcessProblemOutputs,
@@ -76,6 +77,7 @@ pub const HELP_MESSAGE: &str = "\
 pub struct AxiomSet {
     cset: ClauseSet,
     fset: FormulaSet,
+    problem_type: ProblemType,
     staged: bool,
     raw_data: String,
 }
@@ -92,10 +94,22 @@ impl AxiomSet {
         raw_data: impl Into<String>,
         staged: bool,
     ) -> Self {
+        Self::new_with_problem_type(cset, fset, raw_data, staged, ProblemType::FirstOrder)
+    }
+
+    #[must_use]
+    pub fn new_with_problem_type(
+        cset: ClauseSet,
+        fset: FormulaSet,
+        raw_data: impl Into<String>,
+        staged: bool,
+        problem_type: ProblemType,
+    ) -> Self {
         let _ = staged;
         Self {
             cset,
             fset,
+            problem_type,
             staged: false,
             raw_data: raw_data.into(),
         }
@@ -117,6 +131,11 @@ impl AxiomSet {
     }
 
     #[must_use]
+    pub const fn problem_type(&self) -> ProblemType {
+        self.problem_type
+    }
+
+    #[must_use]
     pub const fn is_staged(&self) -> bool {
         self.staged
     }
@@ -135,7 +154,13 @@ impl From<(String, String, BatchProblemData)> for AxiomSet {
     fn from((name, raw_data, mut problem): (String, String, BatchProblemData)) -> Self {
         problem.clauses.set_identifier(name.clone());
         problem.formulas.set_identifier(name);
-        Self::new(problem.clauses, problem.formulas, raw_data, false)
+        Self::new_with_problem_type(
+            problem.clauses,
+            problem.formulas,
+            raw_data,
+            false,
+            problem.problem_type,
+        )
     }
 }
 
@@ -338,11 +363,12 @@ impl InteractiveSpec {
             return ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE;
         }
 
-        ctrl.add_problem(
+        ctrl.add_problem_with_type(
             signature,
             self.axiom_sets[index].clause_set().clone(),
             self.axiom_sets[index].formula_set().clone(),
             false,
+            self.axiom_sets[index].problem_type(),
         );
         self.axiom_sets[index].set_staged(true);
         ctrl.mark_current_problem_stack_shared();
@@ -1304,15 +1330,18 @@ mod tests {
     #[test]
     fn add_parsed_axiom_set_sets_identifiers_and_keeps_raw_data() {
         let mut interactive = InteractiveSpec::new("");
+        let mut problem = empty_problem();
+        problem.problem_type = ProblemType::HigherOrder;
 
         assert_eq!(
-            interactive.add_parsed_axiom_set("parsed", "fof(a,axiom,p).\n", empty_problem()),
+            interactive.add_parsed_axiom_set("parsed", "fof(a,axiom,p).\n", problem),
             OK_ADDED_MESSAGE
         );
 
         let axiom_set = interactive.axiom_sets().next().unwrap();
         assert_eq!(axiom_set.name(), "parsed");
         assert_eq!(axiom_set.formula_set().identifier(), "parsed");
+        assert_eq!(axiom_set.problem_type(), ProblemType::HigherOrder);
         assert_eq!(axiom_set.raw_data(), "fof(a,axiom,p).\n");
     }
 
@@ -1552,6 +1581,29 @@ mod tests {
         assert!(interactive.axiom_set_mut("stage_me").unwrap().is_staged());
         assert_eq!(ctrl.clause_set_count(), 1);
         assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+        assert_eq!(ctrl.problem_type(), ProblemType::FirstOrder);
+    }
+
+    #[test]
+    fn stage_command_preserves_parsed_axiom_problem_type() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        let mut problem = empty_problem();
+        problem.problem_type = ProblemType::HigherOrder;
+        assert_eq!(
+            interactive.add_parsed_axiom_set("higher", "thf(a,axiom,p).\n", problem),
+            OK_ADDED_MESSAGE
+        );
+
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, &signature, "higher"),
+            OK_STAGED_MESSAGE
+        );
+
+        assert!(interactive.axiom_set_mut("higher").unwrap().is_staged());
+        assert_eq!(ctrl.problem_type(), ProblemType::HigherOrder);
         assert_eq!(ctrl.shared_ax_sp(), 1);
     }
 
