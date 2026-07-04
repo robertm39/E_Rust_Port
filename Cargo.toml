@@ -5,6 +5,10 @@ edition = "2021"
 license = "GPL-2.0-or-later"
 publish = false
 
+[features]
+default = []
+measure-expensive = []
+
 [[bin]]
 name = "eprover"
 path = "src/bin/eprover.rs"

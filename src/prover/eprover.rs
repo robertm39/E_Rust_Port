@@ -21415,6 +21415,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("% Shared term nodes"));
         assert!(!printed.contains("% ...corresponding unshared nodes"));
         assert!(!printed.contains("% Match attempts with oriented units"));
+        assert!(!printed.contains("% Oriented PDT nodes visited"));
+        assert!(!printed.contains("% Unoriented PDT nodes visited"));
         assert!(!printed.contains("% Final garbage collected termcells"));
         assert!(!printed.contains("% Final shared term nodes"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
@@ -21451,6 +21453,16 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% ...corresponding unshared nodes      : "));
         assert!(printed.contains("% Match attempts with oriented units   : "));
         assert!(printed.contains("% Match attempts with unoriented units : "));
+        #[cfg(feature = "measure-expensive")]
+        {
+            assert!(printed.contains("% Oriented PDT nodes visited           : "));
+            assert!(printed.contains("% Unoriented PDT nodes visited         : "));
+        }
+        #[cfg(not(feature = "measure-expensive"))]
+        {
+            assert!(!printed.contains("% Oriented PDT nodes visited"));
+            assert!(!printed.contains("% Unoriented PDT nodes visited"));
+        }
         assert!(printed.contains("% Final garbage collected termcells    : "));
         assert!(printed.contains("% Final shared term nodes              : "));
         assert!(stderr.is_empty());

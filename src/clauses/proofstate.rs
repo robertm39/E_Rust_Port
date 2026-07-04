@@ -1781,6 +1781,25 @@ impl ProofState {
             output,
             "{DEFAULT_COMCHAR_RAW} Match attempts with unoriented units : {}",
             self.processed_pos_eqns.demod_index_match_count()
+        )?;
+        #[cfg(feature = "measure-expensive")]
+        {
+            self.write_measure_expensive_statistics(output)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "measure-expensive")]
+    fn write_measure_expensive_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Oriented PDT nodes visited           : {}",
+            self.processed_pos_rules.demod_index_visited_count()
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Unoriented PDT nodes visited         : {}",
+            self.processed_pos_eqns.demod_index_visited_count()
         )
     }
 
@@ -2574,6 +2593,12 @@ mod tests {
         state
             .processed_pos_eqns()
             .record_demod_index_search_attempt();
+        state
+            .processed_pos_rules()
+            .record_demod_index_nodes_visited(5);
+        state
+            .processed_pos_eqns()
+            .record_demod_index_nodes_visited(11);
 
         let ordinary_statistics = state.statistics_string(false, false);
         assert!(!ordinary_statistics.contains("Total literals in generated clauses"));
@@ -2581,6 +2606,7 @@ mod tests {
         assert!(!ordinary_statistics.contains("...corresponding unshared nodes"));
         assert!(!ordinary_statistics.contains("Match attempts with oriented units"));
         assert!(!ordinary_statistics.contains("Match attempts with unoriented units"));
+        assert!(!ordinary_statistics.contains("PDT nodes visited"));
 
         let detailed_statistics = state.statistics_string(false, true);
         assert!(detailed_statistics.contains("Total literals in generated clauses  : 4"));
@@ -2595,6 +2621,15 @@ mod tests {
         )));
         assert!(detailed_statistics.contains("Match attempts with oriented units   : 1"));
         assert!(detailed_statistics.contains("Match attempts with unoriented units : 2"));
+        #[cfg(feature = "measure-expensive")]
+        {
+            assert!(detailed_statistics.contains("Oriented PDT nodes visited           : 5"));
+            assert!(detailed_statistics.contains("Unoriented PDT nodes visited         : 11"));
+        }
+        #[cfg(not(feature = "measure-expensive"))]
+        {
+            assert!(!detailed_statistics.contains("PDT nodes visited"));
+        }
     }
 
     #[test]
