@@ -83,6 +83,21 @@ impl DynamicString {
         }
     }
 
+    /// Append a C-shaped NULL-terminated string array.
+    ///
+    /// `DStrAppendStrArray` stops at the first NULL entry. A first NULL entry
+    /// leaves the descriptor untouched.
+    pub fn append_str_array_c(&mut self, parts: &[Option<&str>], separator: &str) {
+        let mut iterator = parts.iter().copied().map_while(|part| part);
+        if let Some(first) = iterator.next() {
+            self.append_str(first);
+            for part in iterator {
+                self.append_str(separator);
+                self.append_str(part);
+            }
+        }
+    }
+
     pub fn delete_last_char(&mut self) -> u8 {
         self.bytes.pop().unwrap_or(0)
     }
@@ -264,6 +279,25 @@ mod tests {
         assert_eq!(string.address(2), Some(b'c'));
         assert_eq!(string.address(string.len()), Some(0));
         assert_eq!(string.address(99), None);
+    }
+
+    #[test]
+    fn append_str_array_c_stops_at_first_null_sentinel() {
+        let mut string = DynamicString::new();
+
+        string.append_str_array_c(&[Some("alpha"), Some("beta"), None, Some("ignored")], "::");
+
+        assert_eq!(string.view_bytes(), b"alpha::beta");
+    }
+
+    #[test]
+    fn append_str_array_c_first_null_leaves_descriptor_untouched() {
+        let mut string = DynamicString::new();
+
+        string.append_str_array_c(&[None, Some("ignored")], ",");
+
+        assert_eq!(string.view_bytes(), b"");
+        assert_eq!(string.allocated_mem(), 0);
     }
 
     #[test]
