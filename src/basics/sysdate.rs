@@ -79,6 +79,23 @@ impl SysDate {
         }
     }
 
+    /// Increment with the C `SysDateInc` assertion-shaped contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the incremented date is the creation-time sentinel, matching
+    /// the C macro's post-increment `assert(*(sd))`. Also panics on signed
+    /// overflow instead of importing C undefined behavior.
+    pub fn increment_c(&mut self) {
+        match self.increment() {
+            SysDateIncrement::Advanced => {}
+            SysDateIncrement::CAssertionWouldFail => {
+                panic!("SysDateInc advanced to creation time")
+            }
+            SysDateIncrement::Overflow => panic!("SysDateInc date overflow"),
+        }
+    }
+
     #[must_use]
     pub fn unsigned_c_long_bits(self) -> u64 {
         u64::from_ne_bytes(self.0.to_ne_bytes())
@@ -134,6 +151,31 @@ mod tests {
         let mut invalid = SysDate::invalid_time();
         assert_eq!(invalid.increment(), SysDateIncrement::CAssertionWouldFail);
         assert_eq!(invalid, SysDate::creation_time());
+    }
+
+    #[test]
+    fn increment_c_matches_c_macro_for_ordinary_dates() {
+        let mut date = SysDate::creation_time();
+
+        date.increment_c();
+
+        assert_eq!(date.raw(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "SysDateInc advanced to creation time")]
+    fn increment_c_panics_after_invalid_sentinel_increment_like_c_assertion() {
+        let mut date = SysDate::invalid_time();
+
+        date.increment_c();
+    }
+
+    #[test]
+    #[should_panic(expected = "SysDateInc date overflow")]
+    fn increment_c_panics_on_overflow_instead_of_importing_c_undefined_behavior() {
+        let mut date = SysDate::from_raw(i64::MAX);
+
+        date.increment_c();
     }
 
     #[test]

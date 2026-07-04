@@ -85,10 +85,15 @@ Source files reviewed: `BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `SysDateInc(sd)` increments the pointed-to date first and then asserts the result is nonzero, so incrementing `SysDateInvalidTime()` mutates it to the creation-time sentinel before failing. Rust now exposes that as an explicit asserting helper while keeping the reporting helper for callers that need diagnostics.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SysDateInc` uses signed `long` increment without overflow handling. Rust treats overflow as a panic/reportable state instead of importing C undefined behavior; future date APIs should make resource-limit/overflow policy explicit.
 <!-- END MANUAL REVIEW: c_source_docs -->
