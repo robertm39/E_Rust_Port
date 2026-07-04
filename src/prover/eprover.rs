@@ -26471,6 +26471,59 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proves_lfhol_list_map_with_strong_rewrite_instantiation() {
+        let _guard = global_state_lock();
+        let path = temp_path("lfhol-list-map-strong-rw-proof");
+        std::fs::write(
+            &path,
+            "thf(list_decl, type, list: $tType).\n\
+             thf(nil_decl, type, nil: list).\n\
+             thf(cons_decl, type, cons: $i > list > list).\n\
+             thf(map_decl, type, map: ($i > $i) > list > list).\n\
+             thf(a_decl, type, a : $i).\n\
+             thf(b_decl, type, b : $i).\n\
+             thf(c_decl, type, c : $i).\n\
+             thf(d_decl, type, d : $i).\n\
+             thf(f_decl, type, f : $i > $i > $i).\n\
+             thf(l_decl, type, l : list).\n\
+             thf(res_decl, type, res : list).\n\
+             thf(map_nil, axiom, ![F:$i>$i]: ((map @ F @ nil) = nil)).\n\
+             thf(map_cons, axiom, ![F:$i>$i, X:$i, XS: list]: \
+             ((map @ F @ (cons @ X @ XS)) = (cons @ (F @ X) @ (map @ F @ XS)))).\n\
+             thf(f_def, axiom, ![X:$i]:((f @ a @ X) = d)).\n\
+             thf(list_a_b_c, axiom, l = (cons @ a @ (cons @ b @ (cons @ c @ nil)))).\n\
+             thf(list_d_d_d, axiom, res = (cons @ d @ (cons @ d @ (cons @ d @ nil)))).\n\
+             thf(map_a_b_c, conjecture, (map @ (f @ a) @ l) = res).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--output-level=0",
+                "--term-ordering=KBO6",
+                "--order-weight-generation=invfreqrank",
+                "--order-precedence-generation=invfreq",
+                "--order-constant-weight=1",
+                "--strong-rw-inst",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_simple_thf_application_conjunction() {
         let _guard = global_state_lock();
         let path = temp_path("simple-thf-application-conjunction-proof");
