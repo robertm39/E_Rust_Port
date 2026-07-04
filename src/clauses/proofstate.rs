@@ -1555,16 +1555,17 @@ impl ProofState {
 
     fn write_generation_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
         let statistics = self.statistics();
+        let generated_clause_count = generated_clause_statistics_count(
+            statistics.generated_count,
+            statistics.backward_rewritten_count,
+        );
         let cached_rewrite_steps = cached_rewrite_steps(
             statistics.rw_count,
             REWRITE_UNCACHED.load(Ordering::Relaxed),
         );
         writeln!(
             output,
-            "{DEFAULT_COMCHAR_RAW} Generated clauses                    : {}",
-            statistics
-                .generated_count
-                .wrapping_sub(statistics.backward_rewritten_count)
+            "{DEFAULT_COMCHAR_RAW} Generated clauses                    : {generated_clause_count}"
         )?;
         writeln!(
             output,
@@ -1932,6 +1933,14 @@ fn cached_rewrite_steps(rw_count: u64, rewrite_uncached: u64) -> u64 {
     rw_count.saturating_sub(rewrite_uncached)
 }
 
+fn generated_clause_statistics_count(generated_count: u64, backward_rewritten_count: u64) -> i64 {
+    i64::from_ne_bytes(
+        generated_count
+            .wrapping_sub(backward_rewritten_count)
+            .to_ne_bytes(),
+    )
+}
+
 pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofState, Diagnostic> {
     ProofState::new(free_symbol_props)
 }
@@ -1946,8 +1955,9 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_rewrite_steps, proof_state_alloc, ProofObjectAnalysis, ProofObjectGraphEdge,
-        ProofState, ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
+        cached_rewrite_steps, generated_clause_statistics_count, proof_state_alloc,
+        ProofObjectAnalysis, ProofObjectGraphEdge, ProofState, ProofStateGcAnalysis,
+        ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2481,6 +2491,12 @@ mod tests {
     fn proof_state_cached_rewrite_steps_follow_c_max_correction() {
         assert_eq!(cached_rewrite_steps(7, 3), 4);
         assert_eq!(cached_rewrite_steps(3, 7), 0);
+    }
+
+    #[test]
+    fn proof_state_generated_clause_statistics_use_c_signed_display() {
+        assert_eq!(generated_clause_statistics_count(7, 3), 4);
+        assert_eq!(generated_clause_statistics_count(3, 7), -4);
     }
 
     #[test]
