@@ -4,6 +4,7 @@ use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LI
 use crate::clauses::clausefunc::clause_remove_literal_index;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
+use crate::clauses::pdtrees::PDTREE_IGNORE_NF_DATE;
 use crate::clauses::subsumption::eqn_topsubsumes_termpair;
 use crate::terms::termtypes::Term;
 
@@ -222,8 +223,8 @@ fn find_top_simplifying_unit_with_sign<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
-    units.record_demod_index_search_init(false);
-    units.iter().find_map(|clause| {
+    units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
+    let result = units.iter().find_map(|clause| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
             return None;
@@ -232,7 +233,9 @@ fn find_top_simplifying_unit_with_sign<'set>(
             clause,
             literal_index: 0,
         })
-    })
+    });
+    units.record_demod_index_search_exit();
+    result
 }
 
 fn find_top_simplifying_unit_index(
@@ -241,14 +244,16 @@ fn find_top_simplifying_unit_index(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<usize> {
-    units.record_demod_index_search_init(false);
-    units.iter().enumerate().find_map(|(index, clause)| {
+    units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
+    let result = units.iter().enumerate().find_map(|(index, clause)| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
             return None;
         }
         eqn_topsubsumes_termpair(literal, left, right).then_some(index)
-    })
+    });
+    units.record_demod_index_search_exit();
+    result
 }
 
 fn find_simplifying_unit_index(
@@ -321,10 +326,13 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::pdtrees::PdtTraversalOrder;
+    use crate::clauses::pdtrees::{
+        prefix_compute_term_code, PdtTraversalOrder, PDTREE_IGNORE_NF_DATE,
+    };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
 
@@ -431,12 +439,21 @@ mod tests {
             set.demod_index_traversal_order(),
             Some(PdtTraversalOrder::variables_first())
         );
+        assert!(!set.demod_index_search_active());
+        let state = set
+            .demod_index_search_state()
+            .expect("unit lookup records search state");
+        assert_eq!(state.term_code, prefix_compute_term_code(&b));
+        assert_eq!(state.term_weight, term_standard_weight(&b));
+        assert_eq!(state.term_date, PDTREE_IGNORE_NF_DATE);
+        assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
         assert!(find_signed_top_simplifying_unit(&set, &b, &a, false).is_none());
         assert_eq!(set.demod_index_match_count(), 2);
         assert_eq!(
             set.demod_index_traversal_order(),
             Some(PdtTraversalOrder::variables_first())
         );
+        assert!(!set.demod_index_search_active());
     }
 
     #[test]

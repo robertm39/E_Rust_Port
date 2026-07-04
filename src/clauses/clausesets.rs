@@ -21,7 +21,7 @@ use crate::clauses::freqvectors::{
     FvIndexType, PermVector,
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
-use crate::clauses::pdtrees::{PdTree, PdtTraversalOrder};
+use crate::clauses::pdtrees::{PdTree, PdtSearchState, PdtTraversalOrder};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
@@ -29,7 +29,7 @@ use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_compute_order;
-use crate::terms::termtypes::TermProperties;
+use crate::terms::termtypes::{Term, TermProperties};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -198,15 +198,38 @@ impl ClauseSet {
             .map(PdTree::search_traversal_order)
     }
 
+    #[must_use]
+    pub fn demod_index_search_state(&self) -> Option<PdtSearchState> {
+        self.demod_index.as_ref().and_then(PdTree::search_state)
+    }
+
+    #[must_use]
+    pub fn demod_index_search_active(&self) -> bool {
+        self.demod_index
+            .as_ref()
+            .is_some_and(PdTree::search_is_active)
+    }
+
     pub fn record_demod_index_search_attempt(&self) {
         if let Some(index) = &self.demod_index {
             index.record_search_attempt();
         }
     }
 
-    pub fn record_demod_index_search_init(&self, prefer_general: bool) {
+    pub fn record_demod_index_search_init(
+        &self,
+        term: &Term,
+        age_constraint: SysDate,
+        prefer_general: bool,
+    ) {
         if let Some(index) = &self.demod_index {
-            index.record_search_init(prefer_general);
+            index.record_search_init(term, age_constraint, prefer_general);
+        }
+    }
+
+    pub fn record_demod_index_search_exit(&self) {
+        if let Some(index) = &self.demod_index {
+            index.record_search_exit();
         }
     }
 

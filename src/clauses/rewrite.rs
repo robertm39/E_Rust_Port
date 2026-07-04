@@ -247,10 +247,10 @@ pub fn rewrite_with_clause_set_plain(
     );
 
     REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-    demodulators.record_demod_index_search_init(prefer_general);
+    demodulators.record_demod_index_search_init(term, date, prefer_general);
 
     let mut subst = Substitution::new();
-    let Some(found) = find_plain_demodulator(
+    let found = match find_plain_demodulator(
         ocb,
         bank,
         term,
@@ -258,8 +258,15 @@ pub fn rewrite_with_clause_set_plain(
         demodulators,
         &mut subst,
         restricted_rw,
-    )?
-    else {
+    ) {
+        Ok(found) => found,
+        Err(error) => {
+            demodulators.record_demod_index_search_exit();
+            return Err(error);
+        }
+    };
+    demodulators.record_demod_index_search_exit();
+    let Some(found) = found else {
         return Ok(term.clone());
     };
 
@@ -1548,7 +1555,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
-    use crate::clauses::pdtrees::PdtTraversalOrder;
+    use crate::clauses::pdtrees::{prefix_compute_term_code, PdtTraversalOrder};
     use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -1556,6 +1563,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{
         DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
     };
@@ -1931,6 +1939,14 @@ mod tests {
             demods.demod_index_traversal_order(),
             Some(PdtTraversalOrder::symbols_first())
         );
+        assert!(!demods.demod_index_search_active());
+        let state = demods
+            .demod_index_search_state()
+            .expect("rewrite lookup records search state");
+        assert_eq!(state.term_code, prefix_compute_term_code(&f_b));
+        assert_eq!(state.term_weight, term_standard_weight(&f_b));
+        assert_eq!(state.term_date, SysDate::from_raw(0));
+        assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);

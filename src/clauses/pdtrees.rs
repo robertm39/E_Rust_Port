@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 #[cfg(feature = "pdt-count-nodes")]
 use std::sync::atomic::AtomicU64;
@@ -6,12 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
+use crate::basics::sysdate::SysDate;
 use crate::terms::functypes::FunCode;
+use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{term_identity_id, Term};
 
 pub const PDTREE_CELL_MEM: usize = 16;
 pub const PDTNODE_MEM: usize = 52;
 pub const CLAUSEPOSCELL_MEM: usize = 20;
+pub const PDTREE_IGNORE_TERM_WEIGHT: i64 = i64::MAX;
+pub const PDTREE_IGNORE_NF_DATE: SysDate = SysDate::creation_time();
 
 static PDT_USE_SIZE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
 static PDT_USE_AGE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
@@ -79,6 +83,14 @@ impl Default for PdtTraversalOrder {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PdtSearchState {
+    pub term_code: Vec<PrefixToken>,
+    pub term_weight: i64,
+    pub term_date: SysDate,
+    pub traversal_order: PdtTraversalOrder,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
     Fun(FunCode),
@@ -101,6 +113,8 @@ pub struct PdTree {
     match_count: Cell<u64>,
     visited_count: Cell<u64>,
     search_traversal_order: Cell<PdtTraversalOrder>,
+    search_active: Cell<bool>,
+    search_state: RefCell<Option<PdtSearchState>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -128,6 +142,8 @@ impl PdTree {
             match_count: Cell::new(0),
             visited_count: Cell::new(0),
             search_traversal_order: Cell::new(PdtTraversalOrder::default()),
+            search_active: Cell::new(false),
+            search_state: RefCell::new(None),
         }
     }
 
@@ -185,15 +201,52 @@ impl PdTree {
         self.search_traversal_order.get()
     }
 
+    #[must_use]
+    pub fn search_state(&self) -> Option<PdtSearchState> {
+        self.search_state.borrow().clone()
+    }
+
+    #[must_use]
+    pub fn search_is_active(&self) -> bool {
+        self.search_active.get()
+    }
+
+    #[must_use]
+    pub fn search_term_weight(&self) -> i64 {
+        self.search_state
+            .borrow()
+            .as_ref()
+            .map_or(PDTREE_IGNORE_TERM_WEIGHT, |state| state.term_weight)
+    }
+
+    #[must_use]
+    pub fn search_term_date(&self) -> SysDate {
+        self.search_state
+            .borrow()
+            .as_ref()
+            .map_or(PDTREE_IGNORE_NF_DATE, |state| state.term_date)
+    }
+
     pub fn record_search_attempt(&self) {
         self.match_count
             .set(self.match_count.get().saturating_add(1));
     }
 
-    pub fn record_search_init(&self, prefer_general: bool) {
-        self.search_traversal_order
-            .set(PdtTraversalOrder::from_prefer_general(prefer_general));
+    pub fn record_search_init(&self, term: &Term, age_constraint: SysDate, prefer_general: bool) {
+        let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
+        self.search_traversal_order.set(traversal_order);
+        *self.search_state.borrow_mut() = Some(PdtSearchState {
+            term_code: term_lr_traverse_code(term),
+            term_weight: term_standard_weight(term),
+            term_date: age_constraint,
+            traversal_order,
+        });
+        self.search_active.set(true);
         self.record_search_attempt();
+    }
+
+    pub fn record_search_exit(&self) {
+        self.search_active.set(false);
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -501,9 +554,11 @@ mod tests {
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
+    use crate::basics::sysdate::SysDate;
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
 
@@ -584,6 +639,10 @@ mod tests {
 
         assert_eq!(tree.match_count(), 0);
         assert_eq!(tree.visited_count(), 0);
+        assert!(!tree.search_is_active());
+        assert_eq!(tree.search_state(), None);
+        assert_eq!(tree.search_term_weight(), i64::MAX);
+        assert_eq!(tree.search_term_date(), SysDate::creation_time());
         assert_eq!(
             tree.search_traversal_order(),
             PdtTraversalOrder::symbols_first()
@@ -601,23 +660,45 @@ mod tests {
 
     #[test]
     fn search_init_records_c_prefer_general_traversal_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let first = parse_in_bank(&mut bank, "f(a)");
+        let second = parse_in_bank(&mut bank, "g(b,c)");
         let tree = PdTree::new();
 
-        tree.record_search_init(false);
+        tree.record_search_init(&first, SysDate::creation_time(), false);
 
         assert_eq!(tree.match_count(), 1);
         assert_eq!(
             tree.search_traversal_order(),
             PdtTraversalOrder::variables_first()
         );
+        assert!(tree.search_is_active());
+        assert_eq!(tree.search_term_weight(), term_standard_weight(&first));
+        assert_eq!(tree.search_term_date(), SysDate::creation_time());
+        let state = tree.search_state().expect("search init stores state");
+        assert_eq!(state.term_code, prefix_compute_term_code(&first));
+        assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
-        tree.record_search_init(true);
+        tree.record_search_exit();
+
+        assert!(!tree.search_is_active());
+        assert_eq!(tree.search_term_weight(), term_standard_weight(&first));
+
+        tree.record_search_init(&second, SysDate::from_raw(7), true);
 
         assert_eq!(tree.match_count(), 2);
         assert_eq!(
             tree.search_traversal_order(),
             PdtTraversalOrder::symbols_first()
         );
+        assert!(tree.search_is_active());
+        assert_eq!(tree.search_term_weight(), term_standard_weight(&second));
+        assert_eq!(tree.search_term_date(), SysDate::from_raw(7));
+        let state = tree
+            .search_state()
+            .expect("search init stores replacement state");
+        assert_eq!(state.term_code, prefix_compute_term_code(&second));
+        assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
     }
 
     #[test]
