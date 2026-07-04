@@ -106,6 +106,10 @@ impl DynamicString {
         self.bytes.extend_from_slice(prefix);
     }
 
+    pub fn append_dstr_c(&mut self, other: &Self) {
+        self.append_c_str_bytes(other.view_bytes());
+    }
+
     pub fn append_byte(&mut self, new_byte: u8) {
         self.ensure_for_byte_append();
         self.bytes.push(new_byte);
@@ -407,6 +411,30 @@ mod tests {
 
         assert_eq!(string.view_bytes(), &[0xff, b'a']);
         assert_eq!(string.allocated_mem(), DSTR_GROW);
+    }
+
+    #[test]
+    fn append_dstr_c_uses_source_c_string_view() {
+        let mut source = DynamicString::new();
+        source.append_buffer(&[0xff, b'a', 0, b'b']);
+        let mut destination = DynamicString::new();
+        destination.append_str("prefix:");
+
+        destination.append_dstr_c(&source);
+
+        assert_eq!(source.view_bytes(), &[0xff, b'a', 0, b'b']);
+        assert_eq!(destination.view_bytes(), b"prefix:\xffa");
+    }
+
+    #[test]
+    fn append_dstr_c_empty_source_still_uses_str_growth_rule() {
+        let source = DynamicString::new();
+        let mut destination = DynamicString::new();
+
+        destination.append_dstr_c(&source);
+
+        assert_eq!(destination.view_bytes(), b"");
+        assert_eq!(destination.allocated_mem(), DSTR_GROW);
     }
 
     #[test]
