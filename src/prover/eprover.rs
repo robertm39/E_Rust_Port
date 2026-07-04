@@ -5769,7 +5769,7 @@ fn run_proof_search<W: Write + ?Sized>(
         write_proof_statistics(
             output,
             config,
-            &state,
+            &mut state,
             parsed_ax_no,
             relevancy_pruned,
             raw_clause_no,
@@ -5839,7 +5839,7 @@ fn run_proof_search<W: Write + ?Sized>(
     write_proof_statistics(
         output,
         config,
-        &state,
+        &mut state,
         parsed_ax_no,
         relevancy_pruned,
         raw_clause_no,
@@ -8430,7 +8430,7 @@ fn clause_print_for_output_format(
 fn write_proof_statistics(
     output: &mut impl Write,
     config: &EProverConfig,
-    state: &crate::clauses::proofstate::ProofState,
+    state: &mut crate::clauses::proofstate::ProofState,
     parsed_ax_no: i64,
     relevancy_pruned: i64,
     raw_clause_no: i64,
@@ -8509,6 +8509,19 @@ fn write_proof_statistics(
         "{DEFAULT_COMCHAR_RAW} Search garbage collected termcells   : {}",
         state.terms().recovered()
     )?;
+    if config.flags.contains(EProverFlag::PrintDetailedStatistics) {
+        state.collect_term_garbage();
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Final garbage collected termcells    : {}",
+            state.terms().recovered()
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Final shared term nodes              : {}",
+            state.terms().term_nodes()
+        )?;
+    }
     Ok(())
 }
 
@@ -21402,6 +21415,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("% Shared term nodes"));
         assert!(!printed.contains("% ...corresponding unshared nodes"));
         assert!(!printed.contains("% Match attempts with oriented units"));
+        assert!(!printed.contains("% Final garbage collected termcells"));
+        assert!(!printed.contains("% Final shared term nodes"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -21436,6 +21451,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% ...corresponding unshared nodes      : "));
         assert!(printed.contains("% Match attempts with oriented units   : "));
         assert!(printed.contains("% Match attempts with unoriented units : "));
+        assert!(printed.contains("% Final garbage collected termcells    : "));
+        assert!(printed.contains("% Final shared term nodes              : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
