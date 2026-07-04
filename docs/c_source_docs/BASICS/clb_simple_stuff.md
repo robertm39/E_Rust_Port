@@ -123,9 +123,11 @@ Source files reviewed: `BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`.
 ### Compatibility Notes
 
 - C stores `problemType` as process-global state and parser paths set it as first-order or higher-order syntax is observed. Rust now sets the same global for supported first-order executable parsing so lower-level ordering, indexing, and inference helpers see C-shaped state during a run.
+- `StrDistance`, `StringStartsWith`, and `StringIndex` operate on C strings, so embedded NUL bytes terminate comparisons. Rust preserves this for the public simple-string helpers while keeping sentinel-array stopping for `StringIndex`/`StringArrayCardinality`.
 
 ### Change Later
 
 - `problemType` is convenient C global state but awkward for repeated in-process Rust runs and future parallel solving. Rust resets it around executable `run()` calls for isolation; replace that shim with an explicit proof-session/parser context once the full first-order and higher-order parser owners are wired.
 - `JKISSSeed(NULL, ...)` seeds the file-static `rand_state` cell, but `JKISSRand(NULL)` and `JKISSRand(state)` advance separate file-static `xstate`/`ystate`/`zstate`/`cstate` words and ignore the selected `RandState_p`. Rust preserves this exported sequence quirk; a cleaned RNG API should either use caller-provided state consistently or expose an explicit global generator.
+- `StrDistance`, `StringStartsWith`, and `StringIndex` conflate text strings with NUL-terminated byte strings. A cleaned Rust API should either reject embedded NULs at the boundary or expose separate byte-slice helpers where C-string truncation is intentional.
 <!-- END MANUAL REVIEW: c_source_docs -->

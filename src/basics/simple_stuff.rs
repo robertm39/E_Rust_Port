@@ -133,8 +133,8 @@ fn lock_or_recover<T>(mutex: &'static Mutex<T>) -> MutexGuard<'static, T> {
 #[must_use]
 pub fn str_distance(left: &str, right: &str) -> usize {
     let mut distance = 0_usize;
-    let mut left_iter = left.bytes();
-    let mut right_iter = right.bytes();
+    let mut left_iter = c_string_prefix(left).iter();
+    let mut right_iter = c_string_prefix(right).iter();
 
     loop {
         match (left_iter.next(), right_iter.next()) {
@@ -200,19 +200,20 @@ pub fn indent_str(level: i32) -> String {
 
 #[must_use]
 pub fn string_starts_with(pattern: &str, prefix: &str) -> bool {
-    pattern.starts_with(prefix)
+    c_string_prefix(pattern).starts_with(c_string_prefix(prefix))
 }
 
 #[must_use]
 pub fn string_index(key: &str, list: &[&str]) -> Option<usize> {
-    list.iter().position(|candidate| *candidate == key)
+    list.iter()
+        .position(|candidate| c_strings_equal(candidate, key))
 }
 
 #[must_use]
 pub fn string_index_c(key: &str, list: &[Option<&str>]) -> isize {
     list.iter()
         .take_while(|candidate| candidate.is_some())
-        .position(|candidate| *candidate == Some(key))
+        .position(|candidate| candidate.is_some_and(|candidate| c_strings_equal(candidate, key)))
         .map_or(-1, |index| isize::try_from(index).unwrap_or(isize::MAX))
 }
 
@@ -242,6 +243,19 @@ pub fn compute_gcd(mut left: i64, mut right: i64) -> i64 {
             right %= left;
         }
     }
+}
+
+fn c_string_prefix(text: &str) -> &[u8] {
+    let bytes = text.as_bytes();
+    let nul_pos = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    &bytes[..nul_pos]
+}
+
+fn c_strings_equal(left: &str, right: &str) -> bool {
+    c_string_prefix(left) == c_string_prefix(right)
 }
 
 #[must_use]
@@ -331,6 +345,8 @@ mod tests {
         assert_eq!(str_distance("abc", "axc"), 1);
         assert_eq!(str_distance("abc", "axcde"), 3);
         assert_eq!(str_distance("abcd", "ab"), 2);
+        assert_eq!(str_distance("ab\0xxx", "ac\0yyy"), 1);
+        assert_eq!(str_distance("ab\0xxx", "abcd"), 2);
     }
 
     #[test]
@@ -433,14 +449,26 @@ mod tests {
         assert!(string_starts_with("abcdef", "abc"));
         assert!(string_starts_with("abcdef", ""));
         assert!(!string_starts_with("abc", "abcd"));
+        assert!(string_starts_with("abc\0hidden", "abc\0ignored"));
+        assert!(!string_starts_with("ab\0hidden", "abc"));
         assert_eq!(string_index("beta", &["alpha", "beta", "gamma"]), Some(1));
+        assert_eq!(
+            string_index("beta\0key", &["alpha", "beta\0candidate", "beta"]),
+            Some(1)
+        );
         assert_eq!(string_index("delta", &["alpha", "beta"]), None);
     }
 
     #[test]
     fn c_shaped_null_terminated_string_helpers_stop_at_none() {
-        let list = [Some("alpha"), Some("beta"), None, Some("ignored")];
+        let list = [
+            Some("alpha"),
+            Some("beta\0candidate"),
+            None,
+            Some("beta\0ignored"),
+        ];
         assert_eq!(string_index_c("beta", &list), 1);
+        assert_eq!(string_index_c("beta\0key", &list), 1);
         assert_eq!(string_index_c("ignored", &list), -1);
         assert_eq!(string_array_cardinality(&list), 2);
     }
