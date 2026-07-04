@@ -30,8 +30,8 @@ use crate::basics::verbose::set_verbose_level;
 use crate::clauses::bce::eliminate_blocked_clauses_with_output;
 use crate::clauses::clause::{
     clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
-    clause_print_tptp_format_string_with_options, clause_write_tstp_with_type_suffixes, Clause,
-    ClauseParseOptions,
+    clause_print_tptp_format_string_with_options, clause_starts_maybe,
+    clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
@@ -4851,6 +4851,24 @@ fn simple_app_encoded_formula_set(
     Ok(Some(set))
 }
 
+fn simple_fof_formula_owner(
+    formulas: &[SimpleFofFormula],
+    properties: FormulaProperties,
+    name: &str,
+    source: Option<&str>,
+    line: i64,
+    column: i64,
+    bank: &mut TermBank,
+) -> Result<Option<WrappedFormula>, Diagnostic> {
+    let Some(term_formula) = simple_fof_formulas_to_tformula(formulas, bank)? else {
+        return Ok(None);
+    };
+    let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
+    wrapped.set_properties(properties);
+    wrapped.set_info(Some(ClauseInfo::new(Some(name), source, line, column)));
+    Ok(Some(wrapped))
+}
+
 fn simple_fof_formulas_to_tformula(
     formulas: &[SimpleFofFormula],
     bank: &mut TermBank,
@@ -8719,10 +8737,111 @@ pub(crate) fn parse_clause_scanner_into_sets_with_options(
     clauses: &mut ClauseSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
+    let mut destination = InputOwnerDestination::Clauses(clauses);
+    parse_clause_scanner_into_destination_with_options(
+        scanner,
+        parse_format,
+        formula_preprocessing,
+        clause_parse_options,
+        bank,
+        &mut destination,
+        watchlist,
+    )
+}
+
+pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
+    scanner: &mut Scanner,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
+    let mut destination = InputOwnerDestination::Formulas(formulas);
+    parse_clause_scanner_into_destination_with_options(
+        scanner,
+        parse_format,
+        formula_preprocessing,
+        clause_parse_options,
+        bank,
+        &mut destination,
+        watchlist,
+    )
+}
+
+enum InputOwnerDestination<'a> {
+    Clauses(&'a mut ClauseSet),
+    Formulas(&'a mut FormulaSet),
+}
+
+impl InputOwnerDestination<'_> {
+    fn input_owner_count(&self) -> i64 {
+        match self {
+            Self::Clauses(clauses) => clauses.members(),
+            Self::Formulas(formulas) => formulas.cardinality(),
+        }
+    }
+
+    fn insert_clause_owner(
+        &mut self,
+        bank: &mut TermBank,
+        clause: Clause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::Clauses(clauses) => clauses.insert(clause),
+            Self::Formulas(formulas) => {
+                let formula =
+                    WrappedFormula::form_clause_alloc(bank, clause, ProblemType::FirstOrder)?;
+                formulas.insert(formula);
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_parsed_formula_owner(
+        &mut self,
+        bank: &mut TermBank,
+        parsed: ParsedSimpleFofClause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::Clauses(clauses) => {
+                for clause in parsed.clauses {
+                    clauses.insert(clause);
+                }
+            }
+            Self::Formulas(formulas) => {
+                if let Some(formula) = parsed.owner_formula {
+                    formulas.insert(formula);
+                } else {
+                    for clause in parsed.clauses {
+                        let formula = WrappedFormula::form_clause_alloc(
+                            bank,
+                            clause,
+                            ProblemType::FirstOrder,
+                        )?;
+                        formulas.insert(formula);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_clause_scanner_into_destination_with_options(
+    scanner: &mut Scanner,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
+    bank: &mut TermBank,
+    destination: &mut InputOwnerDestination<'_>,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
     set_problem_type(ProblemType::FirstOrder)?;
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
-    let start_clause_count = clauses.len();
+    let start_input_count = destination.input_owner_count();
     let mut formula_conjecture_seen = false;
     let mut raw_formula_features = RawFormulaFeatures::default();
     let input_owner_seen;
@@ -8731,7 +8850,7 @@ pub(crate) fn parse_clause_scanner_into_sets_with_options(
             let parsed = parse_tstp_entry_list(
                 scanner,
                 bank,
-                clauses,
+                destination,
                 watchlist,
                 None,
                 formula_preprocessing,
@@ -8745,7 +8864,7 @@ pub(crate) fn parse_clause_scanner_into_sets_with_options(
             let parsed = parse_tptp_entry_list(
                 scanner,
                 bank,
-                clauses,
+                destination,
                 watchlist,
                 None,
                 formula_preprocessing,
@@ -8756,13 +8875,16 @@ pub(crate) fn parse_clause_scanner_into_sets_with_options(
             input_owner_seen = parsed.input_owner_seen;
         }
         _ => {
-            clauses.parse_list_with_options(
-                scanner,
-                bank,
-                ProblemType::FirstOrder,
-                clause_parse_options,
-            )?;
-            input_owner_seen = clauses.len() != start_clause_count;
+            while clause_starts_maybe(scanner) {
+                let clause = clause_parse_with_options(
+                    scanner,
+                    bank,
+                    ProblemType::FirstOrder,
+                    clause_parse_options,
+                )?;
+                destination.insert_clause_owner(bank, clause)?;
+            }
+            input_owner_seen = destination.input_owner_count() != start_input_count;
         }
     }
     if !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -8996,7 +9118,7 @@ fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<(), Diagnos
 fn parse_tptp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-    clauses: &mut ClauseSet,
+    destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
@@ -9017,7 +9139,7 @@ fn parse_tptp_entry_list(
                 selectors.as_deref_mut(),
             ) {
                 result.input_owner_seen |= is_input_owner;
-                insert_input_or_watchlist_clause(clauses, watchlist, clause);
+                insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
             }
         } else if scanner.test_id("input_formula") {
             let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
@@ -9027,9 +9149,7 @@ fn parse_tptp_entry_list(
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
                 }
-                for clause in parsed.clauses {
-                    insert_input_or_watchlist_clause(clauses, watchlist, clause);
-                }
+                insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
         } else if scanner.test_id("include") {
             let mut include_selectors = StrTree::new();
@@ -9040,7 +9160,7 @@ fn parse_tptp_entry_list(
                 result.add(parse_tptp_entry_list(
                     &mut included,
                     bank,
-                    clauses,
+                    destination,
                     watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
@@ -9067,7 +9187,7 @@ fn parse_tptp_entry_list(
 fn parse_tstp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-    clauses: &mut ClauseSet,
+    destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
@@ -9088,7 +9208,7 @@ fn parse_tstp_entry_list(
                 selectors.as_deref_mut(),
             ) {
                 result.input_owner_seen |= is_input_owner;
-                insert_input_or_watchlist_clause(clauses, watchlist, clause);
+                insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
             let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
@@ -9098,9 +9218,7 @@ fn parse_tstp_entry_list(
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
                 }
-                for clause in parsed.clauses {
-                    insert_input_or_watchlist_clause(clauses, watchlist, clause);
-                }
+                insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
         } else if scanner.test_id("include") {
             let mut include_selectors = StrTree::new();
@@ -9111,7 +9229,7 @@ fn parse_tstp_entry_list(
                 result.add(parse_tstp_entry_list(
                     &mut included,
                     bank,
-                    clauses,
+                    destination,
                     watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
@@ -9136,15 +9254,33 @@ fn parse_tstp_entry_list(
 }
 
 fn insert_input_or_watchlist_clause(
-    clauses: &mut ClauseSet,
+    destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
+    bank: &mut TermBank,
     clause: Clause,
-) {
+) -> Result<(), Diagnostic> {
     if clause.query_tptp_type() == CP_TYPE_WATCH_CLAUSE {
         watchlist.insert(clause);
     } else {
-        clauses.insert(clause);
+        destination.insert_clause_owner(bank, clause)?;
     }
+    Ok(())
+}
+
+fn insert_parsed_formula_or_watchlist_clause(
+    destination: &mut InputOwnerDestination<'_>,
+    watchlist: &mut ClauseSet,
+    bank: &mut TermBank,
+    parsed: ParsedSimpleFofClause,
+) -> Result<(), Diagnostic> {
+    if parsed.raw_formula_type == CP_TYPE_WATCH_CLAUSE {
+        for clause in parsed.clauses {
+            watchlist.insert(clause);
+        }
+    } else {
+        destination.insert_parsed_formula_owner(bank, parsed)?;
+    }
+    Ok(())
 }
 
 fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
@@ -9233,6 +9369,7 @@ fn check_tstp_include_selectors_found(
 struct ParsedSimpleFofClause {
     name: String,
     raw_formula_type: FormulaProperties,
+    owner_formula: Option<WrappedFormula>,
     clauses: Vec<Clause>,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
@@ -9400,6 +9537,7 @@ fn parse_simple_tstp_formula_clause(
         return Ok(ParsedSimpleFofClause {
             name,
             raw_formula_type: CP_TYPE_AXIOM,
+            owner_formula: None,
             clauses: Vec::new(),
             formula_conjecture_seen: false,
             raw_formula_features: RawFormulaFeatures::default(),
@@ -9422,6 +9560,7 @@ fn parse_simple_tstp_formula_clause(
     if annotate_question {
         clause_type = CP_TYPE_CONJECTURE;
     }
+    let owner_formula_type = clause_type;
     let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
@@ -9440,6 +9579,15 @@ fn parse_simple_tstp_formula_clause(
             bank,
         )?;
     }
+    let owner_formula = simple_fof_formula_owner(
+        &formulas,
+        owner_formula_type | CP_INPUT_FORMULA,
+        &name,
+        Some(&start_source),
+        start_line,
+        start_column,
+        bank,
+    )?;
     let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
         formulas,
         formula_conjecture_seen,
@@ -9476,6 +9624,7 @@ fn parse_simple_tstp_formula_clause(
     Ok(ParsedSimpleFofClause {
         name,
         raw_formula_type,
+        owner_formula,
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
@@ -9508,6 +9657,7 @@ fn parse_simple_tptp_formula_clause(
     if annotate_question {
         clause_type = CP_TYPE_CONJECTURE;
     }
+    let owner_formula_type = clause_type;
     let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
@@ -9521,6 +9671,15 @@ fn parse_simple_tptp_formula_clause(
             bank,
         )?;
     }
+    let owner_formula = simple_fof_formula_owner(
+        &formulas,
+        owner_formula_type | CP_INPUT_FORMULA,
+        &name,
+        Some(&start_source),
+        start_line,
+        start_column,
+        bank,
+    )?;
     let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
         formulas,
         formula_conjecture_seen,
@@ -9553,6 +9712,7 @@ fn parse_simple_tptp_formula_clause(
     Ok(ParsedSimpleFofClause {
         name,
         raw_formula_type,
+        owner_formula,
         clauses,
         formula_conjecture_seen,
         raw_formula_features,

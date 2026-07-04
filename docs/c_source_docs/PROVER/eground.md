@@ -93,7 +93,7 @@ Source files reviewed: `PROVER/eground.c`.
 
 ### Change Later
 
-- `--miniscope-limit` is parsed into `miniscope_limit`, and the help advertises a default of 1000, but `main()` passes the hard-coded value `1048576` to `FormulaSetCNF2`. Keep this as a compatibility quirk until exact formula-set clausification is ported, then decide whether the option should actually control the call.
+- `--miniscope-limit` is parsed into `miniscope_limit`, and the help advertises a default of 1000, but `main()` passes the hard-coded value `1048576` to `FormulaSetCNF2`. Rust now mirrors that represented formula-set CNF call; decide later whether a cleaned non-drop-in mode should make the option control the actual miniscope limit.
 - `--local-constraints` sets `constraints`, `local_constraints`, `ClausesHaveDisjointVariables=true`, and `ClausesHaveLocalVariables=false`, but `local_constraints` is not read later in this file. Rust now preserves the parser-visible variable policy with explicit `ClauseParseOptions`; revisit the dead boolean and global parser mutation once grounding compatibility is locked down.
 - `OpenGlobalOut(outname)` runs before the default `-` input is inserted and before any scanner is created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
 - `app_encode` is initialized but unused. Remove it only after the executable option surface and any historical scripts depending on it are audited.
@@ -110,5 +110,6 @@ Source files reviewed: `PROVER/eground.c`.
 ### Rust Port Notes
 
 - `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
+- The Rust wrapper parses supported normal input owners into a represented `FormulaSet`, runs `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` with C's hard-coded `1048576` miniscope limit and parsed definitional-CNF limit, then continues through the grounding pipeline.
 - The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C DIMACS split between the configured output stream and raw stdout.
 <!-- END MANUAL REVIEW: c_source_docs -->
