@@ -296,6 +296,19 @@ pub fn finalize_cpu_limit_outcome(
     }
 }
 
+pub fn finalize_signal_outcome(
+    output: &mut impl Write,
+    stderr: &mut impl Write,
+    outcome: &SignalOutcome,
+) -> io::Result<Option<u8>> {
+    if matches!(outcome, SignalOutcome::UnexpectedSignal { .. }) {
+        stderr.write_all(b"Warning: ")?;
+        stderr.write_all(b"Unexpected signal caught, continuing")?;
+        return Ok(None);
+    }
+    finalize_cpu_limit_outcome(output, outcome)
+}
+
 fn handle_cpu_limit() -> SignalOutcome {
     if TIME_LIMIT_IS_SOFT.swap(false, Ordering::SeqCst) {
         TIME_IS_UP.store(true, Ordering::SeqCst);
@@ -443,12 +456,13 @@ fn reset_signal_state_for_tests() {
 mod tests {
     use super::{
         configure_time_limits, e_sig_term_sched_handler, e_signal_handler, e_signal_setup,
-        finalize_cpu_limit_outcome, hard_time_limit, reset_signal_state_for_tests,
-        schedule_time_limit, set_hard_time_limit, set_schedule_time_limit, set_silent_time_out,
-        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
-        sig_term_caught, silent_time_out, soft_time_limit, system_time_limit, time_is_up,
-        time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome,
-        TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
+        reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
+        set_schedule_time_limit, set_silent_time_out, set_soft_time_limit, set_system_time_limit,
+        set_time_is_up, set_time_limit_is_soft, sig_term_caught, silent_time_out, soft_time_limit,
+        system_time_limit, time_is_up, time_limit_expired_kind, time_limit_is_soft,
+        SchedulerSignalOutcome, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT,
+        SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
@@ -682,6 +696,52 @@ mod tests {
             None
         );
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn signal_outcome_finalizer_writes_c_unexpected_signal_warning() {
+        let mut output = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert_eq!(
+            finalize_signal_outcome(
+                &mut output,
+                &mut stderr,
+                &SignalOutcome::UnexpectedSignal { signal: 999 },
+            )
+            .unwrap(),
+            None
+        );
+        assert!(output.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "Warning: Unexpected signal caught, continuing"
+        );
+    }
+
+    #[test]
+    fn signal_outcome_finalizer_delegates_cpu_timeout_shape() {
+        let mut output = Vec::new();
+        let mut stderr = Vec::new();
+        let status = finalize_signal_outcome(
+            &mut output,
+            &mut stderr,
+            &SignalOutcome::CpuLimitExceeded {
+                silent: false,
+                diagnostic: Some(Diagnostic::new(
+                    ErrorCode::CPU_LIMIT_ERROR,
+                    "CPU time limit exceeded, terminating",
+                )),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(status, Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"
+        );
+        assert!(stderr.is_empty());
     }
 
     #[test]
