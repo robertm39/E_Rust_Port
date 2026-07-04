@@ -169,6 +169,25 @@ impl DDArray {
 
     #[must_use]
     pub fn debug_print_string(&mut self, size: usize) -> String {
+        self.debug_print_prefix(size)
+    }
+
+    /// Return C `DDArrayDebugPrint` output for a signed `long size`.
+    ///
+    /// The C helper uses `for(i = 0; i < size; i++)` and then always writes a
+    /// final newline, so negative sizes print only `"\n"`.
+    #[must_use]
+    pub fn debug_print_string_c(&mut self, size: DDArrayIndex) -> String {
+        if size <= 0 {
+            return "\n".to_owned();
+        }
+        let Ok(size) = usize::try_from(size) else {
+            return "\n".to_owned();
+        };
+        self.debug_print_prefix(size)
+    }
+
+    fn debug_print_prefix(&mut self, size: usize) -> String {
         let mut result = String::new();
         for index in 0..size {
             let value = self.element(index_to_dd(index));
@@ -251,6 +270,21 @@ impl DDArray {
         };
 
         f64::midpoint(self.array[start], second)
+    }
+
+    /// Return the C `DDArraySelectPart` partition value for a signed `long size`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `size` is zero or negative, matching C's `assert(size>0)`,
+    /// and otherwise preserves [`DDArray::select_part`] preconditions.
+    #[must_use]
+    pub fn select_part_c(&mut self, part: f64, size: DDArrayIndex) -> f64 {
+        assert!(size > 0, "DDArraySelectPart size must be non-zero");
+        let Ok(size) = usize::try_from(size) else {
+            panic!("DDArraySelectPart size overflow");
+        };
+        self.select_part(part, size)
     }
 }
 
@@ -384,6 +418,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "DDArraySelectPart size must be non-zero")]
+    fn signed_select_part_panics_on_negative_size_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.select_part_c(0.5, -1);
+    }
+
+    #[test]
     #[should_panic(expected = "DDArraySelectPart size exceeds allocated array size")]
     fn select_part_panics_on_oversized_request_like_c_assertion() {
         let mut array = DDArray::new(2, 2);
@@ -403,6 +444,19 @@ mod tests {
         );
         assert_eq!(array.size(), 12);
         assert_eq!(array.existing_element(11), Some(0.0));
+    }
+
+    #[test]
+    fn signed_debug_print_preserves_negative_size_newline_only() {
+        let mut array = DDArray::new(3, 4);
+        array.assign(0, 1.0);
+
+        assert_eq!(array.debug_print_string_c(0), "\n");
+        assert_eq!(array.debug_print_string_c(-3), "\n");
+        assert_eq!(array.size(), 3);
+
+        assert_eq!(array.debug_print_string_c(1), " 1.000 \n");
+        assert_eq!(array.size(), 3);
     }
 
     #[test]
