@@ -130,6 +130,13 @@ where
         }
     }
 
+    pub fn update_element_c(&mut self, index: isize) {
+        if index < 0 {
+            return;
+        }
+        self.update_element(heap_index_from_signed(index, "MinHeapUpdateElement"));
+    }
+
     pub fn remove_element(&mut self, index: usize) -> T {
         self.assert_valid_index(index, "MinHeapRemoveElement");
 
@@ -142,8 +149,16 @@ where
         result
     }
 
+    pub fn remove_element_c(&mut self, index: isize) -> T {
+        self.remove_element(heap_index_from_signed(index, "MinHeapRemoveElement"))
+    }
+
     pub fn decr_key(&mut self, index: usize) {
         self.drop_down(index);
+    }
+
+    pub fn decr_key_c(&mut self, index: isize) {
+        self.decr_key(heap_index_from_signed(index, "MinHeapDecrKey"));
     }
 
     pub fn incr_key(&mut self, index: usize) {
@@ -152,6 +167,13 @@ where
         }
         self.assert_valid_index(index, "MinHeapIncrKey");
         self.bubble_up(index);
+    }
+
+    pub fn incr_key_c(&mut self, index: isize) {
+        if index < 0 {
+            return;
+        }
+        self.incr_key(heap_index_from_signed(index, "MinHeapIncrKey"));
     }
 
     #[must_use]
@@ -257,6 +279,11 @@ const fn right_child(index: usize) -> usize {
 fn left_child_if_present(index: usize, size: usize) -> Option<usize> {
     let left = index.checked_mul(2)?.checked_add(1)?;
     (left < size).then_some(left)
+}
+
+fn heap_index_from_signed(index: isize, caller: &str) -> usize {
+    usize::try_from(index)
+        .unwrap_or_else(|_error| panic!("{caller} called with negative index {index}"))
 }
 
 #[cfg(test)]
@@ -446,6 +473,35 @@ mod tests {
         heap.incr_key(0);
 
         assert!(heap.is_empty());
+    }
+
+    #[test]
+    fn signed_update_and_incr_negative_indices_match_c_noop() {
+        let mut heap = MinHeap::new(i64::cmp);
+        heap.add(3);
+        heap.add(7);
+        let before = heap.as_slice().to_vec();
+
+        heap.update_element_c(-1);
+        heap.incr_key_c(-2);
+
+        assert_eq!(heap.as_slice(), before.as_slice());
+    }
+
+    #[test]
+    #[should_panic(expected = "MinHeapRemoveElement called with negative index -1")]
+    fn signed_remove_panics_on_negative_index_like_c_assertion() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        let _removed = heap.remove_element_c(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "MinHeapDecrKey called with negative index -1")]
+    fn signed_decr_panics_on_negative_index_like_c_stack_assertion() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        heap.decr_key_c(-1);
     }
 
     #[test]
