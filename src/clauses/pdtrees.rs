@@ -1,5 +1,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
+#[cfg(feature = "pdt-count-nodes")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -9,6 +11,9 @@ use crate::terms::termtypes::{term_identity_id, Term};
 pub const PDTREE_CELL_MEM: usize = 16;
 pub const PDTNODE_MEM: usize = 52;
 pub const CLAUSEPOSCELL_MEM: usize = 20;
+
+#[cfg(feature = "pdt-count-nodes")]
+static PDT_NODE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
@@ -117,6 +122,8 @@ impl PdTree {
     pub fn record_nodes_visited(&self, count: u64) {
         self.visited_count
             .set(self.visited_count.get().saturating_add(count));
+        #[cfg(feature = "pdt-count-nodes")]
+        record_global_nodes_visited(count);
     }
 
     pub fn insert_term(&mut self, term: &Term) -> bool {
@@ -303,6 +310,17 @@ impl PdTree {
     }
 }
 
+#[cfg(feature = "pdt-count-nodes")]
+pub fn record_global_nodes_visited(count: u64) {
+    PDT_NODE_COUNTER.fetch_add(count, Ordering::Relaxed);
+}
+
+#[cfg(feature = "pdt-count-nodes")]
+#[must_use]
+pub fn pdt_node_counter() -> u64 {
+    PDT_NODE_COUNTER.load(Ordering::Relaxed)
+}
+
 fn fun_code_key(code: FunCode) -> IntMapKey {
     IntMapKey::try_from(code)
         .unwrap_or_else(|_| panic!("function code {code} does not fit an IntMap key"))
@@ -383,6 +401,8 @@ fn prefix_token(term: &Term) -> PrefixToken {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "pdt-count-nodes")]
+    use super::pdt_node_counter;
     use super::{
         prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree, PrefixToken,
         CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
@@ -467,6 +487,8 @@ mod tests {
     #[test]
     fn search_counters_start_zero_and_record_c_search_bookkeeping() {
         let tree = PdTree::new();
+        #[cfg(feature = "pdt-count-nodes")]
+        let global_before = pdt_node_counter();
 
         assert_eq!(tree.match_count(), 0);
         assert_eq!(tree.visited_count(), 0);
@@ -477,6 +499,8 @@ mod tests {
 
         assert_eq!(tree.match_count(), 1);
         assert_eq!(tree.visited_count(), 5);
+        #[cfg(feature = "pdt-count-nodes")]
+        assert!(pdt_node_counter() >= global_before.saturating_add(5));
     }
 
     #[test]

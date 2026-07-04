@@ -8497,6 +8497,12 @@ fn write_proof_statistics(
             crate::terms::match_mgu::unification_successes()
         )?;
     }
+    #[cfg(feature = "pdt-count-nodes")]
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} PDT nodes visited                    : {}",
+        crate::clauses::pdtrees::pdt_node_counter()
+    )?;
     writeln!(
         output,
         "{DEFAULT_COMCHAR_RAW} Termbank termtop insertions          : {}",
@@ -21484,6 +21490,14 @@ input_clause(c2,axiom,[++q(X)]).
             assert!(!printed.contains("% Unification attempts"));
             assert!(!printed.contains("% Unification successes"));
         }
+        #[cfg(feature = "pdt-count-nodes")]
+        {
+            assert!(printed.contains("% PDT nodes visited                    : "));
+        }
+        #[cfg(not(feature = "pdt-count-nodes"))]
+        {
+            assert!(!printed.contains("% PDT nodes visited"));
+        }
         assert!(!printed.contains("% Final garbage collected termcells"));
         assert!(!printed.contains("% Final shared term nodes"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
@@ -21529,6 +21543,41 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% BW rewrite match successes           : 13\n"));
         assert!(printed.contains("% Clause-clause subsumption calls (NU) : "));
         assert!(printed.contains("% Condensation attempts                : "));
+    }
+
+    #[cfg(feature = "pdt-count-nodes")]
+    #[test]
+    fn write_proof_statistics_reports_pdt_node_counter_before_termbank() {
+        let _guard = global_state_lock();
+        let before = crate::clauses::pdtrees::pdt_node_counter();
+        crate::clauses::pdtrees::record_global_nodes_visited(17);
+
+        let mut config = EProverConfig::default();
+        config.flags.set(EProverFlag::PrintStatistics);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut stdout = Vec::new();
+        write_proof_statistics(
+            &mut stdout,
+            &config,
+            &mut state,
+            None,
+            ProofStatisticsInput {
+                parsed_ax_no: 1,
+                relevancy_pruned: 2,
+                raw_clause_no: 3,
+                preproc_removed: 4,
+            },
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        let pdt_line = "% PDT nodes visited                    : ";
+        let pdt_pos = printed.find(pdt_line).expect("PDT counter line");
+        let termbank_pos = printed
+            .find("% Termbank termtop insertions")
+            .expect("termbank insertion line");
+        assert!(pdt_pos < termbank_pos);
+        assert!(crate::clauses::pdtrees::pdt_node_counter() >= before.saturating_add(17));
     }
 
     #[cfg(feature = "instrument-perf-ctr")]
@@ -21607,6 +21656,14 @@ input_clause(c2,axiom,[++q(X)]).
         {
             assert!(!printed.contains("% Unification attempts"));
             assert!(!printed.contains("% Unification successes"));
+        }
+        #[cfg(feature = "pdt-count-nodes")]
+        {
+            assert!(printed.contains("% PDT nodes visited                    : "));
+        }
+        #[cfg(not(feature = "pdt-count-nodes"))]
+        {
+            assert!(!printed.contains("% PDT nodes visited"));
         }
         assert!(printed.contains("% Final garbage collected termcells    : "));
         assert!(printed.contains("% Final shared term nodes              : "));
