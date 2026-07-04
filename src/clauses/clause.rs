@@ -293,6 +293,11 @@ impl Clause {
         self.properties.is_any_set(prop)
     }
 
+    #[must_use]
+    pub const fn any_prop_set(&self, prop: FormulaProperties) -> FormulaProperties {
+        self.properties.any_set(prop)
+    }
+
     pub fn set_tptp_type(&mut self, type_: FormulaProperties) {
         self.properties.set_tptp_type(type_);
     }
@@ -2904,6 +2909,7 @@ mod tests {
         assert_eq!(clause.date(), SysDate::from_raw(7));
         assert!(clause.query_prop(CP_INITIAL));
         assert!(clause.is_any_prop_set(CP_INITIAL | CP_IS_SOS));
+        assert_eq!(clause.any_prop_set(CP_INITIAL | CP_IS_SOS), CP_INITIAL);
         assert_eq!(clause.give_props(CP_INITIAL | CP_IS_SOS), CP_INITIAL);
         assert!(clause.is_hypothesis());
         assert_eq!(clause.query_csscpa_source(), 3);

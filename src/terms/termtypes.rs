@@ -475,6 +475,11 @@ impl Term {
     }
 
     #[must_use]
+    pub fn any_prop_set(&self, prop: TermProperties) -> TermProperties {
+        self.properties().any_set(prop)
+    }
+
+    #[must_use]
     pub fn give_props(&self, prop: TermProperties) -> TermProperties {
         self.properties().give(prop)
     }
@@ -1007,6 +1012,10 @@ mod tests {
         assert_eq!(without_args.arity(), 2);
         assert!(without_args.query_prop(TP_PRED_POS | TP_IS_DB_VAR));
         assert!(!without_args.query_prop(TP_OUTPUT_FLAG));
+        assert_eq!(
+            without_args.any_prop_set(TP_PRED_POS | TP_OUTPUT_FLAG),
+            TP_PRED_POS
+        );
         assert!(without_args.argument(0).is_none());
 
         let copy = Term::top_copy(&source);

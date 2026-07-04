@@ -457,6 +457,11 @@ impl Eqn {
     }
 
     #[must_use]
+    pub const fn any_prop_set(&self, prop: EqnProperties) -> EqnProperties {
+        self.properties.any_set(prop)
+    }
+
+    #[must_use]
     pub const fn give_props(&self, prop: EqnProperties) -> EqnProperties {
         self.properties.give(prop)
     }
@@ -3581,6 +3586,10 @@ mod tests {
         assert!(eq.is_oriented());
         assert!(eq.is_selected());
         assert!(eq.is_any_prop_set(EP_IS_SELECTED | EP_IS_MAXIMAL));
+        assert_eq!(
+            eq.any_prop_set(EP_IS_SELECTED | EP_IS_MAXIMAL),
+            EP_IS_SELECTED
+        );
         assert_eq!(
             eq.give_props(EP_IS_SELECTED | EP_IS_MAXIMAL),
             EP_IS_SELECTED

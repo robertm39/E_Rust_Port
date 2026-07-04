@@ -720,6 +720,15 @@ impl Signature {
         self.func(f_code).properties.intersects(prop)
     }
 
+    #[must_use]
+    pub fn any_func_prop_set(
+        &self,
+        f_code: FunCode,
+        prop: FunctionProperties,
+    ) -> FunctionProperties {
+        self.func(f_code).properties.intersection(prop)
+    }
+
     pub fn set_special(&mut self, f_code: FunCode, value: bool) {
         if value {
             self.set_func_prop(f_code, FP_SPECIAL);
@@ -1883,6 +1892,10 @@ mod tests {
         sig.set_func_prop(f, FP_ASSOCIATIVE | FP_COMMUTATIVE);
         assert!(sig.query_prop(f, FP_IS_AC));
         assert!(sig.is_any_func_prop_set(f, FP_ASSOCIATIVE | FP_INTERPRETED));
+        assert_eq!(
+            sig.any_func_prop_set(f, FP_ASSOCIATIVE | FP_INTERPRETED),
+            FP_ASSOCIATIVE
+        );
         sig.del_func_prop(f, FP_COMMUTATIVE);
         assert!(!sig.query_prop(f, FP_IS_AC));
 
