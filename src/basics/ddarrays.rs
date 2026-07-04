@@ -53,11 +53,38 @@ impl DDArray {
         self.enlarge_index(index);
     }
 
+    /// Enlarge using the exported C `DDArayEnlarge` target-size calculation.
+    ///
+    /// This helper deliberately does not return early for already covered
+    /// indices. Direct C callers are expected to pass an uncovered index; when
+    /// the C calculation would produce a smaller allocation and then overrun it
+    /// during `memcpy`, Rust reports that broken precondition as a panic.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, if computing the new logical size
+    /// overflows `usize`, or if the C target size is smaller than the current
+    /// allocation.
+    pub fn enlarge_c_raw(&mut self, idx: DDArrayIndex) {
+        let index = index_or_panic(idx, "DDArayEnlarge");
+        let new_size = self.new_size_for(index);
+        assert!(
+            new_size >= self.size,
+            "DDArayEnlarge target size is smaller than current size"
+        );
+        self.array.resize(new_size, 0.0);
+        self.size = new_size;
+    }
+
     fn enlarge_index(&mut self, index: usize) {
         if index < self.size {
             return;
         }
 
+        self.enlarge_c_raw(index_to_dd(index));
+    }
+
+    fn new_size_for(&self, index: usize) -> usize {
         let Some(block) = index
             .checked_div(self.grow)
             .and_then(|value| value.checked_add(1))
@@ -67,8 +94,7 @@ impl DDArray {
         let Some(new_size) = block.checked_mul(self.grow) else {
             panic!("DDArray capacity overflow");
         };
-        self.array.resize(new_size, 0.0);
-        self.size = new_size;
+        new_size
     }
 
     /// Return a mutable reference to `idx`, enlarging the array if needed.
@@ -246,6 +272,28 @@ mod tests {
         assert_eq!(array.size(), 8);
         assert_eq!(array.existing_element(6), Some(6.5));
         assert_eq!(array.existing_element(7), Some(0.0));
+    }
+
+    #[test]
+    fn raw_enlarge_uses_misspelled_c_target_calculation_without_coverage_guard() {
+        let mut array = DDArray::new(3, 4);
+
+        array.enlarge_c_raw(6);
+        assert_eq!(array.size(), 8);
+        assert_eq!(array.existing_element(6), Some(0.0));
+
+        array.enlarge_c_raw(7);
+        assert_eq!(array.size(), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArayEnlarge target size is smaller than current size")]
+    fn raw_enlarge_rejects_direct_call_that_would_underallocate_in_c() {
+        let mut array = DDArray::new(3, 4);
+        array.enlarge_c_raw(8);
+        assert_eq!(array.size(), 12);
+
+        array.enlarge_c_raw(1);
     }
 
     #[test]

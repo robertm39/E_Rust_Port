@@ -96,7 +96,7 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - `DDArrayDebugPrint` calls `DDArrayElement` for every printed position, so asking it to print beyond the current allocation enlarges and zero-fills the array as a side effect. Rust preserves this in the explicit debug-string helper.
 - `DDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment macros inherit that assertion while always succeeding for nonnegative indices.
 - `DDArraySelectPart` asserts that `part` is in the inclusive `[0, 1]` range, `size` is positive, and the allocated array already covers the requested prefix before partitioning the backing array in place.
-- `DDArayEnlarge` is exported with the historical misspelling and is normally reached through `DDArrayElementRef` only for uncovered indices. A direct call on an already covered index can compute a smaller target size before copying the old allocation.
+- `DDArayEnlarge` is exported with the historical misspelling and is normally reached through `DDArrayElementRef` only for uncovered indices. A direct call on an already covered index can compute a smaller target size before copying the old allocation. Rust exposes an explicit raw compatibility helper for the target-size calculation, but reports that under-allocation case as a panic instead of reproducing the C buffer overrun.
 
 ### Change Later
 

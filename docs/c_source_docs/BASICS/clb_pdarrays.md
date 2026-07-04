@@ -123,7 +123,7 @@ Source files reviewed: `BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment/integer-increment macros inherit that assertion while always succeeding for nonnegative indices.
-- `PDArrayEnlarge` is exported but is normally reached through `PDArrayElementRef` only for uncovered indices. A direct call on an already covered fixed-growth array can compute a smaller target size before copying the old allocation.
+- `PDArrayEnlarge` is exported but is normally reached through `PDArrayElementRef` only for uncovered indices. A direct call on an already covered fixed-growth array can compute a smaller target size before copying the old allocation. Rust exposes an explicit raw compatibility helper for the target-size calculation, but reports that under-allocation case as a panic instead of reproducing the C buffer overrun.
 
 ### Change Later
 

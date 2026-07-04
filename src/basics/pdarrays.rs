@@ -57,14 +57,35 @@ impl<T: Clone> PDArray<T> {
         self.enlarge_index(index);
     }
 
+    /// Enlarge using the exported C `PDArrayEnlarge` target-size calculation.
+    ///
+    /// This helper deliberately does not return early for already covered
+    /// indices. Direct C callers are expected to pass an uncovered index; when
+    /// the C calculation would produce a smaller allocation and then overrun it
+    /// during `memcpy`, Rust reports that broken precondition as a panic.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, if computing the new logical size
+    /// overflows `usize`, or if the C target size is smaller than the current
+    /// allocation.
+    pub fn enlarge_c_raw(&mut self, idx: PDArrayIndex) {
+        let index = index_or_panic(idx, "PDArrayEnlarge");
+        let new_size = self.new_size_for(index);
+        assert!(
+            new_size >= self.size,
+            "PDArrayEnlarge target size is smaller than current size"
+        );
+        self.array.resize(new_size, self.default.clone());
+        self.size = new_size;
+    }
+
     fn enlarge_index(&mut self, index: usize) {
         if index < self.size {
             return;
         }
 
-        let new_size = self.new_size_for(index);
-        self.array.resize(new_size, self.default.clone());
-        self.size = new_size;
+        self.enlarge_c_raw(index_to_pd(index));
     }
 
     /// Return a mutable reference to `idx`, enlarging the array if needed.
@@ -297,6 +318,31 @@ mod tests {
         assert_eq!(array.size(), 15);
         assert_eq!(array.existing_element(12), Some(&Some(99)));
         assert_eq!(array.existing_element(14), Some(&None));
+    }
+
+    #[test]
+    fn raw_enlarge_uses_c_target_calculation_without_coverage_guard() {
+        let mut fixed = PDPointerArray::<usize>::new_pointer(3, 5);
+        fixed.enlarge_c_raw(7);
+        assert_eq!(fixed.size(), 10);
+        fixed.enlarge_c_raw(8);
+        assert_eq!(fixed.size(), 10);
+
+        let mut exponential = PDPointerArray::<usize>::new_pointer(4, GROW_EXPONENTIAL);
+        exponential.enlarge_c_raw(1);
+        assert_eq!(exponential.size(), 4);
+        exponential.enlarge_c_raw(6);
+        assert_eq!(exponential.size(), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "PDArrayEnlarge target size is smaller than current size")]
+    fn raw_enlarge_rejects_direct_call_that_would_underallocate_in_c() {
+        let mut array = PDPointerArray::<usize>::new_pointer(3, 5);
+        array.enlarge_c_raw(12);
+        assert_eq!(array.size(), 15);
+
+        array.enlarge_c_raw(1);
     }
 
     #[test]
