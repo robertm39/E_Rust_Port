@@ -446,6 +446,18 @@ impl ProofState {
         (terms, axioms, f_axioms, f_ax_archive)
     }
 
+    pub fn terms_f_axioms_watchlist_mut(
+        &mut self,
+    ) -> (&mut TermBank, &mut FormulaSet, Option<&mut ClauseSet>) {
+        let Self {
+            terms,
+            f_axioms,
+            watchlist,
+            ..
+        } = self;
+        (terms, f_axioms, watchlist.as_mut())
+    }
+
     pub fn terms_and_processed_sets_mut(&mut self) -> (&mut TermBank, ProofStateProcessedSets<'_>) {
         let Self {
             terms,

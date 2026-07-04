@@ -4,7 +4,6 @@ use crate::basics::simple_stuff::{
 };
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausefunc::clause_set_archive_copy;
-use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::FormulaSetCnfOptions;
 use crate::clauses::proofstate::{proof_state_alloc, ProofState};
 use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
@@ -30,7 +29,8 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::prover::eprover::{
-    apply_proof_state_sine_silent, parse_clause_scanner_into_sets, FoolUnroll, FormulaPreprocessing,
+    apply_proof_state_sine_silent, parse_clause_scanner_into_formula_set_with_options, FoolUnroll,
+    FormulaPreprocessing,
 };
 use crate::prover::version::{E_URL, STS_MAIL, VERSION};
 use crate::terms::signature::{
@@ -47,6 +47,7 @@ const DEFAULT_CLASSIFY_MASK: &str = "aaaa-aaaaaa-a";
 const DEFAULT_RAW_MASK: &str = "aaaaaaaaaa";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
 const MINISCOPE_LIMIT_DEFAULT: i64 = 1_000;
+const MERGED_CNF_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 200;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const TFORM_RENAME_LIMIT_STR: &str = "24";
@@ -1013,6 +1014,11 @@ fn classify_current_cnf_state(
         return Ok("-".repeat(SPEC_STRING_MEM - 1));
     }
 
+    let cnf_options = FormulaSetCnfOptions::new(MERGED_CNF_MINISCOPE_LIMIT, true, problem_type())
+        .with_def_limit(FORMULA_DEF_LIMIT_DEFAULT)
+        .with_lift_lambdas(false);
+    clausify_real_input_formula_axioms_with_options(state, cnf_options)?;
+
     let mut features = SpecFeatureCell::default();
     {
         let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_mut();
@@ -1068,9 +1074,16 @@ fn clausify_real_input_formula_axioms(
     config: &ClassifyProblemConfig,
     state: &mut ProofState,
 ) -> Result<(), Diagnostic> {
-    let fresh_vars = state.fresh_vars().clone();
     let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type())
         .with_def_limit(config.formula_def_limit);
+    clausify_real_input_formula_axioms_with_options(state, options)
+}
+
+fn clausify_real_input_formula_axioms_with_options(
+    state: &mut ProofState,
+    options: FormulaSetCnfOptions,
+) -> Result<(), Diagnostic> {
+    let fresh_vars = state.fresh_vars().clone();
     let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_cnf_mut();
     let _preprocessed = f_axioms.preproc_conjectures(bank, false, false)?;
     let _cnf = f_axioms.cnf2_into(f_ax_archive, axioms, bank, &fresh_vars, options)?;
@@ -1253,27 +1266,23 @@ fn parse_real_input_file(
     state: &mut ProofState,
 ) -> Result<(), Diagnostic> {
     let mut scanner = real_input_scanner(file, stdin)?;
-    let mut parsed = ClauseSet::new();
-    let mut parsed_watchlist = ClauseSet::new();
-    let parsed_file = parse_clause_scanner_into_sets(
+    let (terms, f_axioms, watchlist) = state.terms_f_axioms_watchlist_mut();
+    let watchlist = watchlist.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Cannot store inline watchlist clauses after the watchlist has been disabled",
+        )
+    })?;
+    let parsed_file = parse_clause_scanner_into_formula_set_with_options(
         &mut scanner,
         config.parse_format,
         FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
-        state.terms_mut(),
-        &mut parsed,
-        &mut parsed_watchlist,
+        Default::default(),
+        terms,
+        f_axioms,
+        watchlist,
     )?;
     state.add_raw_formula_features(parsed_file.raw_formula_features);
-    state.axioms_mut().insert_set(&mut parsed);
-    if !parsed_watchlist.is_empty() {
-        let watchlist = state.watchlist_mut().ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "Cannot store inline watchlist clauses after the watchlist has been disabled",
-            )
-        })?;
-        watchlist.insert_set(&mut parsed_watchlist);
-    }
     Ok(())
 }
 
@@ -1478,12 +1487,13 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 mod tests {
     use super::{
         clausify_real_input_formula_axioms, parse_feature_line, parse_raw_feature_line,
-        process_options, run, ClassifyProblemConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        parse_real_input_file, process_options, run, ClassifyProblemConfig, RunCommand,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::basics::verbose::verbose_level;
-    use crate::clauses::clause_props::CP_TYPE_AXIOM;
+    use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::clausefunc::tformula_lit_alloc;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::formulasets::WrappedFormula;
@@ -1985,6 +1995,39 @@ mod tests {
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
         assert_eq!(state.f_ax_archive().cardinality(), 2);
+    }
+
+    #[test]
+    fn real_input_parser_preserves_supported_formula_owner_before_cnf() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"fof(classify_owner_ax, axiom, (p(a) | q(a))).\n";
+
+        parse_real_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("real-input parsing succeeds");
+
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 1);
+        let formula = state
+            .f_axioms()
+            .iter()
+            .next()
+            .expect("formula owner exists");
+        assert!(!formula.is_clause());
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
+
+        clausify_real_input_formula_axioms(&config, &mut state)
+            .expect("formula-owner CNF succeeds");
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(state.f_axioms().cardinality(), 0);
     }
 
     #[test]
