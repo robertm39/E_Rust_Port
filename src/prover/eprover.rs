@@ -4794,6 +4794,7 @@ fn run_app_encode<W: Write + ?Sized>(
 ) -> Result<(), EProverError> {
     let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     let mut formulas = Vec::new();
+    let mut include_echoes = Vec::new();
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
 
@@ -4810,6 +4811,7 @@ fn run_app_encode<W: Write + ?Sized>(
         }
         saw_any_input_owner |= parsed_file.saw_input_owner;
         saw_any_formula_owner |= parsed_file.saw_formula_owner;
+        include_echoes.extend(parsed_file.include_echoes);
         formulas.extend(parsed_file.formulas);
     }
 
@@ -4821,6 +4823,7 @@ fn run_app_encode<W: Write + ?Sized>(
         .into());
     }
 
+    write_app_encode_include_echoes(output, &include_echoes)?;
     write_preprocessing_config_debug_line(output, config)?;
     write_app_encoded_formula_set(output, &mut bank, &formulas, saw_any_formula_owner)?;
     Ok(())
@@ -4852,6 +4855,16 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
     }
 
     write_simple_app_encoded_formula_set(output, bank, formulas)
+}
+
+fn write_app_encode_include_echoes<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    include_echoes: &[String],
+) -> Result<(), EProverError> {
+    for echo in include_echoes {
+        output.write_stdout_side_channel(echo.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn simple_app_encoded_formula_set(
@@ -8981,7 +8994,7 @@ fn parse_app_encode_file(
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
-    let (saw_input_owner, saw_formula_owner, formulas) = match detected_format {
+    let (saw_input_owner, saw_formula_owner, include_echoes, formulas) = match detected_format {
         IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank)?,
         IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank)?,
         _ => {
@@ -9009,6 +9022,7 @@ fn parse_app_encode_file(
         detected_format,
         saw_input_owner,
         saw_formula_owner,
+        include_echoes,
         formulas,
     })
 }
@@ -9055,6 +9069,7 @@ struct ParsedAppEncodeFile {
     detected_format: IoFormat,
     saw_input_owner: bool,
     saw_formula_owner: bool,
+    include_echoes: Vec<String>,
     formulas: Vec<SimpleAppEncodedFormula>,
 }
 
@@ -9109,8 +9124,9 @@ enum SimpleFofFormula {
 fn parse_tptp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+) -> Result<(bool, bool, Vec<String>, Vec<SimpleAppEncodedFormula>), Diagnostic> {
     let mut formulas = Vec::new();
+    let mut include_echoes = Vec::new();
     let mut saw_input_owner = false;
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -9122,7 +9138,7 @@ fn parse_tptp_app_encode_entry_list(
             saw_formula_owner = true;
             formulas.push(parse_simple_tptp_app_encode_formula(scanner, bank)?);
         } else if scanner.test_id("include") {
-            parse_app_encode_ignored_include(scanner)?;
+            include_echoes.push(parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9134,14 +9150,15 @@ fn parse_tptp_app_encode_entry_list(
             ));
         }
     }
-    Ok((saw_input_owner, saw_formula_owner, formulas))
+    Ok((saw_input_owner, saw_formula_owner, include_echoes, formulas))
 }
 
 fn parse_tstp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+) -> Result<(bool, bool, Vec<String>, Vec<SimpleAppEncodedFormula>), Diagnostic> {
     let mut formulas = Vec::new();
+    let mut include_echoes = Vec::new();
     let mut saw_input_owner = false;
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -9157,7 +9174,7 @@ fn parse_tstp_app_encode_entry_list(
                 }
             }
         } else if scanner.test_id("include") {
-            parse_app_encode_ignored_include(scanner)?;
+            include_echoes.push(parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9169,20 +9186,22 @@ fn parse_tstp_app_encode_entry_list(
             ));
         }
     }
-    Ok((saw_input_owner, saw_formula_owner, formulas))
+    Ok((saw_input_owner, saw_formula_owner, include_echoes, formulas))
 }
 
-fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<String, Diagnostic> {
     scanner.accept_id("include")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    scanner.accept_tok(TokenType::SQ_STRING)?;
+    scanner.check_tok(TokenType::SQ_STRING)?;
+    let name = scanner.current_token().literal();
+    scanner.next_token()?;
     if scanner.test_tok(TokenType::COMMA) {
         scanner.accept_tok(TokenType::COMMA)?;
         parse_skip_parenthesized_expr(scanner)?;
     }
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
-    Ok(())
+    Ok(format!("include({name}).\n"))
 }
 
 fn parse_tptp_entry_list(
@@ -16120,11 +16139,52 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.starts_with("include('definitely_missing_for_app_encode.ax').\n"));
+        assert!(printed.contains(&default_preprocessing_debug_line()));
         assert!(!printed.contains("skip_true"));
         assert!(printed.contains("tff(show_false, axiom, "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_echoes_ignored_includes_to_stdout_with_output_file() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-ignore-include-output-file");
+        let output_path = temp_path("app-encode-ignore-include-output");
+        std::fs::write(
+            &path,
+            "include('not_loaded_by_app_encode.ax').\n\
+             fof(show_false, axiom, $false).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let output_arg = output_path.to_string_lossy().into_owned();
+        let output_option = format!("--output-file={output_arg}");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                output_option.as_str(),
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with("include('not_loaded_by_app_encode.ax').\n"));
+        assert!(printed.contains(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(std::fs::read_to_string(&output_path).unwrap().is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&output_path).unwrap();
     }
 
     #[test]
