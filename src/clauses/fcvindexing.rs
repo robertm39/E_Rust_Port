@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
     clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
@@ -14,8 +15,10 @@ use crate::clauses::subsumption::clause_subsume_order_sort_lits;
 use crate::inout::scanner::IoFormat;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
+
+const FVINDEX_MEM: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FvIndexParams {
@@ -355,6 +358,7 @@ pub struct FvIndex {
     final_node: bool,
     clause_count: i64,
     successors: BTreeMap<i64, FvIndex>,
+    successor_storage: Option<IntMap<()>>,
     clauses: BTreeMap<i64, Clause>,
 }
 
@@ -365,6 +369,7 @@ impl FvIndex {
             final_node: false,
             clause_count: 0,
             successors: BTreeMap::new(),
+            successor_storage: None,
             clauses: BTreeMap::new(),
         }
     }
@@ -490,22 +495,52 @@ impl FvIndex {
         vector: &FreqVector,
         clause_identity: i64,
         clause: Clause,
-    ) -> bool {
+    ) -> FvIndexInsertResult {
         let mut node = self;
+        let mut storage_delta = 0_i128;
         node.clause_count += 1;
         for value in vector.as_slice() {
             assert!(
                 !node.final_node,
                 "final FV-index nodes cannot have successors"
             );
-            node = match node.successors.entry(*value) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => entry.insert(Self::new()),
-            };
+            if !node.successors.contains_key(value) {
+                storage_delta += node.insert_empty_successor_storage_delta(*value);
+                node.successors.insert(*value, Self::new());
+            }
+            node = node
+                .successors
+                .get_mut(value)
+                .expect("FV-index successor missing after insertion");
             node.clause_count += 1;
         }
         node.final_node = true;
-        node.clauses.insert(clause_identity, clause).is_none()
+        FvIndexInsertResult {
+            inserted_clause: node.clauses.insert(clause_identity, clause).is_none(),
+            storage_delta,
+        }
+    }
+
+    fn insert_empty_successor_storage_delta(&mut self, value: i64) -> i128 {
+        assert!(
+            value >= 0,
+            "FV-index successor keys must be nonnegative C long values"
+        );
+        let key =
+            IntMapKey::try_from(value).expect("FV-index successor key must fit IntMapKey/isize");
+        let before = self
+            .successor_storage
+            .as_ref()
+            .map_or(0, IntMap::constant_mem_storage_estimate);
+        self.successor_storage
+            .get_or_insert_with(IntMap::new)
+            .assign(key, ());
+        let after = self
+            .successor_storage
+            .as_ref()
+            .map_or(0, IntMap::constant_mem_storage_estimate);
+        i128::try_from(after).unwrap_or(i128::MAX) - i128::try_from(before).unwrap_or(i128::MAX)
+            + i128::try_from(FVINDEX_MEM).unwrap_or(i128::MAX)
     }
 
     fn delete_vector_clause(&mut self, vector: &FreqVector, clause: &Clause) -> bool {
@@ -597,6 +632,12 @@ impl FvIndex {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FvIndexInsertResult {
+    inserted_clause: bool,
+    storage_delta: i128,
+}
+
 fn fv_index_clause_rendered_string(
     bank: &TermBank,
     clause: &Clause,
@@ -665,15 +706,25 @@ impl FvIndexAnchor {
             .clone();
         clause_subsume_order_sort_lits(packed.clause_mut(), bank);
         let clause_identity = fv_clause_key(packed.clause());
-        let before_nodes = self.index.count_nodes(false, false);
-        let inserted =
+        let result =
             self.index
                 .insert_vector_clause(&vector, clause_identity, packed.clause().clone());
-        let after_nodes = self.index.count_nodes(false, false);
-        if after_nodes > before_nodes {
-            self.storage += usize::try_from(after_nodes - before_nodes).unwrap_or(usize::MAX);
+        self.apply_storage_delta(result.storage_delta);
+        result.inserted_clause
+    }
+
+    fn apply_storage_delta(&mut self, delta: i128) {
+        if delta >= 0 {
+            self.storage = self
+                .storage
+                .checked_add(usize::try_from(delta).unwrap_or(usize::MAX))
+                .expect("FV-index storage estimate overflow");
+        } else {
+            self.storage = self
+                .storage
+                .checked_sub(usize::try_from(-delta).unwrap_or(usize::MAX))
+                .expect("FV-index storage estimate underflow");
         }
-        inserted
     }
 
     /// Deletes a clause from the feature-vector index.
@@ -716,9 +767,11 @@ fn fv_clause_key(clause: &Clause) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::basics::intmap::{IntMap, IntMapType, INTMAPCELL_MEM};
+
     use super::{
         fv_index_pack_clause, fv_index_storage, fvi_param_init_anchors, fvi_param_init_specs,
-        FvIndex, FvIndexAnchor, FvIndexInitTargetSets, FvIndexParams,
+        FvIndex, FvIndexAnchor, FvIndexInitTargetSets, FvIndexParams, FVINDEX_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1034,7 +1087,7 @@ mod tests {
         assert!(anchor.insert(&mut packed, &bank));
         assert_eq!(
             fv_index_storage(Some(&anchor)),
-            usize::try_from(vector_len).unwrap()
+            usize::try_from(vector_len).unwrap() * (FVINDEX_MEM + INTMAPCELL_MEM)
         );
         assert_eq!(fv_index_storage(None), 0);
         assert_eq!(anchor.index().clause_count(), 1);
@@ -1057,7 +1110,9 @@ mod tests {
         let first_value = packed.vector().unwrap().as_slice()[0];
 
         assert!(anchor.insert(&mut packed, &bank));
+        let storage_after_insert = fv_index_storage(Some(&anchor));
         assert!(anchor.delete(packed.clause()));
+        assert_eq!(fv_index_storage(Some(&anchor)), storage_after_insert);
         assert_eq!(anchor.index().clause_count(), 0);
         assert_eq!(anchor.count_nodes(true, true), 1);
         assert!(anchor
@@ -1112,7 +1167,11 @@ mod tests {
         let mut index = FvIndex::new();
         let vector = FreqVector::from_values(vec![2, 0]);
 
-        assert!(index.insert_vector_clause(&vector, 1, clause));
+        assert!(
+            index
+                .insert_vector_clause(&vector, 1, clause)
+                .inserted_clause
+        );
 
         assert_eq!(
             index.print_lop_string(&bank, true),
@@ -1129,7 +1188,11 @@ mod tests {
         let mut index = FvIndex::new();
         let vector = FreqVector::from_values(vec![3, 1]);
 
-        assert!(index.insert_vector_clause(&vector, 1, clause));
+        assert!(
+            index
+                .insert_vector_clause(&vector, 1, clause)
+                .inserted_clause
+        );
 
         let input_clause_tree = index
             .print_format_string(&bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
@@ -1154,6 +1217,92 @@ mod tests {
                 .print_format_string(&bank, true, IoFormat::Auto, ProblemType::FirstOrder)
                 .unwrap_or_else(|err| panic!("{err}")),
             index.print_lop_string(&bank, true)
+        );
+    }
+
+    #[test]
+    fn insert_storage_tracks_c_successor_map_transitions() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_storage_a");
+        let second = typed_const(&mut bank, "fv_storage_b");
+        let mut dense = FvIndex::new();
+
+        let first_insert = dense.insert_vector_clause(
+            &FreqVector::from_values(vec![0]),
+            60,
+            clause_from(vec![literal(&mut bank, &first, &second, true)], 60),
+        );
+        assert!(first_insert.inserted_clause);
+        assert_eq!(
+            first_insert.storage_delta,
+            i128::try_from(FVINDEX_MEM + INTMAPCELL_MEM).unwrap()
+        );
+
+        let dense_insert = dense.insert_vector_clause(
+            &FreqVector::from_values(vec![1]),
+            61,
+            clause_from(vec![literal(&mut bank, &first, &second, true)], 61),
+        );
+        assert!(dense_insert.inserted_clause);
+        assert_eq!(dense_insert.storage_delta, 72);
+
+        let mut sparse = FvIndex::new();
+        let _first_sparse = sparse.insert_vector_clause(
+            &FreqVector::from_values(vec![100]),
+            62,
+            clause_from(vec![literal(&mut bank, &first, &second, true)], 62),
+        );
+        let sparse_insert = sparse.insert_vector_clause(
+            &FreqVector::from_values(vec![0]),
+            63,
+            clause_from(vec![literal(&mut bank, &first, &second, true)], 63),
+        );
+        assert!(sparse_insert.inserted_clause);
+        assert_eq!(sparse_insert.storage_delta, 64);
+    }
+
+    #[test]
+    fn insert_storage_can_decrease_when_c_intmap_switches_tree_to_array() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_storage_switch_a");
+        let second = typed_const(&mut bank, "fv_storage_switch_b");
+        let mut index = FvIndex::new();
+        let mut clause_id = 70;
+
+        for key in [100, 0] {
+            let result = index.insert_vector_clause(
+                &FreqVector::from_values(vec![key]),
+                clause_id,
+                clause_from(vec![literal(&mut bank, &first, &second, true)], clause_id),
+            );
+            assert!(result.inserted_clause);
+            clause_id += 1;
+        }
+        for key in 1..=23 {
+            let result = index.insert_vector_clause(
+                &FreqVector::from_values(vec![key]),
+                clause_id,
+                clause_from(vec![literal(&mut bank, &first, &second, true)], clause_id),
+            );
+            assert_eq!(result.storage_delta, 40);
+            clause_id += 1;
+        }
+        assert_eq!(
+            index.successor_storage.as_ref().map(IntMap::map_type),
+            Some(IntMapType::Tree)
+        );
+
+        let switch_result = index.insert_vector_clause(
+            &FreqVector::from_values(vec![24]),
+            clause_id,
+            clause_from(vec![literal(&mut bank, &first, &second, true)], clause_id),
+        );
+
+        assert!(switch_result.inserted_clause);
+        assert_eq!(switch_result.storage_delta, -144);
+        assert_eq!(
+            index.successor_storage.as_ref().map(IntMap::map_type),
+            Some(IntMapType::Array)
         );
     }
 }

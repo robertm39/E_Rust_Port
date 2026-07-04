@@ -125,11 +125,12 @@ Source files reviewed: `CLAUSES/ccl_fcvindexing.h`, `CLAUSES/ccl_fcvindexing.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
-### C Behaviors To Revisit After Compatibility
+### Change Later
 
 - `FVIndexPrint` accepts an `out` stream, but `FVIndexPrint`, `fv_index_print`, and `print_clauses` write the root marker, alternatives, and leaf newlines to `stderr` while clause text is written to `out`. Rust's pure string renderer intentionally returns the combined human-readable tree and now exposes explicit LOP/TPTP/TSTP clause-output dispatch; exact mixed-stream behavior should be handled only if a compatibility test observes it.
 - Final-leaf clause lines are indented one level deeper than the final node level because `print_clauses` receives `level+1`. Rust preserves this visible indentation in the default LOP and format-aware tree renderers.
 - `print_clauses` is documented with no global variables, but its `ClausePrint` call observes the process-global `OutputFormat` and TSTP printing observes the process-global problem type. Rust keeps these dependencies explicit through output-format and problem-type parameters.
+- `FVIndexStorage` is an insertion-side compatibility counter, not live memory usage: it charges new successor `IntMap` storage and `FVIndexCell` allocations, can decrease when an `IntMap` switches from tree to array, and does not decrement for `FVIndexDelete` or count final-leaf `PTree` clause storage. Rust preserves this counter with constant-memory estimates; later profiling APIs should expose actual Rust allocation or logical index statistics separately.
 - `FVIndexInsert` stores raw `Clause_p` pointers in the final-node `PTree`, and `FVIndexDelete` deletes by that same pointer after recomputing the vector. Rust FV indexes store owned/cloned clause snapshots, so the port keys leaves by the clause identifier to survive safe value moves through `ClauseSet`; replace this with stable typed clause handles once long-lived shared clause ownership is available.
 
 ### Porting Focus

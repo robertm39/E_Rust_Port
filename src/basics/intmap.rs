@@ -8,6 +8,11 @@ pub const MAX_TREE_DENSITY: usize = 8;
 pub const MIN_TREE_DENSITY: usize = 4;
 pub const IM_ARRAY_SIZE: usize = MAX_TREE_DENSITY;
 
+pub const INTMAPCELL_MEM: usize = 20;
+pub const NUMTREECELL_MEM: usize = 24;
+pub const PDARRAYCELL_MEM: usize = 20;
+pub const INTORP_MEM: usize = 4;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum IntMapType {
@@ -17,6 +22,7 @@ pub enum IntMapType {
     Tree = 3,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum IntMapRepr<V: Clone> {
     Empty,
     Single { key: IntMapKey, value: Option<V> },
@@ -24,6 +30,7 @@ enum IntMapRepr<V: Clone> {
     Tree(BTreeMap<IntMapKey, Option<V>>),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntMap<V: Clone> {
     repr: IntMapRepr<V>,
     entry_no: usize,
@@ -311,6 +318,15 @@ impl<V: Clone> IntMap<V> {
         }
     }
 
+    #[must_use]
+    pub fn constant_mem_storage_estimate(&self) -> usize {
+        INTMAPCELL_MEM.saturating_add(match &self.repr {
+            IntMapRepr::Array(array) => pdarray_storage_estimate(array.size()),
+            IntMapRepr::Tree(_) => self.entry_no.saturating_mul(NUMTREECELL_MEM),
+            IntMapRepr::Empty | IntMapRepr::Single { .. } => 0,
+        })
+    }
+
     fn ensure_ref_slot(&mut self, key: IntMapKey) {
         match &self.repr {
             IntMapRepr::Empty => {
@@ -466,9 +482,15 @@ fn key_distance_as_i128(distance: IntMapKey) -> i128 {
     i128::try_from(distance).unwrap_or(i128::MAX)
 }
 
+const fn pdarray_storage_estimate(size: usize) -> usize {
+    PDARRAYCELL_MEM
+        .saturating_add(INTORP_MEM)
+        .saturating_add(size.saturating_mul(INTORP_MEM))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IntMap, IntMapType};
+    use super::{IntMap, IntMapType, INTMAPCELL_MEM, INTORP_MEM, NUMTREECELL_MEM, PDARRAYCELL_MEM};
 
     #[test]
     fn get_ref_creates_single_slot_and_assign_overwrites() {
@@ -670,6 +692,29 @@ mod tests {
         assert_eq!(
             map.debug_print_string(),
             "% ==== IntMapType 1 Size = 2\n%     2 : two\n% ==== IntMap End\n"
+        );
+    }
+
+    #[test]
+    fn constant_mem_storage_estimate_matches_c_macro_shapes() {
+        let mut dense = IntMap::new();
+        assert_eq!(dense.constant_mem_storage_estimate(), INTMAPCELL_MEM);
+
+        dense.assign(0, "zero");
+        assert_eq!(dense.constant_mem_storage_estimate(), INTMAPCELL_MEM);
+
+        dense.assign(1, "one");
+        assert_eq!(
+            dense.constant_mem_storage_estimate(),
+            INTMAPCELL_MEM + PDARRAYCELL_MEM + INTORP_MEM + 8 * INTORP_MEM
+        );
+
+        let mut sparse = IntMap::new();
+        sparse.assign(100, "hundred");
+        sparse.assign(0, "zero");
+        assert_eq!(
+            sparse.constant_mem_storage_estimate(),
+            INTMAPCELL_MEM + 2 * NUMTREECELL_MEM
         );
     }
 }
