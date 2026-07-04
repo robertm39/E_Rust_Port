@@ -242,6 +242,14 @@ const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const PICOSAT_LIBRARY_ENV: &str = "E_RUST_PORT_PICOSAT_LIBRARY";
+#[cfg(windows)]
+const PICOSAT_LIBRARY_NAMES: &[&str] = &["picosat.dll", "libpicosat.dll"];
+#[cfg(target_os = "macos")]
+const PICOSAT_LIBRARY_NAMES: &[&str] = &["libpicosat.dylib", "libpicosat.so"];
+#[cfg(all(unix, not(target_os = "macos")))]
+const PICOSAT_LIBRARY_NAMES: &[&str] = &["libpicosat.so", "libpicosat.dylib"];
+#[cfg(not(any(windows, unix)))]
+const PICOSAT_LIBRARY_NAMES: &[&str] = &["libpicosat.so", "picosat.dll"];
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE: &str =
     "THF formula requires the full higher-order formula pipeline; this port currently supports only simple first-order-shaped and application-based THF fragments";
@@ -2802,7 +2810,7 @@ where
 {
     let mut state = CommandLineState::new(argv);
     let mut config = EProverConfig {
-        picosat_library: runtime_picosat_library_from_env(),
+        picosat_library: configured_picosat_library(),
         ..EProverConfig::default()
     };
     loop {
@@ -2842,6 +2850,39 @@ fn runtime_picosat_library_from_env() -> Option<PathBuf> {
     std::env::var_os(PICOSAT_LIBRARY_ENV)
         .filter(|value| !value.as_os_str().is_empty())
         .map(PathBuf::from)
+}
+
+fn configured_picosat_library() -> Option<PathBuf> {
+    runtime_picosat_library_from_env().or_else(runtime_picosat_library_from_bundle)
+}
+
+fn runtime_picosat_library_from_bundle() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    bundled_picosat_library_for_executable(&executable)
+}
+
+fn bundled_picosat_library_for_executable(executable: &Path) -> Option<PathBuf> {
+    picosat_library_candidates_for_executable(executable)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+fn picosat_library_candidates_for_executable(executable: &Path) -> Vec<PathBuf> {
+    let Some(executable_dir) = executable.parent() else {
+        return Vec::new();
+    };
+    let mut directories = vec![executable_dir.to_path_buf(), executable_dir.join("lib")];
+    if let Some(parent) = executable_dir.parent() {
+        directories.push(parent.join("lib"));
+    }
+
+    let mut candidates = Vec::with_capacity(directories.len() * PICOSAT_LIBRARY_NAMES.len());
+    for directory in directories {
+        for name in PICOSAT_LIBRARY_NAMES {
+            candidates.push(directory.join(name));
+        }
+    }
+    candidates
 }
 
 fn apply_parsed_option(
@@ -13304,12 +13345,13 @@ mod tests {
     use super::{
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
         apply_proof_state_sine_silent, apply_relevance_pruning, auto_memory_limit_from_system_mb,
-        core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
-        heuristic_parms_from_config, open_configured_output, order_parms_from_config,
-        parse_app_encode_file, parse_clause_scanner_into_sets_with_options,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        bundled_picosat_library_for_executable, core_limit_failure_messages, cpu_rlimit_to_apply,
+        fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
+        order_parms_from_config, parse_app_encode_file,
+        parse_clause_scanner_into_sets_with_options, preprocessing_config_debug_line,
+        process_options, proof_control_from_config, proof_object_list_display_clauses,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, simple_app_encoded_formula_set,
         simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_statistics,
         write_resource_setup_messages, write_saturation_proof_object_clause,
@@ -13319,7 +13361,8 @@ mod tests {
         PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
         ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
         UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -14929,6 +14972,58 @@ input_clause(c2,axiom,[++q(X)]).
             config.picosat_library,
             Some(PathBuf::from("target/test-picosat-runtime.dll"))
         );
+    }
+
+    #[test]
+    fn runtime_picosat_library_from_env_ignores_empty_value() {
+        let _lock = global_state_lock();
+        let _guard = set_env_var(PICOSAT_LIBRARY_ENV, "");
+
+        assert_eq!(runtime_picosat_library_from_env(), None);
+    }
+
+    #[test]
+    fn bundled_picosat_library_prefers_adjacent_library() {
+        let _lock = global_state_lock();
+        let root = temp_path("picosat-bundle-adjacent").with_extension("dir");
+        let _ = std::fs::remove_dir_all(&root);
+        let bin_dir = root.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let executable = bin_dir.join("eprover.exe");
+        let adjacent = bin_dir.join(PICOSAT_LIBRARY_NAMES[0]);
+        let lib_dir = root.join("lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let sibling = lib_dir.join(PICOSAT_LIBRARY_NAMES[0]);
+        std::fs::write(&adjacent, b"fake picosat").unwrap();
+        std::fs::write(sibling, b"fake picosat").unwrap();
+
+        assert_eq!(
+            bundled_picosat_library_for_executable(&executable),
+            Some(adjacent)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_picosat_library_finds_sibling_lib_directory() {
+        let _lock = global_state_lock();
+        let root = temp_path("picosat-bundle-sibling-lib").with_extension("dir");
+        let _ = std::fs::remove_dir_all(&root);
+        let bin_dir = root.join("bin");
+        let lib_dir = root.join("lib");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let executable = bin_dir.join("eprover.exe");
+        let bundled = lib_dir.join(PICOSAT_LIBRARY_NAMES[0]);
+        std::fs::write(&bundled, b"fake picosat").unwrap();
+
+        assert_eq!(
+            bundled_picosat_library_for_executable(&executable),
+            Some(bundled)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

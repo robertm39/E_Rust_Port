@@ -10,7 +10,7 @@ Current Rust port implementation status is tracked in [`docs/rust-port-status.md
 
 ## Runtime PicoSAT Selection
 
-The Rust executable can opt into the runtime-loaded PicoSAT backend by setting `E_RUST_PORT_PICOSAT_LIBRARY` to the PicoSAT DLL/shared-library path before running `eprover`. This is a Rust-port-specific selection surface; the default executable path still uses the internal solver unless that environment variable is set.
+The Rust executable selects a runtime-loaded PicoSAT backend when `E_RUST_PORT_PICOSAT_LIBRARY` names a PicoSAT DLL/shared-library path. When that environment variable is unset or empty, the executable also looks for a bundled PicoSAT library next to `eprover`, under `lib/` next to the executable, and under `../lib/` relative to the executable directory. If no library is found, the port falls back to the internal solver.
 
 ## C Source Documentation
 
