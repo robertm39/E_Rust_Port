@@ -86,4 +86,5 @@ Source files reviewed: `SIMPLE_APPS/ex_commandline.c`.
 
 - This file is a parser demonstration, not a prover feature. Keep the executable visible while pursuing drop-in source-tree coverage, but decide later whether release packaging should install example binaries.
 - The C option table uses underscore long-option names and gives `--int_example` a default string even though the option requires an argument. Rust preserves both for compatibility; a cleaned example would likely use hyphenated names and remove the unused default.
+- `print_help(FILE* out)` writes the banner to `out` but calls `PrintOptions(stdout, ...)`, so non-stdout help streams would still receive the option table on stdout. Rust's executable path matches the observed `main` behavior; keep this split visible if a stream-parametric helper is added later.
 <!-- END MANUAL REVIEW: c_source_docs -->

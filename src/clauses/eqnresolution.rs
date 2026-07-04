@@ -142,17 +142,13 @@ fn build_resolvent(
 }
 
 fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {
-    let freshvars = VarBank::new(bank.signature().type_bank());
     let mut variables = BTreeMap::new();
     let _ = clause.collect_variables(&mut variables);
-    freshvars.copy_variable_codes_from(bank.vars());
-    for variable in variables.values() {
-        let type_ = variable.type_().expect("clause variables have types");
-        let _ = freshvars.var_assert_alloc(variable.f_code(), &type_);
-    }
-    freshvars.set_fresh_count_to_used();
-    freshvars.set_v_counts_to_used();
-    freshvars
+    VarBank::fresh_normalization_bank(
+        bank.signature().type_bank(),
+        bank.vars(),
+        variables.values(),
+    )
 }
 
 /// Returns the first C `ClausePosFirstEqResLiteral` literal index.

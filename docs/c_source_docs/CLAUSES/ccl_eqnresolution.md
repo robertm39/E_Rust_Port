@@ -94,7 +94,7 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 
 ### Change Later
 
-- `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust currently creates a scratch fresh-variable bank and advances it beyond the clause's current variable codes so fresh variables do not alias original term-bank variables; replace this with proof-state-owned `freshvars` when that C owner is represented.
+- `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust currently creates a scratch fresh-variable bank through `VarBank::fresh_normalization_bank`, copying live variable f-codes/types and advancing beyond the clause's current variable codes so fresh variables do not alias original term-bank variables; replace this with proof-state-owned `freshvars` when that C owner is wired through the inference wrappers.
 - `build_resolvent` normalizes copied resolvent literals before removing false and duplicate literals, so DB-lambda beta/eta reduction can affect which literals are cleaned up and can trigger `EqnMap` truth/polarity side effects. Rust preserves that ordering explicitly through `EqnList::lambda_normalize`.
 - `EqResOnMaximalLiteralsOnly` is a mutable C global controlling the public literal iterators. Rust exposes the default-filter behavior as an explicit boolean argument for now; revisit the API once option/global-state ownership is centralized.
 - C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust separates these into single-resolvent and all-resolvent helpers so callers do not depend on a null-stack mode switch.

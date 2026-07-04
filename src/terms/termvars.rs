@@ -166,6 +166,37 @@ impl VarBank {
         self.set_fresh_count_to_used();
     }
 
+    /// Builds a temporary bank for C-style fresh-variable normalization.
+    ///
+    /// The result contains the normal variables already allocated in
+    /// `source`, the caller-supplied used variables, and counters advanced past
+    /// all represented variable stacks. This mirrors the collision-avoidance
+    /// part of pairing a live C term-bank variable bank with a reusable
+    /// `freshvars` bank.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any source or used variable is untyped, or if the same f-code
+    /// appears with incompatible types.
+    #[must_use]
+    pub fn fresh_normalization_bank<'a>(
+        sort_table: &TypeBank,
+        source: &Self,
+        used_variables: impl IntoIterator<Item = &'a Term>,
+    ) -> Self {
+        let freshvars = Self::new(sort_table);
+        freshvars.copy_variable_codes_from(source);
+        for variable in used_variables {
+            let type_ = variable
+                .type_()
+                .expect("normalization variables have types");
+            let _ = freshvars.var_assert_alloc(variable.f_code(), &type_);
+        }
+        freshvars.set_fresh_count_to_used();
+        freshvars.set_v_counts_to_used();
+        freshvars
+    }
+
     pub fn clear_ext_names(&self) {
         self.clear_ext_names_no_reset();
         self.reset_v_counts();
@@ -720,6 +751,33 @@ mod tests {
         );
         assert_eq!(target.fresh_count(), 4);
         assert_eq!(target.get_fresh_var(&types.i_type()).f_code(), -6);
+    }
+
+    #[test]
+    fn fresh_normalization_bank_copies_live_and_used_variable_codes() {
+        let mut types = TypeBank::new();
+        let person_code = types.define_simple_sort("norm_person").unwrap();
+        let person =
+            types.insert_type_shared(crate::terms::simpletypes::alloc_simple_sort(person_code));
+        let source = VarBank::new(&types);
+        let live = source.var_assert_alloc(-2, &types.i_type());
+        let used = source.var_assert_alloc(-8, &person);
+
+        let target =
+            VarBank::fresh_normalization_bank(&types, &source, std::slice::from_ref(&used));
+
+        assert_eq!(
+            target.f_code_find(live.f_code()).unwrap().type_(),
+            live.type_()
+        );
+        assert_eq!(
+            target.f_code_find(used.f_code()).unwrap().type_(),
+            used.type_()
+        );
+        assert_eq!(target.fresh_count(), 8);
+        assert_eq!(target.v_count_for_type(&types.i_type()), 1);
+        assert_eq!(target.v_count_for_type(&person), 1);
+        assert_eq!(target.get_fresh_var(&types.i_type()).f_code(), -10);
     }
 
     #[test]

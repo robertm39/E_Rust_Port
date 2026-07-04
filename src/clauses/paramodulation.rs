@@ -2265,18 +2265,14 @@ fn eqn_is_maximal_under_subst(
 }
 
 fn fresh_var_bank_for_clauses(bank: &TermBank, first: &Clause, second: &Clause) -> VarBank {
-    let freshvars = VarBank::new(bank.signature().type_bank());
     let mut variables: BTreeMap<usize, Term> = BTreeMap::new();
     let _ = first.collect_variables(&mut variables);
     let _ = second.collect_variables(&mut variables);
-    freshvars.copy_variable_codes_from(bank.vars());
-    for variable in variables.values() {
-        let type_ = variable.type_().expect("clause variables have types");
-        let _ = freshvars.var_assert_alloc(variable.f_code(), &type_);
-    }
-    freshvars.set_fresh_count_to_used();
-    freshvars.set_v_counts_to_used();
-    freshvars
+    VarBank::fresh_normalization_bank(
+        bank.signature().type_bank(),
+        bank.vars(),
+        variables.values(),
+    )
 }
 
 fn from_side_allows_paramod(bank: &TermBank, position: &ClausePos) -> bool {

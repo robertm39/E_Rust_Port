@@ -153,5 +153,6 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 ### Change Later
 
 - C's `VarBankPushEnv`/`VarBankPopEnv` stack restores old external-name bindings only when `VarBankExtNameAssertAllocSort` shadows a name with a different type; same-type quantifier shadowing is handled later by the full formula variable-renaming pipeline rather than by the raw variable bank. Rust keeps the C-shaped assert-allocation helpers, but the temporary executable FOF/TFF bridge uses declaration-specific scoped allocation so same-name quantified variables cannot create self-referential Skolem bindings before the real `TFormula` owner exists.
+- C inference wrappers receive a reusable `freshvars` bank paired with the live term-bank variables. Rust now has a shared `VarBank::fresh_normalization_bank` helper that copies live variable f-codes/types and advances temporary-bank counters for short-lived generation helpers, but proof-state-owned reuse remains the compatibility target once inference wrappers can borrow the state owner directly.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
