@@ -21,7 +21,7 @@ use crate::clauses::freqvectors::{
     FvIndexType, PermVector,
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
-use crate::clauses::pdtrees::PdTree;
+use crate::clauses::pdtrees::{PdTree, PdtTraversalOrder};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
@@ -191,9 +191,22 @@ impl ClauseSet {
         self.demod_index.as_ref().map_or(0, PdTree::visited_count)
     }
 
+    #[must_use]
+    pub fn demod_index_traversal_order(&self) -> Option<PdtTraversalOrder> {
+        self.demod_index
+            .as_ref()
+            .map(PdTree::search_traversal_order)
+    }
+
     pub fn record_demod_index_search_attempt(&self) {
         if let Some(index) = &self.demod_index {
             index.record_search_attempt();
+        }
+    }
+
+    pub fn record_demod_index_search_init(&self, prefer_general: bool) {
+        if let Some(index) = &self.demod_index {
+            index.record_search_init(prefer_general);
         }
     }
 

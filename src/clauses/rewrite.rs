@@ -237,7 +237,7 @@ pub fn rewrite_with_clause_set_plain(
     term: &Term,
     date: SysDate,
     demodulators: &ClauseSet,
-    _prefer_general: bool,
+    prefer_general: bool,
     restricted_rw: bool,
 ) -> Result<Term, Diagnostic> {
     assert!(!term.is_free_var(), "free variables are not rewritten");
@@ -247,7 +247,7 @@ pub fn rewrite_with_clause_set_plain(
     );
 
     REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-    demodulators.record_demod_index_search_attempt();
+    demodulators.record_demod_index_search_init(prefer_general);
 
     let mut subst = Substitution::new();
     let Some(found) = find_plain_demodulator(
@@ -1548,6 +1548,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -1916,7 +1917,7 @@ mod tests {
             &f_b,
             SysDate::from_raw(0),
             &demods,
-            false,
+            true,
             false,
         )
         .unwrap();
@@ -1926,6 +1927,10 @@ mod tests {
         assert!(f_b.is_top_rewritten());
         assert!(!f_b.is_rrewritten());
         assert_eq!(demods.demod_index_match_count(), 1);
+        assert_eq!(
+            demods.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::symbols_first())
+        );
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);

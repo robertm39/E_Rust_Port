@@ -34,6 +34,51 @@ impl Default for PdtConstraintSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PdtTraversalStep {
+    Symbols,
+    Variables,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PdtTraversalOrder {
+    pub first: PdtTraversalStep,
+    pub second: PdtTraversalStep,
+}
+
+impl PdtTraversalOrder {
+    #[must_use]
+    pub const fn symbols_first() -> Self {
+        Self {
+            first: PdtTraversalStep::Symbols,
+            second: PdtTraversalStep::Variables,
+        }
+    }
+
+    #[must_use]
+    pub const fn variables_first() -> Self {
+        Self {
+            first: PdtTraversalStep::Variables,
+            second: PdtTraversalStep::Symbols,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_prefer_general(prefer_general: bool) -> Self {
+        if prefer_general {
+            Self::symbols_first()
+        } else {
+            Self::variables_first()
+        }
+    }
+}
+
+impl Default for PdtTraversalOrder {
+    fn default() -> Self {
+        Self::symbols_first()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
     Fun(FunCode),
@@ -55,6 +100,7 @@ pub struct PdTree {
     arr_storage_estimate: usize,
     match_count: Cell<u64>,
     visited_count: Cell<u64>,
+    search_traversal_order: Cell<PdtTraversalOrder>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -81,6 +127,7 @@ impl PdTree {
             arr_storage_estimate: 0,
             match_count: Cell::new(0),
             visited_count: Cell::new(0),
+            search_traversal_order: Cell::new(PdtTraversalOrder::default()),
         }
     }
 
@@ -133,9 +180,20 @@ impl PdTree {
         self.visited_count.get()
     }
 
+    #[must_use]
+    pub fn search_traversal_order(&self) -> PdtTraversalOrder {
+        self.search_traversal_order.get()
+    }
+
     pub fn record_search_attempt(&self) {
         self.match_count
             .set(self.match_count.get().saturating_add(1));
+    }
+
+    pub fn record_search_init(&self, prefer_general: bool) {
+        self.search_traversal_order
+            .set(PdtTraversalOrder::from_prefer_general(prefer_general));
+        self.record_search_attempt();
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -438,8 +496,8 @@ mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree, PrefixToken,
-        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
+        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree,
+        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -526,6 +584,10 @@ mod tests {
 
         assert_eq!(tree.match_count(), 0);
         assert_eq!(tree.visited_count(), 0);
+        assert_eq!(
+            tree.search_traversal_order(),
+            PdtTraversalOrder::symbols_first()
+        );
 
         tree.record_search_attempt();
         tree.record_nodes_visited(3);
@@ -535,6 +597,27 @@ mod tests {
         assert_eq!(tree.visited_count(), 5);
         #[cfg(feature = "pdt-count-nodes")]
         assert!(pdt_node_counter() >= global_before.saturating_add(5));
+    }
+
+    #[test]
+    fn search_init_records_c_prefer_general_traversal_order() {
+        let tree = PdTree::new();
+
+        tree.record_search_init(false);
+
+        assert_eq!(tree.match_count(), 1);
+        assert_eq!(
+            tree.search_traversal_order(),
+            PdtTraversalOrder::variables_first()
+        );
+
+        tree.record_search_init(true);
+
+        assert_eq!(tree.match_count(), 2);
+        assert_eq!(
+            tree.search_traversal_order(),
+            PdtTraversalOrder::symbols_first()
+        );
     }
 
     #[test]

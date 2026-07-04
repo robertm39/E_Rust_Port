@@ -222,7 +222,7 @@ fn find_top_simplifying_unit_with_sign<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
-    units.record_demod_index_search_attempt();
+    units.record_demod_index_search_init(false);
     units.iter().find_map(|clause| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
@@ -241,7 +241,7 @@ fn find_top_simplifying_unit_index(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<usize> {
-    units.record_demod_index_search_attempt();
+    units.record_demod_index_search_init(false);
     units.iter().enumerate().find_map(|(index, clause)| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
@@ -321,6 +321,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -426,8 +427,16 @@ mod tests {
         assert_eq!(set.demod_index_match_count(), 0);
         assert!(find_top_simplifying_unit(&set, &b, &a).is_some());
         assert_eq!(set.demod_index_match_count(), 1);
+        assert_eq!(
+            set.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::variables_first())
+        );
         assert!(find_signed_top_simplifying_unit(&set, &b, &a, false).is_none());
         assert_eq!(set.demod_index_match_count(), 2);
+        assert_eq!(
+            set.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::variables_first())
+        );
     }
 
     #[test]
