@@ -258,8 +258,8 @@ enum WatchlistActivation {
 impl ProofState {
     /// Allocates the currently ported proof-state owner fields.
     ///
-    /// Global indices, demodulator trees, the temporary term bank, and SAT
-    /// integration are added by later slices. The clause-set, formula-set,
+    /// Global indices, the temporary term bank, and SAT integration are added
+    /// by later slices. The clause-set, demodulator-index, formula-set,
     /// FV-index, distinct-symbol, and statistic initialization mirrors C
     /// `ProofStateAlloc`.
     ///
@@ -282,9 +282,9 @@ impl ProofState {
             f_axioms: FormulaSet::new(),
             ax_archive: ClauseSet::new(),
             f_ax_archive: FormulaSet::new(),
-            processed_pos_rules: ClauseSet::new(),
-            processed_pos_eqns: ClauseSet::new(),
-            processed_neg_units: ClauseSet::new(),
+            processed_pos_rules: ClauseSet::new_demod_indexed(),
+            processed_pos_eqns: ClauseSet::new_demod_indexed(),
+            processed_neg_units: ClauseSet::new_demod_indexed(),
             processed_non_units: ClauseSet::new(),
             unprocessed: ClauseSet::new(),
             tmp_store: ClauseSet::new(),
@@ -2071,6 +2071,10 @@ mod tests {
         assert_eq!(state.processed_pos_eqns().members(), 0);
         assert_eq!(state.processed_neg_units().members(), 0);
         assert_eq!(state.processed_non_units().members(), 0);
+        assert!(state.processed_pos_rules().demod_index().is_some());
+        assert!(state.processed_pos_eqns().demod_index().is_some());
+        assert!(state.processed_neg_units().demod_index().is_some());
+        assert!(state.processed_non_units().demod_index().is_none());
         assert_eq!(state.unprocessed().members(), 0);
         assert_eq!(state.tmp_store().members(), 0);
         assert_eq!(state.eval_store().members(), 0);

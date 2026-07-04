@@ -8,7 +8,8 @@ use crate::clauses::clause::{
     clause_starts_maybe, clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
+    FormulaProperties, CP_DELETE_CLAUSE, CP_IS_D_INDEXED, CP_IS_SOS, CP_IS_S_INDEXED,
+    CP_TYPE_CONJECTURE,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::derivation::ClauseDerivationRef;
@@ -20,6 +21,7 @@ use crate::clauses::freqvectors::{
     FvIndexType, PermVector,
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
+use crate::clauses::pdtrees::PdTree;
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
@@ -98,6 +100,7 @@ pub struct ClauseSet {
     literals: i64,
     date: SysDate,
     identifier: String,
+    demod_index: Option<PdTree>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
     eval_no: usize,
@@ -120,11 +123,19 @@ impl ClauseSet {
             literals: 0,
             date,
             identifier: String::new(),
+            demod_index: None,
             fv_anchor: None,
             eval_indices: Vec::new(),
             eval_no: 0,
             next_eval_object: 0,
         }
+    }
+
+    #[must_use]
+    pub fn new_demod_indexed() -> Self {
+        let mut set = Self::new();
+        set.init_demod_index();
+        set
     }
 
     #[must_use]
@@ -157,6 +168,24 @@ impl ClauseSet {
 
     pub fn set_identifier(&mut self, identifier: impl Into<String>) {
         self.identifier = identifier.into();
+    }
+
+    pub fn init_demod_index(&mut self) {
+        if self.demod_index.is_none() {
+            self.demod_index = Some(PdTree::new());
+        }
+    }
+
+    #[must_use]
+    pub const fn demod_index(&self) -> Option<&PdTree> {
+        self.demod_index.as_ref()
+    }
+
+    #[must_use]
+    pub fn demod_index_storage_estimate(&self) -> usize {
+        self.demod_index
+            .as_ref()
+            .map_or(0, PdTree::storage_estimate)
     }
 
     #[must_use]
@@ -199,14 +228,15 @@ impl ClauseSet {
 
     /// Returns the C `ClauseSetStorage` constant-memory estimate.
     ///
-    /// Demodulator `PDTreeStorage` is currently zero because this Rust owner
-    /// does not yet store the demodulator index in `ClauseSet`.
+    /// Includes the demodulator `PDTreeStorage` component when this set owns a
+    /// demodulator index.
     #[must_use]
     pub fn storage_estimate(&self) -> i64 {
         let clause_cell_mem = CLAUSECELL_DYN_MEM.saturating_add(eval_mem(self.eval_no));
         clause_cell_mem
             .saturating_mul(self.members())
             .saturating_add(EQN_CELL_MEM.saturating_mul(self.literals()))
+            .saturating_add(usize_to_i64(self.demod_index_storage_estimate()))
             .saturating_add(usize_to_i64(fv_index_storage(self.fv_anchor())))
     }
 
@@ -514,12 +544,14 @@ impl ClauseSet {
         fv_anchor: Option<&mut FvIndexAnchor>,
         bank: &TermBank,
     ) {
-        let clause = indexed_clause_for_anchor(clause, fv_anchor, bank);
+        let mut clause = indexed_clause_for_anchor(clause, fv_anchor, bank);
+        self.index_clause_demodulator(&mut clause);
         self.insert(clause);
     }
 
     pub fn indexed_insert_clause_owned(&mut self, clause: Clause, bank: &TermBank) {
-        let clause = indexed_clause_for_anchor(clause, self.fv_anchor.as_mut(), bank);
+        let mut clause = indexed_clause_for_anchor(clause, self.fv_anchor.as_mut(), bank);
+        self.index_clause_demodulator(&mut clause);
         self.insert(clause);
     }
 
@@ -795,7 +827,16 @@ impl ClauseSet {
     ///
     /// Returns a diagnostic if copying a candidate clause into `work_bank` or
     /// inserting normalized terms fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this set owns a demodulator index, matching the C
+    /// `ClauseSetFilterTautologies` precondition for plain clause sets.
     pub fn filter_tautologies(&mut self, work_bank: &mut TermBank) -> Result<i64, Diagnostic> {
+        assert!(
+            self.demod_index.is_none(),
+            "ClauseSetFilterTautologies expects a plain, non-demod-indexed set"
+        );
         let mut removed = 0;
         let mut index = 0;
         while index < self.clauses.len() {
@@ -1224,6 +1265,7 @@ impl ClauseSet {
             }
         }
         let mut clause = self.clauses.remove(position)?;
+        self.delete_clause_demodulator_index(&mut clause);
         if clause.query_prop(CP_IS_S_INDEXED) {
             if let Some(anchor) = self.fv_anchor.as_mut() {
                 anchor.delete(&clause);
@@ -1234,12 +1276,62 @@ impl ClauseSet {
         Some(clause)
     }
 
+    fn index_clause_demodulator(&mut self, clause: &mut Clause) {
+        let Some(index) = self.demod_index.as_mut() else {
+            return;
+        };
+        index_demodulator_clause(index, clause);
+        clause.set_prop(CP_IS_D_INDEXED);
+    }
+
+    fn delete_clause_demodulator_index(&mut self, clause: &mut Clause) {
+        if !clause.query_prop(CP_IS_D_INDEXED) {
+            return;
+        }
+        if let Some(index) = self.demod_index.as_mut() {
+            delete_demodulator_clause(index, clause);
+        }
+        clause.del_prop(CP_IS_D_INDEXED);
+    }
+
     pub(crate) fn recompute_literals(&mut self) {
         self.literals = self
             .clauses
             .iter()
             .map(|clause| usize_to_i64(clause.literal_number()))
             .sum();
+    }
+}
+
+fn index_demodulator_clause(index: &mut PdTree, clause: &Clause) {
+    assert!(
+        clause.is_unit(),
+        "demodulator-indexed clauses must be units"
+    );
+    let literal = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("unit clause has one literal");
+    index.insert_term(literal.left());
+    if !literal.is_oriented() {
+        index.insert_term(literal.right());
+    }
+}
+
+fn delete_demodulator_clause(index: &mut PdTree, clause: &Clause) {
+    assert!(
+        clause.is_unit(),
+        "demodulator-indexed clauses must be units"
+    );
+    let literal = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("unit clause has one literal");
+    let _ = index.delete_term(literal.left());
+    if !literal.is_oriented() {
+        let _ = index.delete_term(literal.right());
     }
 }
 
@@ -1642,8 +1734,8 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_AXIOM,
-        CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
+        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED,
+        CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
@@ -1873,6 +1965,49 @@ mod tests {
             set.storage_estimate(),
             CLAUSECELL_DYN_MEM + eval_mem(0) + EQN_CELL_MEM + fv_storage
         );
+    }
+
+    #[test]
+    fn storage_estimate_includes_owned_demod_index_storage() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "storage_demod_a");
+        let b = typed_const(&mut bank, "storage_demod_b");
+        let mut literal = literal(&mut bank, &a, &b, true);
+        literal.set_prop(EP_IS_ORIENTED);
+        let clause = clause_from(vec![literal]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        let stored = set.iter().next().unwrap();
+        let demod_storage = i64::try_from(set.demod_index_storage_estimate()).unwrap();
+        assert!(stored.query_prop(CP_IS_D_INDEXED));
+        assert_eq!(set.demod_index().unwrap().term_count(), 1);
+        assert!(demod_storage > 0);
+        assert_eq!(
+            set.storage_estimate(),
+            CLAUSECELL_DYN_MEM + eval_mem(0) + EQN_CELL_MEM + demod_storage
+        );
+    }
+
+    #[test]
+    fn extracting_demod_indexed_clause_removes_index_entry_and_flag() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "extract_demod_a");
+        let b = typed_const(&mut bank, "extract_demod_b");
+        let clause = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+        assert_eq!(set.demod_index().unwrap().term_count(), 2);
+        let indexed_storage = set.demod_index_storage_estimate();
+
+        let extracted = set.extract_first().unwrap();
+
+        assert!(!extracted.query_prop(CP_IS_D_INDEXED));
+        assert_eq!(set.demod_index().unwrap().term_count(), 0);
+        assert!(set.demod_index_storage_estimate() < indexed_storage);
+        assert!(set.demod_index_storage_estimate() > 0);
     }
 
     #[test]

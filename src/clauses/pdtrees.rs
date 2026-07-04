@@ -22,7 +22,7 @@ pub struct PrefixMatch {
     pub remains: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PdTree {
     nodes: Vec<PdNode>,
     term_count: usize,
@@ -30,7 +30,7 @@ pub struct PdTree {
     arr_storage_estimate: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct PdNode {
     children: BTreeMap<PrefixToken, usize>,
     fun_alternatives: IntMap<()>,
