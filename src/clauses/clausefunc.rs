@@ -23,6 +23,7 @@ use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::inferencedoc::{FormulaDocView, ProofDocSession, ProofDocWriteResult};
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_start_token, FunCode};
 use crate::terms::lambda::{
@@ -112,12 +113,32 @@ impl TFormulaDefEntry {
 ///
 /// The term is the transformed formula. `derivation_ops` records the C
 /// derivation opcodes that `WTFormulaConjunctiveNF*` would push when a phase
-/// changes the wrapped formula. The full `WFormula` proof object still belongs
-/// to the later formula-owner integration.
+/// changes the wrapped formula. `changed_phases` records the formula snapshot
+/// after each phase that contributes a derivation opcode, so a represented
+/// wrapper can reproduce C's proof-documentation order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TFormulaCnfResult {
     formula: Term,
     derivation_ops: Vec<i64>,
+    changed_phases: Vec<TFormulaCnfPhase>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TFormulaCnfPhase {
+    op: i64,
+    formula: Term,
+}
+
+impl TFormulaCnfPhase {
+    #[must_use]
+    pub const fn op(&self) -> i64 {
+        self.op
+    }
+
+    #[must_use]
+    pub fn formula(&self) -> &Term {
+        &self.formula
+    }
 }
 
 impl TFormulaCnfResult {
@@ -134,6 +155,66 @@ impl TFormulaCnfResult {
     #[must_use]
     pub fn derivation_ops(&self) -> &[i64] {
         &self.derivation_ops
+    }
+
+    #[must_use]
+    pub fn changed_phases(&self) -> &[TFormulaCnfPhase] {
+        &self.changed_phases
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TFormulaToCnfDocResult {
+    pub clauses_generated: i64,
+    pub write_results: Vec<ProofDocWriteResult>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TFormulaToCnfInput<'a> {
+    form: &'a Term,
+    type_: FormulaProperties,
+    fresh_vars: &'a VarBank,
+    source: FormulaDerivationRef,
+    problem_type: ProblemType,
+}
+
+impl<'a> TFormulaToCnfInput<'a> {
+    #[must_use]
+    pub const fn new(
+        form: &'a Term,
+        type_: FormulaProperties,
+        fresh_vars: &'a VarBank,
+        source: FormulaDerivationRef,
+        problem_type: ProblemType,
+    ) -> Self {
+        Self {
+            form,
+            type_,
+            fresh_vars,
+            source,
+            problem_type,
+        }
+    }
+}
+
+pub struct TFormulaToCnfDocContext<'a, 'view, W: fmt::Write> {
+    output: &'a mut W,
+    session: &'a mut ProofDocSession,
+    parent: &'a FormulaDocView<'view>,
+}
+
+impl<'a, 'view, W: fmt::Write> TFormulaToCnfDocContext<'a, 'view, W> {
+    #[must_use]
+    pub const fn new(
+        output: &'a mut W,
+        session: &'a mut ProofDocSession,
+        parent: &'a FormulaDocView<'view>,
+    ) -> Self {
+        Self {
+            output,
+            session,
+            parent,
+        }
     }
 }
 
@@ -4984,11 +5065,13 @@ pub fn tformula_conjunctive_nf(
 ) -> Result<TFormulaCnfResult, Diagnostic> {
     let mut current = form.clone();
     let mut derivation_ops = Vec::new();
+    let mut changed_phases = Vec::new();
 
     apply_cnf_phase(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_FOF_SIMPLIFY,
         |bank, form| tformula_simplify(bank, form, TFORM_CNF_SIMPLIFY_LIMIT),
     )?;
@@ -4996,6 +5079,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_FNNF,
         tformula_nnf_positive,
     )?;
@@ -5003,6 +5087,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SHIFT_QUANTORS,
         tformula_mini_scope,
     )?;
@@ -5011,6 +5096,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_VAR_RENAME,
         tformula_var_rename,
     )?;
@@ -5018,6 +5104,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SKOLEMIZE,
         tformula_skolemize_outermost,
     )?;
@@ -5025,6 +5112,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SHIFT_QUANTORS,
         tformula_shift_quantors,
     )?;
@@ -5032,6 +5120,7 @@ pub fn tformula_conjunctive_nf(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_DIST_DISJUNCTIONS,
         tformula_distribute_disjunctions,
     )?;
@@ -5039,6 +5128,7 @@ pub fn tformula_conjunctive_nf(
     Ok(TFormulaCnfResult {
         formula: current,
         derivation_ops,
+        changed_phases,
     })
 }
 
@@ -5069,11 +5159,13 @@ pub fn tformula_conjunctive_nf3(
 
     let mut current = form.clone();
     let mut derivation_ops = Vec::new();
+    let mut changed_phases = Vec::new();
 
     apply_cnf_phase(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_FOF_SIMPLIFY,
         |bank, form| tformula_simplify(bank, form, TFORM_CNF_SIMPLIFY_LIMIT),
     )?;
@@ -5081,6 +5173,7 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_FNNF,
         tformula_nnf_positive,
     )?;
@@ -5088,6 +5181,7 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SHIFT_QUANTORS,
         |bank, form| tformula_mini_scope3(bank, form, miniscope_limit),
     )?;
@@ -5096,6 +5190,7 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_VAR_RENAME,
         tformula_var_rename,
     )?;
@@ -5103,6 +5198,7 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SKOLEMIZE,
         tformula_skolemize_outermost,
     )?;
@@ -5110,18 +5206,20 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_SHIFT_QUANTORS,
         tformula_shift_quantors,
     )?;
 
     if fool_unroll {
-        apply_cnf_fool_unroll(bank, &mut current, &mut derivation_ops)?;
+        apply_cnf_fool_unroll(bank, &mut current, &mut derivation_ops, &mut changed_phases)?;
     }
 
     apply_cnf_phase(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_FNNF,
         tformula_nnf_positive,
     )?;
@@ -5129,6 +5227,7 @@ pub fn tformula_conjunctive_nf3(
         bank,
         &mut current,
         &mut derivation_ops,
+        &mut changed_phases,
         DC_DIST_DISJUNCTIONS,
         tformula_distribute_disjunctions,
     )?;
@@ -5136,6 +5235,7 @@ pub fn tformula_conjunctive_nf3(
     Ok(TFormulaCnfResult {
         formula: current,
         derivation_ops,
+        changed_phases,
     })
 }
 
@@ -5143,6 +5243,7 @@ fn apply_cnf_phase(
     bank: &mut TermBank,
     current: &mut Term,
     derivation_ops: &mut Vec<i64>,
+    changed_phases: &mut Vec<TFormulaCnfPhase>,
     op: i64,
     transform: impl FnOnce(&mut TermBank, &Term) -> Result<Term, Diagnostic>,
 ) -> Result<(), Diagnostic> {
@@ -5150,6 +5251,10 @@ fn apply_cnf_phase(
     if transformed != *current {
         *current = transformed;
         derivation_ops.push(op);
+        changed_phases.push(TFormulaCnfPhase {
+            op,
+            formula: current.clone(),
+        });
     }
     Ok(())
 }
@@ -5167,11 +5272,16 @@ fn apply_cnf_fool_unroll(
     bank: &mut TermBank,
     current: &mut Term,
     derivation_ops: &mut Vec<i64>,
+    changed_phases: &mut Vec<TFormulaCnfPhase>,
 ) -> Result<(), Diagnostic> {
     let expanded = tformula_expand_literals(bank, current)?;
     let unrolled = do_fool_unroll(bank, &expanded)?;
     if unrolled != expanded {
         derivation_ops.push(DC_FOOL_UNROLL);
+        changed_phases.push(TFormulaCnfPhase {
+            op: DC_FOOL_UNROLL,
+            formula: unrolled.clone(),
+        });
     }
     *current = unrolled;
     Ok(())
@@ -5257,11 +5367,52 @@ pub fn tformula_to_cnf(
     source: FormulaDerivationRef,
     problem_type: ProblemType,
 ) -> Result<i64, Diagnostic> {
+    Ok(tformula_to_cnf_impl::<String>(
+        bank,
+        set,
+        TFormulaToCnfInput::new(form, type_, fresh_vars, source, problem_type),
+        None,
+    )?
+    .clauses_generated)
+}
+
+/// Splits a term-encoded CNF formula into clauses and emits C
+/// `DocClauseFromForm` output for each generated clause.
+///
+/// This is the proof-documenting counterpart to [`tformula_to_cnf`].
+/// The documentation call happens before the `DCSplitConjunct` derivation is
+/// pushed, matching C `TFormulaToCNF`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if clause collection, proof-documentation rendering,
+/// naked Boolean-variable elimination, or higher-order post-CNF encoding fails.
+///
+/// # Panics
+///
+/// Panics if the input violates the C preconditions of the collected formula
+/// shape or if an encoded literal is malformed.
+pub fn tformula_to_cnf_with_docs<W: fmt::Write>(
+    doc_context: TFormulaToCnfDocContext<'_, '_, W>,
+    bank: &mut TermBank,
+    set: &mut ClauseSet,
+    input: TFormulaToCnfInput<'_>,
+) -> Result<TFormulaToCnfDocResult, Diagnostic> {
+    tformula_to_cnf_impl(bank, set, input, Some(doc_context))
+}
+
+fn tformula_to_cnf_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    set: &mut ClauseSet,
+    input: TFormulaToCnfInput<'_>,
+    mut doc_context: Option<TFormulaToCnfDocContext<'_, '_, W>>,
+) -> Result<TFormulaToCnfDocResult, Diagnostic> {
     let old_clause_number = set.members();
+    let mut result = TFormulaToCnfDocResult::default();
     let qall_code = bank.signature().qall_code();
     let and_code = bank.signature().and_code();
 
-    let mut handle = form.clone();
+    let mut handle = input.form.clone();
     while handle.f_code() == qall_code {
         handle = formula_argument(&handle, 1);
     }
@@ -5274,22 +5425,31 @@ pub fn tformula_to_cnf(
             continue;
         }
 
-        let mut clause = tformula_collect_clause(bank, &current, Some(fresh_vars))?;
-        clause.set_tptp_type(type_);
-        clause_push_formula_derivation(&mut clause, DC_SPLIT_CONJUNCT, Some(source), None);
+        let mut clause = tformula_collect_clause(bank, &current, Some(input.fresh_vars))?;
+        clause.set_tptp_type(input.type_);
+        if let Some(doc) = doc_context.as_mut() {
+            result.write_results.push(doc.session.doc_clause_from_form(
+                &mut *doc.output,
+                bank,
+                &mut clause,
+                doc.parent,
+            )?);
+        }
+        clause_push_formula_derivation(&mut clause, DC_SPLIT_CONJUNCT, Some(input.source), None);
 
         if clause_eliminate_naked_boolean_variables(&mut clause, bank)? {
             clause_push_derivation(&mut clause, DC_ELIMINATE_BVAR, None, None);
         }
 
-        if problem_type == ProblemType::HigherOrder {
+        if input.problem_type == ProblemType::HigherOrder {
             post_cnf_encode_clause_terms(bank, &mut clause)?;
         }
 
         set.insert(clause);
     }
 
-    Ok(set.members() - old_clause_number)
+    result.clauses_generated = set.members() - old_clause_number;
+    Ok(result)
 }
 
 /// Applies C `PostCNFEncodeFormulas` to both sides of each clause literal.

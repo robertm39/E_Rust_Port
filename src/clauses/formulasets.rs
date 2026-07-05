@@ -18,17 +18,18 @@ use crate::clauses::clausefunc::{
     tformula_encode_predicate_as_eqn, tformula_fcode_alloc, tformula_find_defs,
     tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
     tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
-    tformula_simplify, tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn,
-    tformula_unroll_fool_result, tformula_var_rename, TFormulaDefinitions,
-    TFormulaTptpPrintOptions,
+    tformula_simplify, tformula_to_cnf, tformula_to_cnf_with_docs, tformula_tptp_string,
+    tformula_unencode_root_eqn, tformula_unroll_fool_result, tformula_var_rename,
+    TFormulaDefinitions, TFormulaToCnfDocContext, TFormulaToCnfInput, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_formula_derivation, push_formula_derivation_stack, DerivationEntry,
-    FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_EQ_TO_EQ, DC_FOF_QUOTE,
-    DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE, DC_LIFT_LAMBDAS,
-    DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
+    FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ,
+    DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
+    DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_EQUIV,
+    DC_VAR_RENAME,
 };
 use crate::clauses::eqn_props::{EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::garbage_coll::tb_gc_collect;
@@ -134,10 +135,38 @@ impl FormulaProofDocRenderOptions {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WrappedFormulaCnfDocContext<'a, W: fmt::Write> {
+    output: &'a mut W,
+    session: &'a mut ProofDocSession,
+    render_options: FormulaProofDocRenderOptions,
+}
+
+impl<'a, W: fmt::Write> WrappedFormulaCnfDocContext<'a, W> {
+    #[must_use]
+    pub const fn new(
+        output: &'a mut W,
+        session: &'a mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+    ) -> Self {
+        Self {
+            output,
+            session,
+            render_options,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WrappedFormulaCnfResult {
     pub clauses_generated: i64,
     pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WrappedFormulaCnfDocResult {
+    pub cnf: WrappedFormulaCnfResult,
+    pub formula_write_results: Vec<ProofDocWriteResult>,
+    pub clause_write_results: Vec<ProofDocWriteResult>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -240,6 +269,19 @@ impl FormulaSetCnfOptions {
 
 const fn formula_set_gc_threshold(old_nodes: i64) -> i64 {
     old_nodes.saturating_mul(TFORMULA_GC_LIMIT_NUMERATOR) / TFORMULA_GC_LIMIT_DENOMINATOR
+}
+
+fn cnf_phase_formula_inference(op: i64) -> Option<FormulaModificationInference> {
+    match op {
+        DC_FOF_SIMPLIFY => Some(FormulaModificationInference::Simplification),
+        DC_FNNF => Some(FormulaModificationInference::Nnf),
+        DC_SHIFT_QUANTORS => Some(FormulaModificationInference::ShiftQuantors),
+        DC_VAR_RENAME => Some(FormulaModificationInference::VarRename),
+        DC_SKOLEMIZE => Some(FormulaModificationInference::Skolemize),
+        DC_DIST_DISJUNCTIONS => Some(FormulaModificationInference::Distribute),
+        DC_FOOL_UNROLL => None,
+        _ => panic!("unexpected CNF formula derivation opcode {op}"),
+    }
 }
 
 fn term_has_named_lambda(term: &Term) -> bool {
@@ -1799,6 +1841,116 @@ impl WrappedFormula {
         Ok(WrappedFormulaCnfResult {
             clauses_generated,
             formula_derivation_ops,
+        })
+    }
+
+    /// Transforms this wrapped formula into CNF clauses and emits C
+    /// proof-documentation for represented formula phases and split clauses.
+    ///
+    /// This is the proof-documenting counterpart to [`Self::cnf2_into`].
+    /// Formula-backed wrappers emit `DocFormulaModificationDefault` for each
+    /// documented changed `WTFormulaConjunctiveNF3` phase, then
+    /// `DocClauseFromForm` for each generated clause before the
+    /// `DCSplitConjunct` derivation is pushed. The direct clause-wrapper
+    /// shortcut remains output-free, matching C `WFormulaCNF2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if lambda normalization, CNF transformation,
+    /// formula rendering, proof-documentation rendering, clause conversion,
+    /// higher-order post-CNF encoding, or clause insertion preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term, if the miniscope limit is
+    /// negative, or if a malformed encoded literal/formula violates the C CNF
+    /// preconditions.
+    pub fn cnf2_into_with_docs<W: fmt::Write>(
+        &mut self,
+        doc: &mut WrappedFormulaCnfDocContext<'_, W>,
+        bank: &mut TermBank,
+        set: &mut ClauseSet,
+        fresh_vars: &VarBank,
+        miniscope_limit: i64,
+        fool_unroll: bool,
+    ) -> Result<WrappedFormulaCnfDocResult, Diagnostic> {
+        let normalized = lambda_normalize_db(bank, self.formula())?;
+        self.set_formula(normalized);
+        let source = FormulaDerivationRef::new(self.ident);
+
+        if self.is_clause {
+            let mut clause = self.form_clause_to_clause(bank)?;
+            clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(source), None);
+            if doc.render_options.problem_type == ProblemType::HigherOrder {
+                post_cnf_encode_clause_terms(bank, &mut clause)?;
+            }
+            set.insert(clause);
+            return Ok(WrappedFormulaCnfDocResult {
+                cnf: WrappedFormulaCnfResult {
+                    clauses_generated: 1,
+                    formula_derivation_ops: Vec::new(),
+                },
+                formula_write_results: Vec::new(),
+                clause_write_results: Vec::new(),
+            });
+        }
+
+        let cnf_result =
+            tformula_conjunctive_nf3(bank, self.formula(), miniscope_limit, fool_unroll)?;
+        let formula_derivation_ops = cnf_result.derivation_ops().to_vec();
+        let mut formula_write_results = Vec::new();
+        for phase in cnf_result.changed_phases() {
+            self.set_formula(phase.formula().clone());
+            if let Some(inference) = cnf_phase_formula_inference(phase.op()) {
+                let (write_result, new_ident, new_properties) = {
+                    let rendered = self.proof_doc_formula_body_string(
+                        bank,
+                        doc.render_options.full_terms,
+                        doc.render_options.problem_type,
+                    )?;
+                    let mut view = self.proof_doc_view(&rendered);
+                    let write_result = doc.session.doc_formula_modification(
+                        &mut *doc.output,
+                        &mut view,
+                        inference,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                self.ident = new_ident;
+                self.set_properties(new_properties);
+                formula_write_results.push(write_result);
+            }
+            self.push_formula_derivation(phase.op(), None, None);
+        }
+        self.set_formula(cnf_result.formula().clone());
+
+        let source = FormulaDerivationRef::new(self.ident);
+        let parent_rendered = self.proof_doc_formula_body_string(
+            bank,
+            doc.render_options.full_terms,
+            doc.render_options.problem_type,
+        )?;
+        let parent_view = self.proof_doc_view(&parent_rendered);
+        let clause_doc_result = tformula_to_cnf_with_docs(
+            TFormulaToCnfDocContext::new(&mut *doc.output, &mut *doc.session, &parent_view),
+            bank,
+            set,
+            TFormulaToCnfInput::new(
+                self.formula(),
+                self.query_tptp_type(),
+                fresh_vars,
+                source,
+                doc.render_options.problem_type,
+            ),
+        )?;
+        Ok(WrappedFormulaCnfDocResult {
+            cnf: WrappedFormulaCnfResult {
+                clauses_generated: clause_doc_result.clauses_generated,
+                formula_derivation_ops,
+            },
+            formula_write_results,
+            clause_write_results: clause_doc_result.write_results,
         })
     }
 
@@ -3723,7 +3875,7 @@ mod tests {
         clause_set_lift_lambdas, formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat,
         FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, FormulaTstpClauseMode,
-        FormulaTstpPrintOptions, WrappedFormula,
+        FormulaTstpPrintOptions, WrappedFormula, WrappedFormulaCnfDocContext,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -5933,6 +6085,171 @@ mod tests {
                 &[
                     DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
                     DerivationEntry::FormulaParent(source),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_formula_cnf2_with_docs_prints_formula_and_split_steps() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_cnf_doc_a");
+        let b = typed_const(&mut bank, "wf_cnf_doc_b");
+        let c = typed_const(&mut bank, "wf_cnf_doc_c");
+        let d = typed_const(&mut bank, "wf_cnf_doc_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_left = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right_right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let right_conjunction =
+            bool_binary_with_code(&mut bank, and_code, &right_left, &right_right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut rendered,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+            );
+            wrapped
+                .cnf2_into_with_docs(
+                    &mut doc_context,
+                    &mut bank,
+                    &mut set,
+                    &fresh_vars,
+                    100,
+                    false,
+                )
+                .unwrap()
+        };
+
+        assert_eq!(result.cnf.clauses_generated, 2);
+        assert_eq!(
+            result.cnf.formula_derivation_ops,
+            vec![DC_DIST_DISJUNCTIONS]
+        );
+        assert_eq!(
+            result.formula_write_results,
+            vec![ProofDocWriteResult::printed()]
+        );
+        assert_eq!(
+            result.clause_write_results,
+            vec![
+                ProofDocWriteResult::printed(),
+                ProofDocWriteResult::printed()
+            ]
+        );
+        let distributed_body = wrapped
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        assert!(rendered.starts_with(&format!(
+            "     1 : neg:{distributed_body} : distribute({old_ident})\n"
+        )));
+        assert_eq!(rendered.matches("split_conjunct(1)").count(), 2);
+        assert_eq!(rendered.lines().count(), 3);
+        assert_eq!(wrapped.ident(), 1);
+        assert!(!wrapped.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            wrapped.derivation_entries(),
+            &[DerivationEntry::Operation(DC_DIST_DISJUNCTIONS)]
+        );
+        assert_eq!(session.id_source.current_ident(), 3);
+
+        let split_source = FormulaDerivationRef::new(1);
+        let generated_idents = set.iter().map(Clause::ident).collect::<Vec<_>>();
+        assert_eq!(generated_idents, vec![2, 3]);
+        for clause in set.iter() {
+            assert_eq!(clause.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+            assert!(!clause.query_prop(CP_INPUT_FORMULA));
+            assert_eq!(
+                &clause.derivation().unwrap().as_slice()[..2],
+                &[
+                    DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                    DerivationEntry::FormulaParent(split_source),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_formula_cnf2_with_docs_suppresses_but_keeps_property_side_effects() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_cnf_doc_suppress_a");
+        let b = typed_const(&mut bank, "wf_cnf_doc_suppress_b");
+        let c = typed_const(&mut bank, "wf_cnf_doc_suppress_c");
+        let d = typed_const(&mut bank, "wf_cnf_doc_suppress_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_left = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right_right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let right_conjunction =
+            bool_binary_with_code(&mut bank, and_code, &right_left, &right_right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut rendered,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+            );
+            wrapped
+                .cnf2_into_with_docs(
+                    &mut doc_context,
+                    &mut bank,
+                    &mut set,
+                    &fresh_vars,
+                    100,
+                    false,
+                )
+                .unwrap()
+        };
+
+        assert_eq!(result.cnf.clauses_generated, 2);
+        assert_eq!(
+            result.formula_write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert_eq!(
+            result.clause_write_results,
+            vec![
+                ProofDocWriteResult::suppressed(),
+                ProofDocWriteResult::suppressed()
+            ]
+        );
+        assert!(rendered.is_empty());
+        assert_eq!(wrapped.ident(), old_ident);
+        assert!(!wrapped.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+
+        let split_source = FormulaDerivationRef::new(old_ident);
+        for clause in set.iter() {
+            assert!(!clause.query_prop(CP_INPUT_FORMULA));
+            assert_eq!(
+                &clause.derivation().unwrap().as_slice()[..2],
+                &[
+                    DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                    DerivationEntry::FormulaParent(split_source),
                 ]
             );
         }
