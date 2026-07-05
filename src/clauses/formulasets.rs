@@ -930,6 +930,13 @@ pub struct FormulaSetIntroduceDefsResult {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetIntroduceDefsDocResult {
+    pub introduce: FormulaSetIntroduceDefsResult,
+    pub definition_write_results: Vec<ProofDocWriteResult>,
+    pub application_write_results: Vec<ProofDocWriteResult>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FormulaSetHigherOrderPreprocessResult {
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
@@ -960,6 +967,107 @@ struct FormulaProofDocContext<'a, W: fmt::Write> {
     output: &'a mut W,
     session: &'a mut ProofDocSession,
     render_options: FormulaProofDocRenderOptions,
+}
+
+fn doc_introduced_definition<W: fmt::Write>(
+    bank: &mut TermBank,
+    formula: &mut WrappedFormula,
+    doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+    result: &mut FormulaSetIntroduceDefsDocResult,
+) -> Result<(), Diagnostic> {
+    if let Some(context) = doc_context.as_mut() {
+        let (write_result, new_ident, new_properties) = {
+            let rendered = formula.proof_doc_formula_body_string(
+                bank,
+                context.render_options.full_terms,
+                context.render_options.problem_type,
+            )?;
+            let mut view = formula.proof_doc_view(&rendered);
+            let write_result = context.session.doc_formula_creation(
+                context.output,
+                &mut view,
+                FormulaCreationInference::IntroDef,
+                FormulaCreationParents::none(),
+                None,
+            )?;
+            (write_result, view.ident(), view.properties())
+        };
+        formula.ident = new_ident;
+        formula.set_properties(new_properties);
+        result.definition_write_results.push(write_result);
+    }
+    Ok(())
+}
+
+fn doc_split_equiv_definition<W: fmt::Write>(
+    bank: &mut TermBank,
+    neutral_formula: &WrappedFormula,
+    split_formula: &mut WrappedFormula,
+    doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+    result: &mut FormulaSetIntroduceDefsDocResult,
+) -> Result<(), Diagnostic> {
+    if let Some(context) = doc_context.as_mut() {
+        let (write_result, new_ident, new_properties) = {
+            let parent_rendered = neutral_formula.proof_doc_formula_body_string(
+                bank,
+                context.render_options.full_terms,
+                context.render_options.problem_type,
+            )?;
+            let parent_view = neutral_formula.proof_doc_view(&parent_rendered);
+            let rendered = split_formula.proof_doc_formula_body_string(
+                bank,
+                context.render_options.full_terms,
+                context.render_options.problem_type,
+            )?;
+            let mut view = split_formula.proof_doc_view(&rendered);
+            let write_result = context.session.doc_formula_creation(
+                context.output,
+                &mut view,
+                FormulaCreationInference::SplitEquiv,
+                FormulaCreationParents::unary(&parent_view),
+                None,
+            )?;
+            (write_result, view.ident(), view.properties())
+        };
+        split_formula.ident = new_ident;
+        split_formula.set_properties(new_properties);
+        result.definition_write_results.push(write_result);
+    }
+    Ok(())
+}
+
+fn doc_applied_definitions<W: fmt::Write>(
+    bank: &mut TermBank,
+    formula: &mut WrappedFormula,
+    defs_used: &[FormulaDerivationRef],
+    doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+    result: &mut FormulaSetIntroduceDefsDocResult,
+) -> Result<(), Diagnostic> {
+    if let Some(context) = doc_context.as_mut() {
+        let (write_result, new_ident, new_properties) = {
+            let def_ids = defs_used
+                .iter()
+                .map(|definition| definition.ident())
+                .collect::<Vec<_>>();
+            let rendered = formula.proof_doc_formula_body_string(
+                bank,
+                context.render_options.full_terms,
+                context.render_options.problem_type,
+            )?;
+            let mut view = formula.proof_doc_view(&rendered);
+            let write_result = context.session.doc_formula_intro_defs(
+                context.output,
+                &mut view,
+                &def_ids,
+                None,
+            )?;
+            (write_result, view.ident(), view.properties())
+        };
+        formula.ident = new_ident;
+        formula.set_properties(new_properties);
+        result.application_write_results.push(write_result);
+    }
+    Ok(())
 }
 
 fn intersimplify_definition_symbols(
@@ -3305,7 +3413,56 @@ impl FormulaSet {
         bank: &mut TermBank,
         limit: i64,
     ) -> Result<FormulaSetIntroduceDefsResult, Diagnostic> {
-        let mut result = FormulaSetIntroduceDefsResult::default();
+        Ok(self
+            .introduce_defs_impl::<String>(archive, bank, limit, None)?
+            .introduce)
+    }
+
+    /// Applies C `TFormulaSetIntroduceDefs` and emits its formula proof docs.
+    ///
+    /// This is the proof-documenting counterpart to [`Self::introduce_defs`].
+    /// It emits `DocFormulaCreationDefault` for introduced definitions and
+    /// split-equivalence wrappers, then `DocFormulaIntroDefsDefault` for
+    /// formulas rewritten by those definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a definition atom, definition formula, copied
+    /// formula, or proof-document render cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term, if formula cells are
+    /// malformed, or if definition metadata invariants are violated.
+    pub fn introduce_defs_with_docs<W: fmt::Write>(
+        &mut self,
+        archive: &mut Self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+        limit: i64,
+    ) -> Result<FormulaSetIntroduceDefsDocResult, Diagnostic> {
+        self.introduce_defs_impl(
+            archive,
+            bank,
+            limit,
+            Some(FormulaProofDocContext {
+                output,
+                session,
+                render_options,
+            }),
+        )
+    }
+
+    fn introduce_defs_impl<W: fmt::Write>(
+        &mut self,
+        archive: &mut Self,
+        bank: &mut TermBank,
+        limit: i64,
+        mut doc_context: Option<FormulaProofDocContext<'_, W>>,
+    ) -> Result<FormulaSetIntroduceDefsDocResult, Diagnostic> {
+        let mut result = FormulaSetIntroduceDefsDocResult::default();
         let mut defs = TFormulaDefinitions::new();
         let mut renamed_forms = Vec::new();
 
@@ -3324,7 +3481,29 @@ impl FormulaSet {
             }
         }
 
-        result.definitions_introduced = usize_to_i64(renamed_forms.len());
+        result.introduce.definitions_introduced = usize_to_i64(renamed_forms.len());
+        self.create_introduced_definitions(
+            archive,
+            bank,
+            &mut defs,
+            renamed_forms,
+            &mut doc_context,
+            &mut result,
+        )?;
+        self.apply_introduced_definitions(bank, &defs, &mut doc_context, &mut result)?;
+
+        Ok(result)
+    }
+
+    fn create_introduced_definitions<W: fmt::Write>(
+        &mut self,
+        archive: &mut Self,
+        bank: &mut TermBank,
+        defs: &mut TFormulaDefinitions,
+        renamed_forms: Vec<Term>,
+        doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+        result: &mut FormulaSetIntroduceDefsDocResult,
+    ) -> Result<(), Diagnostic> {
         for form in renamed_forms {
             let entry_no = form.entry_no();
             let polarity = tformula_decode_polarity(&form);
@@ -3335,13 +3514,14 @@ impl FormulaSet {
                 .clone();
             let neutral_def = tformula_create_def(bank, &def_atom, &form, 0)?;
             let mut neutral_wrapper = WrappedFormula::wt_formula_alloc(neutral_def);
+            doc_introduced_definition(bank, &mut neutral_wrapper, doc_context, result)?;
             let mut archived_wrapper = neutral_wrapper.flat_copy();
             let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
             archived_wrapper.push_formula_derivation(DC_INTRO_DEF, None, None);
             let archived_formula = archived_wrapper.formula().clone();
             archive.insert(archived_wrapper);
-            result.archived_definitions += 1;
-            result.formula_derivation_ops.push(DC_INTRO_DEF);
+            result.introduce.archived_definitions += 1;
+            result.introduce.formula_derivation_ops.push(DC_INTRO_DEF);
 
             if polarity == 0 {
                 let real_definition_id = neutral_wrapper.ident();
@@ -3350,38 +3530,55 @@ impl FormulaSet {
                     .set_definition_metadata(real_definition_id, archived_formula, archived_ref);
                 neutral_wrapper.push_formula_derivation(DC_FOF_QUOTE, Some(archived_ref), None);
                 self.insert(neutral_wrapper);
-                result.active_definitions_inserted += 1;
-                result.formula_derivation_ops.push(DC_FOF_QUOTE);
+                result.introduce.active_definitions_inserted += 1;
+                result.introduce.formula_derivation_ops.push(DC_FOF_QUOTE);
             } else {
                 let active_def = tformula_create_def(bank, &def_atom, &form, polarity)?;
                 let mut active_wrapper = WrappedFormula::wt_formula_alloc(active_def);
+                doc_split_equiv_definition(
+                    bank,
+                    &neutral_wrapper,
+                    &mut active_wrapper,
+                    doc_context,
+                    result,
+                )?;
                 let real_definition_id = active_wrapper.ident();
                 defs.get_mut(&entry_no)
                     .unwrap_or_else(|| panic!("definition {entry_no} disappeared"))
                     .set_definition_metadata(real_definition_id, archived_formula, archived_ref);
                 active_wrapper.push_formula_derivation(DC_SPLIT_EQUIV, Some(archived_ref), None);
                 self.insert(active_wrapper);
-                result.active_definitions_inserted += 1;
-                result.formula_derivation_ops.push(DC_SPLIT_EQUIV);
+                result.introduce.active_definitions_inserted += 1;
+                result.introduce.formula_derivation_ops.push(DC_SPLIT_EQUIV);
             }
         }
+        Ok(())
+    }
 
+    fn apply_introduced_definitions<W: fmt::Write>(
+        &mut self,
+        bank: &mut TermBank,
+        defs: &TFormulaDefinitions,
+        doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+        result: &mut FormulaSetIntroduceDefsDocResult,
+    ) -> Result<(), Diagnostic> {
         for formula in &mut self.formulas {
-            let defs_used = formula.apply_defs(bank, &defs)?;
+            let defs_used = formula.apply_defs(bank, defs)?;
             if !defs_used.is_empty() {
-                result.formulas_rewritten += 1;
+                doc_applied_definitions(bank, formula, &defs_used, doc_context, result)?;
+                result.introduce.formulas_rewritten += 1;
                 let used_count = usize_to_i64(defs_used.len());
-                result.definition_applications += used_count;
+                result.introduce.definition_applications += used_count;
                 for parent in &defs_used {
                     formula.push_formula_derivation(DC_APPLY_DEF, Some(*parent), None);
                 }
                 result
+                    .introduce
                     .formula_derivation_ops
                     .extend(std::iter::repeat_n(DC_APPLY_DEF, defs_used.len()));
             }
         }
-
-        Ok(result)
+        Ok(())
     }
 
     /// Drains this set into CNF clauses using the staged core of C
@@ -5568,6 +5765,163 @@ mod tests {
                 DerivationEntry::FormulaParent(archived_ref)
             ]
         );
+    }
+
+    #[test]
+    fn formula_set_introduce_defs_with_docs_prints_creation_and_apply_steps() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_intro_doc_first");
+        let second = typed_const(&mut bank, "set_intro_doc_second");
+        let third = typed_const(&mut bank, "set_intro_doc_third");
+        let fourth = typed_const(&mut bank, "set_intro_doc_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut archive = FormulaSet::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .introduce_defs_with_docs(
+                &mut archive,
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(result.introduce.definitions_introduced, 1);
+        assert_eq!(result.introduce.archived_definitions, 1);
+        assert_eq!(result.introduce.active_definitions_inserted, 1);
+        assert_eq!(result.introduce.formulas_rewritten, 1);
+        assert_eq!(result.introduce.definition_applications, 1);
+        assert_eq!(
+            result.introduce.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_SPLIT_EQUIV, DC_APPLY_DEF]
+        );
+        assert_eq!(
+            result.definition_write_results,
+            vec![
+                ProofDocWriteResult::printed(),
+                ProofDocWriteResult::printed()
+            ]
+        );
+        assert_eq!(
+            result.application_write_results,
+            vec![ProofDocWriteResult::printed()]
+        );
+
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas.len(), 2);
+        assert_eq!(archive.cardinality(), 1);
+        let archived = archive.iter().next().unwrap();
+        let archived_ref = FormulaDerivationRef::new(archived.ident());
+        assert_eq!(archived.ident(), 1);
+        assert_eq!(formulas[1].ident(), 2);
+        assert_eq!(formulas[0].ident(), 3);
+        assert_eq!(session.id_source.current_ident(), 3);
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_SPLIT_EQUIV),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
+
+        let archived_body = archived
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let active_body = formulas[1]
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let rewritten_body = formulas[0]
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(
+            rendered,
+            format!(
+                "     1 : :{archived_body} : introduced\n     2 : :{active_body} : split_equiv(1)\n     3 : :{rewritten_body} : apply_def({old_ident},1)\n"
+            )
+        );
+    }
+
+    #[test]
+    fn formula_set_introduce_defs_with_docs_suppresses_but_keeps_side_effects() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_intro_doc_suppress_first");
+        let second = typed_const(&mut bank, "set_intro_doc_suppress_second");
+        let third = typed_const(&mut bank, "set_intro_doc_suppress_third");
+        let fourth = typed_const(&mut bank, "set_intro_doc_suppress_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let wrapped = WrappedFormula::wt_formula_alloc(formula);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut archive = FormulaSet::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .introduce_defs_with_docs(
+                &mut archive,
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(result.introduce.definitions_introduced, 1);
+        assert_eq!(
+            result.definition_write_results,
+            vec![
+                ProofDocWriteResult::suppressed(),
+                ProofDocWriteResult::suppressed()
+            ]
+        );
+        assert_eq!(
+            result.application_write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        assert_eq!(session.id_source.current_ident(), 0);
+
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas[0].ident(), old_ident);
+        assert_eq!(
+            result.introduce.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_SPLIT_EQUIV, DC_APPLY_DEF]
+        );
+        assert_eq!(archive.cardinality(), 1);
     }
 
     #[test]
