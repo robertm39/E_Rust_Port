@@ -2904,8 +2904,7 @@ fn schedule_worker_should_drop_original_arg_and_next(arg: &str) -> bool {
 fn schedule_worker_should_drop_original_arg(arg: &str) -> bool {
     matches!(
         arg,
-        "-R" | "--resources-info"
-            | "--print-pid"
+        "--print-pid"
             | "--print-version"
             | "--output-file"
             | "--auto"
@@ -14085,6 +14084,7 @@ input_clause(c2,axiom,[++q(X)]).
             "--force-preproc-sched=false".to_owned(),
             "--select-strategy=Manual".to_owned(),
             "--resources-info".to_owned(),
+            "-R".to_owned(),
             "--print-pid".to_owned(),
             "--cpu-limit=300".to_owned(),
             "--soft-cpu-limit=290".to_owned(),
@@ -14100,7 +14100,14 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(
             filtered,
-            ["eprover", "--tstp-in", "problem.p"].map(str::to_owned)
+            [
+                "eprover",
+                "--resources-info",
+                "-R",
+                "--tstp-in",
+                "problem.p"
+            ]
+            .map(str::to_owned)
         );
     }
 

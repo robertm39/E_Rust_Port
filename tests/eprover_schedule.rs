@@ -2,11 +2,7 @@ use std::process::Command;
 
 #[test]
 fn auto_schedule_runs_worker_process_and_replays_winner() {
-    let path = std::env::current_dir()
-        .unwrap()
-        .join("target")
-        .join(format!("eprover-auto-schedule-{}.p", std::process::id()));
-    std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+    let path = write_false_problem("auto-schedule");
 
     let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
         .arg("--auto-schedule=1")
@@ -27,4 +23,40 @@ fn auto_schedule_runs_worker_process_and_replays_winner() {
     assert!(stderr.is_empty(), "{stderr}");
 
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
+    let path = write_false_problem("auto-schedule-resources");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        .arg("--auto-schedule=1")
+        .arg("--resources-info")
+        .arg("--tstp-in")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+    assert!(stdout.contains("% Preprocessing time       : "));
+    assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    assert!(
+        stdout.matches("% User time                : ").count() >= 2,
+        "{stdout}"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+
+    std::fs::remove_file(path).unwrap();
+}
+
+fn write_false_problem(name: &str) -> std::path::PathBuf {
+    let path = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!("eprover-{name}-{}.p", std::process::id()));
+    std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+    path
 }
