@@ -914,6 +914,122 @@ struct DefinitionSymbolMap {
     recognized_entry_ids: Vec<u64>,
 }
 
+struct FormulaProofDocContext<'a, W: fmt::Write> {
+    output: &'a mut W,
+    session: &'a mut ProofDocSession,
+    render_options: FormulaProofDocRenderOptions,
+}
+
+fn intersimplify_definition_symbols(
+    bank: &mut TermBank,
+    definitions: &mut BTreeMap<FunCode, WrappedFormula>,
+    result: &mut FormulaSetHigherOrderPreprocessDocResult,
+) -> Result<(), Diagnostic> {
+    let definition_codes = definitions.keys().copied().collect::<Vec<_>>();
+    for definition_code in definition_codes {
+        let (lhs, rhs) = {
+            let definition = definitions
+                .get(&definition_code)
+                .expect("definition code disappeared");
+            (
+                definition
+                    .formula()
+                    .argument(0)
+                    .expect("generated definition left side is uninitialized"),
+                definition
+                    .formula()
+                    .argument(1)
+                    .expect("generated definition right side is uninitialized"),
+            )
+        };
+        let mut used_defs = BTreeSet::new();
+        let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
+        let new_rhs =
+            do_rewrite_with_def_symbols(bank, &rhs, definitions, &mut used_defs, &mut max_steps)?;
+        if new_rhs != rhs {
+            let eqn_code = bank.signature().eqn_code();
+            let new_definition = tformula_fcode_alloc(bank, eqn_code, lhs, Some(new_rhs))?;
+            let parents = definition_parent_refs(definitions, &used_defs);
+            let definition = definitions
+                .get_mut(&definition_code)
+                .expect("definition code disappeared");
+            definition.set_formula(new_definition);
+            for parent in parents {
+                definition.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
+            }
+            result.preprocess.unfolded_definition_rhs_rewritten += 1;
+            result.preprocess.definition_symbol_applications += usize_to_i64(used_defs.len());
+            result
+                .preprocess
+                .formula_derivation_ops
+                .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_formulas_with_def_symbols<W: fmt::Write>(
+    formulas: &mut [WrappedFormula],
+    bank: &mut TermBank,
+    definitions: &BTreeMap<FunCode, WrappedFormula>,
+    recognized_entry_ids: &[u64],
+    doc_context: &mut Option<FormulaProofDocContext<'_, W>>,
+    result: &mut FormulaSetHigherOrderPreprocessDocResult,
+) -> Result<(), Diagnostic> {
+    let recognized = recognized_entry_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for formula in formulas {
+        if recognized.contains(&formula.entry_id()) {
+            continue;
+        }
+        let mut used_defs = BTreeSet::new();
+        let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
+        let rewritten = do_rewrite_with_def_symbols(
+            bank,
+            formula.formula(),
+            definitions,
+            &mut used_defs,
+            &mut max_steps,
+        )?;
+        if rewritten != *formula.formula() {
+            let rewritten = unencode_eqns(bank, &rewritten)?;
+            formula.set_formula(rewritten);
+            if let Some(context) = doc_context.as_mut() {
+                let (write_result, new_ident, new_properties) = {
+                    let rendered = formula.proof_doc_formula_body_string(
+                        bank,
+                        context.render_options.full_terms,
+                        context.render_options.problem_type,
+                    )?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = context.session.doc_formula_modification(
+                        context.output,
+                        &mut view,
+                        FormulaModificationInference::Simplification,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                formula.ident = new_ident;
+                formula.set_properties(new_properties);
+                result.write_results.push(write_result);
+            }
+            for parent in definition_parent_refs(definitions, &used_defs) {
+                formula.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
+            }
+            result.preprocess.formulas_def_symbols_unfolded += 1;
+            result.preprocess.definition_symbol_applications += usize_to_i64(used_defs.len());
+            result
+                .preprocess
+                .formula_derivation_ops
+                .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ClauseSetLiftLambdasResult {
     pub clauses_changed: i64,
@@ -2806,7 +2922,68 @@ impl FormulaSet {
         problem_type: ProblemType,
         unfold_only_forms: bool,
     ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
-        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        Ok(self
+            .unfold_def_symbols_impl::<String>(
+                archive,
+                bank,
+                problem_type,
+                unfold_only_forms,
+                None,
+            )?
+            .preprocess)
+    }
+
+    /// Applies C `TFormulaSetUnfoldDefSymbols` and emits its proof-document
+    /// simplification steps for rewritten source formulas.
+    ///
+    /// This is the proof-documenting counterpart to
+    /// [`Self::unfold_def_symbols`]. It mirrors the C phase boundary where
+    /// non-definition source formulas rewritten by unfolded definitions receive
+    /// `DocFormulaModificationDefault(..., inf_fof_simpl)` before their
+    /// `DCApplyDef` parent entries are pushed. Generated definition
+    /// intersimplification remains derivation-only, matching C.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if definition-symbol unfolding, formula rendering,
+    /// or proof-document writing fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or malformed term
+    /// arguments.
+    pub fn unfold_def_symbols_with_docs<W: fmt::Write>(
+        &mut self,
+        archive: &mut Self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+        unfold_only_forms: bool,
+    ) -> Result<FormulaSetHigherOrderPreprocessDocResult, Diagnostic> {
+        let problem_type = render_options.problem_type;
+        self.unfold_def_symbols_impl(
+            archive,
+            bank,
+            problem_type,
+            unfold_only_forms,
+            Some(FormulaProofDocContext {
+                output,
+                session,
+                render_options,
+            }),
+        )
+    }
+
+    fn unfold_def_symbols_impl<W: fmt::Write>(
+        &mut self,
+        archive: &mut Self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        unfold_only_forms: bool,
+        mut doc_context: Option<FormulaProofDocContext<'_, W>>,
+    ) -> Result<FormulaSetHigherOrderPreprocessDocResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessDocResult::default();
         if problem_type != ProblemType::HigherOrder {
             return Ok(result);
         }
@@ -2817,94 +2994,29 @@ impl FormulaSet {
             recognized_entry_ids,
         } = create_definition_symbol_map(self, bank, unfold_only_forms)?;
         result
+            .preprocess
             .formula_derivation_ops
             .extend(std::iter::repeat_n(DC_FOF_QUOTE, definitions.len()));
 
-        let definition_codes = definitions.keys().copied().collect::<Vec<_>>();
-        for definition_code in definition_codes {
-            let (lhs, rhs) = {
-                let definition = definitions
-                    .get(&definition_code)
-                    .expect("definition code disappeared");
-                (
-                    definition
-                        .formula()
-                        .argument(0)
-                        .expect("generated definition left side is uninitialized"),
-                    definition
-                        .formula()
-                        .argument(1)
-                        .expect("generated definition right side is uninitialized"),
-                )
-            };
-            let mut used_defs = BTreeSet::new();
-            let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
-            let new_rhs = do_rewrite_with_def_symbols(
-                bank,
-                &rhs,
-                &definitions,
-                &mut used_defs,
-                &mut max_steps,
-            )?;
-            if new_rhs != rhs {
-                let eqn_code = bank.signature().eqn_code();
-                let new_definition = tformula_fcode_alloc(bank, eqn_code, lhs, Some(new_rhs))?;
-                let parents = definition_parent_refs(&definitions, &used_defs);
-                let definition = definitions
-                    .get_mut(&definition_code)
-                    .expect("definition code disappeared");
-                definition.set_formula(new_definition);
-                for parent in parents {
-                    definition.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
-                }
-                result.unfolded_definition_rhs_rewritten += 1;
-                result.definition_symbol_applications += usize_to_i64(used_defs.len());
-                result
-                    .formula_derivation_ops
-                    .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
-            }
-        }
-
-        let recognized = recognized_entry_ids
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        for formula in &mut self.formulas {
-            if recognized.contains(&formula.entry_id()) {
-                continue;
-            }
-            let mut used_defs = BTreeSet::new();
-            let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
-            let rewritten = do_rewrite_with_def_symbols(
-                bank,
-                formula.formula(),
-                &definitions,
-                &mut used_defs,
-                &mut max_steps,
-            )?;
-            if rewritten != *formula.formula() {
-                let rewritten = unencode_eqns(bank, &rewritten)?;
-                formula.set_formula(rewritten);
-                for parent in definition_parent_refs(&definitions, &used_defs) {
-                    formula.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
-                }
-                result.formulas_def_symbols_unfolded += 1;
-                result.definition_symbol_applications += usize_to_i64(used_defs.len());
-                result
-                    .formula_derivation_ops
-                    .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
-            }
-        }
+        intersimplify_definition_symbols(bank, &mut definitions, &mut result)?;
+        rewrite_formulas_with_def_symbols(
+            &mut self.formulas,
+            bank,
+            &definitions,
+            &recognized_entry_ids,
+            &mut doc_context,
+            &mut result,
+        )?;
 
         for definition in definitions.into_values() {
             archive.insert(definition);
-            result.unfolded_definitions_archived += 1;
+            result.preprocess.unfolded_definitions_archived += 1;
         }
 
         for entry_id in recognized_entry_ids {
             if let Some(original) = self.extract_entry(entry_id) {
                 archive.insert(original);
-                result.unfolded_original_definitions_archived += 1;
+                result.preprocess.unfolded_original_definitions_archived += 1;
             }
         }
 
@@ -3780,6 +3892,26 @@ mod tests {
             tformula_quantor_alloc(bank, SIG_NAMED_LAMBDA_CODE, &x, &left_body).unwrap();
         let eqn_code = bank.signature_mut().get_eqn_code(true);
         bool_binary_with_code(bank, eqn_code, &left_lambda, &g)
+    }
+
+    fn unfolding_definition_fixture(
+        bank: &mut TermBank,
+        prefix: &str,
+    ) -> (WrappedFormula, Term, Term) {
+        let x = typed_var(bank, -711);
+        let a = typed_const(bank, &format!("{prefix}_a"));
+        let p_x = typed_unary_predicate(bank, &format!("{prefix}_p"), &x);
+        let q_x = typed_unary_predicate(bank, &format!("{prefix}_q"), &x);
+        let p_a = typed_unary_predicate(bank, &format!("{prefix}_p"), &a);
+        let q_a = typed_unary_predicate(bank, &format!("{prefix}_q"), &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equiv_code = bank.signature().equiv_code();
+        let true_term = bank.true_term().clone();
+        let lhs_formula = bool_binary_with_code(bank, eqn_code, &p_x, &true_term);
+        let definition_formula = bool_binary_with_code(bank, equiv_code, &lhs_formula, &q_x);
+        let mut definition = WrappedFormula::wt_formula_alloc(definition_formula);
+        definition.set_prop(CP_IS_LAMBDA_DEF);
+        (definition, p_a, q_a)
     }
 
     fn c_complex_bool_shape(bank: &mut TermBank, name: &str) -> Term {
@@ -6033,6 +6165,110 @@ mod tests {
             &definition_formula
         );
         assert_eq!(original_definition.derivation_entries(), &[]);
+    }
+
+    #[test]
+    fn formula_set_unfold_def_symbols_with_docs_prints_changed_formula() {
+        let mut bank = test_bank();
+        let (definition, target_formula, expected_formula) =
+            unfolding_definition_fixture(&mut bank, "set_unfold_def_doc");
+        let mut target = WrappedFormula::wt_formula_alloc(target_formula);
+        target.set_prop(CP_INPUT_FORMULA);
+        let old_ident = target.ident();
+        let mut set = FormulaSet::new();
+        set.insert(definition);
+        set.insert(target);
+        let mut archive = FormulaSet::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .unfold_def_symbols_with_docs(
+                &mut archive,
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_def_symbols_unfolded, 1);
+        assert_eq!(result.preprocess.unfolded_definitions_archived, 1);
+        assert_eq!(result.preprocess.unfolded_original_definitions_archived, 1);
+        assert_eq!(result.preprocess.definition_symbol_applications, 1);
+        assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
+        let rewritten = set.iter().next().unwrap();
+        let rewritten_body = rewritten
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(
+            rendered,
+            format!("     1 : :{rewritten_body} : fof_simplification({old_ident})\n")
+        );
+        assert_eq!(rewritten.formula(), &expected_formula);
+        assert_eq!(rewritten.ident(), 1);
+        assert!(!rewritten.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 1);
+        let generated_definition = archive.iter().next().unwrap();
+        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
+        assert_eq!(
+            rewritten.derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(generated_ref)
+            ]
+        );
+    }
+
+    #[test]
+    fn formula_set_unfold_def_symbols_with_docs_suppresses_but_keeps_property_side_effects() {
+        let mut bank = test_bank();
+        let (definition, target_formula, expected_formula) =
+            unfolding_definition_fixture(&mut bank, "set_unfold_def_doc_suppress");
+        let mut target = WrappedFormula::wt_formula_alloc(target_formula);
+        target.set_prop(CP_INPUT_FORMULA);
+        let old_ident = target.ident();
+        let mut set = FormulaSet::new();
+        set.insert(definition);
+        set.insert(target);
+        let mut archive = FormulaSet::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .unfold_def_symbols_with_docs(
+                &mut archive,
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_def_symbols_unfolded, 1);
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        let rewritten = set.iter().next().unwrap();
+        assert_eq!(rewritten.formula(), &expected_formula);
+        assert_eq!(rewritten.ident(), old_ident);
+        assert!(!rewritten.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+        let generated_definition = archive.iter().next().unwrap();
+        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
+        assert_eq!(
+            rewritten.derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(generated_ref)
+            ]
+        );
     }
 
     #[test]
