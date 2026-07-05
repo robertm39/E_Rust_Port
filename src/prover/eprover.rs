@@ -138,7 +138,6 @@ use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_app_encode, term_collect_variables, term_standard_weight};
 use crate::terms::termtypes::{term_identity_id, DerefType, RewriteLevel, Term};
-use crate::terms::typebanks::TypeBank;
 
 const C_INT_MAX: i64 = i32::MAX as i64;
 const DEFAULT_CLASSIFICATION_TIMEOUT_PERCENTAGE: i64 = 2;
@@ -4737,8 +4736,7 @@ fn run_syntax_only(
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     if config.flags.contains(EProverFlag::PrintFormulas) {
-        let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
-        return run_syntax_only_print_formulas(output, config, &mut bank);
+        return run_syntax_only_print_formulas(output, config);
     }
 
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
@@ -4749,48 +4747,14 @@ fn run_syntax_only(
 fn run_syntax_only_print_formulas(
     output: &mut impl Write,
     config: &mut EProverConfig,
-    bank: &mut TermBank,
 ) -> Result<(), EProverError> {
-    let mut formulas = FormulaSet::new();
-    let mut watchlist = ClauseSet::new();
-    let mut print_problem_type = ProblemType::FirstOrder;
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let print_problem_type = parse_input_files_into_formula_owners(config, &mut state)?;
 
-    config.flags.clear(EProverFlag::FormulaConjectureSeen);
-    let mut input_owner_seen = false;
-    let files = config.files.clone();
-    for file in &files {
-        let parsed_file = parse_formula_file(
-            file,
-            config.parse_format,
-            FormulaPreprocessing::parse_only_from_config(config),
-            bank,
-            &mut formulas,
-            &mut watchlist,
-        )?;
-        if parsed_file.formula_conjecture_seen {
-            config.flags.set(EProverFlag::FormulaConjectureSeen);
-        }
-        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
-        input_owner_seen |= parsed_file.input_owner_seen;
-        print_problem_type = combine_problem_types(print_problem_type, parsed_file.problem_type);
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
-            return Err(Diagnostic::new(
-                ErrorCode::INPUT_SEMANTIC_ERROR,
-                format!("Input file {file} did not contain any clauses"),
-            )
-            .into());
-        }
-    }
-
-    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
-        return Err(Diagnostic::new(
-            ErrorCode::INPUT_SEMANTIC_ERROR,
-            "Input did not contain any clauses",
-        )
-        .into());
-    }
-
-    let rendered = formulas.pretty_print_tstp_string(bank, true, print_problem_type, true)?;
+    let rendered = {
+        let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
+        formulas.pretty_print_tstp_string(bank, true, print_problem_type, true)?
+    };
     output.write_all(rendered.as_bytes())?;
     Ok(())
 }
@@ -4854,10 +4818,11 @@ fn run_app_encode<W: Write + ?Sized>(
     Ok(())
 }
 
+#[cfg(test)]
 fn temporary_executable_term_bank(
     free_symbol_properties: FunctionProperties,
 ) -> Result<TermBank, Diagnostic> {
-    let mut signature = Signature::new(TypeBank::new());
+    let mut signature = Signature::new(crate::terms::typebanks::TypeBank::new());
     signature.insert_internal_codes()?;
     signature.remove_distinct_props(free_symbol_properties);
     TermBank::new(signature)
@@ -6657,6 +6622,56 @@ fn parse_input_files_into_axioms(
     }
 
     Ok(parsed_total)
+}
+
+fn parse_input_files_into_formula_owners(
+    config: &mut EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<ProblemType, EProverError> {
+    let mut input_owner_seen = false;
+    let mut parsed_problem_type = ProblemType::FirstOrder;
+    config.flags.clear(EProverFlag::FormulaConjectureSeen);
+    let files = config.files.clone();
+    for file in &files {
+        let mut parsed_watchlist = ClauseSet::new();
+        let parsed_file = {
+            let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
+            parse_formula_file(
+                file,
+                config.parse_format,
+                FormulaPreprocessing::parse_only_from_config(config),
+                bank,
+                formulas,
+                &mut parsed_watchlist,
+            )?
+        };
+        if parsed_file.formula_conjecture_seen {
+            config.flags.set(EProverFlag::FormulaConjectureSeen);
+        }
+        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
+        input_owner_seen |= parsed_file.input_owner_seen;
+        parsed_problem_type = combine_problem_types(parsed_problem_type, parsed_file.problem_type);
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
+            return Err(Diagnostic::new(
+                ErrorCode::INPUT_SEMANTIC_ERROR,
+                format!("Input file {file} did not contain any clauses"),
+            )
+            .into());
+        }
+    }
+
+    reset_problem_type();
+    set_problem_type(parsed_problem_type)?;
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
+        return Err(Diagnostic::new(
+            ErrorCode::INPUT_SEMANTIC_ERROR,
+            "Input did not contain any clauses",
+        )
+        .into());
+    }
+
+    Ok(parsed_problem_type)
 }
 
 fn write_preprocessing_config_debug_line<W: Write + ?Sized>(
@@ -13736,21 +13751,21 @@ mod tests {
         bundled_picosat_library_for_executable, core_limit_failure_messages, cpu_rlimit_to_apply,
         fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
         order_parms_from_config, parse_app_encode_file,
-        parse_clause_scanner_into_sets_with_options, preprocessing_config_debug_line,
-        process_options, proof_control_from_config, proof_object_list_display_clauses,
-        proof_search_global_indices, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        runtime_picosat_library_from_env, schedule_heuristic_selection,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_statistics,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
-        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
+        preprocessing_config_debug_line, process_options, proof_control_from_config,
+        proof_object_list_display_clauses, proof_search_global_indices,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
+        schedule_heuristic_selection, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_proof_statistics, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
+        LiteralComparison, ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag,
+        PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -18400,6 +18415,39 @@ input_clause(c2,axiom,[++q(X)]).
                 .and_then(|derivation| derivation.as_slice().first()),
             Some(&DerivationEntry::Operation(DC_CNF_QUOTE))
         );
+    }
+
+    #[test]
+    fn parse_input_files_into_formula_owners_routes_print_input_through_f_axioms() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-proof-state-owners");
+        std::fs::write(
+            &path,
+            "cnf(clause_owner, axiom, p(a)).\nfof(formula_owner, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut config = EProverConfig {
+            files: vec![path_arg],
+            ..EProverConfig::default()
+        };
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        let problem_type = parse_input_files_into_formula_owners(&mut config, &mut state).unwrap();
+
+        assert_eq!(problem_type, ProblemType::FirstOrder);
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 2);
+        let rendered = {
+            let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
+            formulas
+                .pretty_print_tstp_string(bank, true, problem_type, true)
+                .unwrap()
+        };
+        assert!(rendered.contains("clause_owner"));
+        assert!(rendered.contains("p(a)"));
+        assert!(rendered.contains("fof(formula_owner, axiom, q(a))"));
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
