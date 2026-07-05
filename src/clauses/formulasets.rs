@@ -2539,8 +2539,7 @@ impl FormulaSet {
     ///
     /// This is gated to higher-order problems, matching the `FormulaSetCNF2`
     /// `ENABLE_LFHO` branch. Changed formulas receive `DCFofSimplify` stack
-    /// entries and this also returns the opcodes as result metadata; proof
-    /// output remains deferred.
+    /// entries and this also returns the opcodes as result metadata.
     ///
     /// # Errors
     ///
@@ -2566,6 +2565,75 @@ impl FormulaSet {
                 result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
             }
         }
+        Ok(result)
+    }
+
+    /// Applies C `TFormulaSetNamedToDBLambdas` and emits its proof-document
+    /// simplification steps.
+    ///
+    /// This is the proof-documenting counterpart to
+    /// [`Self::named_to_db_lambdas`]. Changed formulas keep the staged
+    /// `DCFofSimplify` derivation entry and also receive the proof-document
+    /// id/property side effects that C applies through
+    /// `DocFormulaModificationDefault(..., inf_fof_simpl)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if named-lambda conversion, beta normalization,
+    /// formula rendering, or proof-document writing fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or a malformed
+    /// named-lambda payload.
+    pub fn named_to_db_lambdas_with_docs<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+    ) -> Result<FormulaSetHigherOrderPreprocessDocResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessDocResult::default();
+        if render_options.problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+
+        for index in 0..self.formulas.len() {
+            let changed = {
+                let formula = &mut self.formulas[index];
+                formula.named_to_db_lambdas(bank)?
+            };
+            if changed {
+                result.preprocess.formulas_named_to_db += 1;
+                result
+                    .preprocess
+                    .formula_derivation_ops
+                    .push(DC_FOF_SIMPLIFY);
+                let (write_result, new_ident, new_properties) = {
+                    let formula = &self.formulas[index];
+                    let rendered = formula.proof_doc_formula_body_string(
+                        bank,
+                        render_options.full_terms,
+                        render_options.problem_type,
+                    )?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = session.doc_formula_modification(
+                        output,
+                        &mut view,
+                        FormulaModificationInference::Simplification,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                {
+                    let formula = &mut self.formulas[index];
+                    formula.ident = new_ident;
+                    formula.set_properties(new_properties);
+                }
+                result.write_results.push(write_result);
+            }
+        }
+
         Ok(result)
     }
 
@@ -3697,6 +3765,19 @@ mod tests {
         let db0 = bank.request_db_var(&i_type, 0);
         let left_body = lambda_apply_terms(bank, &f, std::slice::from_ref(&db0)).unwrap();
         let left_lambda = close_with_db_var(bank, &i_type, &left_body).unwrap();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        bool_binary_with_code(bank, eqn_code, &left_lambda, &g)
+    }
+
+    fn named_lambda_equality(bank: &mut TermBank, prefix: &str) -> Term {
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(bank, &format!("{prefix}_f"), &unary_type);
+        let g = typed_const_with_type(bank, &format!("{prefix}_g"), &unary_type);
+        let x = typed_var(bank, -509);
+        let left_body = lambda_apply_terms(bank, &f, std::slice::from_ref(&x)).unwrap();
+        let left_lambda =
+            tformula_quantor_alloc(bank, SIG_NAMED_LAMBDA_CODE, &x, &left_body).unwrap();
         let eqn_code = bank.signature_mut().get_eqn_code(true);
         bool_binary_with_code(bank, eqn_code, &left_lambda, &g)
     }
@@ -5246,6 +5327,106 @@ mod tests {
         assert_eq!(matrix.f_code(), eqn_code);
         assert!(matrix.argument(0).unwrap().is_db_var());
         assert_eq!(matrix.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn formula_set_named_to_db_lambdas_with_docs_prints_changed_formula() {
+        let mut bank = test_bank();
+        let named_lambda_formula = named_lambda_equality(&mut bank, "set_named_db_doc");
+        let mut wrapped = WrappedFormula::wt_formula_alloc(named_lambda_formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .named_to_db_lambdas_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_named_to_db, 1);
+        assert_eq!(
+            result.preprocess.formula_derivation_ops,
+            vec![DC_FOF_SIMPLIFY]
+        );
+        assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
+        let converted_wrapper = set.iter().next().unwrap();
+        let converted_body = converted_wrapper
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(
+            rendered,
+            format!("     1 : :{converted_body} : fof_simplification({old_ident})\n")
+        );
+        assert_eq!(converted_wrapper.ident(), 1);
+        assert!(!converted_wrapper.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            converted_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(
+            converted_wrapper.formula().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            converted_wrapper.formula().argument(0).unwrap().f_code(),
+            SIG_DB_LAMBDA_CODE
+        );
+        assert_eq!(session.id_source.current_ident(), 1);
+    }
+
+    #[test]
+    fn formula_set_named_to_db_lambdas_with_docs_suppresses_but_keeps_property_side_effects() {
+        let mut bank = test_bank();
+        let named_lambda_formula = named_lambda_equality(&mut bank, "set_named_db_doc_suppress");
+        let mut wrapped = WrappedFormula::wt_formula_alloc(named_lambda_formula);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .named_to_db_lambdas_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_named_to_db, 1);
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        let converted_wrapper = set.iter().next().unwrap();
+        assert_eq!(converted_wrapper.ident(), old_ident);
+        assert!(!converted_wrapper.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            converted_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(
+            converted_wrapper.formula().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            converted_wrapper.formula().argument(0).unwrap().f_code(),
+            SIG_DB_LAMBDA_CODE
+        );
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
