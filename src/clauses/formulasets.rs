@@ -903,6 +903,12 @@ pub struct FormulaSetHigherOrderPreprocessResult {
     pub formula_derivation_ops: Vec<i64>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetHigherOrderPreprocessDocResult {
+    pub preprocess: FormulaSetHigherOrderPreprocessResult,
+    pub write_results: Vec<ProofDocWriteResult>,
+}
+
 struct DefinitionSymbolMap {
     definitions: BTreeMap<FunCode, WrappedFormula>,
     recognized_entry_ids: Vec<u64>,
@@ -2868,6 +2874,75 @@ impl FormulaSet {
                 result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
             }
         }
+        Ok(result)
+    }
+
+    /// Applies C `TFormulaSetLambdaNormalize` and emits its proof-document
+    /// simplification steps.
+    ///
+    /// This is the proof-documenting counterpart to
+    /// [`Self::lambda_normalize_forall`]. Changed formulas keep the staged
+    /// `DCFofSimplify` derivation entry and also receive the proof-document
+    /// id/property side effects that C applies through
+    /// `DocFormulaModificationDefault(..., inf_fof_simpl)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if beta normalization, lambda-to-forall
+    /// conversion, formula rendering, or proof-document writing fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or a malformed
+    /// lambda/formula payload.
+    pub fn lambda_normalize_forall_with_docs<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        render_options: FormulaProofDocRenderOptions,
+    ) -> Result<FormulaSetHigherOrderPreprocessDocResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessDocResult::default();
+        if render_options.problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+
+        for index in 0..self.formulas.len() {
+            let changed = {
+                let formula = &mut self.formulas[index];
+                formula.lambda_normalize_forall(bank)?
+            };
+            if changed {
+                result.preprocess.formulas_lambda_normalized += 1;
+                result
+                    .preprocess
+                    .formula_derivation_ops
+                    .push(DC_FOF_SIMPLIFY);
+                let (write_result, new_ident, new_properties) = {
+                    let formula = &self.formulas[index];
+                    let rendered = formula.proof_doc_formula_body_string(
+                        bank,
+                        render_options.full_terms,
+                        render_options.problem_type,
+                    )?;
+                    let mut view = formula.proof_doc_view(&rendered);
+                    let write_result = session.doc_formula_modification(
+                        output,
+                        &mut view,
+                        FormulaModificationInference::Simplification,
+                        None,
+                    )?;
+                    (write_result, view.ident(), view.properties())
+                };
+                {
+                    let formula = &mut self.formulas[index];
+                    formula.ident = new_ident;
+                    formula.set_properties(new_properties);
+                }
+                result.write_results.push(write_result);
+            }
+        }
+
         Ok(result)
     }
 
@@ -5363,6 +5438,90 @@ mod tests {
         let normalized = normalized_wrapper.formula();
         assert_eq!(normalized.f_code(), bank.signature().qall_code());
         assert_eq!(normalized.argument(1).unwrap().f_code(), eqn_code);
+    }
+
+    #[test]
+    fn formula_set_lambda_normalize_forall_with_docs_prints_changed_formula() {
+        let mut bank = test_bank();
+        let formula = db_lambda_equality(&mut bank, "set_lambda_norm_doc");
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .lambda_normalize_forall_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_lambda_normalized, 1);
+        assert_eq!(
+            result.preprocess.formula_derivation_ops,
+            vec![DC_FOF_SIMPLIFY]
+        );
+        assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
+        let normalized_wrapper = set.iter().next().unwrap();
+        let normalized_body = normalized_wrapper
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(
+            rendered,
+            format!("     1 : :{normalized_body} : fof_simplification({old_ident})\n")
+        );
+        assert_eq!(normalized_wrapper.ident(), 1);
+        assert!(!normalized_wrapper.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            normalized_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(session.id_source.current_ident(), 1);
+    }
+
+    #[test]
+    fn formula_set_lambda_normalize_forall_with_docs_suppresses_but_keeps_property_side_effects() {
+        let mut bank = test_bank();
+        let formula = db_lambda_equality(&mut bank, "set_lambda_norm_doc_suppress");
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::HigherOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .lambda_normalize_forall_with_docs(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert_eq!(result.preprocess.formulas_lambda_normalized, 1);
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        let normalized_wrapper = set.iter().next().unwrap();
+        assert_eq!(normalized_wrapper.ident(), old_ident);
+        assert!(!normalized_wrapper.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            normalized_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
