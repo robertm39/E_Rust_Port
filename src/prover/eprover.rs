@@ -5749,15 +5749,14 @@ fn run_prune_only<W: Write + ?Sized>(
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let _parsed_ax_no = parse_input_files_into_axioms(
-        config,
-        &mut state,
-        ExecutableFormulaInputDestination::ClauseBridge,
-    )?;
+    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_preprocessing_config_debug_line(output, config)?;
     load_configured_watchlist_source(config, &mut state)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
+    let formula_params = heuristic_parms_from_config(config)?;
+    let formula_cnf_result =
+        clausify_formula_axioms_with_docs(output, config, &mut state, &formula_params, 1)?;
     let preproc_result = apply_clause_set_preprocessing_with_docs(
         output,
         config,
@@ -5767,7 +5766,7 @@ fn run_prune_only<W: Write + ?Sized>(
             replace_injectivity_defs: config.search.inference.higher_order.replace_inj_defs,
             eqdef_incrlimit: config.preprocessing.eqdef_incrlimit,
             eqdef_maxclauses: config.preprocessing.eqdef_maxclauses,
-            start_ident: 1,
+            start_ident: formula_cnf_result.next_doc_ident,
         },
     )?;
     let choice_max_depth = i32_from_i64_config(
@@ -5831,11 +5830,7 @@ fn run_proof_search<W: Write + ?Sized>(
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let parsed_ax_no = parse_input_files_into_axioms(
-        config,
-        &mut state,
-        ExecutableFormulaInputDestination::FormulaOwners,
-    )?;
+    let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
     let auto_context =
         apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
@@ -6602,16 +6597,9 @@ fn filter_saturated_unprocessed(
         .map_err(Into::into)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExecutableFormulaInputDestination {
-    ClauseBridge,
-    FormulaOwners,
-}
-
 fn parse_input_files_into_axioms(
     config: &mut EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-    formula_destination: ExecutableFormulaInputDestination,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
     let mut input_owner_seen = false;
@@ -6621,41 +6609,22 @@ fn parse_input_files_into_axioms(
     for file in &files {
         let before = state.axiom_count();
         let mut parsed_watchlist = ClauseSet::new();
-        let (parsed_file, parsed_count) = match formula_destination {
-            ExecutableFormulaInputDestination::ClauseBridge => {
-                let mut parsed_axioms = ClauseSet::new();
-                let parsed_file = parse_clause_file(
-                    file,
-                    config.parse_format,
-                    FormulaPreprocessing::clause_bridge_from_config(config),
-                    state.terms_mut(),
-                    &mut parsed_axioms,
-                    &mut parsed_watchlist,
-                )?;
-                let parsed_count = i64::try_from(parsed_axioms.len()).unwrap_or(i64::MAX);
-                state.axioms_mut().insert_set(&mut parsed_axioms);
-                (parsed_file, parsed_count)
-            }
-            ExecutableFormulaInputDestination::FormulaOwners => {
-                let mut parsed_axioms = ClauseSet::new();
-                let mut parsed_formulas = FormulaSet::new();
-                let parsed_file = parse_clause_formula_file(
-                    file,
-                    config.parse_format,
-                    FormulaPreprocessing::parse_only_from_config(config),
-                    state.terms_mut(),
-                    &mut parsed_axioms,
-                    &mut parsed_formulas,
-                    &mut parsed_watchlist,
-                )?;
-                let parsed_count = i64::try_from(parsed_axioms.len())
-                    .unwrap_or(i64::MAX)
-                    .saturating_add(parsed_formulas.cardinality());
-                state.axioms_mut().insert_set(&mut parsed_axioms);
-                state.f_axioms_mut().insert_set(&mut parsed_formulas);
-                (parsed_file, parsed_count)
-            }
-        };
+        let mut parsed_axioms = ClauseSet::new();
+        let mut parsed_formulas = FormulaSet::new();
+        let parsed_file = parse_clause_formula_file(
+            file,
+            config.parse_format,
+            FormulaPreprocessing::parse_only_from_config(config),
+            state.terms_mut(),
+            &mut parsed_axioms,
+            &mut parsed_formulas,
+            &mut parsed_watchlist,
+        )?;
+        let parsed_count = i64::try_from(parsed_axioms.len())
+            .unwrap_or(i64::MAX)
+            .saturating_add(parsed_formulas.cardinality());
+        state.axioms_mut().insert_set(&mut parsed_axioms);
+        state.f_axioms_mut().insert_set(&mut parsed_formulas);
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
@@ -9977,15 +9946,6 @@ impl FormulaPreprocessing {
 
     fn parse_only_from_config(config: &EProverConfig) -> Self {
         Self::parse_only(config.preprocessing.fool_unroll)
-    }
-
-    fn clause_bridge_from_config(config: &EProverConfig) -> Self {
-        Self {
-            annotate_questions: true,
-            add_answer_literals: config.answer_limit > 0,
-            conjectures_are_questions: config.flags.contains(EProverFlag::ConjecturesAreQuestions),
-            fool_unroll: config.preprocessing.fool_unroll,
-        }
     }
 
     fn fool_unroll_enabled(self) -> bool {
@@ -18986,9 +18946,9 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_prune_only_accepts_supported_formula_bridge_input() {
+    fn run_prune_only_routes_supported_formula_owners_through_cnf() {
         let _guard = global_state_lock();
-        let path = temp_path("prune-formula-bridge");
+        let path = temp_path("prune-formula-owners");
         std::fs::write(
             &path,
             "fof(rule, axiom, (p(a)=>q(a))).\n\
@@ -19010,13 +18970,22 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
-        assert!(printed.contains(&format!("axiom, (p(a)), file('{path_arg}', fact)).\n")));
         assert!(printed.contains(&format!(
-            "axiom, (q(a)|~p(a)), file('{path_arg}', rule)).\n"
+            "fof(c_0_1, axiom, (p(a)=>q(a)), file('{path_arg}', rule)).\n"
         )));
         assert!(printed.contains(&format!(
-            "negated_conjecture, (~q(a)), file('{path_arg}', goal)).\n"
+            "fof(c_0_2, axiom, p(a), file('{path_arg}', fact)).\n"
         )));
+        assert!(printed.contains(&format!(
+            "fof(c_0_3, conjecture, q(a), file('{path_arg}', goal)).\n"
+        )));
+        assert!(printed.contains("inference(assume_negation, [status(cth)],[c_0_3])"));
+        assert!(printed.contains("inference(fof_nnf, [status(thm)],[c_0_1])"));
+        assert!(printed.contains("inference(split_conjunct, [status(thm)],[c_0_7])"));
+        assert!(printed.contains("cnf(c_0_8, plain, (q(a)|~p(a))"));
+        assert!(printed.contains("cnf(c_0_9, plain, (p(a))"));
+        assert!(printed.contains("cnf(c_0_11, negated_conjecture, (~q(a))"));
+        assert!(!printed.contains(&format!("file('{path_arg}', rule)).\ncnf")));
         assert!(printed.ends_with("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
