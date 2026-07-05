@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
@@ -83,6 +84,10 @@ use crate::clauses::unfold_defs::{
     clause_set_preprocess, clause_set_unfold_eq_def_normalize,
     clause_set_unfold_eq_def_normalize_with_docs,
 };
+use crate::control::gproc_ctrl::EGPCtrl;
+use crate::control::scheduling::{
+    execute_schedule_multi_core, ScheduleExecutionConfig, ScheduleExecutionOutcome,
+};
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
@@ -146,6 +151,7 @@ const DEFAULT_FORMULA_DEF_LIMIT: i64 = 24;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
+const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
 const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
 const TRAINING_PRINT_POS: i64 = 1;
@@ -1267,6 +1273,7 @@ pub struct SearchControlConfig {
 pub struct EProverConfig {
     pub warnings: Vec<Diagnostic>,
     pub explicit_options: Vec<EProverOption>,
+    pub invocation_args: Vec<String>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub output_level: i64,
@@ -1360,6 +1367,7 @@ impl Default for EProverConfig {
         Self {
             warnings: Vec::new(),
             explicit_options: Vec::new(),
+            invocation_args: Vec::new(),
             files: Vec::new(),
             output_file: None,
             output_level: 1,
@@ -2739,6 +2747,11 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+    if is_schedule_worker_invocation(&argv) {
+        return run_schedule_worker_from_args(&argv, stdout, stderr);
+    }
+
     init_io(PROGRAM_NAME);
     let _io_guard = IoRunGuard;
     let _problem_type_guard = ProblemTypeRunGuard::new();
@@ -2767,6 +2780,155 @@ where
             run_config_with_stderr(stdout, Some(stderr as &mut dyn Write), &config)
         }
     }
+}
+
+fn is_schedule_worker_invocation(argv: &[String]) -> bool {
+    argv.get(1)
+        .is_some_and(|arg| arg == INTERNAL_SCHEDULE_WORKER_ARG)
+}
+
+fn run_schedule_worker_from_args(
+    argv: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<u8, EProverError> {
+    let worker = parse_schedule_worker_args(argv)?;
+    let child_argv = schedule_worker_run_args(
+        &worker.original_args,
+        &worker.heuristic_name,
+        worker.cpu_limit,
+    );
+    run(child_argv, stdout, stderr)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScheduleWorkerArgs {
+    heuristic_name: String,
+    cpu_limit: u64,
+    original_args: Vec<String>,
+}
+
+fn parse_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Diagnostic> {
+    if argv.get(1).map(String::as_str) != Some(INTERNAL_SCHEDULE_WORKER_ARG) || argv.len() < 6 {
+        return Err(schedule_worker_usage_error());
+    }
+    let heuristic_name = argv
+        .get(2)
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .ok_or_else(schedule_worker_usage_error)?;
+    let cpu_limit = argv
+        .get(3)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(schedule_worker_usage_error)?;
+    if argv.get(4).map(String::as_str) != Some("--") {
+        return Err(schedule_worker_usage_error());
+    }
+    let original_args = argv[5..].to_vec();
+    if original_args.is_empty() {
+        return Err(schedule_worker_usage_error());
+    }
+    Ok(ScheduleWorkerArgs {
+        heuristic_name,
+        cpu_limit,
+        original_args,
+    })
+}
+
+fn schedule_worker_usage_error() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::USAGE_ERROR,
+        format!(
+            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <strategy> <cpu-limit> -- <original-eprover-argv...>"
+        ),
+    )
+}
+
+fn schedule_worker_run_args(
+    original_args: &[String],
+    heuristic_name: &str,
+    cpu_limit: u64,
+) -> Vec<String> {
+    let mut args = filter_schedule_worker_original_args(original_args);
+    if args.is_empty() {
+        args.push(PROGRAM_NAME.to_owned());
+    }
+    let insert_at = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    args.splice(
+        insert_at..insert_at,
+        [
+            format!("--select-strategy={heuristic_name}"),
+            format!("--cpu-limit={cpu_limit}"),
+        ],
+    );
+    args
+}
+
+fn filter_schedule_worker_original_args(original_args: &[String]) -> Vec<String> {
+    let mut filtered = Vec::with_capacity(original_args.len());
+    let mut after_double_dash = false;
+    let mut skip_next = false;
+    for arg in original_args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if after_double_dash {
+            filtered.push(arg.clone());
+            continue;
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            filtered.push(arg.clone());
+            continue;
+        }
+        if schedule_worker_should_drop_original_arg_and_next(arg) {
+            skip_next = true;
+            continue;
+        }
+        if schedule_worker_should_drop_original_arg(arg) {
+            continue;
+        }
+        filtered.push(arg.clone());
+    }
+    filtered
+}
+
+fn schedule_worker_should_drop_original_arg_and_next(arg: &str) -> bool {
+    arg == "-o"
+}
+
+fn schedule_worker_should_drop_original_arg(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-R" | "--resources-info"
+            | "--print-pid"
+            | "--print-version"
+            | "--output-file"
+            | "--auto"
+            | "--auto-schedule"
+            | "--satauto-schedule"
+            | "--select-strategy"
+            | "--print-strategy"
+            | "--parse-strategy"
+            | "--serialize-schedule"
+            | "--force-preproc-sched"
+            | "--cpu-limit"
+            | "--soft-cpu-limit"
+    ) || arg.starts_with("--auto-schedule=")
+        || arg.starts_with("--satauto-schedule=")
+        || arg.starts_with("--select-strategy=")
+        || arg.starts_with("--print-strategy=")
+        || arg.starts_with("--parse-strategy=")
+        || arg.starts_with("--serialize-schedule=")
+        || arg.starts_with("--force-preproc-sched=")
+        || arg.starts_with("--cpu-limit=")
+        || arg.starts_with("--soft-cpu-limit=")
+        || arg.starts_with("--output-file=")
+        || (arg.starts_with("-o") && arg.len() > 2)
 }
 
 fn write_config_warnings(
@@ -2808,8 +2970,10 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut state = CommandLineState::new(argv);
+    let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+    let mut state = CommandLineState::new(argv.clone());
     let mut config = EProverConfig {
+        invocation_args: argv,
         picosat_library: configured_picosat_library(),
         ..EProverConfig::default()
     };
@@ -5123,8 +5287,15 @@ fn run_proof_search<W: Write + ?Sized>(
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
-    let auto_context =
-        apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
+    let auto_context = match apply_auto_mode_preprocessing_selection(
+        output,
+        config,
+        &state,
+        &mut heuristic_params,
+    )? {
+        AutoModePreprocessingSelection::Continue(auto_context) => auto_context,
+        AutoModePreprocessingSelection::ScheduledExit(status) => return Ok(status),
+    };
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
     load_configured_watchlist_source(config, &mut state)?;
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
@@ -5187,7 +5358,7 @@ fn run_proof_search<W: Write + ?Sized>(
         output,
         config,
         &mut state,
-        auto_context.as_ref(),
+        auto_context.as_deref(),
         &mut heuristic_params,
     )?;
     apply_strategy_io_to_params(config, &mut heuristic_params)?;
@@ -5382,6 +5553,11 @@ struct AutoModeContext {
     selected_preprocessing_index: usize,
 }
 
+enum AutoModePreprocessingSelection {
+    Continue(Option<Box<AutoModeContext>>),
+    ScheduledExit(u8),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ScheduledHeuristicSelection {
     name: String,
@@ -5393,9 +5569,9 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     params: &mut HeuristicParmsCell,
-) -> Result<Option<AutoModeContext>, EProverError> {
+) -> Result<AutoModePreprocessingSelection, EProverError> {
     if !(config.flags.contains(EProverFlag::Auto) || config.strategy_scheduling) {
-        return Ok(None);
+        return Ok(AutoModePreprocessingSelection::Continue(None));
     }
 
     let limits = create_default_spec_limits();
@@ -5411,7 +5587,21 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
         .as_bytes(),
     )?;
     let selected_preprocessing_index = if config.strategy_scheduling {
-        select_scheduled_preprocessing_cell(output, config, &mut preprocessing_schedule)?
+        let outcome =
+            execute_auto_preprocessing_schedule(output, config, &mut preprocessing_schedule)?;
+        return match outcome {
+            ScheduleExecutionOutcome::Result { exit_status, .. } => {
+                Ok(AutoModePreprocessingSelection::ScheduledExit(
+                    schedule_exit_status_to_u8(exit_status),
+                ))
+            }
+            ScheduleExecutionOutcome::Exhausted => {
+                write_tstp_status(output, "GaveUp")?;
+                Ok(AutoModePreprocessingSelection::ScheduledExit(
+                    ErrorCode::RESOURCE_OUT.exit_status(),
+                ))
+            }
+        };
     } else {
         0
     };
@@ -5433,12 +5623,14 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
         )?;
     }
 
-    Ok(Some(AutoModeContext {
-        limits,
-        raw_features,
-        preprocessing_schedule,
-        selected_preprocessing_index,
-    }))
+    Ok(AutoModePreprocessingSelection::Continue(Some(Box::new(
+        AutoModeContext {
+            limits,
+            raw_features,
+            preprocessing_schedule,
+            selected_preprocessing_index,
+        },
+    ))))
 }
 
 fn apply_auto_mode_search_selection<W: Write + ?Sized>(
@@ -5519,32 +5711,60 @@ fn schedule_heuristic_selection(
         .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
 }
 
-fn select_scheduled_preprocessing_cell<W: Write + ?Sized>(
+fn execute_auto_preprocessing_schedule<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     schedule: &mut Vec<ScheduleCell>,
-) -> Result<usize, EProverError> {
-    let mut cores = configured_schedule_cores(config);
-    let serialize = config.serialize_schedule || cores == 1;
-    let report = schedule_times_init_multi_core(
+) -> Result<ScheduleExecutionOutcome, EProverError> {
+    let max_cores = configured_schedule_cores(config);
+    let report = execute_schedule_multi_core(
         schedule,
-        schedule_time_used_seconds(),
-        configured_schedule_time_limit(config),
-        true,
-        &mut cores,
-        serialize,
-    );
-    write_schedule_report(
+        ScheduleExecutionConfig {
+            time_used: schedule_time_used_seconds(),
+            wc_time_limit: configured_schedule_time_limit(config),
+            preprocessing_schedule: true,
+            max_cores,
+            serialize: config.serialize_schedule || max_cores == 1,
+        },
         output,
-        report.scheduled,
-        report.cores,
-        report.limit,
-        report.total_time,
+        |_, cell, startup_output| spawn_schedule_worker(config, cell, startup_output),
     )?;
-    if schedule.is_empty() {
-        return Err(Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty").into());
-    }
-    Ok(0)
+    Ok(report.outcome)
+}
+
+fn spawn_schedule_worker(
+    config: &EProverConfig,
+    cell: &ScheduleCell,
+    startup_output: &mut dyn Write,
+) -> Result<EGPCtrl, Diagnostic> {
+    let current_exe = std::env::current_exe().map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::FILE_ERROR,
+            format!("Cannot locate eprover executable for schedule worker: {error}"),
+        )
+    })?;
+    let mut command = Command::new(current_exe);
+    command
+        .arg(INTERNAL_SCHEDULE_WORKER_ARG)
+        .arg(&cell.heuristic_name)
+        .arg(cell.time_absolute.to_string())
+        .arg("--")
+        .args(&config.invocation_args);
+    EGPCtrl::spawn_command_reporting(
+        command,
+        cell.heuristic_name.clone(),
+        schedule_cell_cores_usize(cell),
+        cell.time_absolute,
+        startup_output,
+    )
+}
+
+fn schedule_cell_cores_usize(cell: &ScheduleCell) -> usize {
+    usize::try_from(cell.cores).unwrap_or(1).max(1)
+}
+
+fn schedule_exit_status_to_u8(exit_status: i32) -> u8 {
+    u8::try_from(exit_status).unwrap_or_else(|_| ErrorCode::RESOURCE_OUT.exit_status())
 }
 
 fn select_scheduled_search_cell<W: Write + ?Sized>(
@@ -13076,14 +13296,15 @@ mod tests {
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
         apply_proof_state_sine_silent, apply_relevance_pruning, auto_memory_limit_from_system_mb,
         bundled_picosat_library_for_executable, core_limit_failure_messages, cpu_rlimit_to_apply,
-        fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
-        order_parms_from_config, parse_app_encode_file,
-        parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
+        filter_schedule_worker_original_args, fv_index_params_from_config,
+        heuristic_parms_from_config, open_configured_output, order_parms_from_config,
+        parse_app_encode_file, parse_clause_scanner_into_sets_with_options,
+        parse_input_files_into_formula_owners, parse_schedule_worker_args,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
         proof_object_list_display_clauses, proof_search_global_indices,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, simple_fof_bool_term_to_formulas,
+        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
         temporary_executable_term_bank, write_proof_statistics, write_resource_setup_messages,
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
@@ -13091,8 +13312,9 @@ mod tests {
         LiteralComparison, ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag,
         PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement,
         SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -13852,6 +14074,97 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(selected.name, "scheduled-strategy");
         assert_eq!(selected.ordering, to_params::TermOrdering::Lpo4Copy);
+    }
+
+    #[test]
+    fn schedule_worker_args_filter_recursive_scheduler_options() {
+        let original = vec![
+            "eprover".to_owned(),
+            "--auto-schedule=4".to_owned(),
+            "--serialize-schedule=true".to_owned(),
+            "--force-preproc-sched=false".to_owned(),
+            "--select-strategy=Manual".to_owned(),
+            "--resources-info".to_owned(),
+            "--print-pid".to_owned(),
+            "--cpu-limit=300".to_owned(),
+            "--soft-cpu-limit=290".to_owned(),
+            "--output-file=parent.out".to_owned(),
+            "-o".to_owned(),
+            "also-parent.out".to_owned(),
+            "-oattached.out".to_owned(),
+            "--tstp-in".to_owned(),
+            "problem.p".to_owned(),
+        ];
+
+        let filtered = filter_schedule_worker_original_args(&original);
+
+        assert_eq!(
+            filtered,
+            ["eprover", "--tstp-in", "problem.p"].map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn schedule_worker_run_args_selects_cell_strategy_and_cpu_limit() {
+        let original = ["eprover", "--auto", "--tstp-in", "problem.p"].map(str::to_owned);
+
+        let args = schedule_worker_run_args(&original, "ScheduledCell", 17);
+
+        assert_eq!(
+            args,
+            [
+                "eprover",
+                "--tstp-in",
+                "problem.p",
+                "--select-strategy=ScheduledCell",
+                "--cpu-limit=17"
+            ]
+            .map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn schedule_worker_run_args_insert_controls_before_double_dash() {
+        let original =
+            ["eprover", "--auto-schedule=1", "--", "-problem-like-name.p"].map(str::to_owned);
+
+        let args = schedule_worker_run_args(&original, "ScheduledCell", 17);
+
+        assert_eq!(
+            args,
+            [
+                "eprover",
+                "--select-strategy=ScheduledCell",
+                "--cpu-limit=17",
+                "--",
+                "-problem-like-name.p"
+            ]
+            .map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn schedule_worker_parser_keeps_original_argv_tail() {
+        let argv = [
+            "eprover",
+            INTERNAL_SCHEDULE_WORKER_ARG,
+            "ScheduledCell",
+            "17",
+            "--",
+            "eprover",
+            "--auto-schedule=1",
+            "problem.p",
+        ]
+        .map(str::to_owned);
+
+        let parsed = parse_schedule_worker_args(&argv).unwrap();
+
+        assert_eq!(parsed.heuristic_name, "ScheduledCell");
+        assert_eq!(parsed.cpu_limit, 17);
+        assert_eq!(
+            parsed.original_args,
+            ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)
+        );
     }
 
     #[test]
@@ -18853,39 +19166,6 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.contains(
             "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = NoSInE)\n"
         ));
-        assert!(stderr.is_empty());
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn run_auto_schedule_uses_generated_schedules_in_process() {
-        let _guard = global_state_lock();
-        let path = temp_path("proof-auto-schedule-in-process");
-        std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
-        let path_arg = path.to_string_lossy().into_owned();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        let status = run(
-            [
-                "eprover",
-                "--auto-schedule=1",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap();
-
-        let output = String::from_utf8(stdout).unwrap();
-        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
-        assert!(output.contains("% Scheduled 1 strats onto 1 cores with "));
-        assert!(output.contains("% No SInE strategy applied\n"));
-        assert!(output.contains("% Search class: FUHPF-FFSF00-SFFFFFNN\n"));
-        assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
-        assert!(!output.contains("strategy scheduling process execution is not ported yet"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

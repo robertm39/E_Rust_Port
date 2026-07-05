@@ -1,0 +1,30 @@
+use std::process::Command;
+
+#[test]
+fn auto_schedule_runs_worker_process_and_replays_winner() {
+    let path = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!("eprover-auto-schedule-{}.p", std::process::id()));
+    std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        .arg("--auto-schedule=1")
+        .arg("--tstp-in")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
+    assert!(stdout.contains("% Scheduled 1 strats onto 1 cores with "));
+    assert!(stdout.contains("% Starting G-E--_302_C18_F1_URBAN_RG_S04BN"));
+    assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+    assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    assert!(!stdout.contains("strategy scheduling process execution is not ported yet"));
+    assert!(stderr.is_empty(), "{stderr}");
+
+    std::fs::remove_file(path).unwrap();
+}
