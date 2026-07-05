@@ -4736,48 +4736,13 @@ fn run_syntax_only(
     output: &mut impl Write,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     if config.flags.contains(EProverFlag::PrintFormulas) {
+        let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
         return run_syntax_only_print_formulas(output, config, &mut bank);
     }
 
-    let mut clauses = ClauseSet::new();
-    let mut watchlist = ClauseSet::new();
-
-    config.flags.clear(EProverFlag::FormulaConjectureSeen);
-    let mut input_owner_seen = false;
-    let files = config.files.clone();
-    for file in &files {
-        let parsed_file = parse_clause_file(
-            file,
-            config.parse_format,
-            FormulaPreprocessing::parse_only_from_config(config),
-            &mut bank,
-            &mut clauses,
-            &mut watchlist,
-        )?;
-        if parsed_file.formula_conjecture_seen {
-            config.flags.set(EProverFlag::FormulaConjectureSeen);
-        }
-        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
-        input_owner_seen |= parsed_file.input_owner_seen;
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
-            return Err(Diagnostic::new(
-                ErrorCode::INPUT_SEMANTIC_ERROR,
-                format!("Input file {file} did not contain any clauses"),
-            )
-            .into());
-        }
-    }
-
-    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
-        return Err(Diagnostic::new(
-            ErrorCode::INPUT_SEMANTIC_ERROR,
-            "Input did not contain any clauses",
-        )
-        .into());
-    }
-
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     Ok(())
 }
 
@@ -9053,36 +9018,6 @@ fn proof_search_inference_system_complete(
         && heuristic.enable_neg_unit_paramod
 }
 
-fn parse_clause_file(
-    file: &str,
-    parse_format: IoFormat,
-    formula_preprocessing: FormulaPreprocessing,
-    bank: &mut TermBank,
-    clauses: &mut ClauseSet,
-    watchlist: &mut ClauseSet,
-) -> Result<ParsedClauseFile, Diagnostic> {
-    let mut scanner = if file == "-" {
-        let mut input = Vec::new();
-        io::stdin().read_to_end(&mut input).map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot read standard input: {error}"),
-            )
-        })?;
-        Scanner::from_file_content("-", input, false)?
-    } else {
-        Scanner::from_file(Path::new(file), false)?
-    };
-    parse_clause_scanner_into_sets(
-        &mut scanner,
-        parse_format,
-        formula_preprocessing,
-        bank,
-        clauses,
-        watchlist,
-    )
-}
-
 fn parse_formula_file(
     file: &str,
     parse_format: IoFormat,
@@ -9147,26 +9082,8 @@ fn parse_clause_formula_file(
     )
 }
 
-pub(crate) fn parse_clause_scanner_into_sets(
-    scanner: &mut Scanner,
-    parse_format: IoFormat,
-    formula_preprocessing: FormulaPreprocessing,
-    bank: &mut TermBank,
-    clauses: &mut ClauseSet,
-    watchlist: &mut ClauseSet,
-) -> Result<ParsedClauseFile, Diagnostic> {
-    parse_clause_scanner_into_sets_with_options(
-        scanner,
-        parse_format,
-        formula_preprocessing,
-        ClauseParseOptions::default(),
-        bank,
-        clauses,
-        watchlist,
-    )
-}
-
-pub(crate) fn parse_clause_scanner_into_sets_with_options(
+#[cfg(test)]
+fn parse_clause_scanner_into_sets_with_options(
     scanner: &mut Scanner,
     parse_format: IoFormat,
     formula_preprocessing: FormulaPreprocessing,
@@ -9209,6 +9126,7 @@ pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
 }
 
 enum InputOwnerDestination<'a> {
+    #[cfg(test)]
     Clauses(&'a mut ClauseSet),
     ClausesAndFormulas {
         clauses: &'a mut ClauseSet,
@@ -9219,6 +9137,7 @@ enum InputOwnerDestination<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InputFormulaOwnerHandling {
+    #[cfg(test)]
     ClauseBridge,
     FormulaSetPrint,
     FormulaSetCnf,
@@ -9226,7 +9145,11 @@ enum InputFormulaOwnerHandling {
 
 impl InputFormulaOwnerHandling {
     const fn lower_clauses(self) -> bool {
-        matches!(self, Self::ClauseBridge)
+        match self {
+            #[cfg(test)]
+            Self::ClauseBridge => true,
+            Self::FormulaSetPrint | Self::FormulaSetCnf => false,
+        }
     }
 
     const fn use_cnf_problem_type(self) -> bool {
@@ -9235,6 +9158,7 @@ impl InputFormulaOwnerHandling {
 
     const fn keep_represented_owner(self, base_problem_type: ProblemType) -> bool {
         match self {
+            #[cfg(test)]
             Self::ClauseBridge => false,
             Self::FormulaSetPrint => true,
             Self::FormulaSetCnf => !matches!(base_problem_type, ProblemType::HigherOrder),
@@ -9245,6 +9169,7 @@ impl InputFormulaOwnerHandling {
 impl InputOwnerDestination<'_> {
     fn input_owner_count(&self) -> i64 {
         match self {
+            #[cfg(test)]
             Self::Clauses(clauses) => clauses.members(),
             Self::ClausesAndFormulas { clauses, formulas } => {
                 clauses.members().saturating_add(formulas.cardinality())
@@ -9255,6 +9180,7 @@ impl InputOwnerDestination<'_> {
 
     const fn formula_owner_handling(&self) -> InputFormulaOwnerHandling {
         match self {
+            #[cfg(test)]
             Self::Clauses(_) => InputFormulaOwnerHandling::ClauseBridge,
             Self::ClausesAndFormulas { .. } => InputFormulaOwnerHandling::FormulaSetCnf,
             Self::Formulas(_) => InputFormulaOwnerHandling::FormulaSetPrint,
@@ -9267,7 +9193,12 @@ impl InputOwnerDestination<'_> {
         clause: Clause,
     ) -> Result<(), Diagnostic> {
         match self {
+            #[cfg(test)]
             Self::Clauses(clauses) | Self::ClausesAndFormulas { clauses, .. } => {
+                clauses.insert(clause);
+            }
+            #[cfg(not(test))]
+            Self::ClausesAndFormulas { clauses, .. } => {
                 clauses.insert(clause);
             }
             Self::Formulas(formulas) => {
@@ -9285,6 +9216,7 @@ impl InputOwnerDestination<'_> {
         parsed: ParsedSimpleFofClause,
     ) -> Result<(), Diagnostic> {
         match self {
+            #[cfg(test)]
             Self::Clauses(clauses) => {
                 for clause in parsed.clauses {
                     clauses.insert(clause);
