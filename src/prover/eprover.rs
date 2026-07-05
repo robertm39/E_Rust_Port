@@ -55,7 +55,10 @@ use crate::clauses::eqn::{
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
-use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
+use crate::clauses::formulasets::{
+    FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, WrappedFormula,
+    WrappedFormulaCnfDocContext,
+};
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
@@ -5746,7 +5749,11 @@ fn run_prune_only<W: Write + ?Sized>(
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let _parsed_ax_no = parse_input_files_into_axioms(
+        config,
+        &mut state,
+        ExecutableFormulaInputDestination::ClauseBridge,
+    )?;
     write_preprocessing_config_debug_line(output, config)?;
     load_configured_watchlist_source(config, &mut state)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
@@ -5755,10 +5762,13 @@ fn run_prune_only<W: Write + ?Sized>(
         output,
         config,
         &mut state,
-        config.preprocessing.no_preprocessing,
-        config.search.inference.higher_order.replace_inj_defs,
-        config.preprocessing.eqdef_incrlimit,
-        config.preprocessing.eqdef_maxclauses,
+        ClausePreprocessingDocConfig {
+            no_preprocessing: config.preprocessing.no_preprocessing,
+            replace_injectivity_defs: config.search.inference.higher_order.replace_inj_defs,
+            eqdef_incrlimit: config.preprocessing.eqdef_incrlimit,
+            eqdef_maxclauses: config.preprocessing.eqdef_maxclauses,
+            start_ident: 1,
+        },
     )?;
     let choice_max_depth = i32_from_i64_config(
         "inst_choice_max_depth",
@@ -5821,7 +5831,11 @@ fn run_proof_search<W: Write + ?Sized>(
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let parsed_ax_no = parse_input_files_into_axioms(
+        config,
+        &mut state,
+        ExecutableFormulaInputDestination::FormulaOwners,
+    )?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
     let auto_context =
         apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
@@ -5829,15 +5843,24 @@ fn run_proof_search<W: Write + ?Sized>(
     load_configured_watchlist_source(config, &mut state)?;
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let relevancy_pruned = sine_pruned + apply_relevance_pruning(config, &mut state);
+    if relevancy_pruned != 0 || config.search.completeness.incomplete {
+        state.set_state_is_complete(false);
+    }
+    let formula_cnf_result =
+        clausify_formula_axioms_with_docs(output, config, &mut state, &heuristic_params, 1)?;
     let raw_clause_no = state.axioms().members();
+    debug_assert!(raw_clause_no >= formula_cnf_result.clauses_generated);
     let preproc_result = apply_clause_set_preprocessing_with_docs(
         output,
         config,
         &mut state,
-        heuristic_params.no_preproc,
-        heuristic_params.replace_inj_defs,
-        heuristic_params.eqdef_incrlimit,
-        heuristic_params.eqdef_maxclauses,
+        ClausePreprocessingDocConfig {
+            no_preprocessing: heuristic_params.no_preproc,
+            replace_injectivity_defs: heuristic_params.replace_inj_defs,
+            eqdef_incrlimit: heuristic_params.eqdef_incrlimit,
+            eqdef_maxclauses: heuristic_params.eqdef_maxclauses,
+            start_ident: formula_cnf_result.next_doc_ident,
+        },
     )?;
     let preproc_removed = preproc_result.removed;
     let _choice_axioms =
@@ -5869,9 +5892,6 @@ fn run_proof_search<W: Write + ?Sized>(
         heuristic_params.add_goal_defs_neg,
         heuristic_params.add_goal_defs_subterms,
     )?;
-    if relevancy_pruned != 0 || config.search.completeness.incomplete {
-        state.set_state_is_complete(false);
-    }
     let next_doc_ident =
         write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
     let next_doc_ident =
@@ -6582,9 +6602,16 @@ fn filter_saturated_unprocessed(
         .map_err(Into::into)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutableFormulaInputDestination {
+    ClauseBridge,
+    FormulaOwners,
+}
+
 fn parse_input_files_into_axioms(
     config: &mut EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
+    formula_destination: ExecutableFormulaInputDestination,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
     let mut input_owner_seen = false;
@@ -6592,27 +6619,51 @@ fn parse_input_files_into_axioms(
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
     for file in &files {
-        let before = state.axioms().len();
-        let mut parsed = ClauseSet::new();
+        let before = state.axiom_count();
         let mut parsed_watchlist = ClauseSet::new();
-        let parsed_file = parse_clause_file(
-            file,
-            config.parse_format,
-            FormulaPreprocessing::from_config(config),
-            state.terms_mut(),
-            &mut parsed,
-            &mut parsed_watchlist,
-        )?;
+        let (parsed_file, parsed_count) = match formula_destination {
+            ExecutableFormulaInputDestination::ClauseBridge => {
+                let mut parsed_axioms = ClauseSet::new();
+                let parsed_file = parse_clause_file(
+                    file,
+                    config.parse_format,
+                    FormulaPreprocessing::clause_bridge_from_config(config),
+                    state.terms_mut(),
+                    &mut parsed_axioms,
+                    &mut parsed_watchlist,
+                )?;
+                let parsed_count = i64::try_from(parsed_axioms.len()).unwrap_or(i64::MAX);
+                state.axioms_mut().insert_set(&mut parsed_axioms);
+                (parsed_file, parsed_count)
+            }
+            ExecutableFormulaInputDestination::FormulaOwners => {
+                let mut parsed_axioms = ClauseSet::new();
+                let mut parsed_formulas = FormulaSet::new();
+                let parsed_file = parse_clause_formula_file(
+                    file,
+                    config.parse_format,
+                    FormulaPreprocessing::parse_only_from_config(config),
+                    state.terms_mut(),
+                    &mut parsed_axioms,
+                    &mut parsed_formulas,
+                    &mut parsed_watchlist,
+                )?;
+                let parsed_count = i64::try_from(parsed_axioms.len())
+                    .unwrap_or(i64::MAX)
+                    .saturating_add(parsed_formulas.cardinality());
+                state.axioms_mut().insert_set(&mut parsed_axioms);
+                state.f_axioms_mut().insert_set(&mut parsed_formulas);
+                (parsed_file, parsed_count)
+            }
+        };
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         input_owner_seen |= parsed_file.input_owner_seen;
         parsed_problem_type = combine_problem_types(parsed_problem_type, parsed_file.problem_type);
-        let parsed_count = parsed.len();
-        parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
+        parsed_total = parsed_total.saturating_add(parsed_count);
         state.add_raw_formula_features(parsed_file.raw_formula_features);
-        state.axioms_mut().insert_set(&mut parsed);
         if !parsed_watchlist.is_empty() {
             let watchlist = state.watchlist_mut().ok_or_else(|| {
                 Diagnostic::new(
@@ -6629,7 +6680,7 @@ fn parse_input_files_into_axioms(
             )
             .into());
         }
-        debug_assert_eq!(state.axioms().len(), before + parsed_count);
+        debug_assert_eq!(state.axiom_count(), before.saturating_add(parsed_count));
     }
 
     reset_problem_type();
@@ -6970,6 +7021,21 @@ struct ClausePreprocessingResult {
     next_doc_ident: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClausePreprocessingDocConfig {
+    no_preprocessing: bool,
+    replace_injectivity_defs: bool,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+    start_ident: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FormulaCnfPreparationResult {
+    clauses_generated: i64,
+    next_doc_ident: i64,
+}
+
 #[cfg(test)]
 fn apply_clause_set_preprocessing(
     state: &mut crate::clauses::proofstate::ProofState,
@@ -6998,26 +7064,135 @@ fn apply_clause_set_preprocessing(
     Ok(removed)
 }
 
+fn clausify_formula_axioms_with_docs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    params: &HeuristicParmsCell,
+    start_ident: i64,
+) -> Result<FormulaCnfPreparationResult, EProverError> {
+    if state.f_axioms().is_empty() {
+        return Ok(FormulaCnfPreparationResult {
+            clauses_generated: 0,
+            next_doc_ident: start_ident,
+        });
+    }
+
+    let proof_problem_type = problem_type();
+    let options = formula_cnf_options(params, proof_problem_type);
+    if config.output_level >= 2 {
+        clausify_formula_axioms_documented(output, config, state, options, start_ident)
+    } else {
+        clausify_formula_axioms_silent(state, config, options, start_ident)
+    }
+}
+
+fn clausify_formula_axioms_documented<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    options: FormulaSetCnfOptions,
+    start_ident: i64,
+) -> Result<FormulaCnfPreparationResult, EProverError> {
+    let mut rendered = String::new();
+    let mut session = proof_doc_session(config, start_ident, options.problem_type)?;
+    let clauses_generated = {
+        let fresh_vars = state.fresh_vars().clone();
+        let (bank, clauses, formulas, archive) = state.terms_axioms_formula_sets_cnf_mut();
+        let render_options =
+            FormulaProofDocRenderOptions::new(config.pcl_output.full_terms, options.problem_type);
+        let _initial = formulas.doc_initial(
+            &mut rendered,
+            bank,
+            &mut session,
+            config.pcl_output.full_terms,
+            options.problem_type,
+        )?;
+        let _archived = formulas.archive_into(archive);
+        let _preprocessed = formulas.preproc_conjectures_with_docs(
+            &mut rendered,
+            bank,
+            &mut session,
+            render_options,
+            config.answer_limit > 0,
+            config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+        )?;
+        let mut doc_context =
+            WrappedFormulaCnfDocContext::new(&mut rendered, &mut session, render_options);
+        let cnf = formulas.cnf2_into_with_docs(
+            &mut doc_context,
+            archive,
+            clauses,
+            bank,
+            &fresh_vars,
+            options,
+        )?;
+        cnf.cnf.clauses_generated
+    };
+    output.write_all(rendered.as_bytes())?;
+    Ok(FormulaCnfPreparationResult {
+        clauses_generated,
+        next_doc_ident: session.id_source.current_ident().saturating_add(1),
+    })
+}
+
+fn clausify_formula_axioms_silent(
+    state: &mut crate::clauses::proofstate::ProofState,
+    config: &EProverConfig,
+    options: FormulaSetCnfOptions,
+    start_ident: i64,
+) -> Result<FormulaCnfPreparationResult, EProverError> {
+    let fresh_vars = state.fresh_vars().clone();
+    let clauses_generated = {
+        let (bank, clauses, formulas, archive) = state.terms_axioms_formula_sets_cnf_mut();
+        let _archived = formulas.archive_into(archive);
+        let _preprocessed = formulas.preproc_conjectures(
+            bank,
+            config.answer_limit > 0,
+            config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+        )?;
+        formulas
+            .cnf2_into(archive, clauses, bank, &fresh_vars, options)?
+            .clauses_generated
+    };
+    Ok(FormulaCnfPreparationResult {
+        clauses_generated,
+        next_doc_ident: start_ident,
+    })
+}
+
+const fn formula_cnf_options(
+    params: &HeuristicParmsCell,
+    proof_problem_type: ProblemType,
+) -> FormulaSetCnfOptions {
+    FormulaSetCnfOptions::new(
+        params.miniscope_limit,
+        params.fool_unroll,
+        proof_problem_type,
+    )
+    .with_def_limit(params.formula_def_limit)
+    .with_lift_lambdas(params.lift_lambdas)
+    .with_lambda_to_forall(params.lambda_to_forall)
+    .with_unfold_only_forms(params.unroll_only_formulas)
+}
+
 fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-    no_preprocessing: bool,
-    replace_injectivity_defs: bool,
-    eqdef_incrlimit: i64,
-    eqdef_maxclauses: i64,
+    preprocessing: ClausePreprocessingDocConfig,
 ) -> Result<ClausePreprocessingResult, EProverError> {
     let (mut tmp_bank, mut removed) = apply_clause_set_preprocessing_prefix(
         state,
-        no_preprocessing,
-        replace_injectivity_defs,
-        eqdef_incrlimit,
-        eqdef_maxclauses,
+        preprocessing.no_preprocessing,
+        preprocessing.replace_injectivity_defs,
+        preprocessing.eqdef_incrlimit,
+        preprocessing.eqdef_maxclauses,
     )?;
 
     let next_doc_ident = if config.output_level >= 2 {
         let mut rendered = String::new();
-        let mut session = clause_proof_doc_session(config, 1)?;
+        let mut session = clause_proof_doc_session(config, preprocessing.start_ident)?;
         {
             let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
             removed += clause_set_unfold_eq_def_normalize_with_docs(
@@ -7028,8 +7203,8 @@ fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
                 archive,
                 &mut tmp_bank,
                 bank,
-                eqdef_incrlimit,
-                eqdef_maxclauses,
+                preprocessing.eqdef_incrlimit,
+                preprocessing.eqdef_maxclauses,
             )?;
         }
         output.write_all(rendered.as_bytes())?;
@@ -7042,10 +7217,10 @@ fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
             archive,
             &mut tmp_bank,
             bank,
-            eqdef_incrlimit,
-            eqdef_maxclauses,
+            preprocessing.eqdef_incrlimit,
+            preprocessing.eqdef_maxclauses,
         )?;
-        1
+        preprocessing.start_ident
     };
 
     Ok(ClausePreprocessingResult {
@@ -7270,6 +7445,9 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     let mut session = clause_proof_doc_session(config, start_ident)?;
 
     for (index, clause) in set.iter_mut().enumerate() {
+        if clause_has_formula_derivation_parent(clause) {
+            continue;
+        }
         let original_info = if clause.info().is_none() {
             if let Some(Some(info)) = source_infos.get(index).cloned() {
                 clause.set_info(Some(info));
@@ -7306,14 +7484,35 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     Ok(session.id_source.current_ident().saturating_add(1))
 }
 
+fn clause_has_formula_derivation_parent(clause: &Clause) -> bool {
+    clause.derivation().is_some_and(|derivation| {
+        derivation
+            .as_slice()
+            .iter()
+            .any(|entry| matches!(entry, DerivationEntry::FormulaParent(_)))
+    })
+}
+
 fn clause_proof_doc_session(
     config: &EProverConfig,
     start_ident: i64,
 ) -> Result<ProofDocSession, EProverError> {
+    proof_doc_session(
+        config,
+        start_ident,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+    )
+}
+
+fn proof_doc_session(
+    config: &EProverConfig,
+    start_ident: i64,
+    problem_type: ProblemType,
+) -> Result<ProofDocSession, EProverError> {
     let mut session = ProofDocSession::new(
         proof_doc_output_format(config),
         config.output_level,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
+        problem_type,
     );
     session.pcl_shell_level = i32::try_from(config.pcl_output.shell_level).map_err(|_| {
         Diagnostic::new(
@@ -8946,6 +9145,39 @@ fn parse_formula_file(
     )
 }
 
+fn parse_clause_formula_file(
+    file: &str,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    formulas: &mut FormulaSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
+    let mut scanner = if file == "-" {
+        let mut input = Vec::new();
+        io::stdin().read_to_end(&mut input).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read standard input: {error}"),
+            )
+        })?;
+        Scanner::from_file_content("-", input, false)?
+    } else {
+        Scanner::from_file(Path::new(file), false)?
+    };
+    let mut destination = InputOwnerDestination::ClausesAndFormulas { clauses, formulas };
+    parse_clause_scanner_into_destination_with_options(
+        &mut scanner,
+        parse_format,
+        formula_preprocessing,
+        ClauseParseOptions::default(),
+        bank,
+        &mut destination,
+        watchlist,
+    )
+}
+
 pub(crate) fn parse_clause_scanner_into_sets(
     scanner: &mut Scanner,
     parse_format: IoFormat,
@@ -9009,14 +9241,54 @@ pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
 
 enum InputOwnerDestination<'a> {
     Clauses(&'a mut ClauseSet),
+    ClausesAndFormulas {
+        clauses: &'a mut ClauseSet,
+        formulas: &'a mut FormulaSet,
+    },
     Formulas(&'a mut FormulaSet),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputFormulaOwnerHandling {
+    ClauseBridge,
+    FormulaSetPrint,
+    FormulaSetCnf,
+}
+
+impl InputFormulaOwnerHandling {
+    const fn lower_clauses(self) -> bool {
+        matches!(self, Self::ClauseBridge)
+    }
+
+    const fn use_cnf_problem_type(self) -> bool {
+        matches!(self, Self::FormulaSetCnf)
+    }
+
+    const fn keep_represented_owner(self, base_problem_type: ProblemType) -> bool {
+        match self {
+            Self::ClauseBridge => false,
+            Self::FormulaSetPrint => true,
+            Self::FormulaSetCnf => !matches!(base_problem_type, ProblemType::HigherOrder),
+        }
+    }
 }
 
 impl InputOwnerDestination<'_> {
     fn input_owner_count(&self) -> i64 {
         match self {
             Self::Clauses(clauses) => clauses.members(),
+            Self::ClausesAndFormulas { clauses, formulas } => {
+                clauses.members().saturating_add(formulas.cardinality())
+            }
             Self::Formulas(formulas) => formulas.cardinality(),
+        }
+    }
+
+    const fn formula_owner_handling(&self) -> InputFormulaOwnerHandling {
+        match self {
+            Self::Clauses(_) => InputFormulaOwnerHandling::ClauseBridge,
+            Self::ClausesAndFormulas { .. } => InputFormulaOwnerHandling::FormulaSetCnf,
+            Self::Formulas(_) => InputFormulaOwnerHandling::FormulaSetPrint,
         }
     }
 
@@ -9026,7 +9298,9 @@ impl InputOwnerDestination<'_> {
         clause: Clause,
     ) -> Result<(), Diagnostic> {
         match self {
-            Self::Clauses(clauses) => clauses.insert(clause),
+            Self::Clauses(clauses) | Self::ClausesAndFormulas { clauses, .. } => {
+                clauses.insert(clause);
+            }
             Self::Formulas(formulas) => {
                 let formula =
                     WrappedFormula::form_clause_alloc(bank, clause, ProblemType::FirstOrder)?;
@@ -9045,6 +9319,15 @@ impl InputOwnerDestination<'_> {
             Self::Clauses(clauses) => {
                 for clause in parsed.clauses {
                     clauses.insert(clause);
+                }
+            }
+            Self::ClausesAndFormulas { clauses, formulas } => {
+                if let Some(formula) = parsed.owner_formula {
+                    formulas.insert(formula);
+                } else {
+                    for clause in parsed.clauses {
+                        clauses.insert(clause);
+                    }
                 }
             }
             Self::Formulas(formulas) => {
@@ -9413,7 +9696,12 @@ fn parse_tptp_entry_list(
                 insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
             }
         } else if scanner.test_id("input_formula") {
-            let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
+            let parsed = parse_simple_tptp_formula_clause(
+                scanner,
+                bank,
+                formula_preprocessing,
+                destination.formula_owner_handling(),
+            )?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
@@ -9484,7 +9772,12 @@ fn parse_tstp_entry_list(
                 insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
-            let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
+            let parsed = parse_simple_tstp_formula_clause(
+                scanner,
+                bank,
+                formula_preprocessing,
+                destination.formula_owner_handling(),
+            )?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
@@ -9682,17 +9975,17 @@ impl FormulaPreprocessing {
         }
     }
 
-    fn from_config(config: &EProverConfig) -> Self {
+    fn parse_only_from_config(config: &EProverConfig) -> Self {
+        Self::parse_only(config.preprocessing.fool_unroll)
+    }
+
+    fn clause_bridge_from_config(config: &EProverConfig) -> Self {
         Self {
             annotate_questions: true,
             add_answer_literals: config.answer_limit > 0,
             conjectures_are_questions: config.flags.contains(EProverFlag::ConjecturesAreQuestions),
             fool_unroll: config.preprocessing.fool_unroll,
         }
-    }
-
-    fn parse_only_from_config(config: &EProverConfig) -> Self {
-        Self::parse_only(config.preprocessing.fool_unroll)
     }
 
     fn fool_unroll_enabled(self) -> bool {
@@ -9729,12 +10022,7 @@ fn parse_simple_tstp_app_encode_formula(
         }));
     }
 
-    let roles = if formula_kind == "tcf" {
-        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
-    } else {
-        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
-    };
-    scanner.check_id(roles)?;
+    scanner.check_id(simple_tstp_formula_roles(&formula_kind))?;
     let role = scanner.current_token().literal();
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
@@ -9796,10 +10084,15 @@ fn parse_simple_tptp_app_encode_formula(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "TSTP formula parsing keeps scanner token order and C role mutation visible"
+)]
 fn parse_simple_tstp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     formula_preprocessing: FormulaPreprocessing,
+    formula_owner_handling: InputFormulaOwnerHandling,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
@@ -9832,25 +10125,16 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
 
-    let mut clause_type = clause_type_from_identifier(&role, formula_problem_type);
-    let raw_formula_type = clause_type;
-    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
-    if annotate_question {
-        clause_type = CP_TYPE_CONJECTURE;
-    }
-    let owner_formula_type = clause_type;
-    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
-    if formula_conjecture_seen {
-        clause_type = CP_TYPE_NEG_CONJECTURE;
-    }
+    let role_types = simple_fof_role_types(&role, formula_problem_type, formula_preprocessing);
     let formula_position = token_pos_rep(scanner.current_token());
     let mut formulas =
         parse_simple_tstp_body_formulas(scanner, bank, &formula_kind, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
-    let raw_formula_features = simple_fof_raw_formula_features(&formulas, raw_formula_type, bank);
-    if annotate_question {
+    let raw_formula_features =
+        simple_fof_raw_formula_features(&formulas, role_types.raw_formula_type, bank);
+    if role_types.annotate_question {
         formulas = simple_fof_annotate_question_formulas(
             formulas,
             formula_preprocessing.add_answer_literals,
@@ -9859,19 +10143,36 @@ fn parse_simple_tstp_formula_clause(
     }
     let owner_formula = simple_fof_formula_owner(
         &formulas,
-        owner_formula_type | CP_INPUT_FORMULA,
+        role_types.owner_formula_type | CP_INPUT_FORMULA,
         &name,
         Some(&start_source),
         start_line,
         start_column,
         bank,
     )?;
-    let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
-        formulas,
-        formula_conjecture_seen,
-        formula_preprocessing.fool_unroll_enabled(),
-        bank,
-    )?;
+    let owner_routing = simple_fof_owner_routing(
+        formula_problem_type,
+        role_types.raw_formula_type,
+        owner_formula.as_ref(),
+        formula_owner_handling,
+    );
+    let clauses = if owner_routing.should_lower_clauses {
+        simple_fof_formulas_to_clauses(
+            formulas,
+            bank,
+            SimpleFofClauseLoweringContext {
+                clause_type: role_types.clause_type,
+                name: &name,
+                start_source: &start_source,
+                start_line,
+                start_column,
+                negate_as_conjecture: role_types.formula_conjecture_seen,
+                fool_unroll: formula_preprocessing.fool_unroll_enabled(),
+            },
+        )?
+    } else {
+        Vec::new()
+    };
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR | TokenType::APPLICATION) {
         return Err(simple_tstp_formula_unsupported_error(
             scanner,
@@ -9882,25 +10183,67 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let clauses = simple_fof_lowered_clauses_to_clauses(
-        lowered_clauses,
-        clause_type,
-        &name,
-        &start_source,
-        start_line,
-        start_column,
-    );
-    let raw_formula_features =
-        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
+    let raw_formula_features = if owner_routing.should_lower_clauses {
+        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses)
+    } else {
+        raw_formula_features
+    };
+    let owner_formula = if owner_routing.keep_represented_owner {
+        owner_formula
+    } else {
+        None
+    };
     Ok(ParsedSimpleFofClause {
         name,
-        raw_formula_type,
+        raw_formula_type: role_types.raw_formula_type,
         owner_formula,
         clauses,
-        formula_conjecture_seen,
+        formula_conjecture_seen: role_types.formula_conjecture_seen,
         raw_formula_features,
-        problem_type: formula_problem_type,
+        problem_type: owner_routing.parsed_problem_type,
     })
+}
+
+fn simple_tstp_formula_roles(formula_kind: &str) -> &'static str {
+    if formula_kind == "tcf" {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
+    } else {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SimpleFofRoleTypes {
+    clause_type: FormulaProperties,
+    raw_formula_type: FormulaProperties,
+    owner_formula_type: FormulaProperties,
+    formula_conjecture_seen: bool,
+    annotate_question: bool,
+}
+
+fn simple_fof_role_types(
+    role: &str,
+    formula_problem_type: ProblemType,
+    formula_preprocessing: FormulaPreprocessing,
+) -> SimpleFofRoleTypes {
+    let mut clause_type = clause_type_from_identifier(role, formula_problem_type);
+    let raw_formula_type = clause_type;
+    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
+    if annotate_question {
+        clause_type = CP_TYPE_CONJECTURE;
+    }
+    let owner_formula_type = clause_type;
+    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
+    if formula_conjecture_seen {
+        clause_type = CP_TYPE_NEG_CONJECTURE;
+    }
+    SimpleFofRoleTypes {
+        clause_type,
+        raw_formula_type,
+        owner_formula_type,
+        formula_conjecture_seen,
+        annotate_question,
+    }
 }
 
 fn parse_simple_tstp_type_declaration_clause(
@@ -9941,6 +10284,7 @@ fn parse_simple_tptp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     formula_preprocessing: FormulaPreprocessing,
+    formula_owner_handling: InputFormulaOwnerHandling,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
@@ -9986,28 +10330,45 @@ fn parse_simple_tptp_formula_clause(
         start_column,
         bank,
     )?;
-    let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
-        formulas,
-        formula_conjecture_seen,
-        formula_preprocessing.fool_unroll_enabled(),
-        bank,
-    )?;
+    let owner_routing = simple_fof_owner_routing(
+        ProblemType::FirstOrder,
+        raw_formula_type,
+        owner_formula.as_ref(),
+        formula_owner_handling,
+    );
+    let clauses = if owner_routing.should_lower_clauses {
+        simple_fof_formulas_to_clauses(
+            formulas,
+            bank,
+            SimpleFofClauseLoweringContext {
+                clause_type,
+                name: &name,
+                start_source: &start_source,
+                start_line,
+                start_column,
+                negate_as_conjecture: formula_conjecture_seen,
+                fool_unroll: formula_preprocessing.fool_unroll_enabled(),
+            },
+        )?
+    } else {
+        Vec::new()
+    };
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let clauses = simple_fof_lowered_clauses_to_clauses(
-        lowered_clauses,
-        clause_type,
-        &name,
-        &start_source,
-        start_line,
-        start_column,
-    );
-    let raw_formula_features =
-        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
+    let raw_formula_features = if owner_routing.should_lower_clauses {
+        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses)
+    } else {
+        raw_formula_features
+    };
+    let owner_formula = if owner_routing.keep_represented_owner {
+        owner_formula
+    } else {
+        None
+    };
     Ok(ParsedSimpleFofClause {
         name,
         raw_formula_type,
@@ -10015,8 +10376,52 @@ fn parse_simple_tptp_formula_clause(
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
-        problem_type: ProblemType::FirstOrder,
+        problem_type: owner_routing.parsed_problem_type,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SimpleFofOwnerRouting {
+    keep_represented_owner: bool,
+    should_lower_clauses: bool,
+    parsed_problem_type: ProblemType,
+}
+
+fn simple_fof_owner_routing(
+    base_problem_type: ProblemType,
+    raw_formula_type: FormulaProperties,
+    owner_formula: Option<&WrappedFormula>,
+    formula_owner_handling: InputFormulaOwnerHandling,
+) -> SimpleFofOwnerRouting {
+    let keep_represented_owner = formula_owner_handling.keep_represented_owner(base_problem_type);
+    SimpleFofOwnerRouting {
+        keep_represented_owner,
+        should_lower_clauses: formula_owner_handling.lower_clauses()
+            || !keep_represented_owner
+            || raw_formula_type == CP_TYPE_WATCH_CLAUSE
+            || owner_formula.is_none(),
+        parsed_problem_type: simple_fof_formula_owner_problem_type(
+            base_problem_type,
+            owner_formula,
+            formula_owner_handling,
+        ),
+    }
+}
+
+fn simple_fof_formula_owner_problem_type(
+    base: ProblemType,
+    owner_formula: Option<&WrappedFormula>,
+    formula_owner_handling: InputFormulaOwnerHandling,
+) -> ProblemType {
+    if base == ProblemType::HigherOrder || !formula_owner_handling.use_cnf_problem_type() {
+        return base;
+    }
+    if let Some(formula) = owner_formula {
+        if !formula.is_clause() && simple_fof_term_contains_fool(&[formula.formula()]) {
+            return ProblemType::HigherOrder;
+        }
+    }
+    base
 }
 
 fn simple_fof_raw_formula_features(
@@ -10059,6 +10464,38 @@ fn simple_fof_raw_formula_features_with_lowered_clauses(
         }
     }
     features
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SimpleFofClauseLoweringContext<'a> {
+    clause_type: FormulaProperties,
+    name: &'a str,
+    start_source: &'a str,
+    start_line: i64,
+    start_column: i64,
+    negate_as_conjecture: bool,
+    fool_unroll: bool,
+}
+
+fn simple_fof_formulas_to_clauses(
+    formulas: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+    context: SimpleFofClauseLoweringContext<'_>,
+) -> Result<Vec<Clause>, Diagnostic> {
+    let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
+        formulas,
+        context.negate_as_conjecture,
+        context.fool_unroll,
+        bank,
+    )?;
+    Ok(simple_fof_lowered_clauses_to_clauses(
+        lowered_clauses,
+        context.clause_type,
+        context.name,
+        context.start_source,
+        context.start_line,
+        context.start_column,
+    ))
 }
 
 fn simple_fof_lowered_clauses_to_clauses(
@@ -22757,6 +23194,38 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("?- q(a).\n"));
         assert!(printed.contains("q(a) <- p(a).\n"));
         assert!(!printed.contains("% Proof found!"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_routes_formula_owners_through_cnf_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-formula-owner-cnf-docs");
+        std::fs::write(&path, "fof(formula_doc, axiom, (p(a) & q(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--cnf",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", formula_doc)")));
+        assert_eq!(printed.matches("split_conjunct(1)").count(), 2);
+        assert!(!printed.contains(&format!("file('{path_arg}', formula_doc)")));
+        assert!(printed.contains("% CNFization successful!\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
