@@ -4805,8 +4805,8 @@ fn run_app_encode<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
-    let mut formulas = Vec::new();
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let mut fallback_formulas = Vec::new();
     let mut include_echoes = Vec::new();
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
@@ -4814,7 +4814,10 @@ fn run_app_encode<W: Write + ?Sized>(
 
     let files = config.files.clone();
     for file in &files {
-        let parsed_file = parse_app_encode_file(file, config.parse_format, &mut bank)?;
+        let parsed_file = {
+            let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
+            parse_app_encode_file(file, config.parse_format, bank, formulas)?
+        };
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_input_owner {
             return Err(Diagnostic::new(
@@ -4828,7 +4831,7 @@ fn run_app_encode<W: Write + ?Sized>(
         include_echoes.extend(parsed_file.include_echoes);
         app_encode_problem_type =
             combine_problem_types(app_encode_problem_type, parsed_file.problem_type);
-        formulas.extend(parsed_file.formulas);
+        fallback_formulas.extend(parsed_file.fallback_formulas);
     }
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
@@ -4843,8 +4846,8 @@ fn run_app_encode<W: Write + ?Sized>(
     write_preprocessing_config_debug_line(output, config)?;
     write_app_encoded_formula_set(
         output,
-        &mut bank,
-        &formulas,
+        &mut state,
+        &fallback_formulas,
         saw_any_formula_owner,
         app_encode_problem_type,
     )?;
@@ -4862,8 +4865,8 @@ fn temporary_executable_term_bank(
 
 fn write_app_encoded_formula_set<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    bank: &mut TermBank,
-    formulas: &[SimpleAppEncodedFormula],
+    state: &mut ProofState,
+    fallback_formulas: &[SimpleAppEncodedFormula],
     saw_formula_owner: bool,
     problem_type: ProblemType,
 ) -> Result<(), EProverError> {
@@ -4871,13 +4874,28 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
         return Ok(());
     }
 
-    if let Some(formula_set) = simple_app_encoded_formula_set(formulas, bank)? {
-        let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
+    {
+        let (bank, formula_set, _watchlist) = state.terms_f_axioms_watchlist_mut();
+        if !formula_set.is_empty() {
+            let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
+            output.write_stdout_side_channel(rendered.as_bytes())?;
+            return Ok(());
+        }
+    }
+
+    let fallback_rendered = {
+        let bank = state.terms_mut();
+        match simple_app_encoded_formula_set(fallback_formulas, bank)? {
+            Some(formula_set) => Some(formula_set.app_encode_string(bank, problem_type, true)?),
+            None => None,
+        }
+    };
+    if let Some(rendered) = fallback_rendered {
         output.write_stdout_side_channel(rendered.as_bytes())?;
         return Ok(());
     }
 
-    write_simple_app_encoded_formula_set(output, bank, formulas, problem_type)
+    write_simple_app_encoded_formula_set(output, state.terms_mut(), fallback_formulas, problem_type)
 }
 
 fn write_app_encode_include_echoes<W: Write + ?Sized>(
@@ -4896,15 +4914,25 @@ fn simple_app_encoded_formula_set(
 ) -> Result<Option<FormulaSet>, Diagnostic> {
     let mut set = FormulaSet::new();
     for formula in formulas {
-        let Some(term_formula) = simple_fof_formulas_to_tformula(&formula.formulas, bank)? else {
+        let Some(wrapped) = simple_app_encoded_formula_owner(formula, bank)? else {
             return Ok(None);
         };
-        let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
-        wrapped.set_properties(formula.type_);
-        wrapped.set_info(Some(ClauseInfo::new(Some(&formula.name), None, -1, -1)));
         set.insert(wrapped);
     }
     Ok(Some(set))
+}
+
+fn simple_app_encoded_formula_owner(
+    formula: &SimpleAppEncodedFormula,
+    bank: &mut TermBank,
+) -> Result<Option<WrappedFormula>, Diagnostic> {
+    let Some(term_formula) = simple_fof_formulas_to_tformula(&formula.formulas, bank)? else {
+        return Ok(None);
+    };
+    let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
+    wrapped.set_properties(formula.type_);
+    wrapped.set_info(Some(ClauseInfo::new(Some(&formula.name), None, -1, -1)));
+    Ok(Some(wrapped))
 }
 
 fn simple_fof_formula_owner(
@@ -9335,6 +9363,7 @@ fn parse_app_encode_file(
     file: &str,
     parse_format: IoFormat,
     bank: &mut TermBank,
+    formulas: &mut FormulaSet,
 ) -> Result<ParsedAppEncodeFile, Diagnostic> {
     set_problem_type(ProblemType::FirstOrder)?;
     let mut scanner = if file == "-" {
@@ -9351,9 +9380,9 @@ fn parse_app_encode_file(
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
-    let (saw_input_owner, saw_formula_owner, include_echoes, formulas) = match detected_format {
-        IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank)?,
-        IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank)?,
+    let parsed_entries = match detected_format {
+        IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank, formulas)?,
+        IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank, formulas)?,
         _ => {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9377,11 +9406,11 @@ fn parse_app_encode_file(
     }
     Ok(ParsedAppEncodeFile {
         detected_format,
-        saw_input_owner,
-        saw_formula_owner,
-        include_echoes,
-        problem_type: combine_simple_app_encoded_formula_problem_types(&formulas),
-        formulas,
+        saw_input_owner: parsed_entries.saw_input_owner,
+        saw_formula_owner: parsed_entries.saw_formula_owner,
+        include_echoes: parsed_entries.include_echoes,
+        problem_type: parsed_entries.problem_type,
+        fallback_formulas: parsed_entries.fallback_formulas,
     })
 }
 
@@ -9429,7 +9458,7 @@ struct ParsedAppEncodeFile {
     saw_formula_owner: bool,
     include_echoes: Vec<String>,
     problem_type: ProblemType,
-    formulas: Vec<SimpleAppEncodedFormula>,
+    fallback_formulas: Vec<SimpleAppEncodedFormula>,
 }
 
 #[derive(Clone, Debug)]
@@ -9440,14 +9469,47 @@ struct SimpleAppEncodedFormula {
     formulas: Vec<SimpleFofFormula>,
 }
 
-fn combine_simple_app_encoded_formula_problem_types(
-    formulas: &[SimpleAppEncodedFormula],
-) -> ProblemType {
-    formulas
-        .iter()
-        .fold(ProblemType::FirstOrder, |combined, formula| {
-            combine_problem_types(combined, formula.problem_type)
-        })
+#[derive(Clone, Debug)]
+struct ParsedAppEncodeEntries {
+    saw_input_owner: bool,
+    saw_formula_owner: bool,
+    include_echoes: Vec<String>,
+    problem_type: ProblemType,
+    fallback_formulas: Vec<SimpleAppEncodedFormula>,
+}
+
+impl ParsedAppEncodeEntries {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn add_formula_owner(
+        &mut self,
+        formula: SimpleAppEncodedFormula,
+        bank: &mut TermBank,
+        formulas: &mut FormulaSet,
+    ) -> Result<(), Diagnostic> {
+        self.saw_input_owner = true;
+        self.saw_formula_owner = true;
+        self.problem_type = combine_problem_types(self.problem_type, formula.problem_type);
+        if let Some(wrapped) = simple_app_encoded_formula_owner(&formula, bank)? {
+            formulas.insert(wrapped);
+        }
+        self.fallback_formulas.push(formula);
+        Ok(())
+    }
+}
+
+impl Default for ParsedAppEncodeEntries {
+    fn default() -> Self {
+        Self {
+            saw_input_owner: false,
+            saw_formula_owner: false,
+            include_echoes: Vec::new(),
+            problem_type: ProblemType::FirstOrder,
+            fallback_formulas: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -9494,21 +9556,20 @@ enum SimpleFofFormula {
 fn parse_tptp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, bool, Vec<String>, Vec<SimpleAppEncodedFormula>), Diagnostic> {
-    let mut formulas = Vec::new();
-    let mut include_echoes = Vec::new();
-    let mut saw_input_owner = false;
-    let mut saw_formula_owner = false;
+    formulas: &mut FormulaSet,
+) -> Result<ParsedAppEncodeEntries, Diagnostic> {
+    let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+            result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
-            saw_input_owner = true;
-            saw_formula_owner = true;
-            formulas.push(parse_simple_tptp_app_encode_formula(scanner, bank)?);
+            let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
+            result.add_formula_owner(formula, bank, formulas)?;
         } else if scanner.test_id("include") {
-            include_echoes.push(parse_app_encode_ignored_include(scanner)?);
+            result
+                .include_echoes
+                .push(parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9520,31 +9581,29 @@ fn parse_tptp_app_encode_entry_list(
             ));
         }
     }
-    Ok((saw_input_owner, saw_formula_owner, include_echoes, formulas))
+    Ok(result)
 }
 
 fn parse_tstp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, bool, Vec<String>, Vec<SimpleAppEncodedFormula>), Diagnostic> {
-    let mut formulas = Vec::new();
-    let mut include_echoes = Vec::new();
-    let mut saw_input_owner = false;
-    let mut saw_formula_owner = false;
+    formulas: &mut FormulaSet,
+) -> Result<ParsedAppEncodeEntries, Diagnostic> {
+    let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+            result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
                 if formula.type_.query_tptp_type() != CP_TYPE_WATCH_CLAUSE {
-                    saw_input_owner = true;
-                    saw_formula_owner = true;
-                    formulas.push(formula);
+                    result.add_formula_owner(formula, bank, formulas)?;
                 }
             }
         } else if scanner.test_id("include") {
-            include_echoes.push(parse_app_encode_ignored_include(scanner)?);
+            result
+                .include_echoes
+                .push(parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9556,7 +9615,7 @@ fn parse_tstp_app_encode_entry_list(
             ));
         }
     }
-    Ok((saw_input_owner, saw_formula_owner, include_echoes, formulas))
+    Ok(result)
 }
 
 fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<String, Diagnostic> {
@@ -13682,16 +13741,16 @@ mod tests {
         proof_search_global_indices, resource_limit_warning_from_outcome,
         resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
         runtime_picosat_library_from_env, schedule_heuristic_selection,
-        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_statistics, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        LiteralComparison, ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag,
-        PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_statistics,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
+        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
+        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -13707,7 +13766,7 @@ mod tests {
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::formulasets::WrappedFormula;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
     use crate::clauses::rewrite::{
@@ -16240,20 +16299,20 @@ input_clause(c2,axiom,[++q(X)]).
         let fool_arg = fool_path.to_string_lossy().into_owned();
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
 
-        let plain = parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank).unwrap();
-        let plain_set = simple_app_encoded_formula_set(&plain.formulas, &mut bank)
-            .unwrap()
-            .expect("plain formula should use FormulaSetAppEncode");
+        let mut plain_set = FormulaSet::new();
+        let plain =
+            parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank, &mut plain_set).unwrap();
+        assert!(plain.saw_formula_owner);
         let rendered = plain_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
         assert!(rendered.contains("tff(owner_plain, axiom, "));
         assert!(rendered.contains('&'));
 
-        let fool = parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank).unwrap();
-        let fool_set = simple_app_encoded_formula_set(&fool.formulas, &mut bank)
-            .unwrap()
-            .expect("FOOL formulas should use FormulaSetAppEncode");
+        let mut fool_set = FormulaSet::new();
+        let fool =
+            parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank, &mut fool_set).unwrap();
+        assert!(fool.saw_formula_owner);
         let rendered = fool_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
