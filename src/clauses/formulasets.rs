@@ -200,6 +200,95 @@ pub struct FormulaSetCnfResult {
     pub formula_derivation_ops: Vec<i64>,
 }
 
+impl FormulaSetCnfResult {
+    fn add_higher_order_preprocess(&mut self, result: &FormulaSetHigherOrderPreprocessResult) {
+        self.formulas_named_to_db += result.formulas_named_to_db;
+        self.formulas_ites_lifted += result.formulas_ites_lifted;
+        self.formulas_lets_lifted += result.formulas_lets_lifted;
+        self.formulas_def_symbols_unfolded += result.formulas_def_symbols_unfolded;
+        self.unfolded_definition_rhs_rewritten += result.unfolded_definition_rhs_rewritten;
+        self.unfolded_definitions_archived += result.unfolded_definitions_archived;
+        self.unfolded_original_definitions_archived +=
+            result.unfolded_original_definitions_archived;
+        self.definition_symbol_applications += result.definition_symbol_applications;
+        self.formulas_lambda_normalized += result.formulas_lambda_normalized;
+        self.formula_derivation_ops
+            .extend(result.formula_derivation_ops.iter().copied());
+    }
+
+    fn add_fool_unroll(&mut self, result: &FormulaSetFoolUnrollResult) {
+        self.boolean_equalities_replaced += result.boolean_equalities_replaced;
+        self.formulas_fool_unrolled += result.formulas_unrolled;
+        self.formula_derivation_ops
+            .extend(result.formula_derivation_ops.iter().copied());
+    }
+
+    fn add_simplify(&mut self, result: &FormulaSetSimplifyResult) {
+        self.formulas_simplified += result.formulas_changed;
+        self.term_garbage_collections += result.term_garbage_collections;
+        self.terms_recovered_by_gc += result.terms_recovered_by_gc;
+        self.formula_derivation_ops
+            .extend(result.formula_derivation_ops.iter().copied());
+    }
+
+    fn add_introduce_defs(&mut self, result: &FormulaSetIntroduceDefsResult) {
+        self.definitions_introduced += result.definitions_introduced;
+        self.definition_applications += result.definition_applications;
+        self.definition_formulas_archived += result.archived_definitions;
+        self.active_definition_formulas_inserted += result.active_definitions_inserted;
+        self.formulas_rewritten_by_defs += result.formulas_rewritten;
+        self.formula_derivation_ops
+            .extend(result.formula_derivation_ops.iter().copied());
+    }
+
+    fn add_wrapped_cnf(&mut self, result: &WrappedFormulaCnfResult) {
+        self.clauses_generated += result.clauses_generated;
+        self.formula_derivation_ops
+            .extend(result.formula_derivation_ops.iter().copied());
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetCnfDocResult {
+    pub cnf: FormulaSetCnfResult,
+    pub preprocessing_write_results: Vec<ProofDocWriteResult>,
+    pub simplification_write_results: Vec<ProofDocWriteResult>,
+    pub definition_write_results: Vec<ProofDocWriteResult>,
+    pub definition_application_write_results: Vec<ProofDocWriteResult>,
+    pub cnf_formula_write_results: Vec<ProofDocWriteResult>,
+    pub cnf_clause_write_results: Vec<ProofDocWriteResult>,
+}
+
+impl FormulaSetCnfDocResult {
+    fn add_preprocess_doc(&mut self, result: FormulaSetHigherOrderPreprocessDocResult) {
+        self.cnf.add_higher_order_preprocess(&result.preprocess);
+        self.preprocessing_write_results
+            .extend(result.write_results);
+    }
+
+    fn add_simplify_doc(&mut self, result: FormulaSetSimplifyDocResult) {
+        self.cnf.add_simplify(&result.simplify);
+        self.simplification_write_results
+            .extend(result.write_results);
+    }
+
+    fn add_introduce_defs_doc(&mut self, result: FormulaSetIntroduceDefsDocResult) {
+        self.cnf.add_introduce_defs(&result.introduce);
+        self.definition_write_results
+            .extend(result.definition_write_results);
+        self.definition_application_write_results
+            .extend(result.application_write_results);
+    }
+
+    fn add_wrapped_cnf_doc(&mut self, result: WrappedFormulaCnfDocResult) {
+        self.cnf.add_wrapped_cnf(&result.cnf);
+        self.cnf_formula_write_results
+            .extend(result.formula_write_results);
+        self.cnf_clause_write_results
+            .extend(result.clause_write_results);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormulaSetCnfOptions {
     pub miniscope_limit: i64,
@@ -818,6 +907,20 @@ struct FormulaSetCnfDrain<'a> {
     result: &'a mut FormulaSetCnfResult,
 }
 
+struct FormulaSetCnfDocDrain<'a, W: fmt::Write> {
+    archive: &'a mut FormulaSet,
+    clauseset: &'a mut ClauseSet,
+    bank: &'a mut TermBank,
+    fresh_vars: &'a VarBank,
+    options: FormulaSetCnfOptions,
+    old_nodes: &'a mut i64,
+    gc_threshold: &'a mut i64,
+    output: &'a mut W,
+    session: &'a mut ProofDocSession,
+    render_options: FormulaProofDocRenderOptions,
+    result: &'a mut FormulaSetCnfDocResult,
+}
+
 fn drain_formula_set_to_cnf(
     set: &mut FormulaSet,
     drain: &mut FormulaSetCnfDrain<'_>,
@@ -853,6 +956,53 @@ fn drain_formula_set_to_cnf(
                 drain.archive,
                 drain.clauseset,
                 drain.result,
+            );
+            *drain.old_nodes = drain.bank.non_var_term_nodes();
+            *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
+        }
+    }
+
+    Ok(())
+}
+
+fn drain_formula_set_to_cnf_with_docs<W: fmt::Write>(
+    set: &mut FormulaSet,
+    drain: &mut FormulaSetCnfDocDrain<'_, W>,
+) -> Result<(), Diagnostic> {
+    while let Some(handle) = set.extract_first() {
+        let source = FormulaDerivationRef::new(handle.ident());
+        let mut form = handle.flat_copy();
+        drain.archive.insert(handle);
+        drain.result.cnf.original_formulas_archived += 1;
+        drain.result.cnf.quoted_formula_sources.push(source);
+
+        let cnf_result = {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut *drain.output,
+                &mut *drain.session,
+                drain.render_options,
+            );
+            form.cnf2_into_with_docs(
+                &mut doc_context,
+                drain.bank,
+                drain.clauseset,
+                drain.fresh_vars,
+                drain.options.miniscope_limit,
+                drain.options.fool_unroll,
+            )?
+        };
+        drain.result.add_wrapped_cnf_doc(cnf_result);
+
+        let cnf_copy_has_formula = form.formula.is_some();
+        drain.archive.insert(form);
+        drain.result.cnf.cnf_formulas_archived += 1;
+        if cnf_copy_has_formula && drain.bank.non_var_term_nodes() > *drain.gc_threshold {
+            collect_formula_set_cnf_garbage(
+                drain.bank,
+                set,
+                drain.archive,
+                drain.clauseset,
+                &mut drain.result.cnf,
             );
             *drain.old_nodes = drain.bank.non_var_term_nodes();
             *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
@@ -3710,6 +3860,132 @@ impl FormulaSet {
 
         if bank.non_var_term_nodes() != old_nodes {
             collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
+        }
+
+        Ok(result)
+    }
+
+    /// Applies C `FormulaSetCNF2` and emits represented formula proof docs.
+    ///
+    /// This is the proof-documenting counterpart to [`Self::cnf2_into`]. It
+    /// preserves the same supported phase order while threading one
+    /// [`ProofDocSession`] through represented formula-level documentation for
+    /// named-to-DB conversion, definition-symbol unfolding, lambda
+    /// normalization, simplification, definition introduction/application, and
+    /// wrapped CNF conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any CNF phase, proof-document rendering, proof
+    /// writing, garbage collection bookkeeping, or clause insertion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or if a malformed
+    /// formula violates the same preconditions as the underlying phase wrappers.
+    pub fn cnf2_into_with_docs<W: fmt::Write>(
+        &mut self,
+        doc: &mut WrappedFormulaCnfDocContext<'_, W>,
+        archive: &mut Self,
+        clauseset: &mut ClauseSet,
+        bank: &mut TermBank,
+        fresh_vars: &VarBank,
+        options: FormulaSetCnfOptions,
+    ) -> Result<FormulaSetCnfDocResult, Diagnostic> {
+        let mut result = FormulaSetCnfDocResult::default();
+        let mut old_nodes = bank.non_var_term_nodes();
+        let mut gc_threshold = formula_set_gc_threshold(old_nodes);
+        doc.render_options.problem_type = options.problem_type;
+
+        let named_result = self.named_to_db_lambdas_with_docs(
+            &mut *doc.output,
+            bank,
+            &mut *doc.session,
+            doc.render_options,
+        )?;
+        result.add_preprocess_doc(named_result);
+
+        let lift_ite_result = self.lift_ites(bank, options.problem_type)?;
+        result.cnf.add_higher_order_preprocess(&lift_ite_result);
+
+        let lift_let_result = self.lift_lets(bank, options.problem_type)?;
+        result.cnf.add_higher_order_preprocess(&lift_let_result);
+
+        let unfold_def_result = self.unfold_def_symbols_with_docs(
+            archive,
+            &mut *doc.output,
+            bank,
+            &mut *doc.session,
+            doc.render_options,
+            options.higher_order.unfold_only_forms,
+        )?;
+        result.add_preprocess_doc(unfold_def_result);
+
+        if options.higher_order.lambda_to_forall {
+            let normalize_result = self.lambda_normalize_forall_with_docs(
+                &mut *doc.output,
+                bank,
+                &mut *doc.session,
+                doc.render_options,
+            )?;
+            result.add_preprocess_doc(normalize_result);
+        }
+
+        if options.fool_unroll {
+            let unroll_result = self.unroll_fool(bank)?;
+            result.cnf.add_fool_unroll(&unroll_result);
+        }
+
+        let simplify_result = self.simplify_with_garbage_collection_and_docs(
+            &mut *doc.output,
+            bank,
+            &mut *doc.session,
+            doc.render_options.full_terms,
+            doc.render_options.problem_type,
+            true,
+        )?;
+        result.add_simplify_doc(simplify_result);
+
+        let intro_result = self.introduce_defs_with_docs(
+            archive,
+            &mut *doc.output,
+            bank,
+            &mut *doc.session,
+            doc.render_options,
+            options.def_limit,
+        )?;
+        result.add_introduce_defs_doc(intro_result);
+
+        drain_formula_set_to_cnf_with_docs(
+            self,
+            &mut FormulaSetCnfDocDrain {
+                archive,
+                clauseset,
+                bank,
+                fresh_vars,
+                options,
+                old_nodes: &mut old_nodes,
+                gc_threshold: &mut gc_threshold,
+                output: &mut *doc.output,
+                session: &mut *doc.session,
+                render_options: doc.render_options,
+                result: &mut result,
+            },
+        )?;
+
+        if options.higher_order.lift_lambdas {
+            apply_post_cnf_clause_lambda_lifting(
+                clauseset,
+                archive,
+                bank,
+                fresh_vars,
+                options.fool_unroll,
+                &mut result.cnf,
+            )?;
+        }
+
+        if bank.non_var_term_nodes() != old_nodes {
+            collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result.cnf);
         }
 
         Ok(result)
@@ -7327,6 +7603,170 @@ mod tests {
         assert_eq!(rewritten_original.argument(1).as_ref(), Some(&tail));
         assert_eq!(clauses.members(), result.clauses_generated);
         assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn formula_set_cnf2_with_docs_threads_phase_definition_and_split_output() {
+        let mut bank = test_bank();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let simpl_left = typed_const(&mut bank, "set_cnf_doc_simpl_left");
+        let simpl_right = typed_const(&mut bank, "set_cnf_doc_simpl_right");
+        let simpl_atom = bool_binary_with_code(&mut bank, eqn_code, &simpl_left, &simpl_right);
+        let or_code = bank.signature().or_code();
+        let simpl_formula = bool_binary_with_code(&mut bank, or_code, &false_formula, &simpl_atom);
+        let mut simpl_wrapper = WrappedFormula::wt_formula_alloc(simpl_formula);
+        simpl_wrapper.set_prop(CP_INPUT_FORMULA);
+
+        let first = typed_const(&mut bank, "set_cnf_doc_intro_first");
+        let second = typed_const(&mut bank, "set_cnf_doc_intro_second");
+        let third = typed_const(&mut bank, "set_cnf_doc_intro_third");
+        let fourth = typed_const(&mut bank, "set_cnf_doc_intro_fourth");
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let intro_formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut intro_wrapper = WrappedFormula::wt_formula_alloc(intro_formula);
+        intro_wrapper.set_prop(CP_INPUT_FORMULA);
+
+        let mut set = FormulaSet::new();
+        set.insert(simpl_wrapper);
+        set.insert(intro_wrapper);
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut rendered,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+            );
+            set.cnf2_into_with_docs(
+                &mut doc_context,
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder).with_def_limit(1),
+            )
+            .unwrap()
+        };
+
+        assert!(set.is_empty());
+        assert_eq!(result.cnf.formulas_simplified, 1);
+        assert_eq!(result.cnf.definitions_introduced, 1);
+        assert_eq!(result.cnf.definition_applications, 1);
+        assert_eq!(result.cnf.original_formulas_archived, 3);
+        assert_eq!(result.cnf.cnf_formulas_archived, 3);
+        assert_eq!(clauses.members(), result.cnf.clauses_generated);
+        assert_eq!(
+            result.simplification_write_results,
+            vec![ProofDocWriteResult::printed()]
+        );
+        assert_eq!(
+            result.definition_write_results,
+            vec![
+                ProofDocWriteResult::printed(),
+                ProofDocWriteResult::printed()
+            ]
+        );
+        assert_eq!(
+            result.definition_application_write_results,
+            vec![ProofDocWriteResult::printed()]
+        );
+        assert_eq!(
+            result.cnf_clause_write_results.len(),
+            usize::try_from(result.cnf.clauses_generated).unwrap()
+        );
+        assert!(result
+            .cnf_clause_write_results
+            .iter()
+            .all(|write_result| *write_result == ProofDocWriteResult::printed()));
+
+        let simpl_pos = rendered.find("fof_simplification(").unwrap();
+        let intro_pos = rendered.find("introduced").unwrap();
+        let split_pos = rendered.find("split_equiv(").unwrap();
+        let apply_pos = rendered.find("apply_def(").unwrap();
+        let clause_pos = rendered.rfind("split_conjunct(").unwrap();
+        assert!(simpl_pos < intro_pos);
+        assert!(intro_pos < split_pos);
+        assert!(split_pos < apply_pos);
+        assert!(apply_pos < clause_pos);
+        assert!(session.id_source.current_ident() > 0);
+    }
+
+    #[test]
+    fn formula_set_cnf2_with_docs_suppresses_output_but_keeps_c_side_effects() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_cnf_doc_suppress_a");
+        let b = typed_const(&mut bank, "set_cnf_doc_suppress_b");
+        let c = typed_const(&mut bank, "set_cnf_doc_suppress_c");
+        let d = typed_const(&mut bank, "set_cnf_doc_suppress_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_left = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right_right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let right_conjunction =
+            bool_binary_with_code(&mut bank, and_code, &right_left, &right_right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let old_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut rendered,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+            );
+            set.cnf2_into_with_docs(
+                &mut doc_context,
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder),
+            )
+            .unwrap()
+        };
+
+        assert!(rendered.is_empty());
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert_eq!(result.cnf.original_formulas_archived, 1);
+        assert_eq!(result.cnf.cnf_formulas_archived, 1);
+        assert_eq!(result.cnf.clauses_generated, 2);
+        assert_eq!(
+            result.cnf_formula_write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert_eq!(
+            result.cnf_clause_write_results,
+            vec![
+                ProofDocWriteResult::suppressed(),
+                ProofDocWriteResult::suppressed()
+            ]
+        );
+        let archived = archive.iter().collect::<Vec<_>>();
+        assert_eq!(archived[0].ident(), old_ident);
+        assert!(!archived[1].query_prop(CP_INPUT_FORMULA));
     }
 
     #[test]
