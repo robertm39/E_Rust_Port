@@ -272,7 +272,7 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 
 ### Change Later
 
-- Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so remaining app-encode fallback records and helper parser banks cannot bypass fixed-code reservation accidentally.
+- Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so helper parser banks cannot bypass fixed-code reservation accidentally.
 - If command-line parsing eventually allows list support to change after some signatures exist, compare C's global `SigSupportLists` timing against Rust's per-signature flag before exposing a higher-level API.
 
 ### Porting Focus

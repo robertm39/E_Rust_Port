@@ -36,7 +36,7 @@ use crate::clauses::clause::{
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
     CP_IS_LAMBDA_DEF, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
-    CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
+    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
     clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_fcode_alloc,
@@ -49,9 +49,7 @@ use crate::clauses::derivation::{
     deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
     op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE,
 };
-use crate::clauses::eqn::{
-    eqn_fof_parse, eqn_write_app_encode, prepare_predicate_literal, Eqn, EqnPrintOptions,
-};
+use crate::clauses::eqn::{eqn_fof_parse, prepare_predicate_literal, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
@@ -133,10 +131,10 @@ use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
 };
-use crate::terms::simpletypes::{type_app_encoded_name, Type};
+use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_app_encode, term_collect_variables, term_standard_weight};
+use crate::terms::termfunc::{term_collect_variables, term_standard_weight};
 use crate::terms::termtypes::{term_identity_id, DerefType, RewriteLevel, Term};
 
 const C_INT_MAX: i64 = i32::MAX as i64;
@@ -4770,7 +4768,6 @@ fn run_app_encode<W: Write + ?Sized>(
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let mut fallback_formulas = Vec::new();
     let mut include_echoes = Vec::new();
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
@@ -4795,7 +4792,6 @@ fn run_app_encode<W: Write + ?Sized>(
         include_echoes.extend(parsed_file.include_echoes);
         app_encode_problem_type =
             combine_problem_types(app_encode_problem_type, parsed_file.problem_type);
-        fallback_formulas.extend(parsed_file.fallback_formulas);
     }
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
@@ -4811,7 +4807,6 @@ fn run_app_encode<W: Write + ?Sized>(
     write_app_encoded_formula_set(
         output,
         &mut state,
-        &fallback_formulas,
         saw_any_formula_owner,
         app_encode_problem_type,
     )?;
@@ -4831,7 +4826,6 @@ fn temporary_executable_term_bank(
 fn write_app_encoded_formula_set<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     state: &mut ProofState,
-    fallback_formulas: &[SimpleAppEncodedFormula],
     saw_formula_owner: bool,
     problem_type: ProblemType,
 ) -> Result<(), EProverError> {
@@ -4839,28 +4833,10 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
         return Ok(());
     }
 
-    {
-        let (bank, formula_set, _watchlist) = state.terms_f_axioms_watchlist_mut();
-        if !formula_set.is_empty() {
-            let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
-            output.write_stdout_side_channel(rendered.as_bytes())?;
-            return Ok(());
-        }
-    }
-
-    let fallback_rendered = {
-        let bank = state.terms_mut();
-        match simple_app_encoded_formula_set(fallback_formulas, bank)? {
-            Some(formula_set) => Some(formula_set.app_encode_string(bank, problem_type, true)?),
-            None => None,
-        }
-    };
-    if let Some(rendered) = fallback_rendered {
-        output.write_stdout_side_channel(rendered.as_bytes())?;
-        return Ok(());
-    }
-
-    write_simple_app_encoded_formula_set(output, state.terms_mut(), fallback_formulas, problem_type)
+    let (bank, formula_set, _watchlist) = state.terms_f_axioms_watchlist_mut();
+    let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
+    output.write_stdout_side_channel(rendered.as_bytes())?;
+    Ok(())
 }
 
 fn write_app_encode_include_echoes<W: Write + ?Sized>(
@@ -4873,31 +4849,15 @@ fn write_app_encode_include_echoes<W: Write + ?Sized>(
     Ok(())
 }
 
-fn simple_app_encoded_formula_set(
-    formulas: &[SimpleAppEncodedFormula],
-    bank: &mut TermBank,
-) -> Result<Option<FormulaSet>, Diagnostic> {
-    let mut set = FormulaSet::new();
-    for formula in formulas {
-        let Some(wrapped) = simple_app_encoded_formula_owner(formula, bank)? else {
-            return Ok(None);
-        };
-        set.insert(wrapped);
-    }
-    Ok(Some(set))
-}
-
 fn simple_app_encoded_formula_owner(
     formula: &SimpleAppEncodedFormula,
     bank: &mut TermBank,
-) -> Result<Option<WrappedFormula>, Diagnostic> {
-    let Some(term_formula) = simple_fof_formulas_to_tformula(&formula.formulas, bank)? else {
-        return Ok(None);
-    };
+) -> Result<WrappedFormula, Diagnostic> {
+    let term_formula = simple_fof_formulas_to_tformula(&formula.formulas, bank)?;
     let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
     wrapped.set_properties(formula.type_);
     wrapped.set_info(Some(ClauseInfo::new(Some(&formula.name), None, -1, -1)));
-    Ok(Some(wrapped))
+    Ok(wrapped)
 }
 
 fn simple_fof_formula_owner(
@@ -4909,9 +4869,7 @@ fn simple_fof_formula_owner(
     column: i64,
     bank: &mut TermBank,
 ) -> Result<Option<WrappedFormula>, Diagnostic> {
-    let Some(term_formula) = simple_fof_formulas_to_tformula(formulas, bank)? else {
-        return Ok(None);
-    };
+    let term_formula = simple_fof_formulas_to_tformula(formulas, bank)?;
     let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
     wrapped.set_properties(properties);
     wrapped.set_info(Some(ClauseInfo::new(Some(name), source, line, column)));
@@ -4921,7 +4879,7 @@ fn simple_fof_formula_owner(
 fn simple_fof_formulas_to_tformula(
     formulas: &[SimpleFofFormula],
     bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
+) -> Result<Term, Diagnostic> {
     simple_fof_formula_chain_to_tformula(formulas, bank.signature().and_code(), bank)
 }
 
@@ -4929,30 +4887,26 @@ fn simple_fof_formula_chain_to_tformula(
     formulas: &[SimpleFofFormula],
     op: i64,
     bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
+) -> Result<Term, Diagnostic> {
     let Some((first, rest)) = formulas.split_first() else {
-        return tformula_prop_constant_alloc(bank, true).map(Some);
+        return tformula_prop_constant_alloc(bank, true);
     };
-    let Some(mut current) = simple_fof_formula_to_tformula(first, bank)? else {
-        return Ok(None);
-    };
+    let mut current = simple_fof_formula_to_tformula(first, bank)?;
     for formula in rest {
-        let Some(next) = simple_fof_formula_to_tformula(formula, bank)? else {
-            return Ok(None);
-        };
+        let next = simple_fof_formula_to_tformula(formula, bank)?;
         current = tformula_fcode_alloc(bank, op, current, Some(next))?;
     }
-    Ok(Some(current))
+    Ok(current)
 }
 
 fn simple_fof_formula_to_tformula(
     formula: &SimpleFofFormula,
     bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
+) -> Result<Term, Diagnostic> {
     match formula {
-        SimpleFofFormula::Truth(value) => tformula_prop_constant_alloc(bank, *value).map(Some),
+        SimpleFofFormula::Truth(value) => tformula_prop_constant_alloc(bank, *value),
         SimpleFofFormula::Literal(literal) => {
-            tformula_lit_alloc(bank, literal, ProblemType::FirstOrder).map(Some)
+            tformula_lit_alloc(bank, literal, ProblemType::FirstOrder)
         }
         SimpleFofFormula::Implication {
             antecedents,
@@ -4991,10 +4945,8 @@ fn simple_fof_formula_to_tformula(
             simple_fof_formula_chain_to_tformula(formulas, bank.signature().or_code(), bank)
         }
         SimpleFofFormula::Negation(formulas) => {
-            let Some(term) = simple_fof_formulas_to_tformula(formulas, bank)? else {
-                return Ok(None);
-            };
-            tformula_fcode_alloc(bank, bank.signature().not_code(), term, None).map(Some)
+            let term = simple_fof_formulas_to_tformula(formulas, bank)?;
+            tformula_fcode_alloc(bank, bank.signature().not_code(), term, None)
         }
         SimpleFofFormula::Universal { bound, formulas } => {
             simple_fof_quantified_formula_to_tformula(bound, formulas, true, bank)
@@ -5010,14 +4962,10 @@ fn simple_fof_binary_formula_to_tformula(
     op: i64,
     right: &[SimpleFofFormula],
     bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
-    let Some(left) = simple_fof_formulas_to_tformula(left, bank)? else {
-        return Ok(None);
-    };
-    let Some(right) = simple_fof_formulas_to_tformula(right, bank)? else {
-        return Ok(None);
-    };
-    tformula_fcode_alloc(bank, op, left, Some(right)).map(Some)
+) -> Result<Term, Diagnostic> {
+    let left = simple_fof_formulas_to_tformula(left, bank)?;
+    let right = simple_fof_formulas_to_tformula(right, bank)?;
+    tformula_fcode_alloc(bank, op, left, Some(right))
 }
 
 fn simple_fof_quantified_formula_to_tformula(
@@ -5025,10 +4973,8 @@ fn simple_fof_quantified_formula_to_tformula(
     formulas: &[SimpleFofFormula],
     is_universal: bool,
     bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
-    let Some(mut body) = simple_fof_formulas_to_tformula(formulas, bank)? else {
-        return Ok(None);
-    };
+) -> Result<Term, Diagnostic> {
+    let mut body = simple_fof_formulas_to_tformula(formulas, bank)?;
     let quantifier = if is_universal {
         bank.signature().qall_code()
     } else {
@@ -5037,210 +4983,7 @@ fn simple_fof_quantified_formula_to_tformula(
     for variable in bound.iter().rev() {
         body = tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(body))?;
     }
-    Ok(Some(body))
-}
-
-fn write_simple_app_encoded_formula_set<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
-    bank: &mut TermBank,
-    formulas: &[SimpleAppEncodedFormula],
-    problem_type: ProblemType,
-) -> Result<(), EProverError> {
-    for formula in formulas {
-        simple_fof_preload_app_encoded_formulas(&formula.formulas, bank)?;
-    }
-
-    let mut rendered = Vec::new();
-    bank.signature()
-        .type_bank()
-        .app_encode_types(&mut rendered, problem_type, true)?;
-    bank.signature().print_app_encoded_decls(&mut rendered)?;
-
-    for formula in formulas {
-        if simple_fof_formulas_are_app_encoded_prop_true(&formula.formulas) {
-            continue;
-        }
-
-        let mut formula_text = String::new();
-        write!(
-            formula_text,
-            "tff({}, {}, ",
-            formula.name,
-            app_encoded_formula_role(formula.type_)
-        )
-        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-        simple_fof_write_app_encoded_formulas(&mut formula_text, bank, &formula.formulas)?;
-        formula_text.push_str(").\n");
-        rendered.extend_from_slice(formula_text.as_bytes());
-    }
-
-    output.write_stdout_side_channel(&rendered)?;
-    Ok(())
-}
-
-fn simple_fof_preload_app_encoded_formulas(
-    formulas: &[SimpleFofFormula],
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    for formula in formulas {
-        simple_fof_preload_app_encoded_formula(formula, bank)?;
-    }
-    Ok(())
-}
-
-fn simple_fof_preload_app_encoded_formula(
-    formula: &SimpleFofFormula,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    match formula {
-        SimpleFofFormula::Truth(_) => {}
-        SimpleFofFormula::Literal(literal) => {
-            simple_fof_preload_app_encoded_literal(literal, bank)?;
-        }
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        }
-        | SimpleFofFormula::ReverseImplication {
-            antecedents,
-            consequents,
-        } => {
-            simple_fof_preload_app_encoded_formulas(antecedents, bank)?;
-            simple_fof_preload_app_encoded_formulas(consequents, bank)?;
-        }
-        SimpleFofFormula::Equivalence { left, right }
-        | SimpleFofFormula::Xor { left, right }
-        | SimpleFofFormula::Nand { left, right }
-        | SimpleFofFormula::Nor { left, right } => {
-            simple_fof_preload_app_encoded_formulas(left, bank)?;
-            simple_fof_preload_app_encoded_formulas(right, bank)?;
-        }
-        SimpleFofFormula::Conjunction(formulas)
-        | SimpleFofFormula::Disjunction(formulas)
-        | SimpleFofFormula::Negation(formulas)
-        | SimpleFofFormula::Universal { formulas, .. }
-        | SimpleFofFormula::Existential { formulas, .. } => {
-            simple_fof_preload_app_encoded_formulas(formulas, bank)?;
-        }
-    }
-    Ok(())
-}
-
-fn simple_fof_preload_app_encoded_literal(
-    literal: &Eqn,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    if let Some(term) = simple_fof_literal_formula_term(literal, bank) {
-        simple_fof_preload_app_encoded_formula_term(term, bank)
-    } else if literal.is_equ_lit(bank)
-        && simple_fof_term_contains_fool(&[literal.left(), literal.right()])
-    {
-        simple_fof_preload_app_encoded_formula_or_term(literal.left(), bank)?;
-        simple_fof_preload_app_encoded_formula_or_term(literal.right(), bank)
-    } else {
-        let mut sink = String::new();
-        eqn_write_app_encode(&mut sink, bank, literal, false)
-    }
-}
-
-fn simple_fof_preload_app_encoded_formula_term(
-    term: &Term,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    if term.f_code() == SIG_ITE_CODE {
-        for argument in term.argument_clones().into_iter().flatten() {
-            simple_fof_preload_app_encoded_formula_term(&argument, bank)?;
-        }
-        return Ok(());
-    }
-
-    if term.f_code() == SIG_LET_CODE {
-        return simple_fof_preload_app_encoded_let(term, bank);
-    }
-
-    if term.f_code() == bank.signature().not_code() {
-        let argument = simple_fof_formula_term_argument(term, 0, "$not")?;
-        return simple_fof_preload_app_encoded_formula_term(&argument, bank);
-    }
-
-    if simple_fof_app_encoded_formula_binary_operator(bank, term.f_code()).is_some() {
-        for index in 0..2 {
-            let argument = simple_fof_formula_term_argument(term, index, "binary formula")?;
-            simple_fof_preload_app_encoded_formula_term(&argument, bank)?;
-        }
-        return Ok(());
-    }
-
-    if term.f_code() == bank.signature().qall_code() || term.f_code() == bank.signature().qex_code()
-    {
-        let body = simple_fof_formula_term_argument(term, 1, "quantified formula")?;
-        return simple_fof_preload_app_encoded_formula_term(&body, bank);
-    }
-
-    if term.f_code() == bank.signature().eqn_code() || term.f_code() == bank.signature().neqn_code()
-    {
-        let literal = Eqn::tb_term_decode(bank, term)?;
-        simple_fof_preload_app_encoded_literal(&literal, bank)
-    } else {
-        let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
-        let mut sink = String::new();
-        eqn_write_app_encode(&mut sink, bank, &literal, false)
-    }
-}
-
-fn simple_fof_preload_app_encoded_let(term: &Term, bank: &mut TermBank) -> Result<(), Diagnostic> {
-    let body_index = term
-        .arity()
-        .checked_sub(1)
-        .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let body is uninitialized"))?;
-    for index in 0..body_index {
-        let definition = simple_fof_formula_term_argument(term, index, "$let definition")?;
-        simple_fof_preload_app_encoded_let_definition(&definition, bank)?;
-    }
-    let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
-    simple_fof_preload_app_encoded_formula_or_term(&body, bank)
-}
-
-fn simple_fof_preload_app_encoded_let_definition(
-    definition: &Term,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    if definition.f_code() != bank.signature().eqn_code() {
-        return Err(Diagnostic::new(
-            ErrorCode::TYPE_ERROR,
-            "$let definition must be an equality",
-        ));
-    }
-    let left = simple_fof_formula_term_argument(definition, 0, "$let definition")?;
-    let right = simple_fof_formula_term_argument(definition, 1, "$let definition")?;
-    simple_fof_preload_app_encoded_formula_or_term(&left, bank)?;
-    simple_fof_preload_app_encoded_formula_or_term(&right, bank)
-}
-
-fn simple_fof_preload_app_encoded_formula_or_term(
-    term: &Term,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    if term.type_().as_ref().is_some_and(Type::is_bool) {
-        simple_fof_preload_app_encoded_formula_term(term, bank)
-    } else if term.f_code() == SIG_ITE_CODE {
-        simple_fof_preload_app_encoded_formula_term(
-            &simple_fof_formula_term_argument(term, 0, "$ite")?,
-            bank,
-        )?;
-        for index in 1..3 {
-            simple_fof_preload_app_encoded_formula_or_term(
-                &simple_fof_formula_term_argument(term, index, "$ite")?,
-                bank,
-            )?;
-        }
-        Ok(())
-    } else if term.f_code() == SIG_LET_CODE {
-        simple_fof_preload_app_encoded_let(term, bank)
-    } else {
-        let _encoded = term_app_encode(term, bank.signature_mut())?;
-        Ok(())
-    }
+    Ok(body)
 }
 
 fn simple_fof_term_contains_fool(terms: &[&Term]) -> bool {
@@ -5252,340 +4995,6 @@ fn simple_fof_term_contains_fool(terms: &[&Term]) -> bool {
         stack.extend(term.argument_clones().into_iter().flatten());
     }
     false
-}
-
-fn simple_fof_formulas_are_app_encoded_prop_true(formulas: &[SimpleFofFormula]) -> bool {
-    matches!(formulas, [SimpleFofFormula::Truth(true)])
-}
-
-fn app_encoded_formula_role(properties: FormulaProperties) -> &'static str {
-    match properties.query_tptp_type() {
-        CP_TYPE_AXIOM if properties.query(CP_INPUT_FORMULA) => "axiom",
-        CP_TYPE_HYPOTHESIS => "hypothesis",
-        CP_TYPE_CONJECTURE => "conjecture",
-        CP_TYPE_QUESTION => "question",
-        CP_TYPE_LEMMA => "lemma",
-        CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
-        _ => "plain",
-    }
-}
-
-fn simple_fof_write_app_encoded_formulas(
-    output: &mut String,
-    bank: &mut TermBank,
-    formulas: &[SimpleFofFormula],
-) -> Result<(), Diagnostic> {
-    if let Some((first, rest)) = formulas.split_first() {
-        if rest.is_empty() {
-            return simple_fof_write_app_encoded_formula(output, bank, first);
-        }
-
-        output.push('(');
-        simple_fof_write_app_encoded_formula(output, bank, first)?;
-        for formula in rest {
-            output.push('&');
-            simple_fof_write_app_encoded_formula(output, bank, formula)?;
-        }
-        output.push(')');
-        Ok(())
-    } else {
-        simple_fof_write_app_encoded_truth(output, bank, true)
-    }
-}
-
-fn simple_fof_write_app_encoded_formula(
-    output: &mut String,
-    bank: &mut TermBank,
-    formula: &SimpleFofFormula,
-) -> Result<(), Diagnostic> {
-    match formula {
-        SimpleFofFormula::Truth(value) => simple_fof_write_app_encoded_truth(output, bank, *value),
-        SimpleFofFormula::Literal(literal) => {
-            simple_fof_write_app_encoded_literal(output, bank, literal)
-        }
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        } => simple_fof_write_app_encoded_binary(output, bank, antecedents, "=>", consequents),
-        SimpleFofFormula::ReverseImplication {
-            antecedents,
-            consequents,
-        } => simple_fof_write_app_encoded_binary(output, bank, consequents, "<=", antecedents),
-        SimpleFofFormula::Equivalence { left, right } => {
-            simple_fof_write_app_encoded_binary(output, bank, left, "<=>", right)
-        }
-        SimpleFofFormula::Xor { left, right } => {
-            simple_fof_write_app_encoded_binary(output, bank, left, "<~>", right)
-        }
-        SimpleFofFormula::Nand { left, right } => {
-            simple_fof_write_app_encoded_binary(output, bank, left, "~&", right)
-        }
-        SimpleFofFormula::Nor { left, right } => {
-            simple_fof_write_app_encoded_binary(output, bank, left, "~|", right)
-        }
-        SimpleFofFormula::Conjunction(formulas) => {
-            simple_fof_write_app_encoded_chain(output, bank, formulas, "&")
-        }
-        SimpleFofFormula::Disjunction(formulas) => {
-            simple_fof_write_app_encoded_chain(output, bank, formulas, "|")
-        }
-        SimpleFofFormula::Negation(formulas) => {
-            output.push_str("~(");
-            simple_fof_write_app_encoded_formulas(output, bank, formulas)?;
-            output.push(')');
-            Ok(())
-        }
-        SimpleFofFormula::Universal { bound, formulas } => {
-            simple_fof_write_app_encoded_quantified(output, bank, "!", bound, formulas)
-        }
-        SimpleFofFormula::Existential { bound, formulas } => {
-            simple_fof_write_app_encoded_quantified(output, bank, "?", bound, formulas)
-        }
-    }
-}
-
-fn simple_fof_write_app_encoded_literal(
-    output: &mut String,
-    bank: &mut TermBank,
-    literal: &Eqn,
-) -> Result<(), Diagnostic> {
-    if let Some(term) = simple_fof_literal_formula_term(literal, bank) {
-        if literal.is_positive() {
-            simple_fof_write_app_encoded_formula_term(output, bank, term)
-        } else {
-            output.push_str("~(");
-            simple_fof_write_app_encoded_formula_term(output, bank, term)?;
-            output.push(')');
-            Ok(())
-        }
-    } else if literal.is_equ_lit(bank)
-        && simple_fof_term_contains_fool(&[literal.left(), literal.right()])
-    {
-        simple_fof_write_app_encoded_formula_or_term(output, bank, literal.left())?;
-        if literal.is_negative() {
-            output.push('!');
-        }
-        output.push('=');
-        simple_fof_write_app_encoded_formula_or_term(output, bank, literal.right())
-    } else {
-        eqn_write_app_encode(output, bank, literal, false)
-    }
-}
-
-fn simple_fof_literal_formula_term<'a>(literal: &'a Eqn, bank: &TermBank) -> Option<&'a Term> {
-    (literal.right() == bank.true_term()
-        && matches!(literal.left().f_code(), SIG_ITE_CODE | SIG_LET_CODE))
-    .then_some(literal.left())
-}
-
-fn simple_fof_write_app_encoded_formula_term(
-    output: &mut String,
-    bank: &mut TermBank,
-    term: &Term,
-) -> Result<(), Diagnostic> {
-    if term.f_code() == SIG_ITE_CODE {
-        output.push_str("$ite(");
-        for index in 0..3 {
-            if index != 0 {
-                output.push(',');
-            }
-            let argument = term.argument(index).ok_or_else(|| {
-                Diagnostic::new(ErrorCode::TYPE_ERROR, "$ite argument is uninitialized")
-            })?;
-            simple_fof_write_app_encoded_formula_term(output, bank, &argument)?;
-        }
-        output.push(')');
-        return Ok(());
-    }
-
-    if term.f_code() == SIG_LET_CODE {
-        return simple_fof_write_app_encoded_let(output, bank, term);
-    }
-
-    if term.f_code() == bank.signature().not_code() {
-        output.push_str("~(");
-        let argument = simple_fof_formula_term_argument(term, 0, "$not")?;
-        simple_fof_write_app_encoded_formula_term(output, bank, &argument)?;
-        output.push(')');
-        return Ok(());
-    }
-
-    if let Some(operator) = simple_fof_app_encoded_formula_binary_operator(bank, term.f_code()) {
-        output.push('(');
-        let left = simple_fof_formula_term_argument(term, 0, "binary formula")?;
-        simple_fof_write_app_encoded_formula_term(output, bank, &left)?;
-        output.push_str(operator);
-        let right = simple_fof_formula_term_argument(term, 1, "binary formula")?;
-        simple_fof_write_app_encoded_formula_term(output, bank, &right)?;
-        output.push(')');
-        return Ok(());
-    }
-
-    if term.f_code() == bank.signature().qall_code() || term.f_code() == bank.signature().qex_code()
-    {
-        let quantifier = if term.f_code() == bank.signature().qall_code() {
-            "!"
-        } else {
-            "?"
-        };
-        let variable = simple_fof_formula_term_argument(term, 0, "quantified formula")?;
-        let body = simple_fof_formula_term_argument(term, 1, "quantified formula")?;
-        let type_ = variable.type_().ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::TYPE_ERROR,
-                "app-encoded quantified variable has no type",
-            )
-        })?;
-        let type_name = type_app_encoded_name(&type_)?;
-        write!(
-            output,
-            "{quantifier}[{}:{type_name}]:",
-            bank.term_string(&variable, true)
-        )
-        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-        simple_fof_write_app_encoded_formula_term(output, bank, &body)?;
-        return Ok(());
-    }
-
-    if term.f_code() == bank.signature().eqn_code() || term.f_code() == bank.signature().neqn_code()
-    {
-        let literal = Eqn::tb_term_decode(bank, term)?;
-        simple_fof_write_app_encoded_literal(output, bank, &literal)
-    } else {
-        let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
-        eqn_write_app_encode(output, bank, &literal, false)
-    }
-}
-
-fn simple_fof_write_app_encoded_let(
-    output: &mut String,
-    bank: &mut TermBank,
-    term: &Term,
-) -> Result<(), Diagnostic> {
-    let body_index = term
-        .arity()
-        .checked_sub(1)
-        .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let body is uninitialized"))?;
-    let mut definitions = Vec::with_capacity(body_index);
-    for index in 0..body_index {
-        let definition = simple_fof_formula_term_argument(term, index, "$let definition")?;
-        definitions.push(simple_fof_app_encoded_let_definition_parts(
-            bank,
-            &definition,
-        )?);
-    }
-
-    output.push_str("$let(");
-    simple_fof_write_app_encoded_let_declarations(output, bank, &definitions)?;
-    output.push(',');
-    simple_fof_write_app_encoded_let_definitions(output, bank, &definitions)?;
-    output.push(',');
-    let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
-    simple_fof_write_app_encoded_formula_or_term(output, bank, &body)?;
-    output.push(')');
-    Ok(())
-}
-
-fn simple_fof_app_encoded_let_definition_parts(
-    bank: &TermBank,
-    definition: &Term,
-) -> Result<(Term, Term), Diagnostic> {
-    if definition.f_code() != bank.signature().eqn_code() {
-        return Err(Diagnostic::new(
-            ErrorCode::TYPE_ERROR,
-            "$let definition must be an equality",
-        ));
-    }
-    let left = simple_fof_formula_term_argument(definition, 0, "$let definition")?;
-    let right = simple_fof_formula_term_argument(definition, 1, "$let definition")?;
-    Ok((left, right))
-}
-
-fn simple_fof_write_app_encoded_let_declarations(
-    output: &mut String,
-    bank: &TermBank,
-    definitions: &[(Term, Term)],
-) -> Result<(), Diagnostic> {
-    if definitions.len() > 1 {
-        output.push('[');
-    }
-    for (index, (left, _right)) in definitions.iter().enumerate() {
-        if index != 0 {
-            output.push(',');
-        }
-        let name = bank
-            .signature()
-            .find_name(left.f_code())
-            .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let symbol has no name"))?;
-        let type_ = bank
-            .signature()
-            .get_type(left.f_code())
-            .cloned()
-            .or_else(|| left.type_())
-            .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let symbol has no type"))?;
-        let type_name = type_app_encoded_name(&type_)?;
-        write!(output, "{name}:{type_name}")
-            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-    }
-    if definitions.len() > 1 {
-        output.push(']');
-    }
-    Ok(())
-}
-
-fn simple_fof_write_app_encoded_let_definitions(
-    output: &mut String,
-    bank: &mut TermBank,
-    definitions: &[(Term, Term)],
-) -> Result<(), Diagnostic> {
-    if definitions.len() > 1 {
-        output.push('[');
-    }
-    for (index, (left, right)) in definitions.iter().enumerate() {
-        if index != 0 {
-            output.push(',');
-        }
-        simple_fof_write_app_encoded_formula_or_term(output, bank, left)?;
-        output.push_str(":=");
-        simple_fof_write_app_encoded_formula_or_term(output, bank, right)?;
-    }
-    if definitions.len() > 1 {
-        output.push(']');
-    }
-    Ok(())
-}
-
-fn simple_fof_write_app_encoded_formula_or_term(
-    output: &mut String,
-    bank: &mut TermBank,
-    term: &Term,
-) -> Result<(), Diagnostic> {
-    if term.type_().as_ref().is_some_and(Type::is_bool) {
-        simple_fof_write_app_encoded_formula_term(output, bank, term)
-    } else if term.f_code() == SIG_ITE_CODE {
-        output.push_str("$ite(");
-        simple_fof_write_app_encoded_formula_term(
-            output,
-            bank,
-            &simple_fof_formula_term_argument(term, 0, "$ite")?,
-        )?;
-        for index in 1..3 {
-            output.push(',');
-            simple_fof_write_app_encoded_formula_or_term(
-                output,
-                bank,
-                &simple_fof_formula_term_argument(term, index, "$ite")?,
-            )?;
-        }
-        output.push(')');
-        Ok(())
-    } else if term.f_code() == SIG_LET_CODE {
-        simple_fof_write_app_encoded_let(output, bank, term)
-    } else {
-        let encoded = term_app_encode(term, bank.signature_mut())?;
-        bank.write_term(output, &encoded, true)
-            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))
-    }
 }
 
 fn simple_fof_formula_term_argument(
@@ -5624,82 +5033,6 @@ fn simple_fof_app_encoded_formula_binary_operator(
     } else {
         None
     }
-}
-
-fn simple_fof_write_app_encoded_truth(
-    output: &mut String,
-    bank: &mut TermBank,
-    value: bool,
-) -> Result<(), Diagnostic> {
-    let literal = Eqn::alloc(
-        bank.true_term().clone(),
-        bank.true_term().clone(),
-        bank,
-        value,
-    )?;
-    eqn_write_app_encode(output, bank, &literal, false)
-}
-
-fn simple_fof_write_app_encoded_binary(
-    output: &mut String,
-    bank: &mut TermBank,
-    left: &[SimpleFofFormula],
-    operator: &str,
-    right: &[SimpleFofFormula],
-) -> Result<(), Diagnostic> {
-    output.push('(');
-    simple_fof_write_app_encoded_formulas(output, bank, left)?;
-    output.push_str(operator);
-    simple_fof_write_app_encoded_formulas(output, bank, right)?;
-    output.push(')');
-    Ok(())
-}
-
-fn simple_fof_write_app_encoded_chain(
-    output: &mut String,
-    bank: &mut TermBank,
-    formulas: &[SimpleFofFormula],
-    operator: &str,
-) -> Result<(), Diagnostic> {
-    output.push('(');
-    if let Some((first, rest)) = formulas.split_first() {
-        simple_fof_write_app_encoded_formula(output, bank, first)?;
-        for formula in rest {
-            output.push_str(operator);
-            simple_fof_write_app_encoded_formula(output, bank, formula)?;
-        }
-    } else {
-        simple_fof_write_app_encoded_truth(output, bank, true)?;
-    }
-    output.push(')');
-    Ok(())
-}
-
-fn simple_fof_write_app_encoded_quantified(
-    output: &mut String,
-    bank: &mut TermBank,
-    quantifier: &str,
-    bound: &[Term],
-    formulas: &[SimpleFofFormula],
-) -> Result<(), Diagnostic> {
-    output.push_str(quantifier);
-    output.push('[');
-    for (index, variable) in bound.iter().enumerate() {
-        if index != 0 {
-            output.push_str(", ");
-        }
-        let type_ = variable.type_().ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::TYPE_ERROR,
-                "app-encoded quantified variable has no type",
-            )
-        })?;
-        let type_name = type_app_encoded_name(&type_)?;
-        write!(output, "{}:{type_name}", bank.term_string(variable, true))
-            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-    }
-    output.push_str("]:");
-    simple_fof_write_app_encoded_formulas(output, bank, formulas)
 }
 
 fn run_prune_only<W: Write + ?Sized>(
@@ -9425,7 +8758,6 @@ fn parse_app_encode_file(
         saw_formula_owner: parsed_entries.saw_formula_owner,
         include_echoes: parsed_entries.include_echoes,
         problem_type: parsed_entries.problem_type,
-        fallback_formulas: parsed_entries.fallback_formulas,
     })
 }
 
@@ -9473,7 +8805,6 @@ struct ParsedAppEncodeFile {
     saw_formula_owner: bool,
     include_echoes: Vec<String>,
     problem_type: ProblemType,
-    fallback_formulas: Vec<SimpleAppEncodedFormula>,
 }
 
 #[derive(Clone, Debug)]
@@ -9490,7 +8821,6 @@ struct ParsedAppEncodeEntries {
     saw_formula_owner: bool,
     include_echoes: Vec<String>,
     problem_type: ProblemType,
-    fallback_formulas: Vec<SimpleAppEncodedFormula>,
 }
 
 impl ParsedAppEncodeEntries {
@@ -9500,17 +8830,15 @@ impl ParsedAppEncodeEntries {
 
     fn add_formula_owner(
         &mut self,
-        formula: SimpleAppEncodedFormula,
+        formula: &SimpleAppEncodedFormula,
         bank: &mut TermBank,
         formulas: &mut FormulaSet,
     ) -> Result<(), Diagnostic> {
         self.saw_input_owner = true;
         self.saw_formula_owner = true;
         self.problem_type = combine_problem_types(self.problem_type, formula.problem_type);
-        if let Some(wrapped) = simple_app_encoded_formula_owner(&formula, bank)? {
-            formulas.insert(wrapped);
-        }
-        self.fallback_formulas.push(formula);
+        let wrapped = simple_app_encoded_formula_owner(formula, bank)?;
+        formulas.insert(wrapped);
         Ok(())
     }
 }
@@ -9522,7 +8850,6 @@ impl Default for ParsedAppEncodeEntries {
             saw_formula_owner: false,
             include_echoes: Vec::new(),
             problem_type: ProblemType::FirstOrder,
-            fallback_formulas: Vec::new(),
         }
     }
 }
@@ -9580,7 +8907,7 @@ fn parse_tptp_app_encode_entry_list(
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
             let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
-            result.add_formula_owner(formula, bank, formulas)?;
+            result.add_formula_owner(&formula, bank, formulas)?;
         } else if scanner.test_id("include") {
             result
                 .include_echoes
@@ -9612,7 +8939,7 @@ fn parse_tstp_app_encode_entry_list(
         } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
                 if formula.type_.query_tptp_type() != CP_TYPE_WATCH_CLAUSE {
-                    result.add_formula_owner(formula, bank, formulas)?;
+                    result.add_formula_owner(&formula, bank, formulas)?;
                 }
             }
         } else if scanner.test_id("include") {
@@ -16318,6 +15645,7 @@ input_clause(c2,axiom,[++q(X)]).
         let plain =
             parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank, &mut plain_set).unwrap();
         assert!(plain.saw_formula_owner);
+        assert_eq!(plain_set.cardinality(), 1);
         let rendered = plain_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
@@ -16328,6 +15656,7 @@ input_clause(c2,axiom,[++q(X)]).
         let fool =
             parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank, &mut fool_set).unwrap();
         assert!(fool.saw_formula_owner);
+        assert_eq!(fool_set.cardinality(), 3);
         let rendered = fool_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
