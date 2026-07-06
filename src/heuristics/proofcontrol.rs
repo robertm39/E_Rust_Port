@@ -61,11 +61,11 @@ use crate::clauses::paramodulation::{
 };
 use crate::clauses::picosat::{PicoSat, PicoSatError};
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
-use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{
     clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
     clause_local_rw,
 };
+use crate::clauses::rewrite::{find_rewritable_clauses, find_rewritable_clauses_indexed};
 use crate::clauses::satinterface::{
     picosat_error_to_diagnostic, sat_check_proof_state, sat_check_proof_state_with_picosat,
     SatCheckReport,
@@ -82,6 +82,7 @@ use crate::clauses::subsumption::{
     eqn_topsubsumes_termpair, unit_clause_set_subsumes_clause,
     unit_clause_set_subsumes_clause_with_strong,
 };
+use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
@@ -1479,7 +1480,11 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
         let Some(watchlist) = watchlist else {
             return Ok(0);
         };
-        let (_found, ids) = rewritable_ids_in_set(terms, ocb, watchlist, clause, clause.date())?;
+        let bw_rw_index = watchlist_indices
+            .as_ref()
+            .and_then(|indices| indices.bw_rw_index());
+        let (_found, ids) =
+            rewritable_ids_in_watchlist(terms, ocb, watchlist, bw_rw_index, clause, clause.date())?;
         ids
     };
 
@@ -7879,6 +7884,24 @@ fn rewritable_ids_in_set(
     let found = find_rewritable_clauses(terms, ocb, set, &mut rewritable, clause, clause_date)?;
     let ids = rewritable.iter().map(|clause| clause.ident()).collect();
     Ok((found, ids))
+}
+
+fn rewritable_ids_in_watchlist(
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    set: &ClauseSet,
+    bw_rw_index: Option<&SubtermIndex<'_>>,
+    clause: &Clause,
+    clause_date: SysDate,
+) -> Result<(bool, Vec<i64>), Diagnostic> {
+    let Some(index) = bw_rw_index else {
+        return rewritable_ids_in_set(terms, ocb, set, clause, clause_date);
+    };
+    let mut rewritable = Vec::new();
+    let found =
+        find_rewritable_clauses_indexed(terms, ocb, index, &mut rewritable, clause, clause_date)?;
+    let ids = rewritable.iter().map(|clause| clause.ident()).collect();
+    Ok((found != 0, ids))
 }
 
 fn proof_state_eliminate_backward_subsumed_clauses<W: fmt::Write>(
@@ -15794,6 +15817,117 @@ mod tests {
         assert!(archived.query_prop(CP_IS_DEAD));
         assert!(!archived.query_prop(CP_IS_GLOBAL_INDEXED));
         let simplified = state.watchlist().unwrap().find_by_id(4_136).unwrap();
+        assert!(simplified.query_prop(CP_IS_GLOBAL_INDEXED));
+        let literal = &simplified.literals().as_slice()[0];
+        assert_eq!(literal.left(), &target);
+        assert_eq!(literal.right(), &other);
+    }
+
+    #[test]
+    fn proof_state_simplify_watchlist_with_global_indices_uses_indexed_candidates() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, watched, compound, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_watch_simpl_indexed_target");
+            let other = typed_const(terms, "pc_watch_simpl_indexed_other");
+            let compound = typed_unary(terms, "pc_watch_simpl_indexed_f", &target);
+            let mut demod_lit = literal(terms, &compound, &target, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_139);
+            demodulator.set_date(SysDate::from_raw(10));
+            demodulator.set_weight(demodulator.standard_weight());
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &other, true,
+            )]));
+            watched.set_ident(4_140);
+            watched.set_weight(watched.standard_weight());
+            (demodulator, watched, compound, target, other)
+        };
+        state.processed_pos_rules_mut().insert(demodulator.clone());
+        state.processed_pos_rules_mut().set_date(demodulator.date());
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "FP1",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+        assert!(indices.has_bw_rw_index());
+        assert!(indices.find_bw_rw_occurrence(&compound).is_none());
+
+        let simplified = proof_state_simplify_watchlist_with_global_indices(
+            &mut state,
+            &mut control,
+            &demodulator,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(simplified, 0);
+        assert_eq!(state.archive().members(), 0);
+        let watched = state.watchlist().unwrap().find_by_id(4_140).unwrap();
+        let literal = &watched.literals().as_slice()[0];
+        assert_eq!(literal.left(), &compound);
+        assert_eq!(literal.right(), &other);
+        assert!(!watched.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_bw_rw_occurrence(&target).is_none());
+    }
+
+    #[test]
+    fn proof_state_simplify_watchlist_with_global_indices_scans_without_backward_index() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, watched, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_watch_simpl_noindex_target");
+            let other = typed_const(terms, "pc_watch_simpl_noindex_other");
+            let compound = typed_unary(terms, "pc_watch_simpl_noindex_f", &target);
+            let mut demod_lit = literal(terms, &compound, &target, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_141);
+            demodulator.set_date(SysDate::from_raw(11));
+            demodulator.set_weight(demodulator.standard_weight());
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &other, true,
+            )]));
+            watched.set_ident(4_142);
+            watched.set_weight(watched.standard_weight());
+            (demodulator, watched, target, other)
+        };
+        state.processed_pos_rules_mut().insert(demodulator.clone());
+        state.processed_pos_rules_mut().set_date(demodulator.date());
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+        assert!(!indices.has_bw_rw_index());
+
+        let simplified = proof_state_simplify_watchlist_with_global_indices(
+            &mut state,
+            &mut control,
+            &demodulator,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(simplified, 1);
+        let archived = state.archive().find_by_id(4_142).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
+        let simplified = state.watchlist().unwrap().find_by_id(4_142).unwrap();
         assert!(simplified.query_prop(CP_IS_GLOBAL_INDEXED));
         let literal = &simplified.literals().as_slice()[0];
         assert_eq!(literal.left(), &target);

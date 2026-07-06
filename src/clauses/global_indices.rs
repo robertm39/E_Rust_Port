@@ -218,6 +218,11 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     #[must_use]
+    pub const fn bw_rw_index(&self) -> Option<&SubtermIndex<'sig>> {
+        self.bw_rw_index.as_ref()
+    }
+
+    #[must_use]
     pub const fn has_pm_from_index(&self) -> bool {
         self.pm_from_index.is_some()
     }
