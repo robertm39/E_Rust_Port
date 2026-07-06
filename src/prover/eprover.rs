@@ -136,7 +136,7 @@ use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 use crate::terms::lambda::{
-    lambda_eta_expand_db, lambda_eta_reduce_db, named_to_db, set_eta_normalizer,
+    lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
 };
 use crate::terms::match_mgu::term_has_higher_order_unification_surface;
 use crate::terms::signature::{
@@ -13484,6 +13484,11 @@ fn parse_simple_thf_term_formula(
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
+    let formula = if formula.has_lambda_subterm() || formula.has_db_subterm() {
+        lambda_to_forall(bank, &formula)?
+    } else {
+        formula
+    };
     if formula.has_lambda_subterm() || formula.has_db_subterm() {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
@@ -27740,6 +27745,69 @@ input_clause(c2,axiom,[++q(X)]).
             .message()
             .contains(THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_thf_lambda_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-lambda-equality");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(lambda_ext, axiom, (^[X: person]: p @ X) = (^[X: person]: q @ X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed, "\n% Parsing successful!\n% SZS status Unknown\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_thf_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(lambda_ext, axiom, (^[X: person]: p @ X) = (^[X: person]: q @ X)).\n\
+             thf(p_fact, axiom, p @ a).\n\
+             thf(goal, conjecture, q @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
