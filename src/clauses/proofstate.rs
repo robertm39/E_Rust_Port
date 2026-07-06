@@ -13,7 +13,7 @@ use crate::clauses::derivation::{
     demodulator_clause_refs, deriv_stack_count_search_inferences, deriv_stack_extract_parents,
     deriv_stack_indicates_initial_clause, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
     op_has_cnf_arg2, op_has_fof_arg1, op_has_fof_arg2, ClauseDerivationRef, DerivationEntry,
-    DerivationParentRef, FormulaDerivationRef, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
+    DerivationParentRef, FormulaDerivationRef, DC_AC_RES, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
 };
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
@@ -1156,8 +1156,9 @@ impl ProofState {
             return 0;
         }
 
-        let (parents, _) = deriv_stack_extract_parents(root.derivation(), &[]);
-        self.mark_proof_clause_parent_refs(parents)
+        let ac_axioms = self.terms().signature().ac_axioms().to_vec();
+        let (parents, _) = deriv_stack_extract_parents(root.derivation(), &ac_axioms);
+        self.mark_proof_clause_parent_refs(parents, &ac_axioms)
     }
 
     /// Counts EvalGC-selected clauses like C `ProofStateAnalyseGC`.
@@ -1205,6 +1206,7 @@ impl ProofState {
         let mut visited = Vec::new();
         let mut pending_edges = Vec::new();
         let mut formula_visited = Vec::new();
+        let ac_axioms = self.terms().signature().ac_axioms();
 
         for root in roots {
             let root = self.proof_object_first_clause(root);
@@ -1213,6 +1215,7 @@ impl ProofState {
                 &mut analysis,
                 &mut visited,
                 &mut pending_edges,
+                ac_axioms,
             );
         }
 
@@ -1226,6 +1229,7 @@ impl ProofState {
                             &mut analysis,
                             &mut visited,
                             &mut pending_edges,
+                            ac_axioms,
                         );
                     }
                 }
@@ -1236,6 +1240,7 @@ impl ProofState {
                             &mut analysis,
                             &mut formula_visited,
                             &mut pending_edges,
+                            ac_axioms,
                         );
                     }
                 }
@@ -1254,6 +1259,7 @@ impl ProofState {
         let mut clause_visited = Vec::new();
         let mut formula_visited = Vec::new();
         let mut pending_edges = Vec::new();
+        let ac_axioms = self.terms().signature().ac_axioms();
 
         for root in roots {
             let root = self.proof_object_first_clause(root);
@@ -1262,6 +1268,7 @@ impl ProofState {
                 &mut graph,
                 &mut clause_visited,
                 &mut pending_edges,
+                ac_axioms,
             );
             if !graph.root_indices.contains(&root_index) {
                 graph.root_indices.push(root_index);
@@ -1278,6 +1285,7 @@ impl ProofState {
                             &mut graph,
                             &mut clause_visited,
                             &mut pending_edges,
+                            ac_axioms,
                         );
                         let parent = ProofObjectGraphNode::Clause(parent_index);
                         graph
@@ -1298,6 +1306,7 @@ impl ProofState {
                             &mut graph,
                             &mut formula_visited,
                             &mut pending_edges,
+                            ac_axioms,
                         );
                         graph.mixed_edges.push(ProofObjectGraphMixedEdge {
                             parent: ProofObjectGraphNode::Formula(parent_index),
@@ -1332,6 +1341,7 @@ impl ProofState {
         analysis: &mut ProofObjectAnalysis,
         visited: &mut Vec<*const Clause>,
         pending_edges: &mut Vec<ProofObjectParentEdge>,
+        ac_axioms: &[ClauseDerivationRef],
     ) {
         let key = std::ptr::from_ref(clause);
         if visited.contains(&key) {
@@ -1350,7 +1360,7 @@ impl ProofState {
         analysis.generating_inference_count += generating;
         analysis.simplifying_inference_count += simplifying;
 
-        pending_edges.extend(proof_object_parent_edges(clause.derivation()));
+        pending_edges.extend(proof_object_parent_edges(clause.derivation(), ac_axioms));
     }
 
     fn analyse_proof_object_formula(
@@ -1358,6 +1368,7 @@ impl ProofState {
         analysis: &mut ProofObjectAnalysis,
         visited: &mut Vec<*const WrappedFormula>,
         pending_edges: &mut Vec<ProofObjectParentEdge>,
+        ac_axioms: &[ClauseDerivationRef],
     ) {
         let key = std::ptr::from_ref(formula);
         if visited.contains(&key) {
@@ -1373,7 +1384,7 @@ impl ProofState {
             analysis.initial_formula_count += 1;
         }
 
-        pending_edges.extend(proof_object_parent_edges(formula.derivation()));
+        pending_edges.extend(proof_object_parent_edges(formula.derivation(), ac_axioms));
     }
 
     fn collect_proof_object_graph_clause<'a>(
@@ -1381,6 +1392,7 @@ impl ProofState {
         graph: &mut ProofObjectGraph<'a>,
         visited: &mut Vec<(*const Clause, usize)>,
         pending_edges: &mut Vec<(ProofObjectGraphNode, ProofObjectParentEdge)>,
+        ac_axioms: &[ClauseDerivationRef],
     ) -> usize {
         let key = std::ptr::from_ref(clause);
         if let Some((_, index)) = visited.iter().find(|(visited, _)| *visited == key) {
@@ -1390,7 +1402,7 @@ impl ProofState {
         visited.push((key, index));
         graph.clauses.push(clause);
         pending_edges.extend(
-            proof_object_parent_edges(clause.derivation())
+            proof_object_parent_edges(clause.derivation(), ac_axioms)
                 .into_iter()
                 .map(|edge| (ProofObjectGraphNode::Clause(index), edge)),
         );
@@ -1402,6 +1414,7 @@ impl ProofState {
         graph: &mut ProofObjectGraph<'a>,
         visited: &mut Vec<(*const WrappedFormula, usize)>,
         pending_edges: &mut Vec<(ProofObjectGraphNode, ProofObjectParentEdge)>,
+        ac_axioms: &[ClauseDerivationRef],
     ) -> usize {
         let key = std::ptr::from_ref(formula);
         if let Some((_, index)) = visited.iter().find(|(visited, _)| *visited == key) {
@@ -1411,7 +1424,7 @@ impl ProofState {
         visited.push((key, index));
         graph.formulas.push(formula);
         pending_edges.extend(
-            proof_object_parent_edges(formula.derivation())
+            proof_object_parent_edges(formula.derivation(), ac_axioms)
                 .into_iter()
                 .map(|edge| (ProofObjectGraphNode::Formula(index), edge)),
         );
@@ -1478,7 +1491,11 @@ impl ProofState {
         }
     }
 
-    fn mark_proof_clause_parent_refs(&mut self, parents: Vec<DerivationParentRef>) -> u64 {
+    fn mark_proof_clause_parent_refs(
+        &mut self,
+        parents: Vec<DerivationParentRef>,
+        ac_axioms: &[ClauseDerivationRef],
+    ) -> u64 {
         let mut pending = parents;
         let mut visited = BTreeSet::new();
         let mut marked = 0;
@@ -1491,7 +1508,7 @@ impl ProofState {
                 continue;
             }
             let Some((newly_marked, parent_parents)) =
-                self.mark_proof_clause_by_derivation_ref(parent)
+                self.mark_proof_clause_by_derivation_ref(parent, ac_axioms)
             else {
                 continue;
             };
@@ -1507,13 +1524,14 @@ impl ProofState {
     fn mark_proof_clause_by_derivation_ref(
         &mut self,
         parent: ClauseDerivationRef,
+        ac_axioms: &[ClauseDerivationRef],
     ) -> Option<(bool, Vec<DerivationParentRef>)> {
         let clause = self.proof_clause_by_derivation_ref_mut(parent)?;
         if clause.query_prop(CP_IS_PROOF_CLAUSE) {
             return Some((false, Vec::new()));
         }
         clause.set_prop(CP_IS_PROOF_CLAUSE);
-        let (parents, _) = deriv_stack_extract_parents(clause.derivation(), &[]);
+        let (parents, _) = deriv_stack_extract_parents(clause.derivation(), ac_axioms);
         Some((true, parents))
     }
 
@@ -2234,6 +2252,7 @@ fn clause_literals_match(left: &Clause, right: &Clause) -> bool {
 
 fn proof_object_parent_edges(
     derivation: Option<&crate::basics::pstacks::PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
 ) -> Vec<ProofObjectParentEdge> {
     let Some(derivation) = derivation else {
         return Vec::new();
@@ -2253,9 +2272,12 @@ fn proof_object_parent_edges(
         } else {
             ProofObjectParentResolution::ProofStep
         };
+        let mut numarg1 = None;
 
         if op_has_cnf_arg1(op) || op_has_fof_arg1(op) {
             push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
+        } else if op == DC_AC_RES {
+            numarg1 = Some(read_proof_object_numeric_arg(entries, &mut index));
         } else if op_has_arg1(op) {
             index += 1;
         }
@@ -2264,6 +2286,10 @@ fn proof_object_parent_edges(
             push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
         } else if op_has_arg2(op) {
             index += 1;
+        }
+
+        if op == DC_AC_RES {
+            push_proof_object_ac_axiom_edges(numarg1.unwrap_or(0), ac_axioms, &mut edges);
         }
     }
     edges
@@ -2293,6 +2319,44 @@ fn push_proof_object_parent_edge(
         }
     }
     *index += 1;
+}
+
+fn read_proof_object_numeric_arg(entries: &[DerivationEntry], index: &mut usize) -> i64 {
+    let entry = entries
+        .get(*index)
+        .unwrap_or_else(|| panic!("derivation numeric argument is missing"));
+    *index += 1;
+    match entry {
+        DerivationEntry::NumericArg(value) => *value,
+        DerivationEntry::Operation(_)
+        | DerivationEntry::ClauseParent(_)
+        | DerivationEntry::FormulaParent(_)
+        | DerivationEntry::Demodulator(_) => {
+            panic!("derivation numeric argument has the wrong entry shape")
+        }
+    }
+}
+
+fn push_proof_object_ac_axiom_edges(
+    count: i64,
+    ac_axioms: &[ClauseDerivationRef],
+    edges: &mut Vec<ProofObjectParentEdge>,
+) {
+    let ac_count = usize::try_from(count)
+        .unwrap_or_else(|_| panic!("DCACRes parent count must be non-negative"));
+    assert!(
+        ac_count <= ac_axioms.len(),
+        "DCACRes parent count exceeds supplied AC axioms"
+    );
+    edges.extend(
+        ac_axioms[..ac_count]
+            .iter()
+            .copied()
+            .map(|parent| ProofObjectParentEdge {
+                parent: DerivationParentRef::Clause(parent),
+                resolution: ProofObjectParentResolution::ProofStep,
+            }),
+    );
 }
 
 fn cached_rewrite_steps(rw_count: u64, rewrite_uncached: u64) -> u64 {
@@ -2344,9 +2408,9 @@ mod tests {
         CP_WATCH_ONLY,
     };
     use crate::clauses::derivation::{
-        clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
-        DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
-        DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
+        clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
+        ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -2804,6 +2868,34 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_mark_proof_clause_ancestors_follows_signature_ac_axioms() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first = simple_clause(&mut state, "proof_mark_ac_first", 20_050);
+        let second = simple_clause(&mut state, "proof_mark_ac_second", 20_051);
+        let first_ref = ClauseDerivationRef::from(&first);
+        let second_ref = ClauseDerivationRef::from(&second);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_ac_res_derivation(&mut root, 2);
+
+        state.terms_mut().signature_mut().push_ac_axiom(first_ref);
+        state.terms_mut().signature_mut().push_ac_axiom(second_ref);
+        state.axioms_mut().insert(first);
+        state.archive_mut().insert(second);
+
+        assert_eq!(state.mark_proof_clause_ancestors(&root), 2);
+        assert!(state
+            .axioms()
+            .find_by_id(20_050)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(state
+            .archive()
+            .find_by_id(20_051)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+    }
+
+    #[test]
     fn proof_state_proof_object_analysis_counts_reachable_clause_steps() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut source = simple_clause(&mut state, "proof_analysis_source", 20_006);
@@ -2858,6 +2950,36 @@ mod tests {
                 initial_formula_count: 0,
                 generating_inference_count: 1,
                 simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_analysis_follows_signature_ac_axioms() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first = simple_clause(&mut state, "proof_analysis_ac_first", 20_052);
+        let second = simple_clause(&mut state, "proof_analysis_ac_second", 20_053);
+        let first_ref = ClauseDerivationRef::from(&first);
+        let second_ref = ClauseDerivationRef::from(&second);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_ac_res_derivation(&mut root, 2);
+
+        state.terms_mut().signature_mut().push_ac_axiom(first_ref);
+        state.terms_mut().signature_mut().push_ac_axiom(second_ref);
+        state.axioms_mut().insert(first);
+        state.axioms_mut().insert(second);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 3,
+                formula_step_count: 0,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 0,
+                initial_clause_count: 2,
+                initial_formula_count: 0,
+                generating_inference_count: 0,
+                simplifying_inference_count: 1,
             }
         );
     }
@@ -3049,6 +3171,47 @@ mod tests {
                 parent_index: 2,
                 child_index: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_follows_signature_ac_axioms() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first = simple_clause(&mut state, "proof_graph_ac_first", 20_054);
+        let second = simple_clause(&mut state, "proof_graph_ac_second", 20_055);
+        let first_ref = ClauseDerivationRef::from(&first);
+        let second_ref = ClauseDerivationRef::from(&second);
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_056);
+        clause_push_ac_res_derivation(&mut root, 2);
+
+        state.terms_mut().signature_mut().push_ac_axiom(first_ref);
+        state.terms_mut().signature_mut().push_ac_axiom(second_ref);
+        state.axioms_mut().insert(first);
+        state.axioms_mut().insert(second);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_056, 20_055, 20_054]
+        );
+        assert_eq!(graph.root_indices, vec![0]);
+        assert_eq!(
+            graph.edges,
+            vec![
+                ProofObjectGraphEdge {
+                    parent_index: 1,
+                    child_index: 0,
+                },
+                ProofObjectGraphEdge {
+                    parent_index: 2,
+                    child_index: 0,
+                },
+            ]
         );
     }
 
