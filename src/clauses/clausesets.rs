@@ -23,7 +23,7 @@ use crate::clauses::freqvectors::{
     FvIndexType, PermVector,
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
-use crate::clauses::pdtrees::{PdTree, PdtSearchState, PdtTraversalOrder};
+use crate::clauses::pdtrees::{PdTree, PdtIndexedOccurrence, PdtSearchState, PdtTraversalOrder};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
@@ -222,6 +222,15 @@ impl ClauseSet {
             return true;
         }
         index.search_root_satisfies_constraints() && index.search_root_may_have_matchable_path()
+    }
+
+    #[must_use]
+    pub fn demod_index_search_candidate_sides(&self) -> Option<Vec<PdtIndexedOccurrence>> {
+        let index = self.demod_index.as_ref()?;
+        if !self.demod_index_covers_demodulators() {
+            return None;
+        }
+        index.search_matching_occurrences()
     }
 
     pub fn record_demod_index_search_attempt(&self) {
@@ -1421,9 +1430,17 @@ fn index_demodulator_clause(index: &mut PdTree, clause: &Clause) {
         .as_slice()
         .first()
         .expect("unit clause has one literal");
-    index.insert_term_with_clause_date(literal.left(), clause.date());
+    index.insert_term_occurrence(
+        literal.left(),
+        clause.date(),
+        PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide),
+    );
     if !literal.is_oriented() {
-        index.insert_term_with_clause_date(literal.right(), clause.date());
+        index.insert_term_occurrence(
+            literal.right(),
+            clause.date(),
+            PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide),
+        );
     }
 }
 
@@ -1437,9 +1454,17 @@ fn delete_demodulator_clause(index: &mut PdTree, clause: &Clause) {
         .as_slice()
         .first()
         .expect("unit clause has one literal");
-    let _ = index.delete_term_with_clause_date(literal.left(), clause.date());
+    let _ = index.delete_term_occurrence(
+        literal.left(),
+        clause.date(),
+        PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide),
+    );
     if !literal.is_oriented() {
-        let _ = index.delete_term_with_clause_date(literal.right(), clause.date());
+        let _ = index.delete_term_occurrence(
+            literal.right(),
+            clause.date(),
+            PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide),
+        );
     }
 }
 
@@ -1855,7 +1880,7 @@ mod tests {
         FvCollectLayout, FvIndexType,
     };
     use crate::clauses::neweval::{evals_alloc, EvalCell};
-    use crate::clauses::pdtrees::PDTREE_IGNORE_NF_DATE;
+    use crate::clauses::pdtrees::{PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
@@ -2246,6 +2271,48 @@ mod tests {
 
         set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
         assert!(set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+    }
+
+    #[test]
+    fn demod_index_search_candidates_identify_current_clause_sides() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "candidate_side_a");
+        let f_a = typed_unary(&mut bank, "candidate_side_f", &a);
+        let g_a = typed_unary(&mut bank, "candidate_side_g", &a);
+        let clause = clause_from(vec![literal(&mut bank, &f_a, &g_a, true)]);
+        let clause_id = clause.ident();
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            set.demod_index_search_candidate_sides(),
+            Some(vec![PdtIndexedOccurrence::new(
+                clause_id,
+                EqnSide::LeftSide
+            )])
+        );
+        set.record_demod_index_search_exit();
+
+        set.record_demod_index_search_init(&g_a, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            set.demod_index_search_candidate_sides(),
+            Some(vec![PdtIndexedOccurrence::new(
+                clause_id,
+                EqnSide::RightSide
+            )])
+        );
+        set.record_demod_index_search_exit();
+
+        let extracted = set
+            .extract_by_id(clause_id)
+            .expect("indexed clause remains extractable");
+        assert!(!extracted.query_prop(CP_IS_D_INDEXED));
+
+        set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(set.demod_index_search_candidate_sides(), Some(Vec::new()));
         set.record_demod_index_search_exit();
     }
 

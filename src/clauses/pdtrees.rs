@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
 use crate::basics::sysdate::SysDate;
+use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{term_identity_id, Term};
@@ -106,6 +107,12 @@ pub struct PrefixMatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PdtIndexedOccurrence {
+    pub clause_id: i64,
+    pub side: EqnSide,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PrefixQueryCell {
     token: PrefixToken,
     span: usize,
@@ -139,6 +146,7 @@ struct PdNode {
 struct PdTerminalEntry {
     weight: i64,
     date: Option<SysDate>,
+    occurrence: Option<PdtIndexedOccurrence>,
 }
 
 impl Default for PdTerminalEntry {
@@ -146,6 +154,7 @@ impl Default for PdTerminalEntry {
         Self {
             weight: PDTREE_IGNORE_TERM_WEIGHT,
             date: None,
+            occurrence: None,
         }
     }
 }
@@ -167,7 +176,40 @@ impl Default for PdNode {
 impl PdTerminalEntry {
     #[must_use]
     const fn new(weight: i64, date: Option<SysDate>) -> Self {
-        Self { weight, date }
+        Self {
+            weight,
+            date,
+            occurrence: None,
+        }
+    }
+
+    #[must_use]
+    const fn with_occurrence(
+        weight: i64,
+        date: Option<SysDate>,
+        occurrence: PdtIndexedOccurrence,
+    ) -> Self {
+        Self {
+            weight,
+            date,
+            occurrence: Some(occurrence),
+        }
+    }
+
+    #[must_use]
+    fn matches_target(self, target: Self) -> bool {
+        self.weight == target.weight
+            && self.date == target.date
+            && target
+                .occurrence
+                .is_none_or(|occurrence| self.occurrence == Some(occurrence))
+    }
+}
+
+impl PdtIndexedOccurrence {
+    #[must_use]
+    pub const fn new(clause_id: i64, side: EqnSide) -> Self {
+        Self { clause_id, side }
     }
 }
 
@@ -346,6 +388,21 @@ impl PdTree {
         self.insert_code_with_metadata(&code, term_standard_weight(term), Some(clause_date))
     }
 
+    pub fn insert_term_occurrence(
+        &mut self,
+        term: &Term,
+        clause_date: SysDate,
+        occurrence: PdtIndexedOccurrence,
+    ) -> bool {
+        let code = term_lr_traverse_code(term);
+        let entry = PdTerminalEntry::with_occurrence(
+            term_standard_weight(term),
+            Some(clause_date),
+            occurrence,
+        );
+        self.insert_code_with_entry(&code, entry)
+    }
+
     pub fn insert_code(&mut self, code: &[PrefixToken]) -> bool {
         let weight = i64::try_from(code.len()).unwrap_or(PDTREE_IGNORE_TERM_WEIGHT);
         self.insert_code_with_metadata(code, weight, None)
@@ -358,6 +415,10 @@ impl PdTree {
         date: Option<SysDate>,
     ) -> bool {
         let entry = PdTerminalEntry::new(weight, date);
+        self.insert_code_with_entry(code, entry)
+    }
+
+    fn insert_code_with_entry(&mut self, code: &[PrefixToken], entry: PdTerminalEntry) -> bool {
         let mut node_index = 0;
         self.nodes[node_index].ref_count += 1;
         self.apply_entry_to_node(node_index, entry);
@@ -401,6 +462,21 @@ impl PdTree {
         self.delete_code_with_entry(&code, Some(entry))
     }
 
+    pub fn delete_term_occurrence(
+        &mut self,
+        term: &Term,
+        clause_date: SysDate,
+        occurrence: PdtIndexedOccurrence,
+    ) -> bool {
+        let code = term_lr_traverse_code(term);
+        let entry = PdTerminalEntry::with_occurrence(
+            term_standard_weight(term),
+            Some(clause_date),
+            occurrence,
+        );
+        self.delete_code_with_entry(&code, Some(entry))
+    }
+
     pub fn delete_code(&mut self, code: &[PrefixToken]) -> bool {
         self.delete_code_with_entry(code, None)
     }
@@ -428,7 +504,7 @@ impl PdTree {
             self.nodes[node_index]
                 .terminal_entries
                 .iter()
-                .position(|entry| *entry == target)
+                .position(|entry| entry.matches_target(target))
         } else {
             self.nodes[node_index].terminal_entries.len().checked_sub(1)
         };
@@ -631,6 +707,28 @@ impl PdTree {
         self.nodes[node_index].ref_count
     }
 
+    #[must_use]
+    pub fn search_matching_occurrences(&self) -> Option<Vec<PdtIndexedOccurrence>> {
+        let state = self.search_state.borrow();
+        let state = state.as_ref()?;
+        if state.term_code.len() != state.term_spans.len() {
+            return None;
+        }
+        if !self.root_satisfies_constraints(state.term_weight, state.term_date) {
+            return Some(Vec::new());
+        }
+
+        let mut occurrences = Vec::new();
+        self.collect_matching_occurrences(
+            0,
+            0,
+            &state.term_code,
+            &state.term_spans,
+            &mut occurrences,
+        );
+        Some(occurrences)
+    }
+
     fn code_may_have_matchable_path(&self, code: &[PrefixToken], spans: &[usize]) -> bool {
         if code.len() != spans.len() {
             return true;
@@ -672,6 +770,61 @@ impl PdTree {
             .any(|(_, next_index)| {
                 self.node_may_have_matchable_path(*next_index, next_query_index, code, spans)
             })
+    }
+
+    fn collect_matching_occurrences(
+        &self,
+        node_index: usize,
+        query_index: usize,
+        code: &[PrefixToken],
+        spans: &[usize],
+        occurrences: &mut Vec<PdtIndexedOccurrence>,
+    ) {
+        if query_index == code.len() {
+            for occurrence in self.nodes[node_index]
+                .terminal_entries
+                .iter()
+                .filter_map(|entry| entry.occurrence)
+            {
+                if !occurrences.contains(&occurrence) {
+                    occurrences.push(occurrence);
+                }
+            }
+            return;
+        }
+
+        let token = code[query_index];
+        if !matches!(token, PrefixToken::FreeVar(_)) {
+            if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
+                self.collect_matching_occurrences(
+                    next_index,
+                    query_index + 1,
+                    code,
+                    spans,
+                    occurrences,
+                );
+            }
+        }
+
+        let next_query_index = query_index.saturating_add(spans[query_index]);
+        if next_query_index > code.len() {
+            return;
+        }
+        for next_index in self.nodes[node_index]
+            .children
+            .iter()
+            .filter_map(|(edge, next_index)| {
+                matches!(edge, PrefixToken::FreeVar(_)).then_some(*next_index)
+            })
+        {
+            self.collect_matching_occurrences(
+                next_index,
+                next_query_index,
+                code,
+                spans,
+                occurrences,
+            );
+        }
     }
 }
 
@@ -813,12 +966,14 @@ mod tests {
     use super::pdt_node_counter;
     use super::{
         prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
-        term_lr_traverse_query, PdTree, PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM,
-        PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
+        term_lr_traverse_query, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
+        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
+        PDTREE_IGNORE_TERM_WEIGHT,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
     use crate::basics::sysdate::SysDate;
+    use crate::clauses::eqn_props::EqnSide;
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -1031,6 +1186,29 @@ mod tests {
         tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
 
         assert!(!tree.search_root_may_have_matchable_path());
+    }
+
+    #[test]
+    fn matching_occurrences_follow_terminal_side_payloads_and_exact_deletion() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let term = parse_in_bank(&mut bank, "pdt_occurrence_f(pdt_occurrence_a)");
+        let code = prefix_compute_term_code(&term);
+        let left = PdtIndexedOccurrence::new(10, EqnSide::LeftSide);
+        let right = PdtIndexedOccurrence::new(10, EqnSide::RightSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&term, SysDate::from_raw(7), left));
+        assert!(tree.insert_term_occurrence(&term, SysDate::from_raw(7), right));
+        tree.record_search_init(&term, PDTREE_IGNORE_NF_DATE, false);
+
+        assert_eq!(tree.search_matching_occurrences(), Some(vec![left, right]));
+
+        assert!(tree.delete_term_occurrence(&term, SysDate::from_raw(7), left));
+        tree.record_search_init(&term, PDTREE_IGNORE_NF_DATE, false);
+
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.prefix_ref_count(&code), 1);
+        assert_eq!(tree.search_matching_occurrences(), Some(vec![right]));
     }
 
     #[test]

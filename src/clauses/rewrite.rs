@@ -16,6 +16,7 @@ use crate::clauses::eqn_props::{
     MIN_SIDE,
 };
 use crate::clauses::inferencedoc::ProofDocSession;
+use crate::clauses::pdtrees::PdtIndexedOccurrence;
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater_with_bank;
@@ -1048,6 +1049,8 @@ fn find_plain_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    let candidate_sides = demodulators.demod_index_search_candidate_sides();
+    let candidate_sides = candidate_sides.as_deref();
     for clause in demodulators.iter() {
         if !clause.is_demodulator() {
             continue;
@@ -1065,19 +1068,24 @@ fn find_plain_demodulator<'a>(
             continue;
         }
 
-        let backtrack = subst.len();
-        if subst_match_complete(eqn.left(), term, subst)
-            && (eqn.is_oriented() || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
-            && (!restricted_rw || !subst.is_renaming())
-        {
-            return Ok(Some(PlainDemodulatorMatch {
-                clause,
-                replacement: eqn.right(),
-            }));
+        if demod_candidate_allows_side(candidate_sides, clause, EqnSide::LeftSide) {
+            let backtrack = subst.len();
+            if subst_match_complete(eqn.left(), term, subst)
+                && (eqn.is_oriented()
+                    || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
+                && (!restricted_rw || !subst.is_renaming())
+            {
+                return Ok(Some(PlainDemodulatorMatch {
+                    clause,
+                    replacement: eqn.right(),
+                }));
+            }
+            subst.backtrack_to_pos(backtrack);
         }
-        subst.backtrack_to_pos(backtrack);
 
-        if !eqn.is_oriented() {
+        if !eqn.is_oriented()
+            && demod_candidate_allows_side(candidate_sides, clause, EqnSide::RightSide)
+        {
             let backtrack = subst.len();
             if subst_match_complete(eqn.right(), term, subst)
                 && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)?
@@ -1091,6 +1099,16 @@ fn find_plain_demodulator<'a>(
         }
     }
     Ok(None)
+}
+
+fn demod_candidate_allows_side(
+    candidates: Option<&[PdtIndexedOccurrence]>,
+    clause: &Clause,
+    side: EqnSide,
+) -> bool {
+    candidates.is_none_or(|candidates| {
+        candidates.contains(&PdtIndexedOccurrence::new(clause.ident(), side))
+    })
 }
 
 fn demodulator_date_blocks_term(term: &Term, clause: &Clause, eqn: &Eqn) -> bool {
