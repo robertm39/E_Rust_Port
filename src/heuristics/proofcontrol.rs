@@ -8113,8 +8113,8 @@ mod tests {
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
         DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP,
-        DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT,
-        DC_PRIM_ENUM, DC_SR,
+        DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LOCAL_REWRITE, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR,
+        DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -9473,6 +9473,45 @@ mod tests {
         assert_ne!(literal.left(), &target);
         assert_ne!(literal.right(), &target);
         assert!(literal.left() == &replacement || literal.right() == &replacement);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_honors_local_rewrite_option() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut clause, rewritten_left, rewritten_right) = {
+            let terms = state.terms_mut();
+            let a = typed_const(terms, "pc_local_rw_a");
+            let c = typed_const(terms, "pc_local_rw_c");
+            let f_a = typed_unary(terms, "pc_local_rw_f", &a);
+            let g_f_a = typed_unary(terms, "pc_local_rw_g", &f_a);
+            let g_a = typed_unary(terms, "pc_local_rw_g", &a);
+            let rule = literal(terms, &f_a, &a, false);
+            let target = literal(terms, &g_f_a, &c, true);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![rule, target]));
+            clause.set_ident(4_082);
+            (clause, g_a, c)
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().local_rw = true;
+
+        let trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert!(clause.literals().as_slice().iter().any(|literal| {
+            literal.is_positive()
+                && literal.left() == &rewritten_left
+                && literal.right() == &rewritten_right
+        }));
+        assert!(derivation_contains_operation(&clause, DC_LOCAL_REWRITE));
     }
 
     #[test]
