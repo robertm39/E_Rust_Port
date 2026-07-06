@@ -27938,9 +27938,13 @@ input_clause(c2,axiom,[++q(X)]).
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\
+             thf(f_type, type, f: person > $o).\n\
+             thf(g_type, type, g: person > $o).\n\
              thf(p_type, type, p: person > $o).\n\
              thf(q_type, type, q: person > $o).\n\
-             thf(lambda_ext, axiom, (^[X: person]: p @ X) = (^[X: person]: q @ X)).\n",
+             thf(lambda_ext, axiom, (^[X: person]: p @ X) = (^[X: person]: q @ X)).\n\
+             thf(lambda_ext_right, axiom, f = (^[X: person]: g @ X)).\n\
+             thf(lambda_ext_left, axiom, (^[X: person]: g @ X) = f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -27968,9 +27972,13 @@ input_clause(c2,axiom,[++q(X)]).
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\
+             thf(f_type, type, f: person > $o).\n\
+             thf(g_type, type, g: person > $o).\n\
              thf(p_type, type, p: person > $o).\n\
              thf(q_type, type, q: person > $o).\n\
-             thf(lambda_ext_ne, axiom, (^[X: person]: p @ X) != (^[X: person]: q @ X)).\n",
+             thf(lambda_ext_ne, axiom, (^[X: person]: p @ X) != (^[X: person]: q @ X)).\n\
+             thf(lambda_ext_right_ne, axiom, f != (^[X: person]: g @ X)).\n\
+             thf(lambda_ext_left_ne, axiom, (^[X: person]: g @ X) != f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -28020,6 +28028,105 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_thf_right_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-right-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(g_type, type, g: person > person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(lambda_ext, axiom, f = (^[X: person]: g @ X)).\n\
+             thf(f_fact, axiom, f @ a = b).\n\
+             thf(goal, conjecture, g @ a = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_thf_left_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-left-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(g_type, type, g: person > person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(lambda_ext, axiom, (^[X: person]: g @ X) = f).\n\
+             thf(f_fact, axiom, f @ a = b).\n\
+             thf(goal, conjecture, g @ a = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_refutes_thf_lambda_disequality_against_pointwise_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-lambda-disequality-pointwise-equality-refutation");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(f_type, type, f: person > $o).\n\
+             thf(g_type, type, g: person > $o).\n\
+             thf(lambda_ne, axiom, f != (^[X: person]: g @ X)).\n\
+             thf(ext_eq, axiom, ![Y: person]: (f @ Y <=> g @ Y)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
