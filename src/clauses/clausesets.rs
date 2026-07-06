@@ -1,4 +1,6 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
@@ -33,6 +35,7 @@ use crate::terms::termtypes::{Term, TermProperties};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::io::{self, Write};
 
 const CLAUSECELL_MEM: i64 = 68;
 const PTREE_CELL_MEM: i64 = 16;
@@ -296,6 +299,36 @@ impl ClauseSet {
             .saturating_add(EQN_CELL_MEM.saturating_mul(self.literals()))
             .saturating_add(usize_to_i64(self.demod_index_storage_estimate()))
             .saturating_add(usize_to_i64(fv_index_storage(self.fv_anchor())))
+    }
+
+    /// Writes C `ClauseSetDerivationStackStatistics` histogram output.
+    ///
+    /// C counts missing derivation stacks in bucket zero, uses an integer
+    /// `PDArray` with initial/grow size eight, and prints every allocated
+    /// bucket including zero-count buckets.
+    ///
+    /// # Errors
+    ///
+    /// Returns any write error reported by `output`.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn write_derivation_stack_statistics(&self, output: &mut impl Write) -> io::Result<()> {
+        let mut distribution = PDIntArray::with_default(8, 8, 0);
+        for clause in &self.clauses {
+            distribution.inc_int(clause.derivation_stack_pointer(), 1);
+        }
+
+        let mut sum = 0.0;
+        for (index, &count) in distribution.as_slice().iter().enumerate() {
+            writeln!(output, "{DEFAULT_COMCHAR_RAW} {index:5}: {count:6}")?;
+            sum += (count as f64) * (index as f64);
+        }
+
+        let average = sum / (self.members() as f64);
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Average over {} clauses: {average:.6}",
+            self.members()
+        )
     }
 
     #[must_use]
@@ -1795,6 +1828,7 @@ mod tests {
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED,
         CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
+    use crate::clauses::derivation::{DerivationEntry, DC_CNF_EVAL_GC};
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
@@ -2045,6 +2079,50 @@ mod tests {
         assert_eq!(
             set.storage_estimate(),
             CLAUSECELL_DYN_MEM + eval_mem(0) + EQN_CELL_MEM + demod_storage
+        );
+    }
+
+    #[test]
+    fn derivation_stack_statistics_preserves_c_pdarray_print_shape() {
+        let no_derivation = Clause::empty();
+        let mut depth_two = Clause::empty();
+        depth_two
+            .ensure_derivation()
+            .push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+        depth_two
+            .ensure_derivation()
+            .push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+        let mut depth_eight = Clause::empty();
+        {
+            let derivation = depth_eight.ensure_derivation();
+            for _ in 0..8 {
+                derivation.push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+            }
+        }
+        let set = ClauseSet::from_clauses([no_derivation, depth_two, depth_eight]);
+        let mut output = Vec::new();
+
+        set.write_derivation_stack_statistics(&mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "%     0:      1\n\
+             %     1:      0\n\
+             %     2:      1\n\
+             %     3:      0\n\
+             %     4:      0\n\
+             %     5:      0\n\
+             %     6:      0\n\
+             %     7:      0\n\
+             %     8:      1\n\
+             %     9:      0\n\
+             %    10:      0\n\
+             %    11:      0\n\
+             %    12:      0\n\
+             %    13:      0\n\
+             %    14:      0\n\
+             %    15:      0\n\
+             % Average over 3 clauses: 3.333333\n"
         );
     }
 
