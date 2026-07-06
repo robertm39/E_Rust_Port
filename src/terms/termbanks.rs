@@ -2136,7 +2136,15 @@ impl TermBank {
     }
 
     fn parse_tformula_tstp_subset(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_tformula_tstp_disjunction(scanner)?;
+        self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, false)
+    }
+
+    fn parse_tformula_tstp_subset_with_plain_term_atoms(
+        &mut self,
+        scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_tformula_tstp_disjunction(scanner, allow_plain_term_atoms)?;
         if scanner.test_tok(TokenType::FOF_BIN_OP) && !scanner.test_tok(TokenType::FOF_ASSOC_OP) {
             let mut op = self.tptp_operator_parse(scanner)?;
             let equality_is_term_literal = (op == self.sig.eqn_code()
@@ -2145,7 +2153,7 @@ impl TermBank {
             let right = if equality_is_term_literal {
                 self.parse_tformula_equality_right_term_arg(scanner)?
             } else {
-                self.parse_tformula_tstp_disjunction(scanner)?
+                self.parse_tformula_tstp_disjunction(scanner, allow_plain_term_atoms)?
             };
             if formula.type_().as_ref().is_some_and(Type::is_bool)
                 && (op == self.sig.eqn_code() || op == self.sig.neqn_code())
@@ -2162,6 +2170,10 @@ impl TermBank {
                     self.sig.xor_code()
                 };
             }
+            if !equality_is_term_literal {
+                Self::require_boolean_formula_operand(&formula, "left formula operand")?;
+                Self::require_boolean_formula_operand(&right, "right formula operand")?;
+            }
             formula = if equality_is_term_literal {
                 self.encode_equality_term(formula, right, op == self.sig.eqn_code())?
             } else {
@@ -2174,11 +2186,14 @@ impl TermBank {
     fn parse_tformula_tstp_disjunction(
         &mut self,
         scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_tformula_tstp_conjunction(scanner)?;
+        let mut formula = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
         while scanner.test_tok(TokenType::FOF_OR) {
             let op = self.tptp_operator_parse(scanner)?;
-            let right = self.parse_tformula_tstp_conjunction(scanner)?;
+            let right = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
+            Self::require_boolean_formula_operand(&formula, "left disjunction operand")?;
+            Self::require_boolean_formula_operand(&right, "right disjunction operand")?;
             formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
         }
         Ok(formula)
@@ -2187,11 +2202,21 @@ impl TermBank {
     fn parse_tformula_tstp_conjunction(
         &mut self,
         scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_literal_tformula_tstp_with_applications(scanner)?;
+        let mut formula = self
+            .parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+                scanner,
+                allow_plain_term_atoms,
+            )?;
         while scanner.test_tok(TokenType::FOF_AND) {
             let op = self.tptp_operator_parse(scanner)?;
-            let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
+            let right = self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+                scanner,
+                allow_plain_term_atoms,
+            )?;
+            Self::require_boolean_formula_operand(&formula, "left conjunction operand")?;
+            Self::require_boolean_formula_operand(&right, "right conjunction operand")?;
             formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
         }
         Ok(formula)
@@ -2201,7 +2226,16 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_literal_tformula_tstp_subset(scanner)?;
+        self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(scanner, false)
+    }
+
+    fn parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+        &mut self,
+        scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula =
+            self.parse_literal_tformula_tstp_subset(scanner, allow_plain_term_atoms)?;
         if scanner.test_tok(TokenType::APPLICATION) {
             formula = self.parse_applied_tformula_tstp_subset(scanner, &formula)?;
         }
@@ -2264,6 +2298,7 @@ impl TermBank {
     fn parse_literal_tformula_tstp_subset(
         &mut self,
         scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
         let formula = if scanner.test_tok(
             TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
@@ -2291,7 +2326,10 @@ impl TermBank {
                 let head = self.parse_term_real(scanner, true)?;
                 self.prepare_tformula_application_head(head)
             } else {
-                self.parse_tformula_tstp_subset(scanner)?
+                self.parse_tformula_tstp_subset_with_plain_term_atoms(
+                    scanner,
+                    allow_plain_term_atoms,
+                )?
             };
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             formula
@@ -2311,7 +2349,7 @@ impl TermBank {
         } else if scanner.test_tok(TokenType::LET_TOKEN) {
             self.parse_let_tformula_tstp_subset(scanner)?
         } else {
-            self.parse_tformula_atom(scanner)?
+            self.parse_tformula_atom(scanner, allow_plain_term_atoms)?
         };
         if scanner.test_tok(TokenType::APPLICATION) {
             Ok(formula)
@@ -2428,7 +2466,7 @@ impl TermBank {
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             Ok(arg)
         } else {
-            self.parse_literal_tformula_tstp_subset(scanner)
+            self.parse_literal_tformula_tstp_subset(scanner, false)
         }
     }
 
@@ -2521,7 +2559,13 @@ impl TermBank {
             } else {
                 scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
                 scanner.accept_tok(TokenType::COLON)?;
-                self.parse_literal_tformula_tstp_with_applications(scanner)?
+                if quantor == SIG_NAMED_LAMBDA_CODE {
+                    self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+                        scanner, true,
+                    )?
+                } else {
+                    self.parse_literal_tformula_tstp_with_applications(scanner)?
+                }
             };
             self.tformula_fcode_alloc(quantor, variable, Some(rest))
         })();
@@ -2834,6 +2878,16 @@ impl TermBank {
         Ok(())
     }
 
+    fn require_boolean_formula_operand(term: &Term, context: &str) -> Result<(), Diagnostic> {
+        if term.type_().as_ref().is_some_and(Type::is_bool) {
+            return Ok(());
+        }
+        Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            format!("{context} must have Boolean type"),
+        ))
+    }
+
     fn tformula_head_type(&mut self, term: &Term) -> Result<Type, Diagnostic> {
         if term.f_code() == SIG_ITE_CODE || term.f_code() == SIG_LET_CODE {
             term.type_().ok_or_else(|| {
@@ -2899,7 +2953,11 @@ impl TermBank {
         }
     }
 
-    fn parse_tformula_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+    fn parse_tformula_atom(
+        &mut self,
+        scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
+    ) -> Result<Term, Diagnostic> {
         let mut left = self.parse_term_real(scanner, true)?;
         let mut positive = true;
         if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
@@ -2920,6 +2978,9 @@ impl TermBank {
                 return Ok(self.prepare_tformula_application_head(left));
             }
             if self.tformula_atom_can_stay_plain_term(&left) {
+                return Ok(left);
+            }
+            if allow_plain_term_atoms && left.is_any_var() {
                 return Ok(left);
             }
             self.prepare_predicate_formula_atom(&left)?;
@@ -4722,6 +4783,50 @@ mod tests {
         );
         assert_eq!(predicate.argument(0), Some(binder));
         assert_eq!(body.argument(1), Some(bank.true_term().clone()));
+    }
+
+    #[test]
+    fn checked_parser_reads_lambda_function_term_operands() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let (bank, arg) = parse_bool_arg("takes_bool_arg((^[X:$i]: X) = (^[Y:$i]: Y))");
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(arg.type_(), Some(bank.signature().type_bank().bool_type()));
+
+        let left = arg.argument(0).unwrap();
+        let right = arg.argument(1).unwrap();
+        assert_eq!(left.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(right.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(left.type_(), right.type_());
+
+        let lambda_type = left.type_().unwrap();
+        assert!(lambda_type.is_arrow());
+        assert_eq!(lambda_type.arity(), 2);
+        assert_eq!(lambda_type.args()[0], bank.signature().type_bank().i_type());
+        assert_eq!(lambda_type.args()[1], bank.signature().type_bank().i_type());
+
+        let binder = left.argument(0).unwrap();
+        assert!(binder.is_free_var());
+        assert_eq!(binder.type_(), Some(bank.signature().type_bank().i_type()));
+        assert_eq!(left.argument(1), Some(binder));
+    }
+
+    #[test]
+    fn checked_parser_rejects_non_boolean_lambda_body_conjunction() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner =
+            Scanner::from_user_string("takes_bool_arg((^[X:$i]: (X & X)) = (^[Y:$i]: Y))", false)
+                .unwrap();
+
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        assert!(error.message().contains("conjunction operand"));
     }
 
     #[test]

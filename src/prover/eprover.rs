@@ -28020,6 +28020,34 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_thf_function_lambda_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-function-lambda-equality");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(lambda_id, axiom, (^[X: person]: X) = (^[Y: person]: Y)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed, "\n% Parsing successful!\n% SZS status Unknown\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_thf_lambda_disequality() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-thf-lambda-disequality");
