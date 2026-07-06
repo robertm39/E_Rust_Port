@@ -96,8 +96,19 @@ impl<'sig> OverlapIndex<'sig> {
 
     #[must_use]
     pub fn leaf_debug_string(&self, bank: &TermBank, problem_type: ProblemType) -> String {
-        self.index.print_with(|path, leaf, output| {
-            let _ = write_overlap_index_fp_leaf_debug(output, path, leaf, bank, problem_type);
+        let mut output = String::new();
+        let _ = self.write_leaf_debug(&mut output, bank, problem_type);
+        output
+    }
+
+    pub fn write_leaf_debug(
+        &self,
+        output: &mut impl Write,
+        bank: &TermBank,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        self.index.write_print_with(output, |path, leaf, output| {
+            write_overlap_index_fp_leaf_debug(output, path, leaf, bank, problem_type)
         })
     }
 

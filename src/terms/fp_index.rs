@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::objtrees::ObjTree;
 use crate::basics::pstacks::{PStack, PStackInt};
 use crate::terms::functypes::FunCode;
@@ -8,7 +9,7 @@ use crate::terms::signature::Signature;
 use crate::terms::termtypes::Term;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
+use std::fmt::{self, Write};
 
 #[derive(Clone, Debug, Default)]
 pub struct FPTree<T>
@@ -140,17 +141,27 @@ where
         F: FnMut(&[FunCode], &Self, &mut String),
     {
         let mut output = String::new();
-        let mut payload_paths = Vec::new();
-        self.collect_payload_paths(&mut payload_paths);
-        for (path, leaf) in payload_paths {
-            print_leaf(&path, leaf, &mut output);
-        }
+        let _ = self.write_print_with(&mut output, |path, leaf, output| {
+            print_leaf(path, leaf, output);
+            Ok(())
+        });
         output
     }
 
-    #[must_use]
-    pub fn distrib_string(&self) -> String {
-        let mut output = String::new();
+    pub fn write_print_with<W, F>(&self, output: &mut W, mut print_leaf: F) -> fmt::Result
+    where
+        W: Write + ?Sized,
+        F: FnMut(&[FunCode], &Self, &mut W) -> fmt::Result,
+    {
+        let mut payload_paths = Vec::new();
+        self.collect_payload_paths(&mut payload_paths);
+        for (path, leaf) in payload_paths {
+            print_leaf(&path, leaf, output)?;
+        }
+        Ok(())
+    }
+
+    pub fn write_distrib(&self, output: &mut impl Write) -> fmt::Result {
         let mut payload_paths = Vec::new();
         self.collect_payload_paths(&mut payload_paths);
         let leaves = payload_paths.len();
@@ -159,17 +170,23 @@ where
             .map(|(_path, leaf)| leaf.payload_nodes())
             .sum::<usize>();
         for (path, leaf) in payload_paths {
-            write_leaf_size(&path, leaf, &mut output);
+            write_leaf_size(&path, leaf, output)?;
         }
         #[expect(
             clippy::cast_precision_loss,
             reason = "C FPIndexDistribPrint casts long counters to double for the summary"
         )]
         let entries_per_leaf = entries as f64 / leaves as f64;
-        let _ = writeln!(
+        writeln!(
             output,
-            "% {entries} entries, {leaves} leaves, {entries_per_leaf:.6} entries/leaf"
-        );
+            "{DEFAULT_COMCHAR_RAW} {entries} entries, {leaves} leaves, {entries_per_leaf:.6} entries/leaf"
+        )
+    }
+
+    #[must_use]
+    pub fn distrib_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_distrib(&mut output);
         output
     }
 
@@ -660,6 +677,18 @@ where
         self.index.print_with(print_leaf)
     }
 
+    pub fn write_print_with<W, F>(&self, output: &mut W, print_leaf: F) -> fmt::Result
+    where
+        W: Write + ?Sized,
+        F: FnMut(&[FunCode], &FPTree<T>, &mut W) -> fmt::Result,
+    {
+        self.index.write_print_with(output, print_leaf)
+    }
+
+    pub fn write_distrib(&self, output: &mut impl Write) -> fmt::Result {
+        self.index.write_distrib(output)
+    }
+
     #[must_use]
     pub fn distrib_string(&self) -> String {
         self.index.distrib_string()
@@ -688,15 +717,15 @@ fn symbol_arity(sig: &Signature, f_code: FunCode) -> i32 {
     }
 }
 
-fn write_leaf_size<T>(path: &[FunCode], leaf: &FPTree<T>, output: &mut String)
+fn write_leaf_size<T>(path: &[FunCode], leaf: &FPTree<T>, output: &mut impl Write) -> fmt::Result
 where
     T: Ord + Clone,
 {
-    output.push_str("% ");
+    write!(output, "{DEFAULT_COMCHAR_RAW} ")?;
     for sample in path {
-        let _ = write!(output, "{sample:4}.");
+        write!(output, "{sample:4}.")?;
     }
-    let _ = writeln!(output, ":{} terms", leaf.payload_nodes());
+    writeln!(output, ":{} terms", leaf.payload_nodes())
 }
 
 fn fp_path_label(sig: &Signature, path: &[FunCode]) -> String {
@@ -925,6 +954,9 @@ mod tests {
                 any_var = ANY_VAR
             )
         );
+        let mut distrib_output = String::new();
+        tree.write_distrib(&mut distrib_output).unwrap();
+        assert_eq!(distrib_output, tree.distrib_string());
 
         let rendered = tree.print_with(|path, leaf, output| {
             output.push('[');
@@ -944,6 +976,20 @@ mod tests {
                 any_var = ANY_VAR
             )
         );
+        let mut fallible_rendered = String::new();
+        tree.write_print_with(&mut fallible_rendered, |path, leaf, output| {
+            output.push('[');
+            for sample in path {
+                output.push_str(&sample.to_string());
+                output.push(',');
+            }
+            output.push_str("]=");
+            output.push_str(&leaf.payload_nodes().to_string());
+            output.push('\n');
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fallible_rendered, rendered);
     }
 
     #[test]
