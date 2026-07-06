@@ -1,7 +1,8 @@
 use crate::basics::dstrings::DynamicString;
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::PDArrayIndex;
 use crate::basics::pstacks::PStack;
+use crate::basics::verbose::{verbout_global, verbout_global_to};
 use crate::clauses::clausesets::ClauseSet;
 use crate::inout::scanner::Scanner;
 use crate::learn::annotations::Annotation;
@@ -20,6 +21,7 @@ use crate::learn::patterns::PatternSubst;
 use crate::learn::tsm::{tsm_admin_alloc, tsm_admin_build_tsm, Tsm, TsmAdmin, TsmId, TsmType};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use std::io::Write;
 use std::path::Path;
 
 const LARGE_TSM_WEIGHT: f64 = 1_000_000_000_000.0;
@@ -188,6 +190,85 @@ pub fn tsm_from_kb(
     tsm_type: TsmType,
     index_depth: i32,
 ) -> Result<TsmAdmin, Diagnostic> {
+    let admin = tsm_from_kb_core(
+        flat_patterns,
+        eval_weights,
+        kb,
+        sig,
+        target,
+        sel_no,
+        set_part,
+        dist_part,
+        index_type,
+        tsm_type,
+        index_depth,
+    )?;
+    verbout_global("TSM created\n").map_err(|error| verbose_write_diagnostic(&error))?;
+    Ok(admin)
+}
+
+/// Create a TSM admin from a knowledge-base directory and write C-shaped
+/// verbose diagnostics to `verbose_output`.
+///
+/// This is the testable equivalent of `TSMFromKB`'s final
+/// `VERBOUT("TSM created\n")` call.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`tsm_from_kb`], plus a diagnostic if the
+/// verbose output writer fails.
+///
+/// # Panics
+///
+/// Panics under the same in-memory preparation and TSM-construction invariants
+/// as [`example_set_prepare`] and [`tsm_admin_build_tsm`].
+#[allow(clippy::too_many_arguments)]
+pub fn tsm_from_kb_with_verbose_output(
+    flat_patterns: bool,
+    eval_weights: &[f64],
+    kb: &str,
+    sig: &mut Signature,
+    target: &ClauseSet,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+    index_type: IndexType,
+    tsm_type: TsmType,
+    index_depth: i32,
+    verbose_output: &mut impl Write,
+) -> Result<TsmAdmin, Diagnostic> {
+    let admin = tsm_from_kb_core(
+        flat_patterns,
+        eval_weights,
+        kb,
+        sig,
+        target,
+        sel_no,
+        set_part,
+        dist_part,
+        index_type,
+        tsm_type,
+        index_depth,
+    )?;
+    verbout_global_to(verbose_output, "TSM created\n")
+        .map_err(|error| verbose_write_diagnostic(&error))?;
+    Ok(admin)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tsm_from_kb_core(
+    flat_patterns: bool,
+    eval_weights: &[f64],
+    kb: &str,
+    sig: &mut Signature,
+    target: &ClauseSet,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+    index_type: IndexType,
+    tsm_type: TsmType,
+    index_depth: i32,
+) -> Result<TsmAdmin, Diagnostic> {
     let mut filename = DynamicString::new();
     let mut bank = TermBank::new(sig.clone())?;
 
@@ -230,6 +311,13 @@ pub fn tsm_from_kb(
     admin.set_unmapped_weight(tsm_get_highest_weight(&admin));
 
     Ok(admin)
+}
+
+fn verbose_write_diagnostic(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYS_ERROR,
+        format!("Problem writing verbose output: {error}"),
+    )
 }
 
 /// Return C's post-build TSM "highest" weight value.
@@ -332,8 +420,10 @@ fn i64_to_f64(value: i64) -> f64 {
 mod tests {
     use super::{
         example_set_from_kb, example_set_prepare, get_default_eval, tsm_from_kb,
-        tsm_get_highest_weight, LARGE_TSM_WEIGHT,
+        tsm_from_kb_with_verbose_output, tsm_get_highest_weight, LARGE_TSM_WEIGHT,
     };
+    use crate::basics::error::init_error;
+    use crate::basics::verbose::set_verbose_level;
     use crate::clauses::clausesets::ClauseSet;
     use crate::inout::scanner::Scanner;
     use crate::learn::annotations::{Annotation, AnnotationTree};
@@ -349,6 +439,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::path::{Path, PathBuf};
 
     fn assert_close(actual: f64, expected: f64) {
@@ -411,6 +502,28 @@ mod tests {
 
     fn remove_dir_if_present(path: &Path) {
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    fn write_tsm_kb(kb_dir: &Path) {
+        std::fs::create_dir_all(kb_dir).expect("create temporary KB directory");
+        std::fs::write(
+            kb_dir.join("clausepatterns"),
+            "left_sym : 1:(1,0,1,2,0,0,0). \
+             right_sym : 2:(1,0,3,4,0,0,0). \
+             stale_sym : 99:(1,0,10,20,0,0,0).",
+        )
+        .expect("write clausepatterns file");
+        std::fs::write(
+            kb_dir.join("signature"),
+            "left_sym:0 right_sym:0 stale_sym:0",
+        )
+        .expect("write signature file");
+        let features = zero_feature_source();
+        std::fs::write(
+            kb_dir.join("problems"),
+            format!("1: \"left\" {features} 2: \"right\" {features}"),
+        )
+        .expect("write problems file");
     }
 
     #[test]
@@ -564,27 +677,12 @@ mod tests {
 
     #[test]
     fn tsm_from_kb_loads_clausepatterns_and_builds_admin() {
+        let _guard = global_state_lock();
+        init_error("Unknown program");
+        set_verbose_level(0);
         let kb_dir = temp_kb_dir("tsm-from-kb");
         remove_dir_if_present(&kb_dir);
-        std::fs::create_dir_all(&kb_dir).expect("create temporary KB directory");
-        std::fs::write(
-            kb_dir.join("clausepatterns"),
-            "left_sym : 1:(1,0,1,2,0,0,0). \
-             right_sym : 2:(1,0,3,4,0,0,0). \
-             stale_sym : 99:(1,0,10,20,0,0,0).",
-        )
-        .expect("write clausepatterns file");
-        std::fs::write(
-            kb_dir.join("signature"),
-            "left_sym:0 right_sym:0 stale_sym:0",
-        )
-        .expect("write signature file");
-        let features = zero_feature_source();
-        std::fs::write(
-            kb_dir.join("problems"),
-            format!("1: \"left\" {features} 2: \"right\" {features}"),
-        )
-        .expect("write problems file");
+        write_tsm_kb(&kb_dir);
         let mut signature = Signature::new(TypeBank::new());
         let target = ClauseSet::new();
         let kb_name = kb_dir.to_string_lossy();
@@ -610,6 +708,46 @@ mod tests {
         assert_close(admin.unmapped_weight(), LARGE_TSM_WEIGHT);
         assert_ne!(signature.find_f_code("left_sym"), 0);
 
+        remove_dir_if_present(&kb_dir);
+    }
+
+    #[test]
+    fn tsm_from_kb_verbose_output_matches_c_verbout_message() {
+        let _guard = global_state_lock();
+        init_error("eprover");
+        set_verbose_level(1);
+        let kb_dir = temp_kb_dir("tsm-from-kb-verbose");
+        remove_dir_if_present(&kb_dir);
+        write_tsm_kb(&kb_dir);
+        let mut signature = Signature::new(TypeBank::new());
+        let target = ClauseSet::new();
+        let kb_name = kb_dir.to_string_lossy();
+        let mut verbose_output = Vec::new();
+
+        let admin = tsm_from_kb_with_verbose_output(
+            false,
+            &[0.0, 2.0, 5.0, 0.0, 0.0, 0.0],
+            &kb_name,
+            &mut signature,
+            &target,
+            2,
+            1.0,
+            1.0,
+            IndexType::ARITY,
+            TsmType::Flat,
+            0,
+            &mut verbose_output,
+        )
+        .expect("TSM from KB with verbose output");
+
+        assert_eq!(admin.tsm_type(), TsmType::Flat);
+        assert_eq!(
+            String::from_utf8(verbose_output).expect("verbose output is utf8"),
+            "eprover: TSM created\n"
+        );
+
+        init_error("Unknown program");
+        set_verbose_level(0);
         remove_dir_if_present(&kb_dir);
     }
 
