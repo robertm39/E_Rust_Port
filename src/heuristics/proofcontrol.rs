@@ -27,10 +27,11 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
-    DerivationParentRef, FormulaDerivationRef, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST,
-    DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
-    DC_EXT_SUP, DC_FOF_QUOTE, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM, DC_TRIGGER,
+    clause_push_derivation, clause_push_formula_derivation, derivation_entries,
+    ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF,
+    DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF,
+    DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_FOF_QUOTE, DC_LEIBNIZ_ELIM,
+    DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM, DC_SPLIT_EQUIV, DC_TRIGGER,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -3363,7 +3364,15 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
                 ClauseSplitOutcome::Unsplit(unsplit) => {
                     clause = *unsplit;
                 }
-                ClauseSplitOutcome::Split(clauses, split_count) => {
+                ClauseSplitOutcome::Split(mut clauses, split_count) => {
+                    if let Some((output, session)) = doc_context.as_mut() {
+                        proof_state_document_split_clauses(
+                            &mut **output,
+                            session,
+                            state,
+                            &mut clauses,
+                        )?;
+                    }
                     let count = usize_to_u64_saturating(split_count);
                     for split_clause in clauses {
                         state.tmp_store_mut().insert(split_clause);
@@ -3500,7 +3509,15 @@ fn proof_state_replacing_inferences_impl<W: fmt::Write>(
             ClauseSplitOutcome::Unsplit(unsplit) => {
                 clause = *unsplit;
             }
-            ClauseSplitOutcome::Split(clauses, _) => {
+            ClauseSplitOutcome::Split(mut clauses, _) => {
+                if let Some((output, session)) = doc_context.as_mut() {
+                    proof_state_document_split_clauses(
+                        &mut **output,
+                        session,
+                        state,
+                        &mut clauses,
+                    )?;
+                }
                 for split_clause in clauses {
                     state.tmp_store_mut().insert(split_clause);
                 }
@@ -8352,6 +8369,196 @@ fn proof_state_split_clause(
     clause_split(terms, Some(&mut store), clause, method, fresh_defs)
 }
 
+fn formula_parents_for_clause_operation(
+    clause: &Clause,
+    operation: i64,
+) -> Vec<FormulaDerivationRef> {
+    derivation_entries(clause)
+        .windows(2)
+        .filter_map(|entry| match entry {
+            [DerivationEntry::Operation(found), DerivationEntry::FormulaParent(parent)]
+                if *found == operation =>
+            {
+                Some(*parent)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn split_definition_formula_by_ident(
+    state: &ProofState,
+    ident: i64,
+) -> Result<WrappedFormula, Diagnostic> {
+    state
+        .definition_formula_archive()
+        .iter()
+        .find(|formula| formula.ident() == ident)
+        .cloned()
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                format!("split proof documentation is missing definition formula {ident}"),
+            )
+        })
+}
+
+fn remap_split_formula_parent_refs(
+    clause: &mut Clause,
+    old_parent: FormulaDerivationRef,
+    new_parent: FormulaDerivationRef,
+) {
+    if old_parent == new_parent {
+        return;
+    }
+
+    let Some(mut derivation) = clause.take_derivation() else {
+        return;
+    };
+    for entry in derivation.as_mut_slice() {
+        if *entry == DerivationEntry::FormulaParent(old_parent) {
+            *entry = DerivationEntry::FormulaParent(new_parent);
+        }
+    }
+    clause.set_derivation(Some(derivation));
+}
+
+fn update_split_definition_formula_ref(
+    state: &mut ProofState,
+    old_parent: FormulaDerivationRef,
+    new_parent: FormulaDerivationRef,
+    new_properties: crate::clauses::clause_props::FormulaProperties,
+) -> Result<(), Diagnostic> {
+    if old_parent == new_parent {
+        if let Some(formula) = state
+            .definition_formula_archive_mut()
+            .iter_mut()
+            .find(|formula| formula.ident() == old_parent.ident())
+        {
+            formula.set_properties(new_properties);
+        }
+        return Ok(());
+    }
+
+    let Some(formula) = state
+        .definition_formula_archive_mut()
+        .iter_mut()
+        .find(|formula| formula.ident() == old_parent.ident())
+    else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!(
+                "split proof documentation cannot update missing definition formula {}",
+                old_parent.ident()
+            ),
+        ));
+    };
+    formula.set_ident(new_parent.ident());
+    formula.set_properties(new_properties);
+
+    for parent in state.definition_formula_assocs_mut().values_mut() {
+        if *parent == old_parent {
+            *parent = new_parent;
+        }
+    }
+    Ok(())
+}
+
+fn document_split_definition_formula<W: fmt::Write>(
+    output: &mut W,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    parent: FormulaDerivationRef,
+    remapped_parents: &mut BTreeMap<i64, FormulaDerivationRef>,
+) -> Result<FormulaDerivationRef, Diagnostic> {
+    if let Some(parent) = remapped_parents.get(&parent.ident()).copied() {
+        return Ok(parent);
+    }
+
+    let formula = split_definition_formula_by_ident(state, parent.ident())?;
+    let (new_parent, new_properties) = {
+        let rendered = formula.proof_doc_formula_body_string(
+            state.terms_mut(),
+            session.step_options.full_terms,
+            session.problem_type,
+        )?;
+        let mut view = formula.proof_doc_view(&rendered);
+        session.doc_intro_split_def(output, &mut view)?;
+        (FormulaDerivationRef::new(view.ident()), view.properties())
+    };
+
+    update_split_definition_formula_ref(state, parent, new_parent, new_properties)?;
+    remapped_parents.insert(parent.ident(), new_parent);
+    Ok(new_parent)
+}
+
+fn remapped_split_parent(
+    parent: FormulaDerivationRef,
+    remapped_parents: &BTreeMap<i64, FormulaDerivationRef>,
+) -> FormulaDerivationRef {
+    remapped_parents
+        .get(&parent.ident())
+        .copied()
+        .unwrap_or(parent)
+}
+
+fn proof_state_document_split_clauses<W: fmt::Write>(
+    output: &mut W,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    clauses: &mut [Clause],
+) -> Result<(), Diagnostic> {
+    let mut remapped_parents = BTreeMap::new();
+
+    for clause in clauses.iter_mut() {
+        let parents = formula_parents_for_clause_operation(clause, DC_SPLIT_EQUIV);
+        let Some(original_parent) = parents.first().copied() else {
+            continue;
+        };
+        let parent = document_split_definition_formula(
+            output,
+            session,
+            state,
+            original_parent,
+            &mut remapped_parents,
+        )?;
+        remap_split_formula_parent_refs(clause, original_parent, parent);
+        let formula = split_definition_formula_by_ident(state, parent.ident())?;
+        let rendered = formula.proof_doc_formula_body_string(
+            state.terms_mut(),
+            session.step_options.full_terms,
+            session.problem_type,
+        )?;
+        let parent_view = formula.proof_doc_view(&rendered);
+        session.doc_intro_split_def_rest(output, state.terms(), clause, &parent_view, None)?;
+    }
+
+    for clause in clauses.iter_mut() {
+        let original_id = clause.ident();
+        let parents = formula_parents_for_clause_operation(clause, DC_APPLY_DEF);
+        if parents.is_empty() {
+            continue;
+        }
+
+        let mut def_ids = Vec::with_capacity(parents.len());
+        for parent in parents {
+            let mapped = remapped_split_parent(parent, &remapped_parents);
+            remap_split_formula_parent_refs(clause, parent, mapped);
+            def_ids.push(mapped.ident());
+        }
+        session.doc_clause_apply_defs(
+            output,
+            state.terms(),
+            clause,
+            original_id,
+            &def_ids,
+            None,
+        )?;
+    }
+
+    Ok(())
+}
+
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
 /// `eval_clause_set`.
 ///
@@ -12499,6 +12706,59 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_insert_new_clauses_with_docs_documents_fresh_split_result() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left_var = typed_var(terms, -41);
+            let right_var = typed_var(terms, -43);
+            let left_const = typed_const(terms, "pc_insert_doc_split_left");
+            let right_const = typed_const(terms, "pc_insert_doc_split_right");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left_var, &left_const, true),
+                literal(terms, &right_var, &right_const, true),
+            ]));
+            clause.set_ident(4_082);
+            clause
+        };
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewDocFreshSplitTest");
+        control.heuristic_parms_mut().split_aggressive = true;
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let empty = proof_state_insert_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(session.id_source.current_ident(), 5);
+        assert_eq!(output.matches(" : introduced : 'split'\n").count(), 2);
+        assert!(output.contains(" : split_equiv(1)\n"));
+        assert!(output.contains(" : split_equiv(3)\n"));
+        assert!(output.contains(" : apply_def(apply_def(4082,1),3) : 'split'\n"));
+        assert_eq!(
+            state
+                .definition_formula_archive()
+                .iter()
+                .map(WrappedFormula::ident)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(state.unprocessed().find_by_id(4_082).is_none());
+        assert!(state.unprocessed().find_by_id(5).is_some());
+    }
+
+    #[test]
     fn proof_state_insert_new_clauses_reuses_split_definitions() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (first_clause, second_clause) = {
@@ -12542,6 +12802,71 @@ mod tests {
         assert_eq!(state.statistics().generated_count, 8);
         assert_eq!(state.statistics().generated_lit_count, 4);
         assert_eq!(state.statistics().non_trivial_generated_count, 4);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_with_docs_reuses_split_definition_ids() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first_clause, second_clause) = {
+            let terms = state.terms_mut();
+            let first_const = typed_const(terms, "pc_insert_doc_reuse_first");
+            let second_const = typed_const(terms, "pc_insert_doc_reuse_second");
+            let mut first_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -45), &first_const, true),
+                literal(terms, &typed_var(terms, -47), &second_const, true),
+            ]));
+            first_clause.set_ident(4_083);
+            let mut second_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -49), &first_const, true),
+                literal(terms, &typed_var(terms, -51), &second_const, true),
+            ]));
+            second_clause.set_ident(4_084);
+            (first_clause, second_clause)
+        };
+        state.tmp_store_mut().insert(first_clause);
+        state.tmp_store_mut().insert(second_clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewDocReuseSplitTest");
+        control.heuristic_parms_mut().split_aggressive = true;
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+        control.heuristic_parms_mut().split_fresh_defs = false;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let empty = proof_state_insert_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(session.id_source.current_ident(), 6);
+        assert_eq!(output.matches(" : introduced : 'split'\n").count(), 2);
+        assert_eq!(output.matches(" : split_equiv(").count(), 2);
+        assert!(output.contains(" : apply_def(apply_def(4083,1),3) : 'split'\n"));
+        assert!(output.contains(" : apply_def(apply_def(4084,1),3) : 'split'\n"));
+        let mut parent_ids = state
+            .definition_formula_assocs()
+            .values()
+            .map(|parent| parent.ident())
+            .collect::<Vec<_>>();
+        parent_ids.sort_unstable();
+        assert_eq!(parent_ids, vec![1, 3]);
+        assert_eq!(
+            state
+                .definition_formula_archive()
+                .iter()
+                .map(WrappedFormula::ident)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(state.unprocessed().find_by_id(4_084).is_none());
+        assert!(state.unprocessed().find_by_id(6).is_some());
     }
 
     #[test]
@@ -12762,6 +13087,59 @@ mod tests {
             .as_slice()
             .iter()
             .all(|literal| literal.query_prop(EP_IS_SPLIT_LIT)));
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_with_docs_documents_fresh_split_result() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left_var = typed_var(terms, -61);
+            let right_var = typed_var(terms, -63);
+            let left_const = typed_const(terms, "pc_replacing_doc_split_left");
+            let right_const = typed_const(terms, "pc_replacing_doc_split_right");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left_var, &left_const, true),
+                literal(terms, &right_var, &right_const, true),
+            ]));
+            clause.set_ident(4_086);
+            clause
+        };
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingDocFreshSplitTest");
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_replacing_inferences_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            packed,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, ReplacingInferenceOutcome::Replaced { empty: None });
+        assert_eq!(session.id_source.current_ident(), 5);
+        assert_eq!(output.matches(" : introduced : 'split'\n").count(), 2);
+        assert!(output.contains(" : split_equiv(1)\n"));
+        assert!(output.contains(" : split_equiv(3)\n"));
+        assert!(output.contains(" : apply_def(apply_def(4086,1),3) : 'split'\n"));
+        assert_eq!(
+            state
+                .definition_formula_archive()
+                .iter()
+                .map(WrappedFormula::ident)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(state.unprocessed().find_by_id(4_086).is_none());
+        assert!(state.unprocessed().find_by_id(5).is_some());
     }
 
     #[test]
