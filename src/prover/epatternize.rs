@@ -1,5 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{problem_type, reset_problem_type};
+use crate::basics::simple_stuff::{reset_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausesets::ClauseSet;
@@ -777,9 +777,9 @@ fn execute_epatternize(
 
     for file in &config.files {
         let mut state = proof_state_alloc(config.free_symbol_properties)?;
-        parse_input_file(config, file, stdin, &mut state)?;
+        let parsed_problem_type = parse_input_file(config, file, stdin, &mut state)?;
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
-        clausify_formula_axioms(config, &mut state)?;
+        clausify_formula_axioms(config, &mut state, parsed_problem_type)?;
         write_epatternized_axioms(&mut output, &mut state)?;
     }
 
@@ -794,7 +794,7 @@ fn parse_input_file(
     file: &str,
     stdin: &mut impl Read,
     state: &mut ProofState,
-) -> Result<(), Diagnostic> {
+) -> Result<ProblemType, Diagnostic> {
     let mut scanner = scanner_for_input(file, stdin)?;
     let (terms, f_axioms, watchlist) = state.terms_f_axioms_watchlist_mut();
     let watchlist = watchlist.ok_or_else(|| {
@@ -803,7 +803,7 @@ fn parse_input_file(
             "Cannot store inline watchlist clauses after the watchlist has been disabled",
         )
     })?;
-    parse_clause_scanner_into_formula_set_with_options(
+    let parsed_file = parse_clause_scanner_into_formula_set_with_options(
         &mut scanner,
         config.parse_format,
         FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
@@ -812,15 +812,16 @@ fn parse_input_file(
         f_axioms,
         watchlist,
     )?;
-    Ok(())
+    Ok(parsed_file.problem_type)
 }
 
 fn clausify_formula_axioms(
     config: &EpatternizeConfig,
     state: &mut ProofState,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
     let fresh_vars = state.fresh_vars().clone();
-    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type())
+    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type)
         .with_def_limit(config.formula_def_limit);
     let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_cnf_mut();
     let _preprocessed = f_axioms.preproc_conjectures(bank, false, false)?;
@@ -1029,10 +1030,11 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clausify_formula_axioms, parse_input_file, process_options, run, EpatternizeConfig,
-        RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        clausify_formula_axioms, parse_input_file, process_options, run, write_epatternized_axioms,
+        EpatternizeConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::proofstate::proof_state_alloc;
     use crate::inout::scanner::IoFormat;
@@ -1176,8 +1178,9 @@ mod tests {
             proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
         let mut stdin: &[u8] = b"fof(epatternize_owner_ax, axiom, (p(a) | q(a))).\n";
 
-        parse_input_file(&config, "-", &mut stdin, &mut state)
+        let parsed_problem_type = parse_input_file(&config, "-", &mut stdin, &mut state)
             .expect("real-input parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::FirstOrder);
 
         assert_eq!(state.axioms().members(), 0);
         assert_eq!(state.f_axioms().cardinality(), 1);
@@ -1190,7 +1193,8 @@ mod tests {
         assert!(formula.query_prop(CP_INPUT_FORMULA));
         assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
 
-        clausify_formula_axioms(&config, &mut state).expect("formula-owner CNF succeeds");
+        clausify_formula_axioms(&config, &mut state, parsed_problem_type)
+            .expect("formula-owner CNF succeeds");
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
     }
@@ -1220,6 +1224,44 @@ mod tests {
     }
 
     #[test]
+    fn thf_patternization_uses_returned_problem_type_after_global_reset() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        let config = EpatternizeConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec!["-".to_owned()],
+            ..EpatternizeConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(p_type, type, p: person > $o).\n\
+            thf(lambda_fact, axiom, (^[X: person]: p @ X) @ a).\n";
+
+        let parsed_problem_type = parse_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("THF real-input parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::HigherOrder);
+
+        reset_problem_type();
+        set_problem_type(ProblemType::FirstOrder).expect("test global can be reset to first-order");
+
+        clausify_formula_axioms(&config, &mut state, parsed_problem_type)
+            .expect("THF CNF uses the returned parsed problem type");
+        assert!(state.axioms().iter().all(|clause| clause
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| !literal.left().has_lambda_subterm()
+                && !literal.right().has_lambda_subterm())));
+
+        let mut output = Vec::new();
+        write_epatternized_axioms(&mut output, &mut state).expect("pattern output succeeds");
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("$or1("));
+    }
+
+    #[test]
     fn tstp_include_selector_feeds_pattern_formula_owner_cnf_path() {
         let _guard = global_state_lock();
         let include_path = temp_path("epatternize-include-selected-inc");
@@ -1245,8 +1287,10 @@ mod tests {
             proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
         let mut stdin: &[u8] = b"";
 
-        parse_input_file(&config, &config.files[0], &mut stdin, &mut state)
-            .expect("selected include parsing succeeds");
+        let parsed_problem_type =
+            parse_input_file(&config, &config.files[0], &mut stdin, &mut state)
+                .expect("selected include parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::FirstOrder);
 
         assert_eq!(state.axioms().members(), 0);
         assert_eq!(state.f_axioms().cardinality(), 1);
@@ -1257,7 +1301,7 @@ mod tests {
             .expect("selected formula owner exists");
         assert_eq!(formula.get_id(true), "selected");
 
-        clausify_formula_axioms(&config, &mut state)
+        clausify_formula_axioms(&config, &mut state, parsed_problem_type)
             .expect("selected included formula CNF succeeds");
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
