@@ -889,6 +889,10 @@ fn filter_problem<W: IoWrite + ?Sized>(
 ) -> Result<(), Diagnostic> {
     let filter_name = filter.name.as_deref().unwrap_or("");
     let filename = format!("{corename}_{filter_name}.p");
+    let problem_type = match ctrl.problem_type() {
+        ProblemType::NotInitialized => ProblemType::FirstOrder,
+        problem_type => problem_type,
+    };
     let selection = ctrl.get_problem(bank.signature(), filter)?;
 
     writeln_diag(
@@ -905,14 +909,12 @@ fn filter_problem<W: IoWrite + ?Sized>(
         write_all(&mut rendered, desc.as_bytes())?;
     }
     bank.signature()
-        .print_type_decls_tstp(&mut rendered, ProblemType::FirstOrder)
+        .print_type_decls_tstp(&mut rendered, problem_type)
         .map_err(|error| io_diagnostic(format!("Cannot write TSTP type declarations: {error}")))?;
 
-    let clauses =
-        pstack_clause_print_tstp_string(bank, &selection.clauses, ProblemType::FirstOrder)?;
+    let clauses = pstack_clause_print_tstp_string(bank, &selection.clauses, problem_type)?;
     write_all(&mut rendered, clauses.as_bytes())?;
-    let formulas =
-        pstack_formula_print_tstp_string(bank, &selection.formulas, ProblemType::FirstOrder, true)?;
+    let formulas = pstack_formula_print_tstp_string(bank, &selection.formulas, problem_type, true)?;
     write_all(&mut rendered, formulas.as_bytes())?;
 
     let mut file = File::create(&filename)
@@ -1412,6 +1414,52 @@ mod tests {
         assert!(generated.contains("fof(") || generated.contains("cnf("));
 
         for path in [&problem_path, &filter_path, &output_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn thf_filter_output_preserves_higher_order_tstp_wrappers() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("thf-problem");
+        let filter_path = temp_path("thf-filters");
+        let generated_path = generated_path(&problem_path, "tiny");
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(
+            &problem_path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ a).\n",
+        )
+        .expect("problem written");
+        std::fs::write(&filter_path, "tiny=Threshold(10000)\n").expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("filter run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
+        assert!(generated.contains("thf(fact, axiom"));
+        assert!(!generated.contains("tff(fact, axiom"));
+        assert!(!generated.contains("fof(fact, axiom"));
+
+        for path in [&problem_path, &filter_path, &generated_path] {
             remove_if_present(path);
         }
     }
