@@ -29,6 +29,7 @@ pub const E_EXEC_DEFAULT: &str = "eprover";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
 pub const SPASS_EXEC_DEFAULT: &str = "SPASS-0.55";
 pub const FOF_PROOFCHECK_WARNING: &str = "Cannot currently handle full first-order format!";
+const C_PROOFCHECK_FGETS_TEXT_LIMIT: usize = 179;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PclCheckType {
@@ -719,7 +720,16 @@ fn execute_prover_invocation(
 }
 
 fn prover_output_contains_success_marker(output: &[u8], success_marker: &str) -> bool {
-    String::from_utf8_lossy(output).contains(success_marker)
+    let success_marker = success_marker.as_bytes();
+    if success_marker.is_empty() {
+        return true;
+    }
+
+    c_proofcheck_fgets_chunks(output).any(|chunk| {
+        let line = c_string_chunk(chunk);
+        line.windows(success_marker.len())
+            .any(|window| window == success_marker)
+    })
 }
 
 fn prover_display_command(invocation: &ProverInvocation, problem_file: &Path) -> String {
@@ -748,22 +758,42 @@ fn write_prover_output_trace(
     output: &mut (impl IoWrite + ?Sized),
     prover_output: &[u8],
 ) -> Result<(), Diagnostic> {
-    const C_FGETS_TEXT_LIMIT: usize = 179;
-
-    let mut start = 0;
-    while start < prover_output.len() {
-        let remaining = &prover_output[start..];
-        let chunk_len = remaining
-            .iter()
-            .take(C_FGETS_TEXT_LIMIT)
-            .position(|byte| *byte == b'\n')
-            .map_or(remaining.len().min(C_FGETS_TEXT_LIMIT), |index| index + 1);
-        let end = start + chunk_len;
+    for chunk in c_proofcheck_fgets_chunks(prover_output) {
         proofcheck_write_all(output, format!("{DEFAULT_COMCHAR_RAW}> ").as_bytes())?;
-        proofcheck_write_all(output, &prover_output[start..end])?;
-        start = end;
+        proofcheck_write_all(output, c_string_chunk(chunk))?;
     }
     Ok(())
+}
+
+fn c_proofcheck_fgets_chunks(output: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        if start >= output.len() {
+            return None;
+        }
+
+        let remaining = &output[start..];
+        let chunk_len = remaining
+            .iter()
+            .take(C_PROOFCHECK_FGETS_TEXT_LIMIT)
+            .position(|byte| *byte == b'\n')
+            .map_or(
+                remaining.len().min(C_PROOFCHECK_FGETS_TEXT_LIMIT),
+                |index| index + 1,
+            );
+        let end = start + chunk_len;
+        let chunk = &output[start..end];
+        start = end;
+        Some(chunk)
+    })
+}
+
+fn c_string_chunk(chunk: &[u8]) -> &[u8] {
+    let end = chunk
+        .iter()
+        .position(|byte| *byte == b'\0')
+        .unwrap_or(chunk.len());
+    &chunk[..end]
 }
 
 fn otter_clause_string(clause: &Clause, bank: &TermBank) -> String {
@@ -997,10 +1027,10 @@ mod tests {
         dfg_signature_string, eprover_problem_string, generate_check, generate_check_with_warnings,
         neg_skolemize_clause, otter_clause_set_string, otter_problem_string, protocol_check,
         protocol_check_with_output, protocol_check_with_output_and_warnings,
-        prover_invocation_for_problem, run_prover_invocation, run_prover_invocation_with_output,
-        spass_problem_string, step_check, step_check_with_runner, write_prover_output_trace,
-        PclCheckType, ProofcheckWarningOutput, ProverInvocation, ProverProblemFileUse, ProverType,
-        FOF_PROOFCHECK_WARNING,
+        prover_invocation_for_problem, prover_output_contains_success_marker,
+        run_prover_invocation, run_prover_invocation_with_output, spass_problem_string, step_check,
+        step_check_with_runner, write_prover_output_trace, PclCheckType, ProofcheckWarningOutput,
+        ProverInvocation, ProverProblemFileUse, ProverType, FOF_PROOFCHECK_WARNING,
     };
     use crate::basics::defines::DEFAULT_COMCHAR_RAW;
     use crate::basics::simple_stuff::ProblemType;
@@ -1403,6 +1433,36 @@ mod tests {
         assert!(output.contains("% ------------Problem begin--------------\n"));
         assert!(output.contains("payload\nPROOF-SUCCESS\n"));
         assert!(output.contains("% ------------Problem end----------------\n"));
+    }
+
+    #[test]
+    fn prover_success_marker_scans_c_fgets_chunks() {
+        let mut split_marker = vec![b'a'; 178];
+        split_marker.extend_from_slice(b"PROOF-SUCCESS\n");
+        assert!(!prover_output_contains_success_marker(
+            &split_marker,
+            "PROOF-SUCCESS"
+        ));
+
+        let mut contained_marker = vec![b'a'; 166];
+        contained_marker.extend_from_slice(b"PROOF-SUCCESS\n");
+        assert!(prover_output_contains_success_marker(
+            &contained_marker,
+            "PROOF-SUCCESS"
+        ));
+    }
+
+    #[test]
+    fn prover_success_marker_and_trace_use_c_string_view() {
+        assert!(!prover_output_contains_success_marker(
+            b"prefix\0PROOF-SUCCESS\n",
+            "PROOF-SUCCESS"
+        ));
+
+        let mut output = Vec::new();
+        write_prover_output_trace(&mut output, b"prefix\0hidden\n").unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "%> prefix");
     }
 
     #[test]
