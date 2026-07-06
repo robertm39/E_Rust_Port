@@ -86,7 +86,8 @@ use crate::clauses::unfold_defs::{
 };
 use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::scheduling::{
-    execute_schedule_multi_core, ScheduleExecutionConfig, ScheduleExecutionOutcome,
+    execute_schedule_multi_core, execute_schedule_multi_core_with_default_retry,
+    ScheduleExecutionConfig, ScheduleExecutionOutcome,
 };
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
@@ -96,7 +97,7 @@ use crate::heuristics::clausesetfeatures::{
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
-    get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
+    get_default_schedule, get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
     heuristic_parms_strategy_print_string, initialize_placeholder_search_schedule,
     schedule_times_init_multi_core, strategies_print_predefined_string, ScheduleCell, DEFAULT_MASK,
     DEFAULT_SCHED_TIME_LIMIT,
@@ -152,6 +153,7 @@ const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
+const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--e-rust-port-schedule-search-worker";
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
 const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
 const TRAINING_PRINT_POS: i64 = 1;
@@ -1274,6 +1276,7 @@ pub struct EProverConfig {
     pub warnings: Vec<Diagnostic>,
     pub explicit_options: Vec<EProverOption>,
     pub invocation_args: Vec<String>,
+    pub internal_schedule_worker: Option<InternalScheduleWorkerConfig>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub output_level: i64,
@@ -1315,6 +1318,26 @@ pub struct EProverConfig {
     pub memory_limit: u64,
     pub delete_bad_limit: i64,
     pub flags: EProverFlags,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InternalScheduleWorkerConfig {
+    pub preprocessing_index: usize,
+    pub preprocessing_strategy: String,
+    pub preprocessing_ordering: to_params::TermOrdering,
+    pub preprocessing_cpu_limit: u64,
+    pub mode: InternalScheduleWorkerMode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InternalScheduleWorkerMode {
+    Preprocessing,
+    Search {
+        index: usize,
+        strategy: String,
+        ordering: to_params::TermOrdering,
+        cpu_limit: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1368,6 +1391,7 @@ impl Default for EProverConfig {
             warnings: Vec::new(),
             explicit_options: Vec::new(),
             invocation_args: Vec::new(),
+            internal_schedule_worker: None,
             files: Vec::new(),
             output_file: None,
             output_level: 1,
@@ -2783,8 +2807,12 @@ where
 }
 
 fn is_schedule_worker_invocation(argv: &[String]) -> bool {
-    argv.get(1)
-        .is_some_and(|arg| arg == INTERNAL_SCHEDULE_WORKER_ARG)
+    argv.get(1).is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            INTERNAL_SCHEDULE_WORKER_ARG | INTERNAL_SCHEDULE_SEARCH_WORKER_ARG
+        )
+    })
 }
 
 fn run_schedule_worker_from_args(
@@ -2793,77 +2821,177 @@ fn run_schedule_worker_from_args(
     stderr: &mut impl Write,
 ) -> Result<u8, EProverError> {
     let worker = parse_schedule_worker_args(argv)?;
-    let child_argv = schedule_worker_run_args(
-        &worker.original_args,
-        &worker.heuristic_name,
-        worker.cpu_limit,
-    );
-    run(child_argv, stdout, stderr)
+    let child_argv = schedule_worker_run_args(&worker.original_args);
+    init_io(PROGRAM_NAME);
+    let _io_guard = IoRunGuard;
+    let _problem_type_guard = ProblemTypeRunGuard::new();
+    setup_signal_handlers()?;
+    let processed_options = match process_options_for_run(child_argv) {
+        Ok(processed_options) => processed_options,
+        Err(error) => {
+            write_warnings(stderr, &error.warnings)?;
+            return Err(error.into_diagnostic().into());
+        }
+    };
+    match processed_options.action {
+        EProverAction::Help => {
+            write_warnings(stderr, &processed_options.warnings)?;
+            stdout.write_all(print_help().as_bytes())?;
+            Ok(ErrorCode::NO_ERROR.exit_status())
+        }
+        EProverAction::Version => {
+            write_warnings(stderr, &processed_options.warnings)?;
+            stdout.write_all(version::version_line().as_bytes())?;
+            Ok(ErrorCode::NO_ERROR.exit_status())
+        }
+        EProverAction::Run(config) => {
+            let mut config = *config;
+            config.internal_schedule_worker = Some(worker.internal_config());
+            let cpu_limit = i64_from_u64_saturating(worker.worker_cpu_limit());
+            config.cpu_limit = Some(cpu_limit);
+            config.schedule_time_limit = Some(cpu_limit);
+            write_config_warnings(stderr, &config)?;
+            write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
+            run_config_with_stderr(stdout, Some(stderr as &mut dyn Write), &config)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ScheduleWorkerArgs {
-    heuristic_name: String,
-    cpu_limit: u64,
+    preprocessing_index: usize,
+    preprocessing_strategy: String,
+    preprocessing_ordering: to_params::TermOrdering,
+    preprocessing_cpu_limit: u64,
+    mode: InternalScheduleWorkerMode,
     original_args: Vec<String>,
 }
 
+impl ScheduleWorkerArgs {
+    fn internal_config(&self) -> InternalScheduleWorkerConfig {
+        InternalScheduleWorkerConfig {
+            preprocessing_index: self.preprocessing_index,
+            preprocessing_strategy: self.preprocessing_strategy.clone(),
+            preprocessing_ordering: self.preprocessing_ordering,
+            preprocessing_cpu_limit: self.preprocessing_cpu_limit,
+            mode: self.mode.clone(),
+        }
+    }
+
+    const fn worker_cpu_limit(&self) -> u64 {
+        match &self.mode {
+            InternalScheduleWorkerMode::Preprocessing => self.preprocessing_cpu_limit,
+            InternalScheduleWorkerMode::Search { cpu_limit, .. } => *cpu_limit,
+        }
+    }
+}
+
 fn parse_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Diagnostic> {
-    if argv.get(1).map(String::as_str) != Some(INTERNAL_SCHEDULE_WORKER_ARG) || argv.len() < 6 {
+    match argv.get(1).map(String::as_str) {
+        Some(INTERNAL_SCHEDULE_WORKER_ARG) => parse_preprocessing_schedule_worker_args(argv),
+        Some(INTERNAL_SCHEDULE_SEARCH_WORKER_ARG) => parse_search_schedule_worker_args(argv),
+        _ => Err(schedule_worker_usage_error()),
+    }
+}
+
+fn parse_preprocessing_schedule_worker_args(
+    argv: &[String],
+) -> Result<ScheduleWorkerArgs, Diagnostic> {
+    if argv.len() < 8 || argv.get(6).map(String::as_str) != Some("--") {
         return Err(schedule_worker_usage_error());
     }
-    let heuristic_name = argv
-        .get(2)
-        .filter(|name| !name.is_empty())
-        .cloned()
-        .ok_or_else(schedule_worker_usage_error)?;
-    let cpu_limit = argv
-        .get(3)
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(schedule_worker_usage_error)?;
-    if argv.get(4).map(String::as_str) != Some("--") {
-        return Err(schedule_worker_usage_error());
-    }
-    let original_args = argv[5..].to_vec();
+    let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
+    let preprocessing_strategy = schedule_worker_required_string(argv, 3)?;
+    let preprocessing_ordering = schedule_worker_required_ordering(argv, 4)?;
+    let preprocessing_cpu_limit = schedule_worker_required_u64(argv, 5)?;
+    let original_args = argv[7..].to_vec();
     if original_args.is_empty() {
         return Err(schedule_worker_usage_error());
     }
     Ok(ScheduleWorkerArgs {
-        heuristic_name,
-        cpu_limit,
+        preprocessing_index,
+        preprocessing_strategy,
+        preprocessing_ordering,
+        preprocessing_cpu_limit,
+        mode: InternalScheduleWorkerMode::Preprocessing,
         original_args,
     })
+}
+
+fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Diagnostic> {
+    if argv.len() < 12 || argv.get(10).map(String::as_str) != Some("--") {
+        return Err(schedule_worker_usage_error());
+    }
+    let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
+    let preprocessing_strategy = schedule_worker_required_string(argv, 3)?;
+    let preprocessing_ordering = schedule_worker_required_ordering(argv, 4)?;
+    let preprocessing_cpu_limit = schedule_worker_required_u64(argv, 5)?;
+    let search_index = schedule_worker_required_usize(argv, 6)?;
+    let search_strategy = schedule_worker_required_string(argv, 7)?;
+    let search_ordering = schedule_worker_required_ordering(argv, 8)?;
+    let search_cpu_limit = schedule_worker_required_u64(argv, 9)?;
+    let original_args = argv[11..].to_vec();
+    if original_args.is_empty() {
+        return Err(schedule_worker_usage_error());
+    }
+    Ok(ScheduleWorkerArgs {
+        preprocessing_index,
+        preprocessing_strategy,
+        preprocessing_ordering,
+        preprocessing_cpu_limit,
+        mode: InternalScheduleWorkerMode::Search {
+            index: search_index,
+            strategy: search_strategy,
+            ordering: search_ordering,
+            cpu_limit: search_cpu_limit,
+        },
+        original_args,
+    })
+}
+
+fn schedule_worker_required_string(argv: &[String], index: usize) -> Result<String, Diagnostic> {
+    argv.get(index)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(schedule_worker_usage_error)
+}
+
+fn schedule_worker_required_u64(argv: &[String], index: usize) -> Result<u64, Diagnostic> {
+    argv.get(index)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(schedule_worker_usage_error)
+}
+
+fn schedule_worker_required_usize(argv: &[String], index: usize) -> Result<usize, Diagnostic> {
+    argv.get(index)
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(schedule_worker_usage_error)
+}
+
+fn schedule_worker_required_ordering(
+    argv: &[String],
+    index: usize,
+) -> Result<to_params::TermOrdering, Diagnostic> {
+    argv.get(index)
+        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(to_params::TermOrdering::from_c_value)
+        .ok_or_else(schedule_worker_usage_error)
 }
 
 fn schedule_worker_usage_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::USAGE_ERROR,
         format!(
-            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <strategy> <cpu-limit> -- <original-eprover-argv...>"
+            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> -- <original-eprover-argv...>"
         ),
     )
 }
 
-fn schedule_worker_run_args(
-    original_args: &[String],
-    heuristic_name: &str,
-    cpu_limit: u64,
-) -> Vec<String> {
+fn schedule_worker_run_args(original_args: &[String]) -> Vec<String> {
     let mut args = filter_schedule_worker_original_args(original_args);
     if args.is_empty() {
         args.push(PROGRAM_NAME.to_owned());
     }
-    let insert_at = args
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(args.len());
-    args.splice(
-        insert_at..insert_at,
-        [
-            format!("--select-strategy={heuristic_name}"),
-            format!("--cpu-limit={cpu_limit}"),
-        ],
-    );
     args
 }
 
@@ -5353,13 +5481,16 @@ fn run_proof_search<W: Write + ?Sized>(
     let next_doc_ident =
         write_watchlist_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
 
-    apply_auto_mode_search_selection(
+    match apply_auto_mode_search_selection(
         output,
         config,
         &mut state,
         auto_context.as_deref(),
         &mut heuristic_params,
-    )?;
+    )? {
+        AutoModeSearchSelection::Continue => {}
+        AutoModeSearchSelection::ScheduledExit(status) => return Ok(status),
+    }
     apply_strategy_io_to_params(config, &mut heuristic_params)?;
     let mut control = proof_control_from_heuristic_parms(config, heuristic_params)?;
     let mut params = control.heuristic_parms().clone();
@@ -5557,6 +5688,11 @@ enum AutoModePreprocessingSelection {
     ScheduledExit(u8),
 }
 
+enum AutoModeSearchSelection {
+    Continue,
+    ScheduledExit(u8),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ScheduledHeuristicSelection {
     name: String,
@@ -5569,7 +5705,11 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     state: &crate::clauses::proofstate::ProofState,
     params: &mut HeuristicParmsCell,
 ) -> Result<AutoModePreprocessingSelection, EProverError> {
-    if !(config.flags.contains(EProverFlag::Auto) || config.strategy_scheduling) {
+    let internal_worker = config.internal_schedule_worker.as_ref();
+    if !(config.flags.contains(EProverFlag::Auto)
+        || config.strategy_scheduling
+        || internal_worker.is_some())
+    {
         return Ok(AutoModePreprocessingSelection::Continue(None));
     }
 
@@ -5578,14 +5718,23 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     raw_spec_features_compute(&mut raw_features, state);
     raw_spec_features_classify(&mut raw_features, &limits, Some(RAW_DEFAULT_MASK));
     let mut preprocessing_schedule = get_preprocessing_schedule(&raw_features.class)?.schedule;
-    output.write_stdout_side_channel(
-        format!(
-            "{DEFAULT_COMCHAR_RAW} Preprocessing class: {}.\n",
-            raw_features.class
-        )
-        .as_bytes(),
-    )?;
-    let selected_preprocessing_index = if config.strategy_scheduling {
+    if internal_worker.is_none() {
+        output.write_stdout_side_channel(
+            format!(
+                "{DEFAULT_COMCHAR_RAW} Preprocessing class: {}.\n",
+                raw_features.class
+            )
+            .as_bytes(),
+        )?;
+    }
+    let selected_preprocessing_index = if let Some(worker) = internal_worker {
+        scheduled_strategy_index(
+            &preprocessing_schedule,
+            worker.preprocessing_index,
+            &worker.preprocessing_strategy,
+            worker.preprocessing_ordering,
+        )?
+    } else if config.strategy_scheduling {
         let outcome =
             execute_auto_preprocessing_schedule(output, config, &mut preprocessing_schedule)?;
         return match outcome {
@@ -5606,7 +5755,7 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     };
     let preproc_selection =
         schedule_heuristic_selection(&preprocessing_schedule, selected_preprocessing_index)?;
-    if config.strategy_scheduling {
+    if config.strategy_scheduling || internal_worker.is_some() {
         params.order_params.ordertype = preproc_selection.ordering;
     }
     get_heuristic_with_name(&preproc_selection.name, params)?;
@@ -5632,21 +5781,52 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     ))))
 }
 
+fn scheduled_strategy_index(
+    schedule: &[ScheduleCell],
+    index: usize,
+    strategy: &str,
+    ordering: to_params::TermOrdering,
+) -> Result<usize, Diagnostic> {
+    let Some(cell) = schedule.get(index) else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!("scheduled strategy index {index} is not in the generated schedule"),
+        ));
+    };
+    if cell.heuristic_name != strategy || cell.ordering != ordering {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!(
+                "scheduled strategy {strategy} at index {index} does not match the generated schedule"
+            ),
+        ));
+    }
+    Ok(index)
+}
+
 fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
     auto_context: Option<&AutoModeContext>,
     params: &mut HeuristicParmsCell,
-) -> Result<(), EProverError> {
+) -> Result<AutoModeSearchSelection, EProverError> {
     let Some(auto_context) = auto_context else {
-        return Ok(());
+        return Ok(AutoModeSearchSelection::Continue);
     };
     if config.flags.contains(EProverFlag::CnfOnly) {
-        return Ok(());
+        return Ok(AutoModeSearchSelection::Continue);
     }
 
     let choice_max_depth = params.inst_choice_max_depth;
+    if let Some(search_selection) = internal_search_selection(config) {
+        params.order_params.ordertype = search_selection.ordering;
+        get_heuristic_with_name(&search_selection.name, params)?;
+        params.inst_choice_max_depth = choice_max_depth;
+        overlay_explicit_heuristic_options(config, params)?;
+        return Ok(AutoModeSearchSelection::Continue);
+    }
+
     let mut features = SpecFeatureCell::default();
     let (terms, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_mut();
     spec_features_compute_with_choice_recognition(
@@ -5666,6 +5846,16 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     output.write_stdout_side_channel(
         format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
     )?;
+    if internal_preprocessing_worker(config).is_some() {
+        let outcome =
+            execute_auto_search_schedule(output, config, auto_context, &mut search_schedule)?;
+        return Ok(AutoModeSearchSelection::ScheduledExit(match outcome {
+            ScheduleExecutionOutcome::Result { exit_status, .. } => {
+                schedule_exit_status_to_u8(exit_status)
+            }
+            ScheduleExecutionOutcome::Exhausted => ErrorCode::RESOURCE_OUT.exit_status(),
+        }));
+    }
     let search_selection = if config.strategy_scheduling {
         select_scheduled_search_cell(output, config, auto_context, &mut search_schedule)?
     } else {
@@ -5688,7 +5878,30 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
             .as_bytes(),
         )?;
     }
-    Ok(())
+    Ok(AutoModeSearchSelection::Continue)
+}
+
+fn internal_search_selection(config: &EProverConfig) -> Option<ScheduledHeuristicSelection> {
+    match config
+        .internal_schedule_worker
+        .as_ref()
+        .map(|worker| &worker.mode)
+    {
+        Some(InternalScheduleWorkerMode::Search {
+            strategy, ordering, ..
+        }) => Some(ScheduledHeuristicSelection {
+            name: strategy.clone(),
+            ordering: *ordering,
+        }),
+        _ => None,
+    }
+}
+
+fn internal_preprocessing_worker(config: &EProverConfig) -> Option<&InternalScheduleWorkerConfig> {
+    config
+        .internal_schedule_worker
+        .as_ref()
+        .filter(|worker| matches!(worker.mode, InternalScheduleWorkerMode::Preprocessing))
 }
 
 fn first_schedule_heuristic_selection(
@@ -5726,13 +5939,14 @@ fn execute_auto_preprocessing_schedule<W: Write + ?Sized>(
             serialize: config.serialize_schedule || max_cores == 1,
         },
         output,
-        |_, cell, startup_output| spawn_schedule_worker(config, cell, startup_output),
+        |index, cell, startup_output| spawn_schedule_worker(config, index, cell, startup_output),
     )?;
     Ok(report.outcome)
 }
 
 fn spawn_schedule_worker(
     config: &EProverConfig,
+    index: usize,
     cell: &ScheduleCell,
     startup_output: &mut dyn Write,
 ) -> Result<EGPCtrl, Diagnostic> {
@@ -5745,7 +5959,88 @@ fn spawn_schedule_worker(
     let mut command = Command::new(current_exe);
     command
         .arg(INTERNAL_SCHEDULE_WORKER_ARG)
+        .arg(index.to_string())
         .arg(&cell.heuristic_name)
+        .arg(cell.ordering.c_value().to_string())
+        .arg(cell.time_absolute.to_string())
+        .arg("--")
+        .args(&config.invocation_args);
+    EGPCtrl::spawn_command_reporting(
+        command,
+        cell.heuristic_name.clone(),
+        schedule_cell_cores_usize(cell),
+        cell.time_absolute,
+        startup_output,
+    )
+}
+
+fn execute_auto_search_schedule<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    auto_context: &AutoModeContext,
+    search_schedule: &mut Vec<ScheduleCell>,
+) -> Result<ScheduleExecutionOutcome, EProverError> {
+    let preprocessing_tail =
+        &auto_context.preprocessing_schedule[auto_context.selected_preprocessing_index..];
+    initialize_placeholder_search_schedule(
+        search_schedule,
+        preprocessing_tail,
+        config.force_preprocessing_schedule,
+    )?;
+
+    let selected_preprocessing_index = auto_context.selected_preprocessing_index;
+    let selected_preprocessing = &auto_context.preprocessing_schedule[selected_preprocessing_index];
+    let default_schedule = get_default_schedule()?;
+    let report = execute_schedule_multi_core_with_default_retry(
+        search_schedule,
+        &default_schedule,
+        ScheduleExecutionConfig {
+            time_used: schedule_time_used_seconds(),
+            wc_time_limit: f64_from_u64_for_schedule(selected_preprocessing.time_absolute),
+            preprocessing_schedule: false,
+            max_cores: selected_preprocessing.cores.max(1),
+            serialize: false,
+        },
+        output,
+        schedule_time_used_seconds,
+        |index, cell, startup_output| {
+            spawn_search_schedule_worker(
+                config,
+                selected_preprocessing_index,
+                selected_preprocessing,
+                index,
+                cell,
+                startup_output,
+            )
+        },
+    )?;
+    Ok(report.outcome().clone())
+}
+
+fn spawn_search_schedule_worker(
+    config: &EProverConfig,
+    preprocessing_index: usize,
+    preprocessing_cell: &ScheduleCell,
+    index: usize,
+    cell: &ScheduleCell,
+    startup_output: &mut dyn Write,
+) -> Result<EGPCtrl, Diagnostic> {
+    let current_exe = std::env::current_exe().map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::FILE_ERROR,
+            format!("Cannot locate eprover executable for search schedule worker: {error}"),
+        )
+    })?;
+    let mut command = Command::new(current_exe);
+    command
+        .arg(INTERNAL_SCHEDULE_SEARCH_WORKER_ARG)
+        .arg(preprocessing_index.to_string())
+        .arg(&preprocessing_cell.heuristic_name)
+        .arg(preprocessing_cell.ordering.c_value().to_string())
+        .arg(preprocessing_cell.time_absolute.to_string())
+        .arg(index.to_string())
+        .arg(&cell.heuristic_name)
+        .arg(cell.ordering.c_value().to_string())
         .arg(cell.time_absolute.to_string())
         .arg("--")
         .args(&config.invocation_args);
@@ -5846,6 +6141,10 @@ fn i32_from_i64_saturating(value: i64) -> i32 {
             i32::MAX
         }
     })
+}
+
+fn i64_from_u64_saturating(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -13308,12 +13607,12 @@ mod tests {
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
         ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        LiteralComparison, ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag,
-        PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput,
+        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
+        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -14112,41 +14411,27 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn schedule_worker_run_args_selects_cell_strategy_and_cpu_limit() {
+    fn schedule_worker_run_args_strips_recursive_controls_without_strategy_injection() {
         let original = ["eprover", "--auto", "--tstp-in", "problem.p"].map(str::to_owned);
 
-        let args = schedule_worker_run_args(&original, "ScheduledCell", 17);
+        let args = schedule_worker_run_args(&original);
 
         assert_eq!(
             args,
-            [
-                "eprover",
-                "--tstp-in",
-                "problem.p",
-                "--select-strategy=ScheduledCell",
-                "--cpu-limit=17"
-            ]
-            .map(str::to_owned)
+            ["eprover", "--tstp-in", "problem.p"].map(str::to_owned)
         );
     }
 
     #[test]
-    fn schedule_worker_run_args_insert_controls_before_double_dash() {
+    fn schedule_worker_run_args_preserves_double_dash_tail() {
         let original =
             ["eprover", "--auto-schedule=1", "--", "-problem-like-name.p"].map(str::to_owned);
 
-        let args = schedule_worker_run_args(&original, "ScheduledCell", 17);
+        let args = schedule_worker_run_args(&original);
 
         assert_eq!(
             args,
-            [
-                "eprover",
-                "--select-strategy=ScheduledCell",
-                "--cpu-limit=17",
-                "--",
-                "-problem-like-name.p"
-            ]
-            .map(str::to_owned)
+            ["eprover", "--", "-problem-like-name.p"].map(str::to_owned)
         );
     }
 
@@ -14155,7 +14440,9 @@ input_clause(c2,axiom,[++q(X)]).
         let argv = [
             "eprover",
             INTERNAL_SCHEDULE_WORKER_ARG,
+            "2",
             "ScheduledCell",
+            "7",
             "17",
             "--",
             "eprover",
@@ -14166,8 +14453,55 @@ input_clause(c2,axiom,[++q(X)]).
 
         let parsed = parse_schedule_worker_args(&argv).unwrap();
 
-        assert_eq!(parsed.heuristic_name, "ScheduledCell");
-        assert_eq!(parsed.cpu_limit, 17);
+        assert_eq!(parsed.preprocessing_index, 2);
+        assert_eq!(parsed.preprocessing_strategy, "ScheduledCell");
+        assert_eq!(
+            parsed.preprocessing_ordering,
+            to_params::TermOrdering::Lpo4Copy
+        );
+        assert_eq!(parsed.preprocessing_cpu_limit, 17);
+        assert_eq!(parsed.mode, InternalScheduleWorkerMode::Preprocessing);
+        assert_eq!(
+            parsed.original_args,
+            ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn search_schedule_worker_parser_keeps_preprocessing_and_search_strategies() {
+        let argv = [
+            "eprover",
+            INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+            "1",
+            "PreprocCell",
+            "3",
+            "300",
+            "4",
+            "SearchCell",
+            "7",
+            "17",
+            "--",
+            "eprover",
+            "--auto-schedule=1",
+            "problem.p",
+        ]
+        .map(str::to_owned);
+
+        let parsed = parse_schedule_worker_args(&argv).unwrap();
+
+        assert_eq!(parsed.preprocessing_index, 1);
+        assert_eq!(parsed.preprocessing_strategy, "PreprocCell");
+        assert_eq!(parsed.preprocessing_ordering, to_params::TermOrdering::Kbo6);
+        assert_eq!(parsed.preprocessing_cpu_limit, 300);
+        assert_eq!(
+            parsed.mode,
+            InternalScheduleWorkerMode::Search {
+                index: 4,
+                strategy: "SearchCell".to_owned(),
+                ordering: to_params::TermOrdering::Lpo4Copy,
+                cpu_limit: 17,
+            }
+        );
         assert_eq!(
             parsed.original_args,
             ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)

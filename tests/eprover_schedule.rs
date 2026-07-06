@@ -15,10 +15,20 @@ fn auto_schedule_runs_worker_process_and_replays_winner() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
     assert!(stdout.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
-    assert!(stdout.contains("% Scheduled 1 strats onto 1 cores with "));
+    assert!(
+        stdout
+            .matches("% Scheduled 1 strats onto 1 cores with ")
+            .count()
+            >= 2,
+        "{stdout}"
+    );
     assert!(stdout.contains("% Starting G-E--_302_C18_F1_URBAN_RG_S04BN"));
     assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+    assert!(stdout.contains("% Search class: FUHPF-FFSF00-SFFFFFNN\n"));
+    assert!(stdout.contains("% Starting SAT001_MinMin_p005000_rr_RG"));
+    assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
     assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    assert!(!stdout.contains("e-rust-port-schedule"), "{stdout}");
     assert!(!stdout.contains("strategy scheduling process execution is not ported yet"));
     assert!(stderr.is_empty(), "{stderr}");
 
@@ -41,10 +51,11 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
     assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+    assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
     assert!(stdout.contains("% Preprocessing time       : "));
     assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
     assert!(
-        stdout.matches("% User time                : ").count() >= 2,
+        stdout.matches("% User time                : ").count() >= 3,
         "{stdout}"
     );
     assert!(stderr.is_empty(), "{stderr}");
