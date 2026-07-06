@@ -9153,7 +9153,6 @@ fn parse_clause_scanner_into_destination_with_options(
     destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
-    set_problem_type(ProblemType::FirstOrder)?;
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let start_input_count = destination.input_owner_count();
@@ -9193,6 +9192,7 @@ fn parse_clause_scanner_into_destination_with_options(
             result_problem_type = parsed.problem_type;
         }
         _ => {
+            set_problem_type(ProblemType::FirstOrder)?;
             while clause_starts_maybe(scanner) {
                 let clause = clause_parse_with_options(
                     scanner,
@@ -9231,7 +9231,6 @@ fn parse_app_encode_file(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
 ) -> Result<ParsedAppEncodeFile, Diagnostic> {
-    set_problem_type(ProblemType::FirstOrder)?;
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
         io::stdin().read_to_end(&mut input).map_err(|error| {
@@ -9421,6 +9420,7 @@ fn parse_tptp_app_encode_entry_list(
     let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
+            set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
@@ -9452,6 +9452,7 @@ fn parse_tstp_app_encode_entry_list(
     let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
+            set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("fof|tff|tcf|thf") {
@@ -9501,6 +9502,7 @@ fn parse_tptp_entry_list(
     let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
+            set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse_with_options(
                 scanner,
                 bank,
@@ -9577,6 +9579,7 @@ fn parse_tstp_entry_list(
     let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
+            set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse_with_options(
                 scanner,
                 bank,
@@ -9677,49 +9680,6 @@ fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
     } else {
         ProblemType::FirstOrder
     }
-}
-
-struct ScopedProblemType {
-    previous: ProblemType,
-    active: bool,
-}
-
-impl ScopedProblemType {
-    fn enter(scoped: ProblemType) -> Result<Self, Diagnostic> {
-        let previous = problem_type();
-        if previous == scoped {
-            return Ok(Self {
-                previous,
-                active: false,
-            });
-        }
-
-        reset_problem_type();
-        set_problem_type(scoped)?;
-        Ok(Self {
-            previous,
-            active: true,
-        })
-    }
-}
-
-impl Drop for ScopedProblemType {
-    fn drop(&mut self) {
-        if self.active {
-            reset_problem_type();
-            if self.previous != ProblemType::NotInitialized {
-                let _ = set_problem_type(self.previous);
-            }
-        }
-    }
-}
-
-fn with_scoped_problem_type<T>(
-    scoped: ProblemType,
-    parse: impl FnOnce() -> Result<T, Diagnostic>,
-) -> Result<T, Diagnostic> {
-    let _guard = ScopedProblemType::enter(scoped)?;
-    parse()
 }
 
 fn mark_typed_symbols_for_tstp_formula_kind(bank: &mut TermBank, formula_kind: &str) {
@@ -9861,6 +9821,7 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    set_problem_type(formula_problem_type)?;
     mark_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -9870,10 +9831,8 @@ fn parse_simple_tstp_app_encode_formula(
     if scanner.test_id("type") {
         scanner.accept_id("type")?;
         scanner.accept_tok(TokenType::COMMA)?;
-        with_scoped_problem_type(formula_problem_type, || {
-            bank.signature_mut()
-                .parse_tff_type_declaration(scanner, formula_problem_type)
-        })?;
+        bank.signature_mut()
+            .parse_tff_type_declaration(scanner, formula_problem_type)?;
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -9922,6 +9881,7 @@ fn parse_simple_tptp_app_encode_formula(
     bank.vars().clear_ext_names();
 
     scanner.accept_id("input_formula")?;
+    set_problem_type(ProblemType::FirstOrder)?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
@@ -9964,6 +9924,7 @@ fn parse_simple_tstp_formula_clause(
 
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    set_problem_type(formula_problem_type)?;
     mark_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -10118,10 +10079,8 @@ fn parse_simple_tstp_type_declaration_clause(
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     scanner.accept_id("type")?;
     scanner.accept_tok(TokenType::COMMA)?;
-    with_scoped_problem_type(problem_type, || {
-        bank.signature_mut()
-            .parse_tff_type_declaration(scanner, problem_type)
-    })?;
+    bank.signature_mut()
+        .parse_tff_type_declaration(scanner, problem_type)?;
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -10158,6 +10117,7 @@ fn parse_simple_tptp_formula_clause(
     let start_column = usize_to_i64(scanner.current_token().column());
 
     scanner.accept_id("input_formula")?;
+    set_problem_type(ProblemType::FirstOrder)?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
@@ -12932,18 +12892,16 @@ fn parse_simple_tstp_body_formulas(
     formula_kind: &str,
     problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    with_scoped_problem_type(problem_type, || {
-        if formula_kind != "tcf" {
-            return parse_simple_fof_formulas(scanner, bank, problem_type);
-        }
+    if formula_kind != "tcf" {
+        return parse_simple_fof_formulas(scanner, bank, problem_type);
+    }
 
-        let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
-        simple_fof_bool_term_to_formulas(
-            &formula,
-            SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
-            bank,
-        )
-    })
+    let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
+    simple_fof_bool_term_to_formulas(
+        &formula,
+        SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+        bank,
+    )
 }
 
 fn parse_simple_fof_connective_formulas(
@@ -13799,6 +13757,7 @@ mod tests {
     fn tstp_typed_wrappers_mark_signature_typed_like_c() {
         let _guard = global_state_lock();
         for formula_kind in ["tff", "tcf", "thf"] {
+            reset_problem_type();
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             assert!(!bank.signature().typed_symbols());
 
@@ -13812,6 +13771,7 @@ mod tests {
                 "{formula_kind} wrapper did not mark typed symbols"
             );
         }
+        reset_problem_type();
     }
 
     #[test]
@@ -16711,17 +16671,17 @@ input_clause(c2,axiom,[++q(X)]).
         let path = temp_path("app-encode-parenthesized-tstp-applied-head");
         std::fs::write(
             &path,
-            "tff(a_type, type, a: $i).\n\
-             tff(b_type, type, b: $i).\n\
-             tff(c_type, type, c: $i).\n\
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
              thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
-             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
-             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
-             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
-             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
+             thf(curried_eq, axiom, (h @ a) @ b = c).\n\
+             thf(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18114,17 +18074,17 @@ input_clause(c2,axiom,[++q(X)]).
         let path = temp_path("syntax-parenthesized-tstp-applied-head");
         std::fs::write(
             &path,
-            "tff(a_type, type, a: $i).\n\
-             tff(b_type, type, b: $i).\n\
-             tff(c_type, type, c: $i).\n\
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
              thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
-             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
-             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
-             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
-             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
+             thf(curried_eq, axiom, (h @ a) @ b = c).\n\
+             thf(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -25844,17 +25804,17 @@ input_clause(c2,axiom,[++q(X)]).
         let path = temp_path("print-formulas-parenthesized-tstp-applied-head");
         std::fs::write(
             &path,
-            "tff(a_type, type, a: $i).\n\
-             tff(b_type, type, b: $i).\n\
-             tff(c_type, type, c: $i).\n\
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
              thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
-             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
-             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
-             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
-             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
+             thf(curried_eq, axiom, (h @ a) @ b = c).\n\
+             thf(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -27155,6 +27115,37 @@ input_clause(c2,axiom,[++q(X)]).
             String::from_utf8(stdout).unwrap(),
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_mixed_first_and_higher_order_tstp_records() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-mixed-fo-ho-tstp-records");
+        std::fs::write(
+            &path,
+            "thf(i_type, type, i: $tType).\n\
+             fof(fact, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(
+            error.message(),
+            "Mixing of first order and higher order syntax is not allowed."
+        );
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
