@@ -8,8 +8,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::tformula_expand_distinct;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_is_dummy_quote, clause_is_eval_gc, demodulator_clause_refs,
-    deriv_stack_count_search_inferences, deriv_stack_extract_parents,
+    clause_dummy_quote_parent_ref, clause_is_dummy_quote, clause_is_eval_gc,
+    demodulator_clause_refs, deriv_stack_count_search_inferences, deriv_stack_extract_parents,
     deriv_stack_indicates_initial_clause, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
     op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
     FormulaDerivationRef, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
@@ -1161,7 +1161,7 @@ impl ProofState {
                 break;
             }
             visited.push(key);
-            let Some(parent) = dummy_quote_parent_ref(current)
+            let Some(parent) = clause_dummy_quote_parent_ref(current)
                 .and_then(|parent| self.proof_quote_source_by_derivation_ref(parent))
             else {
                 break;
@@ -2004,16 +2004,6 @@ fn push_proof_object_parent_edge(
         }
     }
     *index += 1;
-}
-
-fn dummy_quote_parent_ref(clause: &Clause) -> Option<ClauseDerivationRef> {
-    let derivation = clause.derivation()?;
-    match derivation.as_slice() {
-        [DerivationEntry::Operation(DC_CNF_QUOTE), DerivationEntry::ClauseParent(parent)] => {
-            Some(*parent)
-        }
-        _ => None,
-    }
 }
 
 fn cached_rewrite_steps(rw_count: u64, rewrite_uncached: u64) -> u64 {

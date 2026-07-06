@@ -1150,16 +1150,45 @@ pub fn clause_is_eval_gc(clause: &Clause) -> bool {
 
 #[must_use]
 pub fn clause_is_dummy_quote(clause: &Clause) -> bool {
-    let Some(derivation) = clause.derivation() else {
-        return false;
-    };
-    matches!(
-        derivation.as_slice(),
-        [
-            DerivationEntry::Operation(DC_CNF_QUOTE),
-            DerivationEntry::ClauseParent(_)
-        ]
-    )
+    clause_dummy_quote_parent_ref(clause).is_some()
+}
+
+#[must_use]
+pub fn clause_dummy_quote_parent_ref(clause: &Clause) -> Option<ClauseDerivationRef> {
+    let derivation = clause.derivation()?;
+    match derivation.as_slice() {
+        [DerivationEntry::Operation(DC_CNF_QUOTE), DerivationEntry::ClauseParent(parent)] => {
+            Some(*parent)
+        }
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn clause_deriv_find_first<'a>(
+    clause: &'a Clause,
+    mut resolve_parent: impl FnMut(ClauseDerivationRef) -> Option<&'a Clause>,
+) -> &'a Clause {
+    let mut current = clause;
+    let mut visited = Vec::new();
+
+    while let Some(parent_ref) = clause_dummy_quote_parent_ref(current) {
+        let key = std::ptr::from_ref(current);
+        if visited.contains(&key) {
+            break;
+        }
+        visited.push(key);
+
+        let Some(parent) = resolve_parent(parent_ref) else {
+            break;
+        };
+        if std::ptr::eq(parent, current) {
+            break;
+        }
+        current = parent;
+    }
+
+    current
 }
 
 fn derivation_top_operation(clause: &Clause) -> Option<i64> {
@@ -1178,8 +1207,9 @@ pub fn derivation_entries(clause: &Clause) -> &[DerivationEntry] {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_is_dummy_quote, clause_is_eval_gc, clause_push_ac_res_derivation,
-        clause_push_derivation, clause_push_formula_derivation, clause_push_numeric_derivation,
+        clause_deriv_find_first, clause_dummy_quote_parent_ref, clause_is_dummy_quote,
+        clause_is_eval_gc, clause_push_ac_res_derivation, clause_push_derivation,
+        clause_push_formula_derivation, clause_push_numeric_derivation,
         deriv_stack_count_search_inferences, deriv_stack_extract_parents,
         deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
@@ -1476,12 +1506,78 @@ mod tests {
         let parent = Clause::alloc(EqnList::new());
         clause_push_derivation(&mut quoted, DC_CNF_QUOTE, Some(&parent), None);
         assert!(clause_is_dummy_quote(&quoted));
+        assert_eq!(
+            clause_dummy_quote_parent_ref(&quoted),
+            Some(ClauseDerivationRef::from(&parent))
+        );
         assert!(!clause_is_eval_gc(&quoted));
 
         let mut eval_gc = Clause::alloc(EqnList::new());
         clause_push_derivation(&mut eval_gc, DC_CNF_EVAL_GC, None, None);
         assert!(clause_is_eval_gc(&eval_gc));
         assert!(!clause_is_dummy_quote(&eval_gc));
+        assert_eq!(clause_dummy_quote_parent_ref(&eval_gc), None);
+    }
+
+    #[test]
+    fn clause_deriv_find_first_follows_dummy_quote_cascade() {
+        let mut original = Clause::alloc(EqnList::new());
+        original.set_ident(10);
+        original.set_csscpa_source(1);
+        let mut quote = Clause::alloc(EqnList::new());
+        quote.set_ident(11);
+        quote.set_csscpa_source(2);
+        clause_push_derivation(&mut quote, DC_CNF_QUOTE, Some(&original), None);
+        let mut second_quote = Clause::alloc(EqnList::new());
+        second_quote.set_ident(12);
+        second_quote.set_csscpa_source(3);
+        clause_push_derivation(&mut second_quote, DC_CNF_QUOTE, Some(&quote), None);
+
+        let clauses = [&original, &quote, &second_quote];
+        let first = clause_deriv_find_first(&second_quote, |parent| {
+            clauses
+                .iter()
+                .copied()
+                .find(|clause| ClauseDerivationRef::from(*clause) == parent)
+        });
+
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&original)
+        ));
+    }
+
+    #[test]
+    fn clause_deriv_find_first_stops_when_parent_is_missing_or_cyclic() {
+        let mut missing_parent_quote = Clause::alloc(EqnList::new());
+        let mut missing = Clause::alloc(EqnList::new());
+        missing.set_ident(20);
+        clause_push_derivation(
+            &mut missing_parent_quote,
+            DC_CNF_QUOTE,
+            Some(&missing),
+            None,
+        );
+        let first = clause_deriv_find_first(&missing_parent_quote, |_| None);
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&missing_parent_quote)
+        ));
+
+        let mut cyclic = Clause::alloc(EqnList::new());
+        cyclic.set_ident(30);
+        cyclic.set_csscpa_source(1);
+        let cyclic_ref = ClauseDerivationRef::from(&cyclic);
+        let derivation = cyclic.ensure_derivation();
+        derivation.push(DerivationEntry::Operation(DC_CNF_QUOTE));
+        derivation.push(DerivationEntry::ClauseParent(cyclic_ref));
+
+        let first =
+            clause_deriv_find_first(&cyclic, |parent| (parent == cyclic_ref).then_some(&cyclic));
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&cyclic)
+        ));
     }
 
     #[test]
