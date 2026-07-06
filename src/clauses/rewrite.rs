@@ -1712,7 +1712,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
-    use crate::clauses::pdtrees::{prefix_compute_term_code, PdtTraversalOrder};
+    use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -1720,7 +1720,6 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{
         DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
     };
@@ -2097,13 +2096,7 @@ mod tests {
             Some(PdtTraversalOrder::symbols_first())
         );
         assert!(!demods.demod_index_search_active());
-        let state = demods
-            .demod_index_search_state()
-            .expect("rewrite lookup records search state");
-        assert_eq!(state.term_code, prefix_compute_term_code(&f_b));
-        assert_eq!(state.term_weight, term_standard_weight(&f_b));
-        assert_eq!(state.term_date, SysDate::from_raw(0));
-        assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
+        assert_eq!(demods.demod_index_search_state(), None);
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);
@@ -2216,7 +2209,7 @@ mod tests {
 
         assert_eq!(rewritten, a);
         assert!(!a.is_top_rewritten());
-        assert!(!demods.demod_index_search_may_have_match());
+        assert_eq!(demods.demod_index_search_state(), None);
         assert_eq!(demods.demod_index_match_count(), 1);
         assert!(!demods.demod_index_search_active());
     }

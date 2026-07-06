@@ -144,6 +144,8 @@ pub struct PdTree {
     match_count: Cell<u64>,
     visited_count: Cell<u64>,
     search_traversal_order: Cell<PdtTraversalOrder>,
+    search_term_weight: Cell<i64>,
+    search_term_date: Cell<SysDate>,
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
 }
@@ -247,6 +249,8 @@ impl PdTree {
             match_count: Cell::new(0),
             visited_count: Cell::new(0),
             search_traversal_order: Cell::new(PdtTraversalOrder::default()),
+            search_term_weight: Cell::new(PDTREE_IGNORE_TERM_WEIGHT),
+            search_term_date: Cell::new(PDTREE_IGNORE_NF_DATE),
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
         }
@@ -350,18 +354,12 @@ impl PdTree {
 
     #[must_use]
     pub fn search_term_weight(&self) -> i64 {
-        self.search_state
-            .borrow()
-            .as_ref()
-            .map_or(PDTREE_IGNORE_TERM_WEIGHT, |state| state.term_weight)
+        self.search_term_weight.get()
     }
 
     #[must_use]
     pub fn search_term_date(&self) -> SysDate {
-        self.search_state
-            .borrow()
-            .as_ref()
-            .map_or(PDTREE_IGNORE_NF_DATE, |state| state.term_date)
+        self.search_term_date.get()
     }
 
     pub fn record_search_attempt(&self) {
@@ -370,15 +368,22 @@ impl PdTree {
     }
 
     pub fn record_search_init(&self, term: &Term, age_constraint: SysDate, prefer_general: bool) {
+        debug_assert!(
+            !self.search_active.get(),
+            "PDTreeSearchInit requires no active search"
+        );
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
         let query = term_lr_traverse_query(term);
+        let term_weight = term_standard_weight(term);
         self.search_traversal_order.set(traversal_order);
+        self.search_term_weight.set(term_weight);
+        self.search_term_date.set(age_constraint);
         *self.search_state.borrow_mut() = Some(PdtSearchState {
             term_code: query.iter().map(|cell| cell.token).collect(),
             term_spans: query.iter().map(|cell| cell.span).collect(),
             term_type_uids: query.iter().map(|cell| cell.type_uid).collect(),
             term_weights: query.iter().map(|cell| cell.weight).collect(),
-            term_weight: term_standard_weight(term),
+            term_weight,
             term_date: age_constraint,
             traversal_order,
         });
@@ -388,6 +393,7 @@ impl PdTree {
 
     pub fn record_search_exit(&self) {
         self.search_active.set(false);
+        *self.search_state.borrow_mut() = None;
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -1280,7 +1286,14 @@ mod tests {
         tree.record_search_exit();
 
         assert!(!tree.search_is_active());
+        assert_eq!(tree.search_state(), None);
+        assert_eq!(tree.search_matching_occurrences(), None);
         assert_eq!(tree.search_term_weight(), term_standard_weight(&first));
+        assert_eq!(tree.search_term_date(), SysDate::creation_time());
+        assert_eq!(
+            tree.search_traversal_order(),
+            PdtTraversalOrder::variables_first()
+        );
 
         tree.record_search_init(&second, SysDate::from_raw(7), true);
 
@@ -1380,6 +1393,7 @@ mod tests {
         assert_eq!(tree.search_matching_occurrences(), Some(vec![left, right]));
 
         assert!(tree.delete_term_occurrence(&term, SysDate::from_raw(7), left));
+        tree.record_search_exit();
         tree.record_search_init(&term, PDTREE_IGNORE_NF_DATE, false);
 
         assert_eq!(tree.term_count(), 1);
@@ -1405,6 +1419,7 @@ mod tests {
             Some(vec![general, specific])
         );
 
+        tree.record_search_exit();
         tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, true);
         assert_eq!(
             tree.search_matching_occurrences(),
@@ -1448,6 +1463,7 @@ mod tests {
         tree.record_search_init(&query, SysDate::from_raw(5), false);
         assert_eq!(tree.search_matching_occurrences(), Some(vec![new_general]));
 
+        tree.record_search_exit();
         tree.record_search_init(&query, SysDate::from_raw(2), false);
         assert_eq!(
             tree.search_matching_occurrences(),
@@ -1472,6 +1488,7 @@ mod tests {
         tree.record_search_init(&different_query, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(tree.search_matching_occurrences(), Some(Vec::new()));
 
+        tree.record_search_exit();
         tree.record_search_init(&same_query, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(tree.search_matching_occurrences(), Some(vec![repeated]));
     }
@@ -1492,6 +1509,7 @@ mod tests {
         tree.record_search_init(&bool_const, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(tree.search_matching_occurrences(), Some(Vec::new()));
 
+        tree.record_search_exit();
         tree.record_search_init(&individual_const, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(tree.search_matching_occurrences(), Some(vec![occurrence]));
     }

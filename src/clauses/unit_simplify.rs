@@ -460,13 +460,10 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::pdtrees::{
-        prefix_compute_term_code, PdtTraversalOrder, PDTREE_IGNORE_NF_DATE,
-    };
+    use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
 
@@ -574,13 +571,7 @@ mod tests {
             Some(PdtTraversalOrder::variables_first())
         );
         assert!(!set.demod_index_search_active());
-        let state = set
-            .demod_index_search_state()
-            .expect("unit lookup records search state");
-        assert_eq!(state.term_code, prefix_compute_term_code(&b));
-        assert_eq!(state.term_weight, term_standard_weight(&b));
-        assert_eq!(state.term_date, PDTREE_IGNORE_NF_DATE);
-        assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
+        assert_eq!(set.demod_index_search_state(), None);
         assert!(find_signed_top_simplifying_unit(&set, &b, &a, false).is_none());
         assert_eq!(set.demod_index_match_count(), 2);
         assert_eq!(
