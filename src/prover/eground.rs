@@ -3,9 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
-use crate::basics::simple_stuff::{
-    problem_type, reset_problem_type, set_problem_type, ProblemType,
-};
+use crate::basics::simple_stuff::{problem_type, reset_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_remove_superfluous_literals;
@@ -478,7 +476,6 @@ where
 {
     let _problem_type_guard = ProblemTypeRunGuard::new();
     init_io(PROGRAM_NAME);
-    set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout, stderr);
     exit_io();
@@ -1334,6 +1331,29 @@ mod tests {
             .expect("formula-owner CNF succeeds");
         assert_eq!(formulas.cardinality(), 0);
         assert_eq!(clauses.members(), 1);
+    }
+
+    #[test]
+    fn run_tstp_thf_input_uses_higher_order_parser_context() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(p_type, type, p: person > $o).\n\
+            thf(fact, axiom, p @ a).\n";
+
+        let status = run(
+            [PROGRAM_NAME, "--tstp-in", "--silent", "--suppress-result"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("THF input parses and grounds");
+
+        assert_eq!(status, 0);
+        assert_eq!(String::from_utf8(stdout).unwrap(), "% Success!\n");
+        assert!(stderr.is_empty());
     }
 
     #[test]
