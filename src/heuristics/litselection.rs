@@ -671,6 +671,78 @@ impl MaximalGateSelector {
             }
         }
     }
+
+    fn apply_with_mut_bank(
+        self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::UnlessUniqMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                MaximalGate::MoreThanOne,
+            ),
+            Self::PUnlessUniqMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                MaximalGate::MoreThanOne,
+            ),
+            Self::UnlessUniqMaxSmallestOrientable => {
+                select_unless_maximal_gate_smallest_orientable_with_bank(ocb, bank, clause, false)
+            }
+            Self::PUnlessUniqMaxSmallestOrientable => {
+                select_unless_maximal_gate_smallest_orientable_with_bank(ocb, bank, clause, true)
+            }
+            Self::UnlessPosMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                MaximalGate::NoPositive,
+            ),
+            Self::PUnlessPosMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                MaximalGate::NoPositive,
+            ),
+            Self::UnlessUniqPosMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                MaximalGate::NotUniquePositive,
+            ),
+            Self::PUnlessUniqPosMax => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                MaximalGate::NotUniquePositive,
+            ),
+            Self::UnlessUniqMaxPos => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                MaximalGate::NotUniquePositiveOnly,
+            ),
+            Self::PUnlessUniqMaxPos => select_unless_maximal_gate_optimal_literal_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                MaximalGate::NotUniquePositiveOnly,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2835,6 +2907,15 @@ pub fn apply_ported_literal_selector_with_mut_bank(
         };
         selector.apply_with_mut_bank(ocb, bank, clause)?;
         Ok(())
+    } else if let Some(selector) = MaximalGateSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        let Some(bank) = bank else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        selector.apply_with_mut_bank(ocb, bank, clause)?;
+        Ok(())
     } else {
         apply_ported_literal_selector_with_bank(name, ocb, bank.as_deref(), clause)
             .map_err(LiteralSelectionError::from)
@@ -3093,6 +3174,22 @@ fn select_unless_maximal_gate_optimal_literal(
     }
 }
 
+fn select_unless_maximal_gate_optimal_literal_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    gate: MaximalGate,
+) -> Result<(), Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+
+    if maximal_gate_allows_selection(clause, gate) {
+        apply_optimal_variant(Some(ocb), clause, positive_variant);
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+    Ok(())
+}
+
 fn select_unless_maximal_gate_smallest_orientable(
     ocb: &mut OrderControlBlock,
     bank: &TermBank,
@@ -3109,6 +3206,27 @@ fn select_unless_maximal_gate_smallest_orientable(
         }
         clause.del_prop(CP_IS_ORIENTED);
     }
+}
+
+fn select_unless_maximal_gate_smallest_orientable_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) -> Result<(), Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+
+    if maximal_gate_allows_selection(clause, MaximalGate::MoreThanOne) {
+        select_orientable_literal_impl_with_bank(
+            ocb,
+            bank,
+            clause,
+            positive_variant,
+            OrientableWeightChoice::Smallest,
+        )?;
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+    Ok(())
 }
 
 fn maximal_gate_allows_selection(clause: &Clause, gate: MaximalGate) -> bool {
@@ -6697,6 +6815,38 @@ mod tests {
 
         apply_ported_literal_selector_with_mut_bank(
             SELECT_LARGEST_ORIENTABLE,
+            Some(&mut ocb),
+            Some(&mut bank),
+            &mut clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(selected_indices(&clause), vec![0]);
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        substitution.backtrack();
+    }
+
+    #[test]
+    fn mutable_bank_unless_max_selector_uses_lpo4_instantiation_context() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = higher_order_test_bank();
+        let head_binding = typed_unary_const(&mut bank, "lit_sel_unless_lpo4_applied_head");
+        let head_type = head_binding.type_().expect("test head has a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let arg = typed_const(&mut bank, "lit_sel_unless_lpo4_arg");
+        let applied = phony_app(&mut bank, &head, &arg);
+        let mut substitution = Substitution::new();
+        substitution.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(&bank);
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(arg.f_code(), 10);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &applied, &arg, false,
+        )]));
+
+        apply_ported_literal_selector_with_mut_bank(
+            SELECT_UNLESS_POS_MAX,
             Some(&mut ocb),
             Some(&mut bank),
             &mut clause,
