@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
@@ -7832,47 +7832,73 @@ fn proof_object_display_ids_by_ordinal(
 
 fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphNode> {
     let node_count = proof_object_list_node_count(graph);
-    let mut children_by_parent = vec![Vec::new(); node_count];
-    let mut remaining_parent_counts = vec![0_usize; node_count];
-    for edge in proof_object_list_mixed_edges(graph) {
+    let mut parents_by_child = vec![Vec::new(); node_count];
+    let mut ref_counts = vec![0_usize; node_count];
+    let edges = proof_object_list_mixed_edges(graph);
+    for edge in edges {
         if let (Some(parent), Some(child)) = (
             proof_object_list_node_ordinal(graph, edge.parent),
             proof_object_list_node_ordinal(graph, edge.child),
         ) {
-            children_by_parent[parent].push(child);
-            remaining_parent_counts[child] = remaining_parent_counts[child].saturating_add(1);
+            parents_by_child[child].push(parent);
+            ref_counts[parent] = ref_counts[parent].saturating_add(1);
         }
     }
 
-    let mut ready = BTreeSet::new();
-    for (index, count) in remaining_parent_counts.iter().copied().enumerate() {
-        if count == 0 {
-            ready.insert(index);
-        }
-    }
-
-    let mut order = Vec::with_capacity(node_count);
-    while let Some(ordinal) = ready.pop_last() {
-        order.push(ordinal);
-        for child_index in &children_by_parent[ordinal] {
-            let remaining = &mut remaining_parent_counts[*child_index];
-            *remaining = remaining.saturating_sub(1);
-            if *remaining == 0 {
-                ready.insert(*child_index);
+    let mut work_queue = VecDeque::new();
+    for root_index in &graph.root_indices {
+        if let Some(root) =
+            proof_object_list_node_ordinal(graph, ProofObjectGraphNode::Clause(*root_index))
+        {
+            if ref_counts[root] == 0 {
+                work_queue.push_back(root);
             }
         }
     }
 
-    if order.len() != node_count {
-        let ordered: BTreeSet<usize> = order.iter().copied().collect();
-        order.extend(
+    if work_queue.is_empty() {
+        for (ordinal, count) in ref_counts.iter().copied().enumerate() {
+            if count == 0 {
+                work_queue.push_back(ordinal);
+            }
+        }
+    }
+
+    let mut ordered_deriv = Vec::with_capacity(node_count);
+    let mut ax_stack = Vec::new();
+    let mut processed = vec![false; node_count];
+    while let Some(child) = work_queue.pop_front() {
+        if processed[child] {
+            continue;
+        }
+        processed[child] = true;
+        ordered_deriv.push(child);
+
+        for parent in &parents_by_child[child] {
+            ref_counts[*parent] = ref_counts[*parent].saturating_sub(1);
+            if ref_counts[*parent] == 0 {
+                if proof_object_list_node_has_derivation(graph, *parent) {
+                    work_queue.push_back(*parent);
+                } else {
+                    ax_stack.push(*parent);
+                }
+            }
+        }
+    }
+
+    ordered_deriv.extend(ax_stack);
+
+    if ordered_deriv.len() != node_count {
+        let ordered: BTreeSet<usize> = ordered_deriv.iter().copied().collect();
+        ordered_deriv.extend(
             (0..node_count)
                 .rev()
                 .filter(|index| !ordered.contains(index)),
         );
     }
-    order
+    ordered_deriv
         .into_iter()
+        .rev()
         .map(|ordinal| proof_object_list_node_from_ordinal(graph, ordinal))
         .collect()
 }
@@ -7917,6 +7943,19 @@ fn proof_object_list_node_from_ordinal(
         ProofObjectGraphNode::Clause(ordinal)
     } else {
         ProofObjectGraphNode::Formula(ordinal - graph.clauses.len())
+    }
+}
+
+fn proof_object_list_node_has_derivation(graph: &ProofObjectGraph<'_>, ordinal: usize) -> bool {
+    match proof_object_list_node_from_ordinal(graph, ordinal) {
+        ProofObjectGraphNode::Clause(index) => graph
+            .clauses
+            .get(index)
+            .is_some_and(|clause| clause.derivation().is_some()),
+        ProofObjectGraphNode::Formula(index) => graph
+            .formulas
+            .get(index)
+            .is_some_and(|formula| formula.derivation().is_some()),
     }
 }
 
@@ -13949,7 +13988,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
-        DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES, DC_FOF_QUOTE,
+        DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES, DC_FOF_QUOTE, DC_PARAMOD,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -24251,7 +24290,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(
-            printed.contains("inference(rw,[status(thm)],[c_0_4, c_0_7])"),
+            printed.contains("inference(rw,[status(thm)],[c_0_6, c_0_7])"),
             "{printed}"
         );
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
@@ -24716,6 +24755,60 @@ input_clause(c2,axiom,[++q(X)]).
             .is_some_and(|derivation| derivation.as_slice().contains(
                 &DerivationEntry::ClauseParent(ClauseDerivationRef::new(1, 0)),
             )));
+    }
+
+    #[test]
+    fn proof_object_list_display_clauses_uses_c_axiom_stack_order() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut first_parent = parse_lop_test_clause(&mut bank, "p(a).", 31);
+        first_parent.set_csscpa_source(3);
+        let mut second_parent = parse_lop_test_clause(&mut bank, "r(a).", 32);
+        second_parent.set_csscpa_source(4);
+        let mut child = parse_lop_test_clause(&mut bank, "q(a).", 33);
+        clause_push_derivation(
+            &mut child,
+            DC_PARAMOD,
+            Some(&second_parent),
+            Some(&first_parent),
+        );
+        let graph = ProofObjectGraph {
+            clauses: vec![&first_parent, &second_parent, &child],
+            formulas: Vec::new(),
+            edges: Vec::new(),
+            mixed_edges: vec![
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(1),
+                    child: ProofObjectGraphNode::Clause(2),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(0),
+                    child: ProofObjectGraphNode::Clause(2),
+                },
+            ],
+            root_indices: vec![2],
+        };
+
+        let displayed = proof_object_list_display_clauses(&graph);
+
+        assert_eq!(displayed.len(), 3);
+        assert_eq!(displayed[0].0.query_csscpa_source(), 3);
+        assert_eq!(displayed[0].0.ident(), 1);
+        assert_eq!(displayed[1].0.query_csscpa_source(), 4);
+        assert_eq!(displayed[1].0.ident(), 2);
+        assert_eq!(displayed[2].0.ident(), 3);
+        assert!(displayed[2].1);
+        assert!(displayed[2].0.derivation().is_some_and(|derivation| {
+            derivation
+                .as_slice()
+                .contains(&DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+                    1, 3,
+                )))
+                && derivation
+                    .as_slice()
+                    .contains(&DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+                        2, 4,
+                    )))
+        }));
     }
 
     #[test]
