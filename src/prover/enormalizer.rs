@@ -1003,8 +1003,9 @@ const fn formula_print_format(format: IoFormat) -> FormulaPrintFormat {
 
 fn old_tptp_input_formula_type(role: &str) -> FormulaProperties {
     match role {
-        "axiom" | "hypothesis" | "conjecture" | "negated_conjecture" | "question" | "lemma"
-        | "unknown" => clause_type_from_identifier(role, ProblemType::FirstOrder),
+        "hypothesis" | "conjecture" | "negated_conjecture" | "question" => {
+            clause_type_from_identifier(role, ProblemType::FirstOrder)
+        }
         _ => CP_TYPE_AXIOM,
     }
 }
@@ -1579,6 +1580,50 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).expect("utf8"),
             "input_formula(form1,axiom,p(f(b))). ==> input_formula(form1,axiom,p(a)).\n"
+        );
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn old_tptp_formula_targets_map_lemma_and_unknown_roles_to_axiom_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("old_tptp_role_rules");
+        let formula_path = temp_path("old_tptp_role_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "input_formula(lemma_form,lemma,p(a)).\n\
+             input_formula(unknown_form,unknown,q(a)).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tptp-in",
+                "--tptp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("utf8"),
+            "input_formula(lemma_form,axiom,p(a)). ==> input_formula(lemma_form,axiom,p(a)).\n\
+             input_formula(unknown_form,axiom,q(a)). ==> input_formula(unknown_form,axiom,q(a)).\n"
         );
 
         let _ = fs::remove_file(rule_path);
