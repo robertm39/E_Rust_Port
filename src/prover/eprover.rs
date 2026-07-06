@@ -24146,7 +24146,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains("% CNFization successful!\n"));
-        assert!(printed.contains("f($and($eq(p(a),$true),$eq(q(a),$true)))=c <- .\n"));
+        assert!(printed.contains("f((p(a)&q(a)))=c <- .\n"));
         assert!(!printed.contains("f($true)=c <- p(a), q(a).\n"));
         assert!(!printed.contains("f($false)=c; p(a) <- .\n"));
         assert!(!printed.contains("f($false)=c; q(a) <- .\n"));

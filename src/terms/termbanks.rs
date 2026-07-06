@@ -9,7 +9,9 @@ use crate::terms::garbage_coll::{
     gc_deregister_clause_set, gc_register_clause_set, gc_register_formula_set, GcAdmin, GcSetHandle,
 };
 use crate::terms::lambda::apply_terms as lambda_apply_terms;
-use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
+use crate::terms::signature::{
+    FunctionProperties, Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE,
+};
 use crate::terms::signature::{
     FP_FOF_OP, SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
     SIG_NAMED_LAMBDA_CODE,
@@ -281,10 +283,9 @@ impl TermBank {
     /// Writes the C `TermPrint` shape with an explicit dereference mode.
     ///
     /// This follows the `TermPrint` macro dispatch: first-order problems use
-    /// the conventional first-order surface, while higher-order problems use
-    /// the currently ported `TermPrintHO` application surface. FOOL formula,
-    /// `let`, and lambda pretty-printing remain part of the full
-    /// formula-printer integration.
+    /// the conventional first-order surface, including C's FOOL and `$let`
+    /// detours, while higher-order problems use `TermPrintHO` with its FOOL
+    /// and lambda surface.
     ///
     /// # Panics
     ///
@@ -397,13 +398,12 @@ impl TermBank {
 
     /// Writes the C `TermPrintHO` application surface with an explicit deref mode.
     ///
-    /// This covers the term-application part of `do_ho_print`: DB variables use
-    /// C's `Z<depth-index-1>` spelling, phony applications print only visible
-    /// arguments with ` @ ` separators, `$ite` uses its dedicated syntax, and
+    /// This covers the C `do_ho_print` surface: DB variables use C's
+    /// `Z<depth-index-1>` spelling, phony applications print only visible
+    /// arguments with ` @ ` separators, `$ite` uses its dedicated syntax, FOOL
+    /// formulas and lambdas route through `do_fool_print`-style rendering, and
     /// LFHO applied free-variable dereferencing uses the same no-cache
-    /// `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule as the debug printer. FOOL
-    /// formula and lambda pretty-printing remain deferred until the full
-    /// formula printer is integrated.
+    /// `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule as the debug printer.
     ///
     /// # Panics
     ///
@@ -501,21 +501,7 @@ impl TermBank {
     }
 
     fn write_plain_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
-        if term.is_free_var() {
-            return write!(output, "{}", var_print_string(term.f_code()));
-        }
-        if term.is_db_var() {
-            return write!(output, "db({})", term.f_code());
-        }
-        if self.should_print_cons_list(term) {
-            return self.write_cons_list(output, term);
-        }
-
-        self.write_symbol(output, term.f_code())?;
-        if !term.is_const() {
-            self.write_plain_arg_list(output, term)?;
-        }
-        Ok(())
+        self.write_plain_term_deref_impl(output, term, DerefType::Never, true)
     }
 
     fn write_plain_term_deref(
@@ -524,12 +510,28 @@ impl TermBank {
         term: &Term,
         deref: DerefType,
     ) -> fmt::Result {
+        self.write_plain_term_deref_impl(output, term, deref, true)
+    }
+
+    fn write_plain_term_deref_impl(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+        allow_fool: bool,
+    ) -> fmt::Result {
         let (term, current_deref, _) = Self::print_deref_root_no_whnf(term, deref);
+        if term.f_code() == SIG_LET_CODE {
+            return self.write_let_term(output, &term, current_deref, ProblemType::FirstOrder);
+        }
         if term.is_free_var() {
             return write!(output, "{}", var_print_string(term.f_code()));
         }
         if term.is_db_var() {
             return write!(output, "db({})", term.f_code());
+        }
+        if allow_fool && self.should_plain_fool_print(&term) {
+            return self.write_fool_term(output, &term, 0, ProblemType::FirstOrder);
         }
         if self.should_print_cons_list(&term) {
             return self.write_cons_list_deref(output, &term, current_deref);
@@ -565,26 +567,6 @@ impl TermBank {
     fn should_print_cons_list(&self, term: &Term) -> bool {
         self.sig.supports_lists()
             && (term.f_code() == SIG_NIL_CODE || term.f_code() == SIG_CONS_CODE)
-    }
-
-    fn write_cons_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
-        output.write_str("[")?;
-        let mut list = term.clone();
-        if list.f_code() == SIG_CONS_CODE {
-            self.write_plain_term(output, &initialized_arg(&list, 0))?;
-            list = initialized_arg(&list, 1);
-            while list.f_code() == SIG_CONS_CODE {
-                output.write_str(",")?;
-                self.write_plain_term(output, &initialized_arg(&list, 0))?;
-                list = initialized_arg(&list, 1);
-            }
-            assert_eq!(
-                list.f_code(),
-                SIG_NIL_CODE,
-                "C list printing requires a proper $nil tail"
-            );
-        }
-        output.write_str("]")
     }
 
     fn write_cons_list_deref(
@@ -634,20 +616,6 @@ impl TermBank {
             );
         }
         output.write_str("]")
-    }
-
-    fn write_plain_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
-        write!(output, "(")?;
-        for index in 0..term.arity() {
-            if index != 0 {
-                write!(output, ",")?;
-            }
-            let arg = term
-                .argument(index)
-                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            self.write_plain_term(output, &arg)?;
-        }
-        write!(output, ")")
     }
 
     fn write_plain_arg_list_deref(
@@ -709,6 +677,9 @@ impl TermBank {
         depth: i64,
     ) -> fmt::Result {
         let (term, current_deref, limit) = Self::print_deref_root_no_whnf(term, deref);
+        if self.should_ho_fool_print(&term) {
+            return self.write_fool_term(output, &term, depth, ProblemType::HigherOrder);
+        }
         if term.f_code() == SIG_ITE_CODE {
             assert_eq!(term.arity(), 3, "$ite expects three arguments");
             output.write_str("$ite(")?;
@@ -759,13 +730,422 @@ impl TermBank {
                     && arg.binding().is_some_and(|binding| binding.arity() != 0))
             {
                 output.write_char('(')?;
-                self.write_ho_term(output, &arg, child_deref, depth)?;
+                if arg.type_().as_ref().is_some_and(Type::is_bool) {
+                    self.write_fool_term(output, &arg, depth, ProblemType::HigherOrder)?;
+                } else {
+                    self.write_ho_term(output, &arg, child_deref, depth)?;
+                }
                 output.write_char(')')?;
             } else {
                 self.write_ho_term(output, &arg, child_deref, depth)?;
             }
         }
         Ok(())
+    }
+
+    fn write_ho_term_raw(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+        depth: i64,
+    ) -> fmt::Result {
+        let (term, current_deref, limit) = Self::print_deref_root_no_whnf(term, deref);
+        if term.f_code() == SIG_ITE_CODE {
+            assert_eq!(term.arity(), 3, "$ite expects three arguments");
+            output.write_str("$ite(")?;
+            self.write_ho_term(output, &initialized_arg(&term, 0), current_deref, depth)?;
+            output.write_str(", ")?;
+            self.write_ho_term(output, &initialized_arg(&term, 1), current_deref, depth)?;
+            output.write_str(", ")?;
+            self.write_ho_term(output, &initialized_arg(&term, 2), current_deref, depth)?;
+            output.write_char(')')?;
+            return Ok(());
+        }
+
+        if term.is_db_var() {
+            write!(output, "Z{}", depth - term.f_code() - 1)?;
+        } else if !term.is_top_level_any_var() {
+            if term.is_phony_app() {
+                let head = initialized_arg(&term, 0);
+                if head.is_lambda() {
+                    output.write_str("( ")?;
+                }
+                self.write_ho_term(output, &head, current_deref, depth)?;
+                if head.is_lambda() {
+                    output.write_str(" )")?;
+                }
+            } else {
+                self.write_symbol(output, term.f_code())?;
+            }
+        } else {
+            let var = if term.is_any_var() {
+                term.clone()
+            } else {
+                initialized_arg(&term, 0)
+            };
+            if var.is_free_var() {
+                write!(output, "{}", var_print_string(var.f_code()))?;
+            } else {
+                write!(output, "Z{}", depth - var.f_code() - 1)?;
+            }
+        }
+
+        let first_visible_arg = usize::from(term.is_phony_app());
+        for index in first_visible_arg..term.arity() {
+            output.write_str(" @ ")?;
+            let arg = initialized_arg(&term, index);
+            let child_deref = Self::convert_lfho_deref(index, limit, current_deref);
+            if arg.arity() != 0
+                || (child_deref != DerefType::Never
+                    && arg.binding().is_some_and(|binding| binding.arity() != 0))
+            {
+                output.write_char('(')?;
+                if arg.type_().as_ref().is_some_and(Type::is_bool) {
+                    self.write_fool_term(output, &arg, depth, ProblemType::HigherOrder)?;
+                } else {
+                    self.write_ho_term(output, &arg, child_deref, depth)?;
+                }
+                output.write_char(')')?;
+            } else {
+                self.write_ho_term(output, &arg, child_deref, depth)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_fool_term(
+        &self,
+        output: &mut impl fmt::Write,
+        form: &Term,
+        depth: i64,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        if form.is_db_var() {
+            return write!(output, "Z{}", depth - form.f_code() - 1);
+        }
+
+        if self.is_equality_formula(form) && form.type_().as_ref().is_some_and(Type::is_bool) {
+            return self.write_fool_equality(output, form, depth, problem_type);
+        }
+
+        if self.is_fool_quantifier_or_lambda(form) && form.arity() == 2 {
+            return self.write_fool_quantifier(output, form, depth, problem_type);
+        }
+
+        if form.f_code() == self.sig.not_code() {
+            output.write_str("~(")?;
+            self.write_fool_term(output, &initialized_arg(form, 0), depth, problem_type)?;
+            output.write_char(')')?;
+            return Ok(());
+        }
+
+        if !form.is_free_var()
+            && self.has_function_prop(form.f_code(), FP_FOF_OP)
+            && form.arity() == 2
+        {
+            return self.write_fool_binary(output, form, depth, problem_type);
+        }
+
+        match problem_type {
+            ProblemType::HigherOrder => {
+                self.write_ho_term_raw(output, form, DerefType::Never, depth)
+            }
+            ProblemType::FirstOrder | ProblemType::NotInitialized => {
+                self.write_plain_term_deref_impl(output, form, DerefType::Never, false)
+            }
+        }
+    }
+
+    fn write_fool_equality(
+        &self,
+        output: &mut impl fmt::Write,
+        form: &Term,
+        depth: i64,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        let left = initialized_arg(form, 0);
+        let right = initialized_arg(form, 1);
+        if right.f_code() == SIG_TRUE_CODE {
+            if form.f_code() == self.sig.neqn_code() {
+                output.write_char('~')?;
+            }
+            Self::write_ho_paren(output, '(', problem_type)?;
+            self.write_term_body_for_problem(output, &left, DerefType::Never, depth, problem_type)?;
+            Self::write_ho_paren(output, ')', problem_type)?;
+            return Ok(());
+        }
+
+        Self::write_ho_paren(output, '(', problem_type)?;
+        Self::write_ho_paren(output, '(', problem_type)?;
+        self.write_term_body_for_problem(output, &left, DerefType::Never, depth, problem_type)?;
+        Self::write_ho_paren(output, ')', problem_type)?;
+        if form.f_code() == self.sig.neqn_code() {
+            output.write_char('!')?;
+        }
+        output.write_char('=')?;
+        Self::write_ho_paren(output, '(', problem_type)?;
+        self.write_term_body_for_problem(output, &right, DerefType::Never, depth, problem_type)?;
+        Self::write_ho_paren(output, ')', problem_type)?;
+        Self::write_ho_paren(output, ')', problem_type)
+    }
+
+    fn write_fool_quantifier(
+        &self,
+        output: &mut impl fmt::Write,
+        form: &Term,
+        mut depth: i64,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        let quantifier = form.f_code();
+        if quantifier == self.sig.qex_code() {
+            output.write_str("?[")?;
+        } else if quantifier == self.sig.qall_code() {
+            output.write_str("![")?;
+        } else {
+            output.write_str("^[")?;
+        }
+
+        let mut current = form.clone();
+        loop {
+            let variable = initialized_arg(&current, 0);
+            if current.f_code() == SIG_DB_LAMBDA_CODE {
+                write!(output, "Z{depth}")?;
+                depth += 1;
+            } else {
+                self.write_term_body_for_problem(
+                    output,
+                    &variable,
+                    DerefType::Never,
+                    depth,
+                    problem_type,
+                )?;
+            }
+            if problem_type == ProblemType::HigherOrder
+                || variable
+                    .type_()
+                    .as_ref()
+                    .is_some_and(|type_| !type_.is_individual())
+            {
+                output.write_char(':')?;
+                let type_ = variable
+                    .type_()
+                    .expect("quantifier variable must have a type");
+                self.write_tstp_type(output, &type_, problem_type)?;
+            }
+
+            let body = initialized_arg(&current, 1);
+            if body.f_code() != quantifier {
+                output.write_str("]:(")?;
+                self.write_fool_term(output, &body, depth, problem_type)?;
+                output.write_char(')')?;
+                return Ok(());
+            }
+            output.write_str(", ")?;
+            current = body;
+        }
+    }
+
+    fn write_fool_binary(
+        &self,
+        output: &mut impl fmt::Write,
+        form: &Term,
+        depth: i64,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        output.write_char('(')?;
+        Self::write_ho_paren(output, '(', problem_type)?;
+        self.write_fool_term(output, &initialized_arg(form, 0), depth, problem_type)?;
+        Self::write_ho_paren(output, ')', problem_type)?;
+        output.write_str(self.fool_binary_operator(form.f_code()).unwrap_or("XXX"))?;
+        Self::write_ho_paren(output, '(', problem_type)?;
+        self.write_fool_term(output, &initialized_arg(form, 1), depth, problem_type)?;
+        Self::write_ho_paren(output, ')', problem_type)?;
+        output.write_char(')')
+    }
+
+    fn write_let_term(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        assert!(term.arity() >= 1, "$let expects at least one body argument");
+        output.write_str("$let(")?;
+        let declarations = term.arity() - 1;
+
+        if declarations > 1 {
+            output.write_char('[')?;
+        }
+        for index in 0..declarations {
+            if index != 0 {
+                output.write_str(", ")?;
+            }
+            let definition = initialized_arg(term, index);
+            assert_eq!(
+                definition.f_code(),
+                self.sig.eqn_code(),
+                "$let definition must be an equality"
+            );
+            let lhs = initialized_arg(&definition, 0);
+            self.write_symbol(output, lhs.f_code())?;
+            output.write_str(" : ")?;
+            let type_ = self
+                .sig
+                .get_type(lhs.f_code())
+                .cloned()
+                .or_else(|| lhs.type_())
+                .expect("$let declaration symbol must have a type");
+            self.write_tstp_type(output, &type_, problem_type)?;
+        }
+        if declarations > 1 {
+            output.write_char(']')?;
+        }
+
+        output.write_str(", ")?;
+        if declarations > 1 {
+            output.write_char('[')?;
+        }
+        for index in 0..declarations {
+            if index != 0 {
+                output.write_str(", ")?;
+            }
+            let definition = initialized_arg(term, index);
+            self.write_plain_term_deref_impl(
+                output,
+                &initialized_arg(&definition, 0),
+                deref,
+                true,
+            )?;
+            output.write_str(" := ")?;
+            self.write_plain_term_deref_impl(
+                output,
+                &initialized_arg(&definition, 1),
+                deref,
+                true,
+            )?;
+        }
+        if declarations > 1 {
+            output.write_char(']')?;
+        }
+
+        output.write_str(", ")?;
+        self.write_plain_term_deref_impl(
+            output,
+            &initialized_arg(term, declarations),
+            deref,
+            true,
+        )?;
+        output.write_char(')')
+    }
+
+    fn write_term_body_for_problem(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+        depth: i64,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        match problem_type {
+            ProblemType::HigherOrder => self.write_ho_term(output, term, deref, depth),
+            ProblemType::FirstOrder | ProblemType::NotInitialized => {
+                self.write_plain_term_deref(output, term, deref)
+            }
+        }
+    }
+
+    fn write_ho_paren(
+        output: &mut impl fmt::Write,
+        ch: char,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        if problem_type == ProblemType::HigherOrder {
+            output.write_char(ch)?;
+        }
+        Ok(())
+    }
+
+    fn write_tstp_type(
+        &self,
+        output: &mut impl fmt::Write,
+        type_: &Type,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        let mut rendered = Vec::new();
+        self.sig
+            .type_bank()
+            .print_tstp(&mut rendered, type_, problem_type)
+            .map_err(|_| fmt::Error)?;
+        let rendered = String::from_utf8(rendered).map_err(|_| fmt::Error)?;
+        output.write_str(&rendered)
+    }
+
+    fn should_plain_fool_print(&self, term: &Term) -> bool {
+        !term.is_free_var()
+            && !term.is_db_var()
+            && self.is_logical_symbol_code(term.f_code())
+            && term.f_code() != SIG_TRUE_CODE
+            && term.f_code() != SIG_FALSE_CODE
+    }
+
+    fn should_ho_fool_print(&self, term: &Term) -> bool {
+        let is_lambda = term.is_lambda();
+        let is_bool_logical = !is_lambda
+            && term.type_().as_ref().is_some_and(Type::is_bool)
+            && self.is_logical_symbol_code(term.f_code());
+        !(term.is_any_var() || self.is_tformula_quantified(term) && term.arity() == 1)
+            && (is_bool_logical || is_lambda)
+            && term.f_code() != SIG_TRUE_CODE
+            && term.f_code() != SIG_FALSE_CODE
+    }
+
+    fn is_logical_symbol_code(&self, f_code: FunCode) -> bool {
+        f_code > 0 && self.sig.find_name(f_code).is_some() && self.sig.is_logical_symbol(f_code)
+    }
+
+    fn has_function_prop(&self, f_code: FunCode, prop: FunctionProperties) -> bool {
+        f_code > 0 && self.sig.find_name(f_code).is_some() && self.sig.query_prop(f_code, prop)
+    }
+
+    fn is_equality_formula(&self, term: &Term) -> bool {
+        matches!(term.f_code(), code if code == self.sig.eqn_code() || code == self.sig.neqn_code())
+            && term.arity() == 2
+    }
+
+    fn is_tformula_quantified(&self, term: &Term) -> bool {
+        !term.is_db_var()
+            && matches!(term.f_code(), code if code == self.sig.qex_code()
+                || code == self.sig.qall_code()
+                || code == SIG_NAMED_LAMBDA_CODE)
+    }
+
+    fn is_fool_quantifier_or_lambda(&self, term: &Term) -> bool {
+        matches!(term.f_code(), code if code == self.sig.qex_code() || code == self.sig.qall_code())
+            || term.is_lambda()
+    }
+
+    fn fool_binary_operator(&self, f_code: FunCode) -> Option<&'static str> {
+        if f_code == self.sig.and_code() {
+            Some("&")
+        } else if f_code == self.sig.or_code() {
+            Some("|")
+        } else if f_code == self.sig.impl_code() {
+            Some("=>")
+        } else if f_code == self.sig.equiv_code() {
+            Some("<=>")
+        } else if f_code == self.sig.nand_code() {
+            Some("~&")
+        } else if f_code == self.sig.nor_code() {
+            Some("~|")
+        } else if f_code == self.sig.bimpl_code() {
+            Some("<=")
+        } else if f_code == self.sig.xor_code() {
+            Some("<~>")
+        } else {
+            None
+        }
     }
 
     fn write_ho_debug_term(

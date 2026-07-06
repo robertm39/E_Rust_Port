@@ -198,7 +198,9 @@ mod tests {
     use super::{term_pos_is_top_pos, TermPos, TERM_POS_ELEMENT_SIZE};
     use crate::basics::simple_stuff::ProblemType;
     use crate::inout::scanner::Scanner;
-    use crate::terms::signature::Signature;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
+    use crate::terms::signature::{Signature, SIG_LET_CODE};
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
@@ -217,6 +219,53 @@ mod tests {
     fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn formula_bank() -> TermBank {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        TermBank::new(signature).unwrap()
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        typed_const_with_type(bank, name, type_)
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: Type) -> Term {
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn first_order_let_term(bank: &mut TermBank) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let local_code = bank.signature_mut().insert_id("tp_let_f", 0, false);
+        bank.signature_mut()
+            .declare_final_type(local_code, type_.clone())
+            .unwrap();
+        let lhs = bank.create_const_term(local_code).unwrap();
+        let rhs = typed_const(bank, "tp_let_value");
+        let eqn_code = bank.signature().eqn_code();
+        let definition = bool_binary_with_code(bank, eqn_code, &lhs, &rhs);
+        let term = Term::top_alloc(SIG_LET_CODE, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, definition);
+        term.set_argument(1, lhs);
+        bank.term_top_insert(term).unwrap()
     }
 
     #[test]
@@ -311,6 +360,69 @@ mod tests {
         assert_eq!(
             output,
             "# TermPos--\n# f @ X1...f @ (g @ a) Subterm 0\n# --TermPos\n"
+        );
+    }
+
+    #[test]
+    fn debug_term_print_uses_first_order_let_surface() {
+        let mut bank = formula_bank();
+        let let_term = first_order_let_term(&mut bank);
+        let mut pos = TermPos::new();
+        pos.push_component(let_term, 1);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# $let(tp_let_f : $i, tp_let_f := tp_let_value, tp_let_f)...\
+             $let(tp_let_f : $i, tp_let_f := tp_let_value, tp_let_f) Subterm 1\n# --TermPos\n"
+        );
+    }
+
+    #[test]
+    fn debug_term_print_uses_higher_order_fool_formula_surface() {
+        let mut bank = formula_bank();
+        let left = typed_const(&mut bank, "tp_fool_left");
+        let right = typed_const(&mut bank, "tp_fool_right");
+        let eqn_code = bank.signature().eqn_code();
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut pos = TermPos::new();
+        pos.push_component(equality, 0);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# ((tp_fool_left)=(tp_fool_right))...\
+             ((tp_fool_left)=(tp_fool_right)) Subterm 0\n# --TermPos\n"
+        );
+    }
+
+    #[test]
+    fn debug_term_print_uses_higher_order_db_lambda_surface() {
+        let mut bank = formula_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![type_.clone(), type_.clone()]);
+        let function = typed_const_with_type(&mut bank, "tp_lambda_f", unary_type);
+        let db0 = bank.request_db_var(&type_, 0);
+        let matrix = apply_terms(&mut bank, &function, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&type_), &matrix).unwrap();
+        let mut pos = TermPos::new();
+        pos.push_component(lambda, 1);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# ^[Z0:$i]:(tp_lambda_f @ Z0)...\
+             ^[Z0:$i]:(tp_lambda_f @ Z0) Subterm 1\n# --TermPos\n"
         );
     }
 }
