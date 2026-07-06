@@ -3419,16 +3419,17 @@ fn insert_new_forward_modify_options(
 
 /// Applies C `replacing_inferences` to one already packed selected clause.
 ///
-/// The current port covers the first-order destructive equality-resolution
-/// branch plus fresh and reused controlled-splitting branches. If either branch
-/// replaces the selected clause, the produced clauses are routed through
-/// [`proof_state_insert_new_clauses`] immediately, matching the C helper.
+/// The current port covers the higher-order immediate-clausification branch,
+/// the first-order destructive equality-resolution branch, and fresh/reused
+/// controlled-splitting branches. If a branch replaces the selected clause, the
+/// produced clauses are routed through [`proof_state_insert_new_clauses`]
+/// immediately, matching the C helper.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from destructive equality resolution, controlled
-/// splitting, generated-clause insertion, or from replacement branches whose C
-/// dependencies are not ported yet.
+/// Returns diagnostics from immediate clausification, destructive equality
+/// resolution, controlled splitting, generated-clause insertion, or staged
+/// replacement branches that still require formula-owner integration.
 pub fn proof_state_replacing_inferences(
     state: &mut ProofState,
     control: &mut ProofControl,
