@@ -50,8 +50,8 @@ use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_has_interpreted_symbol, DerefType, Term, TermProperties, TP_CHECK_FLAG,
-    TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
+    term_del_prop, term_has_interpreted_symbol, term_identity_id, DerefType, Term, TermProperties,
+    TP_CHECK_FLAG, TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
 };
 use crate::terms::termvars::VarBank;
 use std::collections::{BTreeMap, BTreeSet};
@@ -746,6 +746,11 @@ fn lift_lambda_prefix(
         let type_ = variable.type_().expect("lambda binder must have a type");
         closed = crate::terms::lambda::close_with_db_var(bank, &type_, &closed)?;
     }
+    let lifting_key = term_identity_id(&closed);
+    if let Some(entry) = state.exact_liftings.get(&lifting_key) {
+        used_defs.push(entry.definition.clone());
+        return Ok(entry.lifted.clone());
+    }
 
     let loose_fresh_vars = loose_replacements
         .values()
@@ -798,7 +803,14 @@ fn lift_lambda_prefix(
 
     let wrapped = WrappedFormula::wt_formula_alloc(definition);
     state.definitions.push(wrapped.clone());
-    used_defs.push(wrapped);
+    used_defs.push(wrapped.clone());
+    state.exact_liftings.insert(
+        lifting_key,
+        LambdaLiftReuseEntry {
+            lifted: lifted.clone(),
+            definition: wrapped,
+        },
+    );
     Ok(lifted)
 }
 
@@ -1341,6 +1353,13 @@ pub struct ClauseSetLiftLambdasResult {
 #[derive(Default)]
 struct LambdaLiftState {
     definitions: Vec<WrappedFormula>,
+    exact_liftings: BTreeMap<usize, LambdaLiftReuseEntry>,
+}
+
+#[derive(Clone)]
+struct LambdaLiftReuseEntry {
+    lifted: Term,
+    definition: WrappedFormula,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -6503,6 +6522,49 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_lift_lambdas_reuses_exact_closed_liftings() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let body = typed_unary(&mut bank, "set_lift_reuse_body", &db0);
+        let lambda = close_with_db_var(&mut bank, &i_type, &body).unwrap();
+        let lambda_type = lambda.type_().expect("lambda term is typed");
+        let wrapped_lambda = typed_unary_with_types(
+            &mut bank,
+            "set_lift_reuse_wrapper",
+            &lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let eqn_code = bank.signature().eqn_code();
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &wrapped_lambda, &wrapped_lambda);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+
+        let result = set
+            .lift_lambdas(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lambdas_lifted, 1);
+        assert_eq!(result.lambda_lift_definitions_inserted, 2);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_INTRO_DEF]
+        );
+        assert_eq!(set.cardinality(), 2);
+        let formulas = set.iter().collect::<Vec<_>>();
+        let rewritten = formulas[0].formula();
+        assert_eq!(rewritten.argument(0), rewritten.argument(1));
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_INTRO_DEF),
+                DerivationEntry::Operation(DC_INTRO_DEF),
+            ]
+        );
+    }
+
+    #[test]
     fn formula_set_lambda_normalize_forall_is_higher_order_gated() {
         let mut bank = test_bank();
         let formula = db_lambda_equality(&mut bank, "set_lambda_norm");
@@ -7374,6 +7436,49 @@ mod tests {
         assert!(result.lambda_lift_definition_clauses_generated > 0);
         assert!(clauses.members() > result.clauses_generated);
         assert!(archive.cardinality() >= 4);
+    }
+
+    #[test]
+    fn clause_set_lift_lambdas_reuses_exact_closed_liftings() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let body = typed_unary(&mut bank, "clause_lift_reuse_body", &db0);
+        let lambda = close_with_db_var(&mut bank, &i_type, &body).unwrap();
+        let lambda_type = lambda.type_().expect("lambda term is typed");
+        let wrapped_lambda = typed_unary_with_types(
+            &mut bank,
+            "clause_lift_reuse_wrapper",
+            &lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &wrapped_lambda,
+            &wrapped_lambda,
+            true,
+        )]));
+        let mut clauses = ClauseSet::new();
+        clauses.insert(clause);
+        let mut archive = FormulaSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result =
+            clause_set_lift_lambdas(&mut clauses, &mut archive, &mut bank, &fresh_vars, false)
+                .unwrap();
+
+        assert_eq!(result.clauses_changed, 1);
+        assert_eq!(result.definitions_archived, 1);
+        assert_eq!(
+            result.clause_derivation_ops,
+            vec![DC_LIFT_LAMBDAS, DC_LIFT_LAMBDAS]
+        );
+        assert!(result.definition_clauses_generated > 0);
+        assert_eq!(archive.cardinality(), 2);
+        let lifted_clause = clauses.iter().next().unwrap();
+        let lifted_literal = lifted_clause.literals().as_slice().first().unwrap();
+        assert_eq!(lifted_literal.left(), lifted_literal.right());
     }
 
     #[test]
