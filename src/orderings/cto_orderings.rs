@@ -564,8 +564,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "requires first-order-shaped terms")]
-    fn to_compare_lpo4_rejects_equal_higher_order_surface_before_structural_equality() {
+    fn to_compare_lpo4_accepts_equal_higher_order_surface_before_structural_equality() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let signature = signature();
@@ -575,13 +574,16 @@ mod tests {
         let mut ocb =
             OrderControlBlock::alloc(TermOrdering::Lpo4, true, &signature, HoOrderKind::LfhoOrder);
 
-        let _ = to_compare(
-            &mut ocb,
-            &signature,
-            &applied,
-            &applied,
-            DerefType::Never,
-            DerefType::Never,
+        assert_eq!(
+            to_compare(
+                &mut ocb,
+                &signature,
+                &applied,
+                &applied,
+                DerefType::Never,
+                DerefType::Never,
+            ),
+            CompareResult::Equal
         );
     }
 

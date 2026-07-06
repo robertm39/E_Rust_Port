@@ -4,6 +4,7 @@ use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
+use crate::terms::simpletypes::types_cmp;
 use crate::terms::termfunc::{
     term_copy_keep_vars, term_is_subterm, term_struct_equal_deref, term_struct_equal_no_deref,
 };
@@ -206,14 +207,13 @@ pub fn lpo_compare_copy(
     result
 }
 
-/// Return whether `s` is strictly greater than `t` in first-order LPO4.
+/// Return whether `s` is strictly greater than `t` in LPO4.
 ///
 /// # Panics
 ///
-/// Panics if the global problem type is higher-order, if term argument slots
-/// are uninitialized, if the OCB lacks precedence storage, or if dereferencing
-/// an applied variable would require the unported higher-order normalization
-/// path.
+/// Panics if term argument slots are uninitialized, if the OCB lacks
+/// precedence storage, or if `DEREF_ONCE` over an applied variable would
+/// require the bank-owned higher-order instantiation path.
 #[must_use]
 pub fn lpo4_greater(
     ocb: &OrderControlBlock,
@@ -234,8 +234,8 @@ pub fn lpo4_greater(
     )
 }
 
-/// Return whether `s` is strictly greater than `t` in first-order LPO4, using
-/// an explicit recursion limit.
+/// Return whether `s` is strictly greater than `t` in LPO4, using an explicit
+/// recursion limit.
 ///
 /// # Panics
 ///
@@ -253,7 +253,7 @@ pub fn lpo4_greater_with_limit(
     Lpo4Context::new(ocb, signature, limit).greater_inner(s, t, deref_s, deref_t, 0)
 }
 
-/// Compare `s` and `t` in first-order LPO4.
+/// Compare `s` and `t` in LPO4.
 ///
 /// # Panics
 ///
@@ -278,7 +278,7 @@ pub fn lpo4_compare(
     )
 }
 
-/// Compare `s` and `t` in first-order LPO4, using an explicit recursion limit.
+/// Compare `s` and `t` in LPO4, using an explicit recursion limit.
 ///
 /// # Panics
 ///
@@ -293,7 +293,8 @@ pub fn lpo4_compare_with_limit(
     deref_t: DerefType,
     limit: i64,
 ) -> CompareResult {
-    assert_legacy_lpo_deref_inputs_ready(s, t, deref_s, deref_t);
+    assert_lpo4_deref_once_ready(s, deref_s);
+    assert_lpo4_deref_once_ready(t, deref_t);
     if term_struct_equal_deref(s, t, deref_s, deref_t) {
         return CompareResult::Equal;
     }
@@ -632,15 +633,14 @@ impl<'a> Lpo4Context<'a> {
         }
         let s = term_deref(s, &mut deref_s);
         let t = term_deref(t, &mut deref_t);
-        assert_legacy_lpo_inputs_ready(&s, &t);
         let child_depth = depth + 1;
 
         if s.is_top_level_free_var() {
             false
         } else if t.is_top_level_free_var() {
-            term_is_subterm(&s, &t, deref_s)
+            lpo4_subterm(&s, &t, deref_s)
         } else {
-            match self.ocb.fun_compare(self.signature, s.f_code(), t.f_code()) {
+            match self.head_compare(&s, &t) {
                 CompareResult::Greater => self.majo(&s, &t, 0, deref_s, deref_t, child_depth),
                 CompareResult::Equal => self.lex_ma(&s, &t, 0, deref_s, deref_t, child_depth),
                 CompareResult::Lesser | CompareResult::Uncomparable => {
@@ -648,6 +648,48 @@ impl<'a> Lpo4Context<'a> {
                 }
                 result => panic!("unexpected function-symbol comparison in LPO4: {result:?}"),
             }
+        }
+    }
+
+    fn head_compare(&self, s: &Term, t: &Term) -> CompareResult {
+        let s_class = lpo4_head_class(self.signature, s);
+        let t_class = lpo4_head_class(self.signature, t);
+        if s_class != t_class {
+            return if s_class > t_class {
+                CompareResult::Greater
+            } else {
+                CompareResult::Lesser
+            };
+        }
+
+        let s_head = lpo4_head(s);
+        let t_head = lpo4_head(t);
+        if s_head.is_db_var() {
+            return match s_head.f_code().cmp(&t_head.f_code()) {
+                std::cmp::Ordering::Greater => CompareResult::Greater,
+                std::cmp::Ordering::Less => CompareResult::Lesser,
+                std::cmp::Ordering::Equal => CompareResult::Equal,
+            };
+        }
+
+        if s.is_lambda() {
+            let s_binder = initialized_arg(s, 0);
+            let t_binder = initialized_arg(t, 0);
+            if s_binder == t_binder {
+                CompareResult::Equal
+            } else {
+                let s_type = s_binder.type_().expect("lambda binder must have a type");
+                let t_type = t_binder.type_().expect("lambda binder must have a type");
+                if types_cmp(&s_type, &t_type) > 0 {
+                    CompareResult::Greater
+                } else {
+                    CompareResult::Lesser
+                }
+            }
+        } else {
+            assert!(s.f_code() > 0, "LPO4 symbol head requires positive f-code");
+            assert!(t.f_code() > 0, "LPO4 symbol head requires positive f-code");
+            self.ocb.fun_compare(self.signature, s.f_code(), t.f_code())
         }
     }
 }
@@ -716,6 +758,47 @@ fn lpo4_argument_offset(term: &Term) -> usize {
     usize::from(term.is_lambda() || term.is_phony_app())
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Lpo4HeadClass {
+    Symbol = 1,
+    Quantifier = 2,
+    Db = 3,
+    Lambda = 4,
+}
+
+fn lpo4_head(term: &Term) -> Term {
+    if term.is_phony_app() {
+        initialized_arg(term, 0)
+    } else {
+        term.clone()
+    }
+}
+
+fn lpo4_head_class(signature: &Signature, term: &Term) -> Lpo4HeadClass {
+    let head = lpo4_head(term);
+    if head.is_lambda() {
+        Lpo4HeadClass::Lambda
+    } else if head.is_db_var() {
+        Lpo4HeadClass::Db
+    } else if head.f_code() == signature.qex_code() || head.f_code() == signature.qall_code() {
+        Lpo4HeadClass::Quantifier
+    } else {
+        Lpo4HeadClass::Symbol
+    }
+}
+
+fn lpo4_subterm(super_term: &Term, test: &Term, mut deref: DerefType) -> bool {
+    let super_term = term_deref(super_term, &mut deref);
+    if super_term.is_applied_free_var() {
+        return super_term == *test;
+    }
+    if super_term == *test {
+        return true;
+    }
+    (usize::from(super_term.is_lambda())..super_term.arity())
+        .any(|index| lpo4_subterm(&initialized_arg(&super_term, index), test, deref))
+}
+
 fn assert_lpo4_deref_once_ready(term: &Term, deref: DerefType) {
     assert!(
         deref != DerefType::Once || !term.has_app_var(),
@@ -726,17 +809,6 @@ fn assert_lpo4_deref_once_ready(term: &Term, deref: DerefType) {
 fn assert_legacy_lpo_inputs_ready(s: &Term, t: &Term) {
     assert_legacy_lpo_term_ready(s);
     assert_legacy_lpo_term_ready(t);
-}
-
-fn assert_legacy_lpo_deref_inputs_ready(
-    s: &Term,
-    t: &Term,
-    mut deref_s: DerefType,
-    mut deref_t: DerefType,
-) {
-    let s = term_deref(s, &mut deref_s);
-    let t = term_deref(t, &mut deref_t);
-    assert_legacy_lpo_inputs_ready(&s, &t);
 }
 
 fn assert_legacy_lpo_term_ready(term: &Term) {
@@ -760,13 +832,30 @@ mod tests {
         DEFAULT_LPO_RECURSION_DEPTH_LIMIT,
     };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::dbvars::mk_db;
     use crate::terms::functypes::FunCode;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn signature() -> Signature {
         let mut signature = Signature::new(TypeBank::new());
@@ -792,6 +881,22 @@ mod tests {
         let term = Term::top_alloc(symbol, args.len());
         for (index, arg) in args.iter().enumerate() {
             term.set_argument(index, arg.clone());
+        }
+        term
+    }
+
+    fn db_lambda(binder: &Term, body: &Term) -> Term {
+        let lambda = Term::top_alloc(SIG_DB_LAMBDA_CODE, 2);
+        lambda.set_argument(0, binder.clone());
+        lambda.set_argument(1, body.clone());
+        lambda
+    }
+
+    fn phony_app(head: &Term, args: &[Term]) -> Term {
+        let term = Term::top_alloc(SIG_PHONY_APP_CODE, args.len() + 1);
+        term.set_argument(0, head.clone());
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index + 1, arg.clone());
         }
         term
     }
@@ -987,6 +1092,92 @@ mod tests {
                 DerefType::Never
             ),
             CompareResult::Lesser
+        );
+    }
+
+    #[test]
+    fn lpo4_orders_visible_lfho_head_classes() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut signature = signature();
+        let a = symbol(&mut signature, "lpo4_ho_a", 0);
+        let i_type = signature.type_bank().i_type();
+        let bool_type = signature.type_bank().bool_type();
+        let predicate_type = signature
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), bool_type]));
+        let db = mk_db(0, &i_type);
+        let body = Term::const_cell_alloc(a);
+        let lambda = db_lambda(&db, &body);
+        let quantified = app(signature.qall_code(), std::slice::from_ref(&lambda));
+        let symbol_term = Term::const_cell_alloc(a);
+        let mut ocb = lpo4_ocb(&signature);
+        ocb.set_fun_prec_weight(a, 10);
+
+        assert_eq!(
+            lpo4_compare(
+                &ocb,
+                &signature,
+                &lambda,
+                &db,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            lpo4_compare(
+                &ocb,
+                &signature,
+                &db,
+                &symbol_term,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            lpo4_compare(
+                &ocb,
+                &signature,
+                &quantified,
+                &symbol_term,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(lambda.argument(0).unwrap().type_(), Some(i_type));
+        assert!(predicate_type.is_arrow());
+    }
+
+    #[test]
+    fn lpo4_phony_app_uses_head_class_but_skips_hidden_head_in_arguments() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut signature = signature();
+        let a = symbol(&mut signature, "lpo4_ho_arg_a", 0);
+        let b = symbol(&mut signature, "lpo4_ho_arg_b", 0);
+        let i_type = signature.type_bank().i_type();
+        let db_head = mk_db(1, &i_type);
+        let a_term = Term::const_cell_alloc(a);
+        let b_term = Term::const_cell_alloc(b);
+        let app_a = phony_app(&db_head, std::slice::from_ref(&a_term));
+        let app_b = phony_app(&db_head, std::slice::from_ref(&b_term));
+        let mut ocb = lpo4_ocb(&signature);
+        ocb.set_fun_prec_weight(b, 20);
+        ocb.set_fun_prec_weight(a, 10);
+
+        assert_eq!(
+            lpo4_compare(
+                &ocb,
+                &signature,
+                &app_b,
+                &app_a,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
         );
     }
 
