@@ -83,6 +83,7 @@ Source files reviewed: `BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`.
 - Foundation code. Preserve allocation, container, assertion, and fatal-error conventions before trying to make the Rust version more idiomatic.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `VERBOUT*`/`VERBOUTARG*` close over the global `ProgName` and `stderr` while preserving the threshold checks and explicit flushes. Rust now keeps writer-injected helpers for tests and also exposes global-`ProgName` plus stderr-backed wrappers for direct C macro call-site ports.
 
 ### Porting Focus
 
@@ -92,5 +93,5 @@ Source files reviewed: `BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`.
 
 ### Change Later
 
-- `Verbose` is a process-global `int`, and the `VERBOSE*`/`VERBOUT*` macros close over that global plus `ProgName` and `stderr`. Rust preserves the threshold and formatting behavior for compatibility, but future Rust-only call paths should prefer explicit per-run verbosity configuration and writer injection instead of hidden global output.
+- `Verbose` is a process-global `int`, and the `VERBOSE*`/`VERBOUT*` macros close over that global plus `ProgName` and `stderr`. Rust preserves the threshold, formatting, global-name, and stderr behavior for compatibility, but future Rust-only call paths should prefer explicit per-run verbosity configuration and writer injection instead of hidden global output.
 <!-- END MANUAL REVIEW: c_source_docs -->
