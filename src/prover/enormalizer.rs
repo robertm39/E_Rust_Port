@@ -16,6 +16,7 @@ use crate::clauses::clause::{
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
 };
+use crate::clauses::clausefunc::tformula_has_free_vars;
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::EqnPrintOptions;
@@ -31,7 +32,7 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::prover::eprover::{
@@ -52,6 +53,8 @@ const ENORMALIZER_CNF_MINISCOPE_LIMIT: i64 = 1000;
 const ENORMALIZER_CNF_DEF_LIMIT: i64 = 24;
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
+const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
+    "Formula has free variables (check parentheses and quantifier precedence)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -819,7 +822,11 @@ fn parse_tstp_wrapped_formula(
     let role = scanner.current_token().literal();
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
+    let formula_position = token_pos_rep(scanner.current_token());
     let formula = bank.parse_tformula_tstp(scanner)?;
+    if tformula_has_free_vars(bank, &formula).is_some() {
+        return Err(tstp_formula_free_variables_error(&formula_position));
+    }
     skip_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -1052,6 +1059,13 @@ fn skip_tstp_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+fn tstp_formula_free_variables_error(position: &str) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!("{position} {TSTP_FORMULA_FREE_VARIABLES_MESSAGE}"),
+    )
+}
+
 fn token_source_string(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -1139,6 +1153,7 @@ mod tests {
     use super::{
         memory_limit_bytes_from_mb, new_term_bank, parse_wrapped_formula, print_help,
         process_options, run, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA};
@@ -1610,6 +1625,43 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("Opening square brace"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn tstp_formula_targets_reject_free_variables_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tstp_free_var_rules");
+        let formula_path = temp_path("tstp_free_var_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(&formula_path, "fof(free_var, axiom, p(X)).\n").expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("TSTP formula target free variables are rejected");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains(TSTP_FORMULA_FREE_VARIABLES_MESSAGE));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
 
