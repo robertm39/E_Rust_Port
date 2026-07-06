@@ -9679,6 +9679,12 @@ fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
     }
 }
 
+fn mark_typed_symbols_for_tstp_formula_kind(bank: &mut TermBank, formula_kind: &str) {
+    if matches!(formula_kind, "tff" | "tcf" | "thf") {
+        bank.signature_mut().set_typed_symbols(true);
+    }
+}
+
 fn combine_problem_types(left: ProblemType, right: ProblemType) -> ProblemType {
     if left == ProblemType::HigherOrder || right == ProblemType::HigherOrder {
         ProblemType::HigherOrder
@@ -9812,6 +9818,7 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    mark_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
@@ -9912,6 +9919,7 @@ fn parse_simple_tstp_formula_clause(
 
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    mark_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
@@ -13724,6 +13732,48 @@ mod tests {
     fn apply_unary(bank: &mut TermBank, head: &Term, arg: &Term) -> Term {
         let applied = bank.term_apply_arg(head, arg);
         bank.term_top_insert(applied).unwrap()
+    }
+
+    fn parse_tstp_formula_clause_into_bank(source: &str, bank: &mut TermBank) {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        super::parse_simple_tstp_formula_clause(
+            &mut scanner,
+            bank,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            super::InputFormulaOwnerHandling::ClauseBridge,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn tstp_typed_wrappers_mark_signature_typed_like_c() {
+        let _guard = global_state_lock();
+        for formula_kind in ["tff", "tcf", "thf"] {
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            assert!(!bank.signature().typed_symbols());
+
+            parse_tstp_formula_clause_into_bank(
+                &format!("{formula_kind}(typed, axiom, p(a))."),
+                &mut bank,
+            );
+
+            assert!(
+                bank.signature().typed_symbols(),
+                "{formula_kind} wrapper did not mark typed symbols"
+            );
+        }
+    }
+
+    #[test]
+    fn tstp_fof_wrapper_does_not_mark_signature_typed_like_c() {
+        let _guard = global_state_lock();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        assert!(!bank.signature().typed_symbols());
+
+        parse_tstp_formula_clause_into_bank("fof(untyped, axiom, p(a)).", &mut bank);
+
+        assert!(!bank.signature().typed_symbols());
     }
 
     fn choice_const(bank: &mut TermBank, name: &str) -> Term {

@@ -325,6 +325,10 @@ impl Signature {
         self.typed_symbols
     }
 
+    pub const fn set_typed_symbols(&mut self, typed_symbols: bool) {
+        self.typed_symbols = typed_symbols;
+    }
+
     #[must_use]
     pub const fn distinct_props(&self) -> FunctionProperties {
         self.distinct_props
