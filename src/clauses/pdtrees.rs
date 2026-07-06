@@ -117,12 +117,51 @@ pub struct PdTree {
     search_state: RefCell<Option<PdtSearchState>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct PdNode {
     children: BTreeMap<PrefixToken, usize>,
     fun_alternatives: IntMap<()>,
     ref_count: usize,
     terminal_count: usize,
+    terminal_entries: Vec<PdTerminalEntry>,
+    size_constr: i64,
+    age_constr: SysDate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PdTerminalEntry {
+    weight: i64,
+    date: Option<SysDate>,
+}
+
+impl Default for PdTerminalEntry {
+    fn default() -> Self {
+        Self {
+            weight: PDTREE_IGNORE_TERM_WEIGHT,
+            date: None,
+        }
+    }
+}
+
+impl Default for PdNode {
+    fn default() -> Self {
+        Self {
+            children: BTreeMap::new(),
+            fun_alternatives: IntMap::new(),
+            ref_count: 0,
+            terminal_count: 0,
+            terminal_entries: Vec::new(),
+            size_constr: PDTREE_IGNORE_TERM_WEIGHT,
+            age_constr: SysDate::creation_time(),
+        }
+    }
+}
+
+impl PdTerminalEntry {
+    #[must_use]
+    const fn new(weight: i64, date: Option<SysDate>) -> Self {
+        Self { weight, date }
+    }
 }
 
 impl Default for PdTree {
@@ -197,6 +236,29 @@ impl PdTree {
     }
 
     #[must_use]
+    pub fn size_constraint(&self) -> i64 {
+        self.nodes[0].size_constr
+    }
+
+    #[must_use]
+    pub fn age_constraint(&self) -> SysDate {
+        self.nodes[0].age_constr
+    }
+
+    #[must_use]
+    pub fn root_satisfies_constraints(&self, term_weight: i64, term_date: SysDate) -> bool {
+        self.node_satisfies_constraints(0, term_weight, term_date)
+    }
+
+    #[must_use]
+    pub fn search_root_satisfies_constraints(&self) -> bool {
+        self.search_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|state| self.root_satisfies_constraints(state.term_weight, state.term_date))
+    }
+
+    #[must_use]
     pub fn search_traversal_order(&self) -> PdtTraversalOrder {
         self.search_traversal_order.get()
     }
@@ -258,12 +320,29 @@ impl PdTree {
 
     pub fn insert_term(&mut self, term: &Term) -> bool {
         let code = term_lr_traverse_code(term);
-        self.insert_code(&code)
+        self.insert_code_with_metadata(&code, term_standard_weight(term), None)
+    }
+
+    pub fn insert_term_with_clause_date(&mut self, term: &Term, clause_date: SysDate) -> bool {
+        let code = term_lr_traverse_code(term);
+        self.insert_code_with_metadata(&code, term_standard_weight(term), Some(clause_date))
     }
 
     pub fn insert_code(&mut self, code: &[PrefixToken]) -> bool {
+        let weight = i64::try_from(code.len()).unwrap_or(PDTREE_IGNORE_TERM_WEIGHT);
+        self.insert_code_with_metadata(code, weight, None)
+    }
+
+    fn insert_code_with_metadata(
+        &mut self,
+        code: &[PrefixToken],
+        weight: i64,
+        date: Option<SysDate>,
+    ) -> bool {
+        let entry = PdTerminalEntry::new(weight, date);
         let mut node_index = 0;
         self.nodes[node_index].ref_count += 1;
+        self.apply_entry_to_node(node_index, entry);
 
         for token in code {
             self.select_alt_ref_for_insert(node_index, *token);
@@ -284,9 +363,11 @@ impl PdTree {
                 };
             node_index = next_index;
             self.nodes[node_index].ref_count += 1;
+            self.apply_entry_to_node(node_index, entry);
         }
 
         self.nodes[node_index].terminal_count += 1;
+        self.nodes[node_index].terminal_entries.push(entry);
         self.term_count += 1;
         true
     }
@@ -296,7 +377,21 @@ impl PdTree {
         self.delete_code(&code)
     }
 
+    pub fn delete_term_with_clause_date(&mut self, term: &Term, clause_date: SysDate) -> bool {
+        let code = term_lr_traverse_code(term);
+        let entry = PdTerminalEntry::new(term_standard_weight(term), Some(clause_date));
+        self.delete_code_with_entry(&code, Some(entry))
+    }
+
     pub fn delete_code(&mut self, code: &[PrefixToken]) -> bool {
+        self.delete_code_with_entry(code, None)
+    }
+
+    fn delete_code_with_entry(
+        &mut self,
+        code: &[PrefixToken],
+        target_entry: Option<PdTerminalEntry>,
+    ) -> bool {
         let mut node_index = 0;
         let mut path = Vec::with_capacity(code.len());
 
@@ -311,8 +406,22 @@ impl PdTree {
         if self.nodes[node_index].terminal_count == 0 {
             return false;
         }
+        let terminal_position = if let Some(target) = target_entry {
+            self.nodes[node_index]
+                .terminal_entries
+                .iter()
+                .position(|entry| *entry == target)
+        } else {
+            self.nodes[node_index].terminal_entries.len().checked_sub(1)
+        };
+        let Some(terminal_position) = terminal_position else {
+            return false;
+        };
 
         self.nodes[node_index].terminal_count -= 1;
+        self.nodes[node_index]
+            .terminal_entries
+            .remove(terminal_position);
         self.term_count -= 1;
         self.nodes[0].ref_count -= 1;
 
@@ -320,6 +429,10 @@ impl PdTree {
             self.nodes[*path_node_index].ref_count -= 1;
         }
 
+        let affected_path: Vec<_> = path
+            .iter()
+            .map(|(_, _, path_node_index)| *path_node_index)
+            .collect();
         for (parent_index, token, dead_index) in path.into_iter().rev() {
             if self.nodes[dead_index].ref_count != 0 {
                 break;
@@ -345,7 +458,21 @@ impl PdTree {
             self.nodes[dead_index].children.clear();
             self.nodes[dead_index].fun_alternatives = IntMap::new();
             self.nodes[dead_index].terminal_count = 0;
+            self.nodes[dead_index].terminal_entries.clear();
+            self.nodes[dead_index].size_constr = PDTREE_IGNORE_TERM_WEIGHT;
+            self.nodes[dead_index].age_constr = SysDate::creation_time();
             self.live_node_count -= 1;
+        }
+
+        let mut affected = Vec::with_capacity(code.len().saturating_add(1));
+        affected.push(0);
+        affected.extend(
+            affected_path
+                .into_iter()
+                .filter(|path_node_index| self.nodes[*path_node_index].ref_count != 0),
+        );
+        for index in affected.into_iter().rev() {
+            self.recompute_node_constraints(index);
         }
 
         true
@@ -376,6 +503,53 @@ impl PdTree {
                 }
             }
         }
+    }
+
+    fn apply_entry_to_node(&mut self, node_index: usize, entry: PdTerminalEntry) {
+        self.nodes[node_index].size_constr = self.nodes[node_index].size_constr.min(entry.weight);
+        if let Some(date) = entry.date {
+            self.nodes[node_index].age_constr = self.nodes[node_index].age_constr.maximum(date);
+        }
+    }
+
+    fn recompute_node_constraints(&mut self, node_index: usize) {
+        let mut size_constr = PDTREE_IGNORE_TERM_WEIGHT;
+        let mut age_constr = SysDate::creation_time();
+        for entry in &self.nodes[node_index].terminal_entries {
+            size_constr = size_constr.min(entry.weight);
+            if let Some(date) = entry.date {
+                age_constr = age_constr.maximum(date);
+            }
+        }
+
+        let child_indices: Vec<_> = self.nodes[node_index].children.values().copied().collect();
+        for child_index in child_indices {
+            size_constr = size_constr.min(self.nodes[child_index].size_constr);
+            age_constr = age_constr.maximum(self.nodes[child_index].age_constr);
+        }
+
+        self.nodes[node_index].size_constr = size_constr;
+        self.nodes[node_index].age_constr = age_constr;
+    }
+
+    fn node_satisfies_constraints(
+        &self,
+        node_index: usize,
+        term_weight: i64,
+        term_date: SysDate,
+    ) -> bool {
+        let settings = pdt_constraint_settings();
+        if settings.use_size_constraints && term_weight < self.nodes[node_index].size_constr {
+            return false;
+        }
+
+        if settings.use_age_constraints
+            && term_date != PDTREE_IGNORE_NF_DATE
+            && !term_date.is_earlier_than(self.nodes[node_index].age_constr)
+        {
+            return false;
+        }
+        true
     }
 
     fn apply_arr_storage_delta(&mut self, before: usize, after: usize) {
@@ -551,6 +725,7 @@ mod tests {
     use super::{
         prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree,
         PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
+        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -561,6 +736,7 @@ mod tests {
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
@@ -699,6 +875,49 @@ mod tests {
             .expect("search init stores replacement state");
         assert_eq!(state.term_code, prefix_compute_term_code(&second));
         assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
+    }
+
+    #[test]
+    fn constraints_track_minimum_weight_and_youngest_clause_date() {
+        let _guard = global_state_lock();
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let light = parse_in_bank(&mut bank, "constraint_light");
+        let heavy = parse_in_bank(&mut bank, "constraint_heavy(a,b)");
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_with_clause_date(&heavy, SysDate::from_raw(8)));
+        assert!(tree.insert_term_with_clause_date(&light, SysDate::from_raw(3)));
+
+        assert_eq!(tree.size_constraint(), term_standard_weight(&light));
+        assert_eq!(tree.age_constraint(), SysDate::from_raw(8));
+        assert!(tree.root_satisfies_constraints(term_standard_weight(&heavy), SysDate::from_raw(7)));
+        assert!(
+            !tree.root_satisfies_constraints(term_standard_weight(&heavy), SysDate::from_raw(8))
+        );
+        assert!(
+            tree.root_satisfies_constraints(term_standard_weight(&light), PDTREE_IGNORE_NF_DATE)
+        );
+        assert!(!tree
+            .root_satisfies_constraints(term_standard_weight(&light) - 1, PDTREE_IGNORE_NF_DATE));
+    }
+
+    #[test]
+    fn delete_recomputes_extremal_constraints_for_remaining_entries() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let light = parse_in_bank(&mut bank, "delete_constraint_light");
+        let heavy = parse_in_bank(&mut bank, "delete_constraint_heavy(a,b)");
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_with_clause_date(&heavy, SysDate::from_raw(8)));
+        assert!(tree.insert_term_with_clause_date(&light, SysDate::from_raw(3)));
+
+        assert!(tree.delete_term_with_clause_date(&heavy, SysDate::from_raw(8)));
+        assert_eq!(tree.size_constraint(), term_standard_weight(&light));
+        assert_eq!(tree.age_constraint(), SysDate::from_raw(3));
+
+        assert!(tree.delete_term_with_clause_date(&light, SysDate::from_raw(3)));
+        assert_eq!(tree.size_constraint(), PDTREE_IGNORE_TERM_WEIGHT);
+        assert_eq!(tree.age_constraint(), SysDate::creation_time());
     }
 
     #[test]

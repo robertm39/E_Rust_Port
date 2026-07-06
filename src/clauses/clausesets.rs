@@ -1404,9 +1404,9 @@ fn index_demodulator_clause(index: &mut PdTree, clause: &Clause) {
         .as_slice()
         .first()
         .expect("unit clause has one literal");
-    index.insert_term(literal.left());
+    index.insert_term_with_clause_date(literal.left(), clause.date());
     if !literal.is_oriented() {
-        index.insert_term(literal.right());
+        index.insert_term_with_clause_date(literal.right(), clause.date());
     }
 }
 
@@ -1420,9 +1420,9 @@ fn delete_demodulator_clause(index: &mut PdTree, clause: &Clause) {
         .as_slice()
         .first()
         .expect("unit clause has one literal");
-    let _ = index.delete_term(literal.left());
+    let _ = index.delete_term_with_clause_date(literal.left(), clause.date());
     if !literal.is_oriented() {
-        let _ = index.delete_term(literal.right());
+        let _ = index.delete_term_with_clause_date(literal.right(), clause.date());
     }
 }
 
@@ -1845,6 +1845,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -2144,6 +2145,40 @@ mod tests {
         assert_eq!(set.demod_index().unwrap().term_count(), 0);
         assert!(set.demod_index_storage_estimate() < indexed_storage);
         assert!(set.demod_index_storage_estimate() > 0);
+    }
+
+    #[test]
+    fn demod_index_constraints_track_clause_dates_and_deletion() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "constraint_demod_a");
+        let b = typed_const(&mut bank, "constraint_demod_b");
+        let f_a = typed_unary(&mut bank, "constraint_demod_f", &a);
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second_literal = literal(&mut bank, &f_a, &b, true);
+        second_literal.set_prop(EP_IS_ORIENTED);
+        let mut second = clause_from(vec![second_literal]);
+        first.set_date(SysDate::from_raw(3));
+        second.set_date(SysDate::from_raw(7));
+        let second_id = second.ident();
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(first, &bank);
+        set.indexed_insert_clause_owned(second, &bank);
+
+        let index = set.demod_index().expect("demod index initialized");
+        assert_eq!(index.term_count(), 3);
+        assert_eq!(index.size_constraint(), term_standard_weight(&a));
+        assert_eq!(index.age_constraint(), SysDate::from_raw(7));
+
+        let extracted = set
+            .extract_by_id(second_id)
+            .expect("second clause is indexed by identifier");
+
+        assert!(!extracted.query_prop(CP_IS_D_INDEXED));
+        let index = set.demod_index().expect("demod index remains initialized");
+        assert_eq!(index.term_count(), 2);
+        assert_eq!(index.size_constraint(), term_standard_weight(&a));
+        assert_eq!(index.age_constraint(), SysDate::from_raw(3));
     }
 
     #[test]
