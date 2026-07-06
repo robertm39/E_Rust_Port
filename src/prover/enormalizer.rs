@@ -4,9 +4,7 @@ use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
-use crate::basics::simple_stuff::{
-    problem_type, reset_problem_type, set_problem_type, ProblemType,
-};
+use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
@@ -509,20 +507,27 @@ fn execute_config(
     let mut clauses = ClauseSet::new();
     let mut formulas = FormulaSet::new();
     let mut ignored_watchlist = ClauseSet::new();
+    let mut parsed_rule_problem_type = ProblemType::FirstOrder;
 
     for file in &config.rule_files {
-        let mut scanner = scanner_for_input(file, stdin)?;
-        parse_clause_scanner_into_formula_set_with_options(
-            &mut scanner,
-            config.parse_format,
-            FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
-            ClauseParseOptions::default(),
-            &mut bank,
-            &mut formulas,
-            &mut ignored_watchlist,
-        )?;
+        parsed_rule_problem_type = combine_rule_problem_types(
+            parsed_rule_problem_type,
+            parse_rule_file(
+                config,
+                file,
+                stdin,
+                &mut bank,
+                &mut formulas,
+                &mut ignored_watchlist,
+            )?,
+        );
     }
-    clausify_rule_formulas(&mut bank, &mut formulas, &mut clauses)?;
+    clausify_rule_formulas(
+        &mut bank,
+        &mut formulas,
+        &mut clauses,
+        parsed_rule_problem_type,
+    )?;
 
     let demodulators = build_rw_system(&mut clauses, &bank, config, stderr)?;
     let mut ocb = OrderControlBlock::alloc(
@@ -583,15 +588,45 @@ fn new_term_bank() -> Result<TermBank, Diagnostic> {
     TermBank::new(signature)
 }
 
+fn parse_rule_file(
+    config: &EnormalizerConfig,
+    file: &str,
+    stdin: &mut impl Read,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    ignored_watchlist: &mut ClauseSet,
+) -> Result<ProblemType, Diagnostic> {
+    let mut scanner = scanner_for_input(file, stdin)?;
+    let parsed_file = parse_clause_scanner_into_formula_set_with_options(
+        &mut scanner,
+        config.parse_format,
+        FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+        ClauseParseOptions::default(),
+        bank,
+        formulas,
+        ignored_watchlist,
+    )?;
+    Ok(parsed_file.problem_type)
+}
+
+const fn combine_rule_problem_types(left: ProblemType, right: ProblemType) -> ProblemType {
+    if matches!(left, ProblemType::HigherOrder) || matches!(right, ProblemType::HigherOrder) {
+        ProblemType::HigherOrder
+    } else {
+        ProblemType::FirstOrder
+    }
+}
+
 fn clausify_rule_formulas(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     clauses: &mut ClauseSet,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
     let mut archive = FormulaSet::new();
     let _preprocessed = formulas.preproc_conjectures(bank, false, false)?;
     let fresh_vars = VarBank::new(bank.signature().type_bank());
-    let options = FormulaSetCnfOptions::new(ENORMALIZER_CNF_MINISCOPE_LIMIT, true, problem_type())
+    let options = FormulaSetCnfOptions::new(ENORMALIZER_CNF_MINISCOPE_LIMIT, true, problem_type)
         .with_def_limit(ENORMALIZER_CNF_DEF_LIMIT);
     let _cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
     Ok(())
@@ -1165,12 +1200,15 @@ impl<W: Write> Write for EnormalizerOutput<'_, W> {
 #[cfg(test)]
 mod tests {
     use super::{
-        memory_limit_bytes_from_mb, new_term_bank, parse_wrapped_formula, print_help,
-        process_options, run, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        clausify_rule_formulas, memory_limit_bytes_from_mb, new_term_bank, parse_rule_file,
+        parse_wrapped_formula, print_help, process_options, run, EnormalizerConfig, RunCommand,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA};
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::formulasets::FormulaSet;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::test_support::global_state_lock;
     use std::fs;
@@ -1245,6 +1283,50 @@ mod tests {
             panic!("expected execute");
         };
         assert_eq!(config.rule_files, vec!["-"]);
+    }
+
+    #[test]
+    fn thf_rule_cnf_uses_returned_problem_type_after_global_reset() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        let config = EnormalizerConfig {
+            parse_format: IoFormat::Tstp,
+            rule_files: vec!["-".to_owned()],
+            ..EnormalizerConfig::default()
+        };
+        let mut bank = new_term_bank().expect("term bank");
+        let mut formulas = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let mut ignored_watchlist = ClauseSet::new();
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(f_type, type, f: person > person).\n\
+            thf(g_type, type, g: person > person).\n\
+            thf(lambda_rule, axiom, ((^[X: person]: f @ X) @ a) = (g @ a)).\n";
+
+        let parsed_problem_type = parse_rule_file(
+            &config,
+            "-",
+            &mut stdin,
+            &mut bank,
+            &mut formulas,
+            &mut ignored_watchlist,
+        )
+        .expect("THF rule parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::HigherOrder);
+
+        reset_problem_type();
+        set_problem_type(ProblemType::FirstOrder).expect("test global can be reset to first-order");
+
+        clausify_rule_formulas(&mut bank, &mut formulas, &mut clauses, parsed_problem_type)
+            .expect("THF rule CNF uses returned parsed problem type");
+        assert!(clauses.members() > 0);
+        assert!(clauses.iter().all(|clause| clause
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| !literal.left().has_lambda_subterm()
+                && !literal.right().has_lambda_subterm())));
     }
 
     #[test]
