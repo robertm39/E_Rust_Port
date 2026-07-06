@@ -144,6 +144,10 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `VarBankCollectVars` prints `VarBankCollectVars()...` and `...VarBankCollectVars()` directly to stdout around its collection loop, and that loop scans `i < max_var`, so a variable stored exactly at `max_var` is skipped. Rust preserves the loop-bound quirk in `VarBank::collect_vars` and exposes `collect_vars_with_output` for the C progress text while keeping the ordinary helper output-free.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
@@ -154,5 +158,6 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 
 - C's `VarBankPushEnv`/`VarBankPopEnv` stack restores old external-name bindings only when `VarBankExtNameAssertAllocSort` shadows a name with a different type; same-type quantifier shadowing is handled later by the full formula variable-renaming pipeline rather than by the raw variable bank. Rust keeps the C-shaped assert-allocation helpers, but the temporary executable FOF/TFF bridge uses declaration-specific scoped allocation so same-name quantified variables cannot create self-referential Skolem bindings before the real `TFormula` owner exists.
 - C inference wrappers receive a reusable `freshvars` bank paired with the live term-bank variables. Rust now has a shared `VarBank::fresh_normalization_bank` helper that copies live variable f-codes/types and advances temporary-bank counters for short-lived generation helpers, but proof-state-owned reuse remains the compatibility target once inference wrappers can borrow the state owner directly.
+- `VarBankCollectVars` couples variable collection to debug progress output. Keep the output-aware wrapper for compatibility callers, but prefer the quiet collection helper for ordinary Rust code after drop-in behavior is secured.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

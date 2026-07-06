@@ -7,6 +7,7 @@ use crate::terms::termtypes::{
 use crate::terms::typebanks::TypeBank;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 use std::rc::{Rc, Weak};
 
 pub const INITIAL_SORT_STACK_SIZE: usize = 10;
@@ -467,6 +468,26 @@ impl VarBank {
         count
     }
 
+    /// Collect variables while writing C `VarBankCollectVars` progress output.
+    ///
+    /// C writes two debug progress lines to stdout around the collection loop.
+    /// This wrapper preserves that behavior for compatibility call sites while
+    /// keeping `collect_vars` output-free for ordinary Rust callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns any write error reported by `output`.
+    pub fn collect_vars_with_output(
+        &self,
+        into: &mut PStack<Term>,
+        output: &mut impl Write,
+    ) -> io::Result<i64> {
+        writeln!(output, "VarBankCollectVars()...")?;
+        let count = self.collect_vars(into);
+        writeln!(output, "...VarBankCollectVars()")?;
+        Ok(count)
+    }
+
     #[must_use]
     pub fn normal_stack_len(&self, type_: &Type) -> usize {
         let sort = type_.type_uid();
@@ -825,7 +846,20 @@ mod tests {
         let count = bank.collect_vars(&mut stack);
 
         assert_eq!(count, 1);
-        assert_eq!(stack.as_slice(), &[first]);
+        assert_eq!(stack.as_slice(), std::slice::from_ref(&first));
         assert_ne!(stack.as_slice(), &[second]);
+
+        let mut stack = PStack::new();
+        let mut output = Vec::new();
+        let count = bank
+            .collect_vars_with_output(&mut stack, &mut output)
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(stack.as_slice(), &[first]);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "VarBankCollectVars()...\n...VarBankCollectVars()\n"
+        );
     }
 }
