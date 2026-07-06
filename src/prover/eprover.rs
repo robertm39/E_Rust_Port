@@ -17304,10 +17304,13 @@ input_clause(c2,axiom,[++q(X)]).
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
-             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
+             fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17329,6 +17332,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("(f,a)=b)."));
         assert!(printed.contains("tff(lambda_eq_right, axiom, b=app_"));
         assert!(printed.contains("(f,a))."));
+        assert!(printed.contains("tff(lambda_ext_right, axiom"));
+        assert!(printed.contains("tff(lambda_ext_left, axiom"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -18732,10 +18737,13 @@ input_clause(c2,axiom,[++q(X)]).
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
-             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
+             fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -26874,10 +26882,13 @@ input_clause(c2,axiom,[++q(X)]).
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
-             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
+             fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -26899,6 +26910,8 @@ input_clause(c2,axiom,[++q(X)]).
                 "fof(lambda_app, axiom",
                 "fof(lambda_eq_left, axiom",
                 "fof(lambda_eq_right, axiom",
+                "fof(lambda_ext_right, axiom",
+                "fof(lambda_ext_left, axiom",
             ],
         );
         std::fs::remove_file(&path).unwrap();
