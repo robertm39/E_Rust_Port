@@ -224,16 +224,20 @@ fn find_top_simplifying_unit_with_sign<'set>(
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
-    let result = units.iter().find_map(|clause| {
-        let literal = unit_literal(clause)?;
-        if sign.is_some_and(|required| literal.is_positive() != required) {
-            return None;
-        }
-        eqn_topsubsumes_termpair(literal, left, right).then_some(SimplifyingUnit {
-            clause,
-            literal_index: 0,
+    let result = if units.demod_index_search_may_have_match() {
+        units.iter().find_map(|clause| {
+            let literal = unit_literal(clause)?;
+            if sign.is_some_and(|required| literal.is_positive() != required) {
+                return None;
+            }
+            eqn_topsubsumes_termpair(literal, left, right).then_some(SimplifyingUnit {
+                clause,
+                literal_index: 0,
+            })
         })
-    });
+    } else {
+        None
+    };
     units.record_demod_index_search_exit();
     result
 }
@@ -245,13 +249,17 @@ fn find_top_simplifying_unit_index(
     sign: Option<bool>,
 ) -> Option<usize> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
-    let result = units.iter().enumerate().find_map(|(index, clause)| {
-        let literal = unit_literal(clause)?;
-        if sign.is_some_and(|required| literal.is_positive() != required) {
-            return None;
-        }
-        eqn_topsubsumes_termpair(literal, left, right).then_some(index)
-    });
+    let result = if units.demod_index_search_may_have_match() {
+        units.iter().enumerate().find_map(|(index, clause)| {
+            let literal = unit_literal(clause)?;
+            if sign.is_some_and(|required| literal.is_positive() != required) {
+                return None;
+            }
+            eqn_topsubsumes_termpair(literal, left, right).then_some(index)
+        })
+    } else {
+        None
+    };
     units.record_demod_index_search_exit();
     result
 }

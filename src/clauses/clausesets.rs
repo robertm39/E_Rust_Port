@@ -213,6 +213,17 @@ impl ClauseSet {
             .is_some_and(PdTree::search_is_active)
     }
 
+    #[must_use]
+    pub fn demod_index_search_may_have_match(&self) -> bool {
+        let Some(index) = &self.demod_index else {
+            return true;
+        };
+        if !self.demod_index_covers_demodulators() {
+            return true;
+        }
+        index.search_root_satisfies_constraints()
+    }
+
     pub fn record_demod_index_search_attempt(&self) {
         if let Some(index) = &self.demod_index {
             index.record_search_attempt();
@@ -1385,6 +1396,12 @@ impl ClauseSet {
         clause.del_prop(CP_IS_D_INDEXED);
     }
 
+    fn demod_index_covers_demodulators(&self) -> bool {
+        self.clauses
+            .iter()
+            .all(|clause| !clause.is_demodulator() || clause.query_prop(CP_IS_D_INDEXED))
+    }
+
     pub(crate) fn recompute_literals(&mut self) {
         self.literals = self
             .clauses
@@ -1838,6 +1855,7 @@ mod tests {
         FvCollectLayout, FvIndexType,
     };
     use crate::clauses::neweval::{evals_alloc, EvalCell};
+    use crate::clauses::pdtrees::PDTREE_IGNORE_NF_DATE;
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
@@ -2179,6 +2197,50 @@ mod tests {
         assert_eq!(index.term_count(), 2);
         assert_eq!(index.size_constraint(), term_standard_weight(&a));
         assert_eq!(index.age_constraint(), SysDate::from_raw(3));
+    }
+
+    #[test]
+    fn demod_index_search_may_have_match_uses_root_constraints() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "constraint_search_a");
+        let b = typed_const(&mut bank, "constraint_search_b");
+        let f_a = typed_unary(&mut bank, "constraint_search_f", &a);
+        let mut literal = literal(&mut bank, &f_a, &b, true);
+        literal.set_prop(EP_IS_ORIENTED);
+        let mut clause = clause_from(vec![literal]);
+        clause.set_date(SysDate::from_raw(7));
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
+        assert!(!set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+
+        set.record_demod_index_search_init(&f_a, SysDate::from_raw(6), false);
+        assert!(set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+
+        set.record_demod_index_search_init(&f_a, SysDate::from_raw(7), false);
+        assert!(!set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+    }
+
+    #[test]
+    fn demod_index_search_may_have_match_falls_back_for_unindexed_demodulators() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "constraint_fallback_a");
+        let b = typed_const(&mut bank, "constraint_fallback_b");
+        let mut literal = literal(&mut bank, &a, &b, true);
+        literal.set_prop(EP_IS_ORIENTED);
+        let clause = clause_from(vec![literal]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.insert(clause);
+        set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
+
+        assert!(set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
     }
 
     #[test]

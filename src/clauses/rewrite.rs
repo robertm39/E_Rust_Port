@@ -250,20 +250,24 @@ pub fn rewrite_with_clause_set_plain(
     demodulators.record_demod_index_search_init(term, date, prefer_general);
 
     let mut subst = Substitution::new();
-    let found = match find_plain_demodulator(
-        ocb,
-        bank,
-        term,
-        date,
-        demodulators,
-        &mut subst,
-        restricted_rw,
-    ) {
-        Ok(found) => found,
-        Err(error) => {
-            demodulators.record_demod_index_search_exit();
-            return Err(error);
+    let found = if demodulators.demod_index_search_may_have_match() {
+        match find_plain_demodulator(
+            ocb,
+            bank,
+            term,
+            date,
+            demodulators,
+            &mut subst,
+            restricted_rw,
+        ) {
+            Ok(found) => found,
+            Err(error) => {
+                demodulators.record_demod_index_search_exit();
+                return Err(error);
+            }
         }
+    } else {
+        None
     };
     demodulators.record_demod_index_search_exit();
     let Some(found) = found else {
@@ -1983,6 +1987,40 @@ mod tests {
         assert_eq!(rewritten, f_b);
         assert!(!f_b.is_top_rewritten());
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn plain_clause_set_rewrite_uses_pdt_root_size_prune_for_indexed_sets() {
+        let _counter_guard = reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "rw_pdt_prune_a");
+        let b = typed_const(&mut bank, "rw_pdt_prune_b");
+        let f_a = typed_unary(&mut bank, "rw_pdt_prune_f", &a);
+        let mut demod_lit = eqn(&mut bank, &f_a, &b, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        demod.set_weight(demod.standard_weight());
+        let mut demods = ClauseSet::new_demod_indexed();
+        demods.indexed_insert_clause_owned(demod, &bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &a,
+            SysDate::creation_time(),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, a);
+        assert!(!a.is_top_rewritten());
+        assert!(!demods.demod_index_search_may_have_match());
+        assert_eq!(demods.demod_index_match_count(), 1);
+        assert!(!demods.demod_index_search_active());
     }
 
     #[test]
