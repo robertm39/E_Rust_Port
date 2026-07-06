@@ -494,6 +494,24 @@ mod tests {
     }
 
     #[test]
+    fn filter_accepts_old_tptp_input_clause_under_tstp_mode() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"accept: input_clause(c_0_1,axiom,[++p(a)]).\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect("filter old-TPTP clause run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("output is utf8");
+        assert!(output.contains("accepted from 0 (forced)"));
+        assert!(output.contains("% Resulting clause set:"));
+        assert!(output.contains("p(a)"));
+    }
+
+    #[test]
     fn silent_output_file_redirects_filter_output() {
         let _guard = global_state_lock();
         let input_path = temp_path("input");

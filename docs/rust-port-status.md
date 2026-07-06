@@ -329,7 +329,7 @@ Implemented:
 Pending:
 
 - Byte-for-byte `CSSCPA_filter` comparison against a built C executable remains pending for the full help stream and platform-specific system-error suffixes.
-- Exact scanner-format provenance for historical `.csscpa` files that use old `input_clause(...)` syntax even though `CSSCPA_filter.c` sets `TSTPFormat` before invoking `CSSCPALoop`.
+- Reference confirmation of exact scanner-format provenance remains pending for historical `.csscpa` files that use old `input_clause(...)` syntax even though `CSSCPA_filter.c` sets `TSTPFormat` before invoking `CSSCPALoop`; the Rust standalone wrapper already accepts that legacy clause form under the TSTP-mode filter path.
 
 Change-later notes:
 
