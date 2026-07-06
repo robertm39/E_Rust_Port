@@ -411,6 +411,7 @@ mod linux_signal {
     const SIG_ERR_COMPAT: usize = usize::MAX;
 
     extern "C" {
+        fn raise(signal_number: i32) -> i32;
         #[link_name = "signal"]
         fn signal_handler(signum: i32, handler: SignalHandler) -> usize;
         #[link_name = "signal"]
@@ -432,8 +433,19 @@ mod linux_signal {
         (unsafe { signal_raw(signal_number, SIG_DFL_COMPAT) }) != SIG_ERR_COMPAT
     }
 
+    pub(super) fn restore_default_and_reraise(signal_number: i32) {
+        let _ = restore_default_handler(signal_number);
+        // SAFETY: raise is libc's process-global signal API. The signal number
+        // comes from the active C signal trampoline and mirrors C
+        // `ESignalHandler` after resetting the handler to SIG_DFL.
+        let _ = unsafe { raise(signal_number) };
+    }
+
     extern "C" fn signal_trampoline(signal_number: i32) {
-        let _ = e_signal_handler(signal_number);
+        let outcome = e_signal_handler(signal_number);
+        if matches!(outcome, super::SignalOutcome::Terminate { .. }) {
+            restore_default_and_reraise(signal_number);
+        }
     }
 }
 
