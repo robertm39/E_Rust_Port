@@ -1337,6 +1337,49 @@ mod tests {
     }
 
     #[test]
+    fn tstp_include_selector_feeds_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("eground-include-selected-inc");
+        let main_path = temp_path("eground-include-selected-main");
+        let include_arg = include_path.to_string_lossy().replace('\\', "/");
+        fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\nfof(skipped, axiom, q(a)).\n",
+        )
+        .unwrap();
+        fs::write(
+            &main_path,
+            format!("include('{include_arg}',[selected]).\n"),
+        )
+        .unwrap();
+
+        let mut bank = eground_term_bank().expect("test term bank allocation succeeds");
+        let mut formulas = FormulaSet::new();
+        let config = EgroundConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec![main_path.to_string_lossy().into_owned()],
+            ..EgroundConfig::default()
+        };
+        let mut stdin: &[u8] = b"";
+
+        parse_input_files_to_formula_set(&config, &mut stdin, &mut bank, &mut formulas)
+            .expect("selected include parsing succeeds");
+
+        assert_eq!(formulas.cardinality(), 1);
+        let formula = formulas.iter().next().expect("selected formula is kept");
+        assert_eq!(formula.get_id(true), "selected");
+
+        let mut clauses = ClauseSet::new();
+        clausify_input_formulas(&config, &mut bank, &mut formulas, &mut clauses)
+            .expect("selected included formula CNF succeeds");
+        assert_eq!(formulas.cardinality(), 0);
+        assert_eq!(clauses.members(), 1);
+
+        let _ = fs::remove_file(include_path);
+        let _ = fs::remove_file(main_path);
+    }
+
+    #[test]
     fn dimacs_output_prints_header_and_complete_status() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();

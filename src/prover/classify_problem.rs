@@ -2324,6 +2324,55 @@ mod tests {
     }
 
     #[test]
+    fn real_input_include_selector_feeds_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let include_path = temp_path("include-selected-inc");
+        let main_path = temp_path("include-selected-main");
+        let include_arg = include_path.to_string_lossy().replace('\\', "/");
+        std::fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\nfof(skipped, axiom, q(a)).\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &main_path,
+            format!("include('{include_arg}',[selected]).\n"),
+        )
+        .unwrap();
+
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec![main_path.to_string_lossy().into_owned()],
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"";
+
+        parse_real_input_file(&config, &config.files[0], &mut stdin, &mut state)
+            .expect("selected include parsing succeeds");
+
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 1);
+        let formula = state
+            .f_axioms()
+            .iter()
+            .next()
+            .expect("selected formula owner exists");
+        assert_eq!(formula.get_id(true), "selected");
+
+        clausify_real_input_formula_axioms(&config, &mut state)
+            .expect("selected included formula CNF succeeds");
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+
+        remove_if_present(&include_path);
+        remove_if_present(&main_path);
+    }
+
+    #[test]
     fn output_close_failure_uses_c_outclose_diagnostic() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(feature_line("prob").into_bytes());

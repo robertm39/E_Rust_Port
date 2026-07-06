@@ -1199,6 +1199,53 @@ mod tests {
     }
 
     #[test]
+    fn tstp_include_selector_feeds_pattern_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("epatternize-include-selected-inc");
+        let main_path = temp_path("epatternize-include-selected-main");
+        let include_arg = include_path.to_string_lossy().replace('\\', "/");
+        fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\nfof(skipped, axiom, q(a)).\n",
+        )
+        .unwrap();
+        fs::write(
+            &main_path,
+            format!("include('{include_arg}',[selected]).\n"),
+        )
+        .unwrap();
+
+        let config = EpatternizeConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec![main_path.to_string_lossy().into_owned()],
+            ..EpatternizeConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"";
+
+        parse_input_file(&config, &config.files[0], &mut stdin, &mut state)
+            .expect("selected include parsing succeeds");
+
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 1);
+        let formula = state
+            .f_axioms()
+            .iter()
+            .next()
+            .expect("selected formula owner exists");
+        assert_eq!(formula.get_id(true), "selected");
+
+        clausify_formula_axioms(&config, &mut state)
+            .expect("selected included formula CNF succeeds");
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+
+        let _ = fs::remove_file(include_path);
+        let _ = fs::remove_file(main_path);
+    }
+
+    #[test]
     fn patternizes_tstp_file_to_output_file() {
         let _guard = global_state_lock();
         let input_path = temp_path("epatternize-input");
