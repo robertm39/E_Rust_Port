@@ -110,9 +110,9 @@ use crate::heuristics::new_autoschedule::{
 use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
     proof_state_filter_unprocessed, proof_state_init_with_output,
-    proof_state_reset_processed_with_global_indices,
-    proof_state_saturate_with_global_indices_and_output, ProofControl, SaturateOutcome,
-    SaturateReturnReason, SaturateStopReason,
+    proof_state_insert_watchlist_global_indices, proof_state_reset_processed_with_global_indices,
+    proof_state_saturate_with_global_and_watchlist_indices_and_output, ProofControl,
+    SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::rawspecfeatures::{
     raw_spec_features_classify, raw_spec_features_compute, RawSpecFeatureCell, RAW_DEFAULT_MASK,
@@ -5537,6 +5537,13 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
     }
     proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
+    let index_signature = state.terms().signature().clone();
+    let mut watchlist_indices = proof_search_watchlist_indices(&index_signature, &control);
+    let _watchlist_indexed = proof_state_insert_watchlist_global_indices(
+        &mut state,
+        &mut watchlist_indices,
+        control.heuristic_parms().lambda_demod,
+    );
     write_preprocessing_time(output, config)?;
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
@@ -5555,7 +5562,6 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
-    let index_signature = state.terms().signature().clone();
     let mut global_indices = proof_search_global_indices(&index_signature, &control);
     let presat_outcome = if control.heuristic_parms().presat_interreduction {
         run_presaturation_interreduction(
@@ -5564,6 +5570,7 @@ fn run_proof_search<W: Write + ?Sized>(
             &mut state,
             &mut control,
             &mut global_indices,
+            &mut watchlist_indices,
         )?
     } else {
         None
@@ -5577,6 +5584,7 @@ fn run_proof_search<W: Write + ?Sized>(
             &mut state,
             &mut control,
             &mut global_indices,
+            &mut watchlist_indices,
         )?
     };
     if hard_time_limit_expired_in_saturation(&outcome) {
@@ -5677,21 +5685,25 @@ fn run_main_saturation<W: Write + ?Sized>(
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, EProverError> {
-    Ok(proof_state_saturate_with_global_indices_and_output(
-        output,
-        config.output_level,
-        state,
-        control,
-        config.step_limit,
-        config.processed_set_limit,
-        config.unprocessed_limit,
-        config.total_clause_set_limit,
-        config.generated_limit,
-        config.term_bank_insert_limit,
-        config.answer_limit,
-        indices,
-    )?)
+    Ok(
+        proof_state_saturate_with_global_and_watchlist_indices_and_output(
+            output,
+            config.output_level,
+            state,
+            control,
+            config.step_limit,
+            config.processed_set_limit,
+            config.unprocessed_limit,
+            config.total_clause_set_limit,
+            config.generated_limit,
+            config.term_bank_insert_limit,
+            config.answer_limit,
+            indices,
+            watchlist_indices,
+        )?,
+    )
 }
 
 fn should_suppress_saturated_output_after_force_deriv(
@@ -6192,6 +6204,21 @@ fn proof_search_global_indices<'sig>(
     )
 }
 
+fn proof_search_watchlist_indices<'sig>(
+    signature: &'sig Signature,
+    control: &ProofControl,
+) -> GlobalIndices<'sig> {
+    let params = control.heuristic_parms();
+    GlobalIndices::new_for_problem(
+        signature,
+        params.rw_bw_index_type.as_str(),
+        "NoIndex",
+        "NoIndex",
+        params.ext_rules_max_depth,
+        problem_type(),
+    )
+}
+
 fn write_proof_search_result_outputs<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
@@ -6391,10 +6418,11 @@ fn run_presaturation_interreduction(
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
 ) -> Result<Option<SaturateOutcome>, EProverError> {
     let selection_strategy = control.heuristic_parms().selection_strategy.clone();
     NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
-    let outcome = proof_state_saturate_with_global_indices_and_output(
+    let outcome = proof_state_saturate_with_global_and_watchlist_indices_and_output(
         output,
         output_level,
         state,
@@ -6407,6 +6435,7 @@ fn run_presaturation_interreduction(
         i64::MAX,
         i64::MAX,
         indices,
+        watchlist_indices,
     );
     control.heuristic_parms_mut().selection_strategy = selection_strategy;
     let outcome = outcome?;

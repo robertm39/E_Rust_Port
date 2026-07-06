@@ -943,6 +943,25 @@ pub fn proof_state_init_with_global_indices_and_docs<'sig>(
     Ok(outcome)
 }
 
+/// Inserts the initialized proof-state watchlist into caller-owned
+/// watchlist global indices.
+///
+/// C stores this owner in `state->wlindices` and calls
+/// `GlobalIndicesInsertClauseSet` at the tail of `ProofStateInitWatchlist`.
+/// Rust keeps the owner explicit until a proof-session owner can hold the
+/// proof state and signature-borrowing global-index shell together.
+pub fn proof_state_insert_watchlist_global_indices(
+    state: &mut ProofState,
+    indices: &mut GlobalIndices<'_>,
+    lambda_demod: bool,
+) -> i64 {
+    let (terms, watchlist) = state.terms_and_watchlist_mut();
+    let Some(watchlist) = watchlist else {
+        return 0;
+    };
+    indices.insert_clause_set(watchlist, terms, lambda_demod)
+}
+
 /// Runs the axiom-queue portion of C `ProofStateInit` after indexing setup.
 ///
 /// # Errors
@@ -1055,6 +1074,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
                 &mut new,
                 static_watchlist,
                 lambda_demod,
+                None,
                 doc_context,
                 output_context.as_mut(),
             )?;
@@ -1121,6 +1141,7 @@ pub fn proof_state_check_watchlist(
         clause,
         static_watchlist,
         lambda_demod,
+        None,
         &mut doc_context,
         output_context.as_mut(),
     )
@@ -1148,6 +1169,65 @@ pub fn proof_state_check_watchlist_with_docs(
         clause,
         static_watchlist,
         lambda_demod,
+        None,
+        &mut doc_context,
+        output_context.as_mut(),
+    )
+}
+
+/// Runs C `check_watchlist` while maintaining caller-owned watchlist global
+/// indices.
+///
+/// # Panics
+///
+/// Panics if the internal non-documenting path reports a proof-documentation
+/// diagnostic, which would indicate a bug because no proof-doc writer is
+/// installed.
+#[must_use]
+pub fn proof_state_check_watchlist_with_global_indices(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> ProofStateWatchlistOutcome {
+    let mut doc_context = None;
+    let mut output_context = None;
+    proof_state_check_watchlist_impl::<String>(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        Some(watchlist_indices),
+        &mut doc_context,
+        output_context.as_mut(),
+    )
+    .unwrap_or_else(|err| panic!("indexed watchlist check unexpectedly failed: {err}"))
+}
+
+/// Runs C `check_watchlist` with proof docs while maintaining caller-owned
+/// watchlist global indices.
+///
+/// # Errors
+///
+/// Returns any proof-documentation write diagnostic.
+pub fn proof_state_check_watchlist_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
+    let mut doc_context = Some((output, session));
+    let mut output_context = None;
+    proof_state_check_watchlist_impl(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        Some(watchlist_indices),
         &mut doc_context,
         output_context.as_mut(),
     )
@@ -1175,6 +1255,7 @@ pub fn proof_state_check_watchlist_with_output(
         clause,
         static_watchlist,
         lambda_demod,
+        None,
         &mut doc_context,
         output_context.as_mut(),
     )
@@ -1185,6 +1266,7 @@ fn proof_state_check_watchlist_maybe_output<W: fmt::Write>(
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
+    watchlist_indices: Option<&mut GlobalIndices<'_>>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
     output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
@@ -1193,6 +1275,7 @@ fn proof_state_check_watchlist_maybe_output<W: fmt::Write>(
         clause,
         static_watchlist,
         lambda_demod,
+        watchlist_indices,
         doc_context,
         output_context,
     )
@@ -1202,7 +1285,8 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     state: &mut ProofState,
     clause: &mut Clause,
     static_watchlist: bool,
-    _lambda_demod: bool,
+    lambda_demod: bool,
+    watchlist_indices: Option<&mut GlobalIndices<'_>>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
     mut output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
@@ -1231,7 +1315,15 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
         return Ok(ProofStateWatchlistOutcome::default());
     }
 
-    let removed = remove_watchlist_subsumed(watchlist, archive, clause, terms, doc_context)?;
+    let removed = remove_watchlist_subsumed(
+        watchlist,
+        archive,
+        clause,
+        terms,
+        lambda_demod,
+        watchlist_indices,
+        doc_context,
+    )?;
     if removed != 0 {
         clause.set_prop(CP_SUBSUMES_WATCH);
         if let Some((output, session)) = doc_context.as_mut() {
@@ -1295,7 +1387,7 @@ pub fn proof_state_simplify_watchlist(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<i64, Diagnostic> {
-    proof_state_simplify_watchlist_impl::<String>(state, control, clause, None)
+    proof_state_simplify_watchlist_impl::<String>(state, control, clause, None, None)
 }
 
 /// Runs C `simplify_watchlist` while emitting represented proof docs.
@@ -1314,13 +1406,62 @@ pub fn proof_state_simplify_watchlist_with_docs(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<i64, Diagnostic> {
-    proof_state_simplify_watchlist_impl(state, control, clause, Some((output, session)))
+    proof_state_simplify_watchlist_impl(state, control, clause, None, Some((output, session)))
 }
 
+/// Runs C `simplify_watchlist` while maintaining caller-owned watchlist global
+/// indices.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_simplify_watchlist`].
+pub fn proof_state_simplify_watchlist_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    proof_state_simplify_watchlist_impl::<String>(
+        state,
+        control,
+        clause,
+        Some(watchlist_indices),
+        None,
+    )
+}
+
+/// Runs C `simplify_watchlist` with proof docs while maintaining caller-owned
+/// watchlist global indices.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_simplify_watchlist_with_docs`].
+pub fn proof_state_simplify_watchlist_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    proof_state_simplify_watchlist_impl(
+        state,
+        control,
+        clause,
+        Some(watchlist_indices),
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible watchlist simplification keeps removal, normalization, and reinsertion together"
+)]
 fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
+    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
@@ -1347,9 +1488,18 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
         let Some(watchlist) = state.watchlist_mut() else {
             break;
         };
-        let Some(watched) = watchlist.extract_by_id(id) else {
+        let Some(mut watched) = watchlist.extract_by_id(id) else {
             continue;
         };
+        if watched.query_prop(CP_IS_GLOBAL_INDEXED) {
+            if let Some(indices) = watchlist_indices.as_deref_mut() {
+                indices.delete_clause(
+                    &mut watched,
+                    state.terms(),
+                    control.heuristic_parms().lambda_demod,
+                );
+            }
+        }
         let requeued = proof_state_archive_simplified_clause(state, watched)?;
         tmp_set.insert(requeued);
     }
@@ -1422,6 +1572,9 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
         }
         let (terms, watchlist, _) = state.terms_watchlist_archive_mut();
         if let Some(watchlist) = watchlist {
+            if let Some(indices) = watchlist_indices.as_deref_mut() {
+                indices.insert_clause(&mut handle, terms, control.heuristic_parms().lambda_demod);
+            }
             watchlist.indexed_insert_clause_owned(handle, terms);
             simplified += 1;
         }
@@ -1435,6 +1588,8 @@ fn remove_watchlist_subsumed<W: fmt::Write>(
     archive: &mut ClauseSet,
     subsumer: &Clause,
     terms: &TermBank,
+    lambda_demod: bool,
+    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut stack = PStack::new();
@@ -1456,6 +1611,11 @@ fn remove_watchlist_subsumed<W: fmt::Write>(
         let Some(mut clause) = watchlist.extract_by_id(ident) else {
             continue;
         };
+        if clause.query_prop(CP_IS_GLOBAL_INDEXED) {
+            if let Some(indices) = watchlist_indices.as_deref_mut() {
+                indices.delete_clause(&mut clause, terms, lambda_demod);
+            }
+        }
         if let Some((output, session)) = doc_context.as_mut() {
             let comment = if clause.query_prop(CP_WATCH_ONLY) {
                 "extract_wl_subsumed"
@@ -3093,6 +3253,10 @@ pub fn proof_state_insert_new_clauses_with_output(
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible generated-clause admission keeps the mutation gates in source order"
+)]
 fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -3141,6 +3305,7 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
             &mut clause,
             static_watchlist,
             lambda_demod,
+            None,
             &mut doc_context,
             output_context.as_mut(),
         )?;
@@ -6281,7 +6446,7 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None, None)
+    proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None, None, None)
 }
 
 /// Processes one selected clause while emitting represented C proof output.
@@ -6309,6 +6474,7 @@ pub fn proof_state_process_clause_with_docs(
         control,
         answer_limit,
         None,
+        None,
         Some((output, session, output_level)),
         None,
     )
@@ -6332,6 +6498,7 @@ pub fn proof_state_process_clause_with_output(
         state,
         control,
         answer_limit,
+        None,
         None,
         None,
         Some((output, output_level)),
@@ -6364,6 +6531,32 @@ pub fn proof_state_process_clause_with_global_indices(
         Some(indices),
         None,
         None,
+        None,
+    )
+}
+
+/// Processes one selected clause using caller-owned global indices and
+/// caller-owned watchlist global indices.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_process_clause_with_global_indices`].
+pub fn proof_state_process_clause_with_global_and_watchlist_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    proof_state_process_clause_impl::<String>(
+        state,
+        control,
+        answer_limit,
+        Some(indices),
+        Some(watchlist_indices),
+        None,
+        None,
     )
 }
 
@@ -6389,6 +6582,35 @@ pub fn proof_state_process_clause_with_global_indices_and_output(
         control,
         answer_limit,
         Some(indices),
+        None,
+        None,
+        Some((output, output_level)),
+    )
+}
+
+/// Processes one selected clause using caller-owned global and watchlist global
+/// indices while rendering only C's `OutputLevel` text.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_process_clause_with_global_indices_and_output`].
+pub fn proof_state_process_clause_with_global_and_watchlist_indices_and_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    let output = output as &mut dyn std::io::Write;
+    proof_state_process_clause_impl::<String>(
+        state,
+        control,
+        answer_limit,
+        Some(indices),
+        Some(watchlist_indices),
         None,
         Some((output, output_level)),
     )
@@ -6416,6 +6638,7 @@ pub fn proof_state_process_clause_with_global_indices_and_docs(
         control,
         answer_limit,
         Some(indices),
+        None,
         Some((output, session, output_level)),
         None,
     )
@@ -6430,6 +6653,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     control: &mut ProofControl,
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
@@ -6553,14 +6777,25 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     let static_watchlist = control.heuristic_parms().watchlist_is_static;
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let watchlist = if let Some((output, session, _output_level)) = doc_context.as_mut() {
-        proof_state_check_watchlist_with_docs(
-            &mut **output,
-            session,
-            state,
-            &mut clause,
-            static_watchlist,
-            lambda_demod,
-        )?
+        match watchlist_indices.as_deref_mut() {
+            Some(indices) => proof_state_check_watchlist_with_global_indices_and_docs(
+                &mut **output,
+                session,
+                state,
+                &mut clause,
+                static_watchlist,
+                lambda_demod,
+                indices,
+            )?,
+            None => proof_state_check_watchlist_with_docs(
+                &mut **output,
+                session,
+                state,
+                &mut clause,
+                static_watchlist,
+                lambda_demod,
+            )?,
+        }
     } else if output_context.is_some() {
         let mut no_doc_context = None;
         proof_state_check_watchlist_impl::<String>(
@@ -6568,11 +6803,21 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             &mut clause,
             static_watchlist,
             lambda_demod,
+            watchlist_indices.as_deref_mut(),
             &mut no_doc_context,
             output_context.as_mut(),
         )?
     } else {
-        proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod)
+        match watchlist_indices.as_deref_mut() {
+            Some(indices) => proof_state_check_watchlist_with_global_indices(
+                state,
+                &mut clause,
+                static_watchlist,
+                lambda_demod,
+                indices,
+            ),
+            None => proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod),
+        }
     };
 
     let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
@@ -6636,16 +6881,33 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             proof_state_processed_clause_by_class(state, class, processed_ident).cloned();
         if let Some(processed_clause) = processed_clause {
             if let Some((output, session, _output_level)) = doc_context.as_mut() {
-                let _simplified = proof_state_simplify_watchlist_with_docs(
-                    &mut **output,
-                    session,
-                    state,
-                    control,
-                    &processed_clause,
-                )?;
+                let _simplified = match watchlist_indices.as_deref_mut() {
+                    Some(indices) => proof_state_simplify_watchlist_with_global_indices_and_docs(
+                        &mut **output,
+                        session,
+                        state,
+                        control,
+                        &processed_clause,
+                        indices,
+                    )?,
+                    None => proof_state_simplify_watchlist_with_docs(
+                        &mut **output,
+                        session,
+                        state,
+                        control,
+                        &processed_clause,
+                    )?,
+                };
             } else {
-                let _simplified =
-                    proof_state_simplify_watchlist(state, control, &processed_clause)?;
+                let _simplified = match watchlist_indices {
+                    Some(indices) => proof_state_simplify_watchlist_with_global_indices(
+                        state,
+                        control,
+                        &processed_clause,
+                        indices,
+                    )?,
+                    None => proof_state_simplify_watchlist(state, control, &processed_clause)?,
+                };
             }
         }
     }
@@ -6875,6 +7137,7 @@ pub fn proof_state_saturate(
         answer_limit,
         None,
         None,
+        None,
     )
 }
 
@@ -6915,6 +7178,7 @@ pub fn proof_state_saturate_with_output(
         answer_limit,
         None,
         Some((output, output_level)),
+        None,
     )
 }
 
@@ -6958,6 +7222,7 @@ pub fn proof_state_saturate_with_global_indices(
         answer_limit,
         Some(indices),
         None,
+        None,
     )
 }
 
@@ -7000,6 +7265,51 @@ pub fn proof_state_saturate_with_global_indices_and_output(
         answer_limit,
         Some(indices),
         Some((output, output_level)),
+        None,
+    )
+}
+
+/// Runs the ported C `Saturate` loop using caller-owned global indices and
+/// caller-owned watchlist global indices while rendering only C's `OutputLevel`
+/// text from selected-clause processing.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_saturate_with_global_indices_and_output`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<SaturateOutcome, Diagnostic> {
+    let output = output as &mut dyn std::io::Write;
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        Some(indices),
+        Some((output, output_level)),
+        Some(watchlist_indices),
     )
 }
 
@@ -7065,6 +7375,7 @@ fn proof_state_saturate_impl(
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
+    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
     let mut sat_check_thresholds = SatCheckThresholds::new(control.heuristic_parms());
@@ -7092,6 +7403,7 @@ fn proof_state_saturate_impl(
             control,
             answer_limit,
             indices.as_deref_mut(),
+            watchlist_indices.as_deref_mut(),
             output_context.as_mut(),
         )?;
         match process_outcome {
@@ -7207,29 +7519,74 @@ fn proof_state_process_clause_for_saturate(
     control: &mut ProofControl,
     answer_limit: i64,
     indices: Option<&mut GlobalIndices<'_>>,
+    watchlist_indices: Option<&mut GlobalIndices<'_>>,
     output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    match (indices, output_context) {
-        (Some(indices), Some((output, output_level))) => proof_state_process_clause_impl::<String>(
-            state,
-            control,
-            answer_limit,
-            Some(indices),
-            None,
-            Some((&mut **output, *output_level)),
-        ),
-        (Some(indices), None) => {
+    match (indices, watchlist_indices, output_context) {
+        (Some(indices), Some(watchlist_indices), Some((output, output_level))) => {
+            proof_state_process_clause_impl::<String>(
+                state,
+                control,
+                answer_limit,
+                Some(indices),
+                Some(watchlist_indices),
+                None,
+                Some((&mut **output, *output_level)),
+            )
+        }
+        (Some(indices), Some(watchlist_indices), None) => {
+            proof_state_process_clause_with_global_and_watchlist_indices(
+                state,
+                control,
+                answer_limit,
+                indices,
+                watchlist_indices,
+            )
+        }
+        (Some(indices), None, Some((output, output_level))) => {
+            proof_state_process_clause_impl::<String>(
+                state,
+                control,
+                answer_limit,
+                Some(indices),
+                None,
+                None,
+                Some((&mut **output, *output_level)),
+            )
+        }
+        (Some(indices), None, None) => {
             proof_state_process_clause_with_global_indices(state, control, answer_limit, indices)
         }
-        (None, Some((output, output_level))) => proof_state_process_clause_impl::<String>(
+        (None, Some(watchlist_indices), Some((output, output_level))) => {
+            proof_state_process_clause_impl::<String>(
+                state,
+                control,
+                answer_limit,
+                None,
+                Some(watchlist_indices),
+                None,
+                Some((&mut **output, *output_level)),
+            )
+        }
+        (None, Some(watchlist_indices), None) => proof_state_process_clause_impl::<String>(
+            state,
+            control,
+            answer_limit,
+            None,
+            Some(watchlist_indices),
+            None,
+            None,
+        ),
+        (None, None, Some((output, output_level))) => proof_state_process_clause_impl::<String>(
             state,
             control,
             answer_limit,
             None,
             None,
+            None,
             Some((&mut **output, *output_level)),
         ),
-        (None, None) => proof_state_process_clause(state, control, answer_limit),
+        (None, None, None) => proof_state_process_clause(state, control, answer_limit),
     }
 }
 
@@ -8439,15 +8796,15 @@ mod tests {
         proof_control_clause_set_reweight_with_bank, proof_control_init,
         proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_check_ac_status,
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
-        proof_state_check_watchlist_with_output, proof_state_cleanup_unprocessed_clauses,
-        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
-        proof_state_generate_new_clauses_with_docs,
+        proof_state_check_watchlist_with_global_indices, proof_state_check_watchlist_with_output,
+        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -8455,7 +8812,7 @@ mod tests {
         proof_state_init_with_global_indices, proof_state_init_with_output,
         proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
         proof_state_insert_new_clauses_with_output, proof_state_insert_processed_clause,
-        proof_state_move_eval_store_to_unprocessed,
+        proof_state_insert_watchlist_global_indices, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
@@ -8465,7 +8822,8 @@ mod tests {
         proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_indices,
         proof_state_saturate_with_output, proof_state_simplify_watchlist,
-        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
+        proof_state_simplify_watchlist_with_docs,
+        proof_state_simplify_watchlist_with_global_indices, proof_state_storage_estimate,
         select_inherited_literal, write_cleanup_unprocessed_output, BackwardSimplificationOutcome,
         CleanupUnprocessedOutcome, ForwardContractCounts, ForwardContractOptions,
         GenerateNewClausesOutcome, LiteralSelectionOutcome, ParentLivenessSnapshot,
@@ -9183,6 +9541,103 @@ mod tests {
         let watchlist = state.watchlist().unwrap();
         assert!(watchlist.fv_anchor().is_some());
         assert_eq!(watchlist.members(), 1);
+    }
+
+    #[test]
+    fn proof_state_insert_watchlist_global_indices_indexes_rebuilt_watchlist() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut watch = {
+            let terms = state.terms_mut();
+            negative_clause(terms)
+        };
+        watch.set_ident(4_010);
+        state.watchlist_mut().unwrap().insert(watch);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let indexed = proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "FP1",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+
+        let globally_indexed = proof_state_insert_watchlist_global_indices(
+            &mut state,
+            &mut indices,
+            control.heuristic_parms().lambda_demod,
+        );
+
+        assert_eq!(indexed, 1);
+        assert_eq!(globally_indexed, 1);
+        let watch = state.watchlist().unwrap().find_by_id(4_010).unwrap();
+        assert!(watch.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices
+            .find_bw_rw_occurrence(watch.literals().as_slice()[0].left())
+            .is_some());
+    }
+
+    #[test]
+    fn proof_state_check_watchlist_with_global_indices_deletes_removed_watch() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, watched, watched_term) = {
+            let terms = state.terms_mut();
+            let (subsumer, watched) =
+                watchlist_subsumption_pair(terms, "pc_wl_gidx_remove", 4_011, 4_012);
+            let watched_term = watched.literals().as_slice()[0].left().clone();
+            (subsumer, watched, watched_term)
+        };
+        state.watchlist_mut().unwrap().insert(watched);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "FP1",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+        assert_eq!(
+            proof_state_insert_watchlist_global_indices(
+                &mut state,
+                &mut indices,
+                control.heuristic_parms().lambda_demod,
+            ),
+            1
+        );
+        assert!(indices.find_bw_rw_occurrence(&watched_term).is_some());
+
+        let outcome = proof_state_check_watchlist_with_global_indices(
+            &mut state,
+            &mut subsumer,
+            false,
+            control.heuristic_parms().lambda_demod,
+            &mut indices,
+        );
+
+        assert_eq!(
+            outcome,
+            ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 1,
+            }
+        );
+        assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        let archived = state.archive().find_by_id(4_012).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
+        assert!(!archived.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_bw_rw_occurrence(&watched_term).is_none());
     }
 
     #[test]
@@ -15277,6 +15732,72 @@ mod tests {
         assert_eq!(literal.right(), &other);
         assert!(simplified.query_prop(CP_IS_ORIENTED));
         assert!(state.statistics().rw_count >= 1);
+    }
+
+    #[test]
+    fn proof_state_simplify_watchlist_with_global_indices_reindexes_watched_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, watched, compound, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_watch_simpl_gidx_target");
+            let other = typed_const(terms, "pc_watch_simpl_gidx_other");
+            let compound = typed_unary(terms, "pc_watch_simpl_gidx_f", &target);
+            let mut demod_lit = literal(terms, &compound, &target, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_135);
+            demodulator.set_date(SysDate::from_raw(8));
+            demodulator.set_weight(demodulator.standard_weight());
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &other, true,
+            )]));
+            watched.set_ident(4_136);
+            watched.set_weight(watched.standard_weight());
+            (demodulator, watched, compound, target, other)
+        };
+        state.processed_pos_rules_mut().insert(demodulator.clone());
+        state.processed_pos_rules_mut().set_date(demodulator.date());
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "FP1",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+        assert_eq!(
+            proof_state_insert_watchlist_global_indices(
+                &mut state,
+                &mut indices,
+                control.heuristic_parms().lambda_demod,
+            ),
+            1
+        );
+        assert!(indices.find_bw_rw_occurrence(&compound).is_some());
+
+        let simplified = proof_state_simplify_watchlist_with_global_indices(
+            &mut state,
+            &mut control,
+            &demodulator,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(simplified, 1);
+        assert!(indices.find_bw_rw_occurrence(&compound).is_none());
+        assert!(indices.find_bw_rw_occurrence(&target).is_some());
+        let archived = state.archive().find_by_id(4_136).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
+        assert!(!archived.query_prop(CP_IS_GLOBAL_INDEXED));
+        let simplified = state.watchlist().unwrap().find_by_id(4_136).unwrap();
+        assert!(simplified.query_prop(CP_IS_GLOBAL_INDEXED));
+        let literal = &simplified.literals().as_slice()[0];
+        assert_eq!(literal.left(), &target);
+        assert_eq!(literal.right(), &other);
     }
 
     #[test]
