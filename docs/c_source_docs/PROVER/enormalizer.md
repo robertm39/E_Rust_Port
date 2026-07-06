@@ -94,7 +94,7 @@ Source files reviewed: `PROVER/enormalizer.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `src/prover/enormalizer.rs` and `src/bin/enormalizer.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin rule file, LOP/TPTP/TSTP parse/print aliases, represented formula-owner preprocessing/CNF for rule files, left-to-right demodulator orientation, non-rule warnings, term/clause/formula normalization including old-TPTP `input_formula` targets, output-file routing including `-o -`, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, resource-limit parsing, and resource-usage printing.
+- `src/prover/enormalizer.rs` and `src/bin/enormalizer.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin rule file, LOP/TPTP/TSTP parse/print aliases, represented formula-owner preprocessing/CNF for rule files, left-to-right demodulator orientation, non-rule warnings, term/clause/formula normalization including old-TPTP `input_formula` targets and TSTP formula-target `$distinct`/`tcf` body parsing, output-file routing including `-o -`, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, resource-limit parsing, and resource-usage printing.
 
 ### Porting Focus
 
