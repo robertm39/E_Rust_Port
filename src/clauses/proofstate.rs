@@ -12,13 +12,13 @@ use crate::clauses::derivation::{
     clause_dummy_quote_parent_ref, clause_is_dummy_quote, clause_is_eval_gc,
     demodulator_clause_refs, deriv_stack_count_search_inferences, deriv_stack_extract_parents,
     deriv_stack_indicates_initial_clause, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-    FormulaDerivationRef, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
+    op_has_cnf_arg2, op_has_fof_arg1, op_has_fof_arg2, ClauseDerivationRef, DerivationEntry,
+    DerivationParentRef, FormulaDerivationRef, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
 };
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
-use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
+use crate::clauses::formulasets::{wformula_deriv_find_first, FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvCollect;
 use crate::clauses::rewrite::REWRITE_UNCACHED;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
@@ -935,6 +935,16 @@ impl ProofState {
     }
 
     #[must_use]
+    pub fn proof_formula_by_derivation_ref(
+        &self,
+        parent: FormulaDerivationRef,
+    ) -> Option<&WrappedFormula> {
+        self.proof_formula_sets()
+            .into_iter()
+            .find_map(|set| find_formula_by_derivation_ref(set, parent))
+    }
+
+    #[must_use]
     pub fn proof_quote_source_by_derivation_ref(
         &self,
         parent: ClauseDerivationRef,
@@ -1066,6 +1076,10 @@ impl ProofState {
         sets
     }
 
+    fn proof_formula_sets(&self) -> Vec<&FormulaSet> {
+        vec![&self.f_archive, &self.f_ax_archive, &self.f_axioms]
+    }
+
     #[must_use]
     pub const fn fvi_initialized(&self) -> bool {
         self.fvi_initialized
@@ -1176,6 +1190,7 @@ impl ProofState {
         let mut analysis = ProofObjectAnalysis::default();
         let mut visited = Vec::new();
         let mut pending_edges = Vec::new();
+        let mut formula_visited = Vec::new();
 
         for root in roots {
             let root = self.proof_object_first_clause(root);
@@ -1188,14 +1203,28 @@ impl ProofState {
         }
 
         while let Some(edge) = pending_edges.pop() {
-            for clause in self.proof_object_edge_clauses(edge) {
-                let clause = self.proof_object_first_clause(clause);
-                Self::analyse_proof_object_clause(
-                    clause,
-                    &mut analysis,
-                    &mut visited,
-                    &mut pending_edges,
-                );
+            match edge.parent {
+                DerivationParentRef::Clause(_) | DerivationParentRef::Demodulator(_) => {
+                    for clause in self.proof_object_edge_clauses(edge) {
+                        let clause = self.proof_object_first_clause(clause);
+                        Self::analyse_proof_object_clause(
+                            clause,
+                            &mut analysis,
+                            &mut visited,
+                            &mut pending_edges,
+                        );
+                    }
+                }
+                DerivationParentRef::Formula(parent) => {
+                    if let Some(formula) = self.proof_object_formula_by_derivation_ref(parent) {
+                        Self::analyse_proof_object_formula(
+                            formula,
+                            &mut analysis,
+                            &mut formula_visited,
+                            &mut pending_edges,
+                        );
+                    }
+                }
             }
         }
 
@@ -1285,6 +1314,29 @@ impl ProofState {
         pending_edges.extend(proof_object_parent_edges(clause.derivation()));
     }
 
+    fn analyse_proof_object_formula(
+        formula: &WrappedFormula,
+        analysis: &mut ProofObjectAnalysis,
+        visited: &mut Vec<*const WrappedFormula>,
+        pending_edges: &mut Vec<ProofObjectParentEdge>,
+    ) {
+        let key = std::ptr::from_ref(formula);
+        if visited.contains(&key) {
+            return;
+        }
+        visited.push(key);
+
+        analysis.formula_step_count += 1;
+        if formula.is_conjecture() {
+            analysis.formula_conjecture_count += 1;
+        }
+        if formula.derivation().is_none() {
+            analysis.initial_formula_count += 1;
+        }
+
+        pending_edges.extend(proof_object_parent_edges(formula.derivation()));
+    }
+
     fn collect_proof_object_graph_clause<'a>(
         clause: &'a Clause,
         graph: &mut ProofObjectGraph<'a>,
@@ -1329,6 +1381,20 @@ impl ProofState {
             current = parent;
         }
         current
+    }
+
+    fn proof_object_first_formula<'a>(&'a self, formula: &'a WrappedFormula) -> &'a WrappedFormula {
+        wformula_deriv_find_first(formula, |parent| {
+            self.proof_formula_by_derivation_ref(parent)
+        })
+    }
+
+    fn proof_object_formula_by_derivation_ref(
+        &self,
+        parent: FormulaDerivationRef,
+    ) -> Option<&WrappedFormula> {
+        self.proof_formula_by_derivation_ref(parent)
+            .map(|formula| self.proof_object_first_formula(formula))
     }
 
     fn proof_object_edge_clauses(&self, edge: ProofObjectParentEdge) -> Vec<&Clause> {
@@ -2089,6 +2155,13 @@ fn find_by_derivation_ref_or_sourceless_id(
     })
 }
 
+fn find_formula_by_derivation_ref(
+    set: &FormulaSet,
+    parent: FormulaDerivationRef,
+) -> Option<&WrappedFormula> {
+    set.iter().find(|formula| formula.ident() == parent.ident())
+}
+
 fn clause_literals_match(left: &Clause, right: &Clause) -> bool {
     left.literal_number() == right.literal_number()
         && left
@@ -2121,13 +2194,13 @@ fn proof_object_parent_edges(
             ProofObjectParentResolution::ProofStep
         };
 
-        if op_has_cnf_arg1(op) {
+        if op_has_cnf_arg1(op) || op_has_fof_arg1(op) {
             push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
         } else if op_has_arg1(op) {
             index += 1;
         }
 
-        if op_has_cnf_arg2(op) {
+        if op_has_cnf_arg2(op) || op_has_fof_arg2(op) {
             push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
         } else if op_has_arg2(op) {
             index += 1;
@@ -2152,9 +2225,11 @@ fn push_proof_object_parent_edge(
                 parent: DerivationParentRef::Demodulator(*demodulator),
                 resolution: ProofObjectParentResolution::ProofStep,
             }),
-            DerivationEntry::FormulaParent(_)
-            | DerivationEntry::Operation(_)
-            | DerivationEntry::NumericArg(_) => {}
+            DerivationEntry::FormulaParent(parent) => edges.push(ProofObjectParentEdge {
+                parent: DerivationParentRef::Formula(*parent),
+                resolution,
+            }),
+            DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {}
         }
     }
     *index += 1;
@@ -2208,8 +2283,9 @@ mod tests {
         CP_WATCH_ONLY,
     };
     use crate::clauses::derivation::{
-        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_SIMPLIFY,
+        clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
+        DerivationParentRef, FormulaDerivationRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES,
+        DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -2720,6 +2796,63 @@ mod tests {
                 initial_clause_count: 1,
                 initial_formula_count: 0,
                 generating_inference_count: 1,
+                simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_analysis_counts_formula_parents() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut formula = wrapped_formula(&mut state, "proof_analysis_formula_parent");
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(formula_ref), None);
+
+        state.f_ax_archive_mut().insert(formula);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 1,
+                formula_step_count: 1,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 1,
+                initial_clause_count: 1,
+                initial_formula_count: 1,
+                generating_inference_count: 0,
+                simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_analysis_follows_formula_quote_source() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut original = wrapped_formula(&mut state, "proof_analysis_original_formula");
+        original.set_tptp_type(CP_TYPE_CONJECTURE);
+        let original_ref = FormulaDerivationRef::new(original.ident());
+        let mut quote = wrapped_formula(&mut state, "proof_analysis_formula_quote");
+        quote.set_tptp_type(CP_TYPE_AXIOM);
+        quote.push_formula_derivation(DC_FOF_QUOTE, Some(original_ref), None);
+        let quote_ref = FormulaDerivationRef::new(quote.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(quote_ref), None);
+
+        state.f_ax_archive_mut().insert(original);
+        state.f_axioms_mut().insert(quote);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 1,
+                formula_step_count: 1,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 1,
+                initial_clause_count: 1,
+                initial_formula_count: 1,
+                generating_inference_count: 0,
                 simplifying_inference_count: 0,
             }
         );
