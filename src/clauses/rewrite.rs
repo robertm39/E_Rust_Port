@@ -16,7 +16,6 @@ use crate::clauses::eqn_props::{
     MIN_SIDE,
 };
 use crate::clauses::inferencedoc::ProofDocSession;
-use crate::clauses::pdtrees::PdtIndexedOccurrence;
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater_with_bank;
@@ -1049,39 +1048,24 @@ fn find_plain_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
-    let candidate_sides = demodulators.demod_index_search_candidate_sides();
-    if let Some(candidate_sides) = candidate_sides.as_deref() {
-        return find_indexed_demodulator(
-            ocb,
-            bank,
-            term,
-            date,
-            demodulators,
-            candidate_sides,
-            subst,
-            restricted_rw,
-        );
+    if demodulators.demod_index_search_uses_compact_candidates() {
+        return find_indexed_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw);
     }
 
     find_set_order_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Mirrors C indexed demodulator search state"
-)]
 fn find_indexed_demodulator<'a>(
     ocb: &mut OrderControlBlock,
     bank: &mut TermBank,
     term: &Term,
     date: SysDate,
     demodulators: &'a ClauseSet,
-    candidate_sides: &[PdtIndexedOccurrence],
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     let clauses_by_id = first_demodulator_clause_by_id(demodulators);
-    for &candidate in candidate_sides {
+    while let Some(candidate) = demodulators.demod_index_search_next_candidate_side() {
         let Some(&clause) = clauses_by_id.get(&candidate.clause_id) else {
             continue;
         };

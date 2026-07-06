@@ -225,12 +225,26 @@ impl ClauseSet {
     }
 
     #[must_use]
+    pub fn demod_index_search_uses_compact_candidates(&self) -> bool {
+        self.demod_index.is_some() && self.demod_index_covers_demodulators()
+    }
+
+    #[must_use]
     pub fn demod_index_search_candidate_sides(&self) -> Option<Vec<PdtIndexedOccurrence>> {
         let index = self.demod_index.as_ref()?;
         if !self.demod_index_covers_demodulators() {
             return None;
         }
         index.search_matching_occurrences()
+    }
+
+    pub fn demod_index_search_next_candidate_side(&self) -> Option<PdtIndexedOccurrence> {
+        if !self.demod_index_covers_demodulators() {
+            return None;
+        }
+        self.demod_index
+            .as_ref()
+            .and_then(PdTree::search_next_matching_occurrence)
     }
 
     pub fn record_demod_index_search_attempt(&self) {
@@ -2294,6 +2308,11 @@ mod tests {
                 EqnSide::LeftSide
             )])
         );
+        assert_eq!(
+            set.demod_index_search_next_candidate_side(),
+            Some(PdtIndexedOccurrence::new(clause_id, EqnSide::LeftSide))
+        );
+        assert_eq!(set.demod_index_search_next_candidate_side(), None);
         set.record_demod_index_search_exit();
 
         set.record_demod_index_search_init(&g_a, PDTREE_IGNORE_NF_DATE, false);
@@ -2304,6 +2323,11 @@ mod tests {
                 EqnSide::RightSide
             )])
         );
+        assert_eq!(
+            set.demod_index_search_next_candidate_side(),
+            Some(PdtIndexedOccurrence::new(clause_id, EqnSide::RightSide))
+        );
+        assert_eq!(set.demod_index_search_next_candidate_side(), None);
         set.record_demod_index_search_exit();
 
         let extracted = set
@@ -2313,6 +2337,7 @@ mod tests {
 
         set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(set.demod_index_search_candidate_sides(), Some(Vec::new()));
+        assert_eq!(set.demod_index_search_next_candidate_side(), None);
         set.record_demod_index_search_exit();
     }
 

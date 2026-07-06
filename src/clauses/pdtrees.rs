@@ -148,6 +148,7 @@ pub struct PdTree {
     search_term_date: Cell<SysDate>,
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
+    search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,11 +162,33 @@ struct PdNode {
     age_constr: SysDate,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtOccurrenceCursor {
+    occurrences: Vec<PdtIndexedOccurrence>,
+    position: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PdTerminalEntry {
     weight: i64,
     date: Option<SysDate>,
     occurrence: Option<PdtIndexedOccurrence>,
+}
+
+impl PdtOccurrenceCursor {
+    #[must_use]
+    fn new(occurrences: Vec<PdtIndexedOccurrence>) -> Self {
+        Self {
+            occurrences,
+            position: 0,
+        }
+    }
+
+    fn next(&mut self) -> Option<PdtIndexedOccurrence> {
+        let occurrence = self.occurrences.get(self.position).copied()?;
+        self.position += 1;
+        Some(occurrence)
+    }
 }
 
 impl Default for PdTerminalEntry {
@@ -253,6 +276,7 @@ impl PdTree {
             search_term_date: Cell::new(PDTREE_IGNORE_NF_DATE),
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
+            search_cursor: RefCell::new(None),
         }
     }
 
@@ -387,6 +411,7 @@ impl PdTree {
             term_date: age_constraint,
             traversal_order,
         });
+        *self.search_cursor.borrow_mut() = None;
         self.search_active.set(true);
         self.record_search_attempt();
     }
@@ -394,6 +419,7 @@ impl PdTree {
     pub fn record_search_exit(&self) {
         self.search_active.set(false);
         *self.search_state.borrow_mut() = None;
+        *self.search_cursor.borrow_mut() = None;
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -753,6 +779,15 @@ impl PdTree {
             &mut occurrences,
         );
         Some(occurrences)
+    }
+
+    pub fn search_next_matching_occurrence(&self) -> Option<PdtIndexedOccurrence> {
+        if self.search_cursor.borrow().is_none() {
+            let occurrences = self.search_matching_occurrences()?;
+            *self.search_cursor.borrow_mut() = Some(PdtOccurrenceCursor::new(occurrences));
+        }
+
+        self.search_cursor.borrow_mut().as_mut()?.next()
     }
 
     fn code_may_have_matchable_path(&self, code: &[PrefixToken], spans: &[usize]) -> bool {
@@ -1425,6 +1460,28 @@ mod tests {
             tree.search_matching_occurrences(),
             Some(vec![specific, general])
         );
+    }
+
+    #[test]
+    fn matching_occurrence_cursor_yields_candidates_and_clears_on_exit() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_cursor_f(pdt_cursor_a)");
+        let variable = typed_var(&bank, -27);
+        let specific = PdtIndexedOccurrence::new(100, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(101, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        assert_eq!(tree.search_next_matching_occurrence(), Some(general));
+        assert_eq!(tree.search_next_matching_occurrence(), Some(specific));
+        assert_eq!(tree.search_next_matching_occurrence(), None);
+
+        tree.record_search_exit();
+
+        assert_eq!(tree.search_next_matching_occurrence(), None);
     }
 
     #[test]
