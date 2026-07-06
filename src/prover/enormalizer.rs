@@ -373,7 +373,6 @@ where
 {
     let _problem_type_guard = ProblemTypeRunGuard::new();
     init_io(PROGRAM_NAME);
-    set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout, stderr);
     exit_io();
@@ -755,6 +754,7 @@ fn parse_old_tptp_wrapped_formula(
     bank: &mut TermBank,
 ) -> Result<FormulaTarget, Diagnostic> {
     bank.vars().clear_ext_names();
+    set_problem_type(ProblemType::FirstOrder)?;
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
@@ -793,6 +793,8 @@ fn parse_tstp_wrapped_formula(
     let start_column = usize_to_i64(scanner.current_token().column());
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    set_problem_type(formula_problem_type)?;
+    mark_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
@@ -1037,6 +1039,12 @@ fn tstp_formula_kind_problem_type(kind: &str) -> ProblemType {
         ProblemType::HigherOrder
     } else {
         ProblemType::FirstOrder
+    }
+}
+
+fn mark_typed_symbols_for_tstp_formula_kind(bank: &mut TermBank, kind: &str) {
+    if matches!(kind, "tff" | "tcf" | "thf") {
+        bank.signature_mut().set_typed_symbols(true);
     }
 }
 
@@ -1553,6 +1561,50 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("utf8");
         assert!(rendered.contains("thf(person_type, axiom, $true)."));
         assert!(rendered.contains(" ==> thf(person_type, axiom, $true)."));
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn thf_formula_targets_parse_typed_let_under_higher_order_problem_type() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("thf_let_rules");
+        let formula_path = temp_path("thf_let_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(let_fact, axiom, $let(f: person > $o, f(X) := p @ X, f @ a)).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("THF $let formula target is accepted");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("utf8");
+        assert!(rendered.contains("thf(let_fact, axiom, "));
+        assert!(rendered.contains("$let("));
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);
