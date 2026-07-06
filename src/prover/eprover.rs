@@ -7749,14 +7749,11 @@ fn proof_object_list_display_items(
 ) -> Vec<ProofObjectListDisplayItem> {
     let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
     let display_order = proof_object_list_display_order(graph);
-    let mut display_ids_by_ordinal = vec![0; proof_object_list_node_count(graph)];
+    let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
     let mut fallback_clause_display_ids = BTreeMap::new();
     let mut fallback_formula_display_ids = BTreeMap::new();
     for (print_index, node) in display_order.iter().copied().enumerate() {
         let display_id = usize_to_i64(print_index.saturating_add(1));
-        if let Some(ordinal) = proof_object_list_node_ordinal(graph, node) {
-            display_ids_by_ordinal[ordinal] = display_id;
-        }
         match node {
             ProofObjectGraphNode::Clause(index) => {
                 fallback_clause_display_ids
@@ -7817,6 +7814,20 @@ fn proof_object_list_display_items(
             }
         })
         .collect()
+}
+
+fn proof_object_display_ids_by_ordinal(
+    graph: &ProofObjectGraph<'_>,
+    display_order: &[ProofObjectGraphNode],
+) -> Vec<i64> {
+    let mut display_ids_by_ordinal = vec![0; proof_object_list_node_count(graph)];
+    for (print_index, node) in display_order.iter().copied().enumerate() {
+        let display_id = usize_to_i64(print_index.saturating_add(1));
+        if let Some(ordinal) = proof_object_list_node_ordinal(graph, node) {
+            display_ids_by_ordinal[ordinal] = display_id;
+        }
+    }
+    display_ids_by_ordinal
 }
 
 fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphNode> {
@@ -8308,44 +8319,38 @@ fn write_proof_object_dot(
         b"digraph proof{\n  rankdir=TB\n  graph [splines=true overlap=false];\n  subgraph ax{\n  rank=\"same\";\n",
     )?;
     let mut axiom_open = true;
-    for index in (0..graph.clauses.len()).rev() {
-        let clause = graph.clauses[index];
-        if axiom_open && clause.derivation().is_some() {
-            output.write_all(b"   }\n")?;
-            axiom_open = false;
-        }
-        write_proof_object_dot_clause(
-            output,
-            config,
-            bank,
-            clause,
-            proof_object_dot_node_id(graph, index),
-        )?;
-    }
     let mut formula_bank = bank.clone();
-    for index in (0..graph.formulas.len()).rev() {
-        let formula = graph.formulas[index];
-        if axiom_open && formula.derivation().is_some() {
+    let display_order = proof_object_list_display_order(graph);
+    let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
+    for item in proof_object_list_display_items(graph) {
+        if axiom_open && proof_object_display_item_has_derivation(&item) {
             output.write_all(b"   }\n")?;
             axiom_open = false;
         }
-        write_proof_object_dot_formula(
-            output,
-            config,
-            &mut formula_bank,
-            formula,
-            proof_object_dot_formula_node_id(graph, index),
-        )?;
+        match item {
+            ProofObjectListDisplayItem::Clause { clause, .. } => {
+                write_proof_object_dot_clause(output, config, bank, &clause, clause.ident())?;
+            }
+            ProofObjectListDisplayItem::Formula(formula) => {
+                write_proof_object_dot_formula(
+                    output,
+                    config,
+                    &mut formula_bank,
+                    &formula,
+                    formula.ident(),
+                )?;
+            }
+        }
     }
     if axiom_open {
         output.write_all(b"   }\n")?;
     }
-    for edge in &graph.mixed_edges {
+    for edge in proof_object_list_mixed_edges(graph) {
         writeln!(
             output,
             "    {} -> {} [style=\"bold\"{}]",
-            proof_object_dot_graph_node_id(graph, edge.parent),
-            proof_object_dot_graph_node_id(graph, edge.child),
+            proof_object_display_id_for_node(graph, edge.parent, &display_ids_by_ordinal),
+            proof_object_display_id_for_node(graph, edge.child, &display_ids_by_ordinal),
             proof_object_dot_graph_node_colour(graph, edge.child)
         )?;
     }
@@ -8358,7 +8363,7 @@ fn write_proof_object_dot_clause(
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
-    node_id: usize,
+    node_id: i64,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
         let mut rendered = String::new();
@@ -8404,7 +8409,7 @@ fn write_proof_object_dot_formula(
     config: &EProverConfig,
     bank: &mut TermBank,
     formula: &WrappedFormula,
-    node_id: usize,
+    node_id: i64,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
         let mut rendered = formula.tstp_string(bank, true, false, ProblemType::FirstOrder, true)?;
@@ -8434,24 +8439,10 @@ fn write_proof_object_dot_formula(
     Ok(())
 }
 
-fn proof_object_dot_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
-    graph.clauses.len().saturating_sub(index)
-}
-
-fn proof_object_dot_formula_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
-    graph
-        .clauses
-        .len()
-        .saturating_add(graph.formulas.len().saturating_sub(index))
-}
-
-fn proof_object_dot_graph_node_id(
-    graph: &ProofObjectGraph<'_>,
-    node: ProofObjectGraphNode,
-) -> usize {
-    match node {
-        ProofObjectGraphNode::Clause(index) => proof_object_dot_node_id(graph, index),
-        ProofObjectGraphNode::Formula(index) => proof_object_dot_formula_node_id(graph, index),
+fn proof_object_display_item_has_derivation(item: &ProofObjectListDisplayItem) -> bool {
+    match item {
+        ProofObjectListDisplayItem::Clause { clause, .. } => clause.derivation().is_some(),
+        ProofObjectListDisplayItem::Formula(formula) => formula.derivation().is_some(),
     }
 }
 
@@ -24386,14 +24377,18 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(output).unwrap();
         assert!(
             printed.contains(
-                "  2 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"fof("
+                "  1 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"fof(c_0_1"
             ),
             "{printed}"
         );
         assert!(printed.contains("conjecture"), "{printed}");
         assert!(printed.contains("dot_formula"), "{printed}");
         assert!(
-            printed.contains("    2 -> 1 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
+            printed.contains("inference(QUOTE,[status(unknown)],[c_0_1])"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
             "{printed}"
         );
     }
