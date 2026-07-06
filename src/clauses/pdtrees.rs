@@ -724,6 +724,7 @@ impl PdTree {
             0,
             &state.term_code,
             &state.term_spans,
+            state.traversal_order,
             &mut occurrences,
         );
         Some(occurrences)
@@ -778,6 +779,7 @@ impl PdTree {
         query_index: usize,
         code: &[PrefixToken],
         spans: &[usize],
+        traversal_order: PdtTraversalOrder,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
         if query_index == code.len() {
@@ -793,6 +795,37 @@ impl PdTree {
             return;
         }
 
+        for step in [traversal_order.first, traversal_order.second] {
+            match step {
+                PdtTraversalStep::Symbols => self.collect_symbol_matching_occurrences(
+                    node_index,
+                    query_index,
+                    code,
+                    spans,
+                    traversal_order,
+                    occurrences,
+                ),
+                PdtTraversalStep::Variables => self.collect_variable_matching_occurrences(
+                    node_index,
+                    query_index,
+                    code,
+                    spans,
+                    traversal_order,
+                    occurrences,
+                ),
+            }
+        }
+    }
+
+    fn collect_symbol_matching_occurrences(
+        &self,
+        node_index: usize,
+        query_index: usize,
+        code: &[PrefixToken],
+        spans: &[usize],
+        traversal_order: PdtTraversalOrder,
+        occurrences: &mut Vec<PdtIndexedOccurrence>,
+    ) {
         let token = code[query_index];
         if !matches!(token, PrefixToken::FreeVar(_)) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
@@ -801,11 +834,22 @@ impl PdTree {
                     query_index + 1,
                     code,
                     spans,
+                    traversal_order,
                     occurrences,
                 );
             }
         }
+    }
 
+    fn collect_variable_matching_occurrences(
+        &self,
+        node_index: usize,
+        query_index: usize,
+        code: &[PrefixToken],
+        spans: &[usize],
+        traversal_order: PdtTraversalOrder,
+        occurrences: &mut Vec<PdtIndexedOccurrence>,
+    ) {
         let next_query_index = query_index.saturating_add(spans[query_index]);
         if next_query_index > code.len() {
             return;
@@ -822,6 +866,7 @@ impl PdTree {
                 next_query_index,
                 code,
                 spans,
+                traversal_order,
                 occurrences,
             );
         }
@@ -1209,6 +1254,31 @@ mod tests {
         assert_eq!(tree.term_count(), 1);
         assert_eq!(tree.prefix_ref_count(&code), 1);
         assert_eq!(tree.search_matching_occurrences(), Some(vec![right]));
+    }
+
+    #[test]
+    fn matching_occurrences_follow_recorded_traversal_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_order_f(pdt_order_a)");
+        let variable = typed_var(&bank, -20);
+        let specific = PdtIndexedOccurrence::new(20, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(30, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
+
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            tree.search_matching_occurrences(),
+            Some(vec![general, specific])
+        );
+
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, true);
+        assert_eq!(
+            tree.search_matching_occurrences(),
+            Some(vec![specific, general])
+        );
     }
 
     #[test]

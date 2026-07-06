@@ -229,19 +229,11 @@ fn find_top_simplifying_unit_with_sign<'set>(
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
         let candidate_sides = units.demod_index_search_candidate_sides();
-        let candidate_sides = candidate_sides.as_deref();
-        units.iter().find_map(|clause| {
-            let literal = unit_literal(clause)?;
-            if sign.is_some_and(|required| literal.is_positive() != required) {
-                return None;
-            }
-            unit_literal_matches_top_pair(candidate_sides, clause, literal, left, right).then_some(
-                SimplifyingUnit {
-                    clause,
-                    literal_index: 0,
-                },
-            )
-        })
+        if let Some(candidate_sides) = candidate_sides.as_deref() {
+            find_indexed_top_simplifying_unit(units, candidate_sides, left, right, sign)
+        } else {
+            find_plain_top_simplifying_unit(units, left, right, sign)
+        }
     } else {
         None
     };
@@ -249,25 +241,65 @@ fn find_top_simplifying_unit_with_sign<'set>(
     result
 }
 
-fn unit_literal_matches_top_pair(
-    candidate_sides: Option<&[PdtIndexedOccurrence]>,
-    clause: &Clause,
+fn find_indexed_top_simplifying_unit<'set>(
+    units: &'set ClauseSet,
+    candidate_sides: &[PdtIndexedOccurrence],
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Option<SimplifyingUnit<'set>> {
+    candidate_sides.iter().find_map(|&candidate| {
+        let clause = units.find_by_id(candidate.clause_id)?;
+        let literal = unit_literal(clause)?;
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            return None;
+        }
+        unit_literal_occurrence_matches_top_pair(candidate, literal, left, right).then_some(
+            SimplifyingUnit {
+                clause,
+                literal_index: 0,
+            },
+        )
+    })
+}
+
+fn find_plain_top_simplifying_unit<'set>(
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Option<SimplifyingUnit<'set>> {
+    units.iter().find_map(|clause| {
+        let literal = unit_literal(clause)?;
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            return None;
+        }
+        eqn_topsubsumes_termpair(literal, left, right).then_some(SimplifyingUnit {
+            clause,
+            literal_index: 0,
+        })
+    })
+}
+
+fn unit_literal_occurrence_matches_top_pair(
+    occurrence: PdtIndexedOccurrence,
     literal: &Eqn,
     left: &Term,
     right: &Term,
 ) -> bool {
-    let Some(candidate_sides) = candidate_sides else {
-        return eqn_topsubsumes_termpair(literal, left, right);
-    };
-
-    (candidate_sides.contains(&PdtIndexedOccurrence::new(
-        clause.ident(),
-        EqnSide::LeftSide,
-    )) && unit_literal_side_matches_top_pair(literal.left(), literal.right(), left, right))
-        || (candidate_sides.contains(&PdtIndexedOccurrence::new(
-            clause.ident(),
-            EqnSide::RightSide,
-        )) && unit_literal_side_matches_top_pair(literal.right(), literal.left(), left, right))
+    match occurrence.side {
+        EqnSide::NoSide => false,
+        EqnSide::LeftSide => {
+            unit_literal_side_matches_top_pair(literal.left(), literal.right(), left, right)
+        }
+        EqnSide::RightSide => {
+            unit_literal_side_matches_top_pair(literal.right(), literal.left(), left, right)
+        }
+        EqnSide::BothSides => {
+            unit_literal_side_matches_top_pair(literal.left(), literal.right(), left, right)
+                || unit_literal_side_matches_top_pair(literal.right(), literal.left(), left, right)
+        }
+    }
 }
 
 fn unit_literal_side_matches_top_pair(
@@ -283,6 +315,41 @@ fn unit_literal_side_matches_top_pair(
     result
 }
 
+fn find_indexed_top_simplifying_unit_index(
+    units: &ClauseSet,
+    candidate_sides: &[PdtIndexedOccurrence],
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Option<usize> {
+    candidate_sides.iter().find_map(|&candidate| {
+        let (index, clause) = units
+            .iter()
+            .enumerate()
+            .find(|(_, clause)| clause.ident() == candidate.clause_id)?;
+        let literal = unit_literal(clause)?;
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            return None;
+        }
+        unit_literal_occurrence_matches_top_pair(candidate, literal, left, right).then_some(index)
+    })
+}
+
+fn find_plain_top_simplifying_unit_index(
+    units: &ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Option<usize> {
+    units.iter().enumerate().find_map(|(index, candidate)| {
+        let literal = unit_literal(candidate)?;
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            return None;
+        }
+        eqn_topsubsumes_termpair(literal, left, right).then_some(index)
+    })
+}
+
 fn find_top_simplifying_unit_index(
     units: &ClauseSet,
     left: &Term,
@@ -292,15 +359,11 @@ fn find_top_simplifying_unit_index(
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
         let candidate_sides = units.demod_index_search_candidate_sides();
-        let candidate_sides = candidate_sides.as_deref();
-        units.iter().enumerate().find_map(|(index, clause)| {
-            let literal = unit_literal(clause)?;
-            if sign.is_some_and(|required| literal.is_positive() != required) {
-                return None;
-            }
-            unit_literal_matches_top_pair(candidate_sides, clause, literal, left, right)
-                .then_some(index)
-        })
+        if let Some(candidate_sides) = candidate_sides.as_deref() {
+            find_indexed_top_simplifying_unit_index(units, candidate_sides, left, right, sign)
+        } else {
+            find_plain_top_simplifying_unit_index(units, left, right, sign)
+        }
     } else {
         None
     };
@@ -527,6 +590,35 @@ mod tests {
 
         let plain = ClauseSet::from_clauses([unit]);
         assert!(find_top_simplifying_unit(&plain, &b, &a).is_some());
+    }
+
+    #[test]
+    fn indexed_top_lookup_uses_pdt_candidate_order_before_set_order() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -11);
+        let a = typed_const(&mut bank, "unit_order_a");
+        let rhs = typed_const(&mut bank, "unit_order_rhs");
+        let mut specific = clause_from(vec![literal(&mut bank, &a, &rhs, true)]);
+        let specific_id = specific.ident();
+        let mut general = clause_from(vec![literal(&mut bank, &variable, &rhs, true)]);
+        let general_id = general.ident();
+        let mut indexed = ClauseSet::new_demod_indexed();
+
+        specific.set_weight(specific.standard_weight());
+        general.set_weight(general.standard_weight());
+        indexed.indexed_insert_clause_owned(specific.clone(), &bank);
+        indexed.indexed_insert_clause_owned(general.clone(), &bank);
+
+        assert_eq!(
+            find_top_simplifying_unit(&indexed, &a, &rhs).map(|unit| unit.clause().ident()),
+            Some(general_id)
+        );
+
+        let plain = ClauseSet::from_clauses([specific, general]);
+        assert_eq!(
+            find_top_simplifying_unit(&plain, &a, &rhs).map(|unit| unit.clause().ident()),
+            Some(specific_id)
+        );
     }
 
     #[test]
