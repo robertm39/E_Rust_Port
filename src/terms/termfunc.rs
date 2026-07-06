@@ -20,6 +20,7 @@ use crate::terms::typecheck::{type_infer_sort_with_options, TypeInferOptions};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{self, Write};
 
 const TRIM_IMPL_THRESHOLD: usize = 10;
 
@@ -337,6 +338,28 @@ pub fn term_check_consistency(term: &Term, deref: DerefType) -> Option<Term> {
     term_check_consistency_rek(term, deref, &mut branch)
 }
 
+/// Checks consistency while writing C `TermCheckConsistency` progress output.
+///
+/// C prints a start banner, one dot for every dereferenced node visited, and
+/// an end banner directly to stdout. This wrapper keeps that behavior explicit
+/// for compatibility call sites while leaving `term_check_consistency`
+/// output-free for reusable Rust logic.
+///
+/// # Errors
+///
+/// Returns any write error reported by `output`.
+pub fn term_check_consistency_with_output(
+    term: &Term,
+    deref: DerefType,
+    output: &mut impl Write,
+) -> io::Result<Option<Term>> {
+    writeln!(output, "TermCheckConsistency...")?;
+    let mut branch = BTreeSet::new();
+    let result = term_check_consistency_rek_with_output(term, deref, &mut branch, output)?;
+    writeln!(output, "...TermCheckConsistency")?;
+    Ok(result)
+}
+
 fn term_check_consistency_rek(
     term: &Term,
     deref: DerefType,
@@ -364,6 +387,40 @@ fn term_check_consistency_rek(
     let removed = branch.remove(&key);
     debug_assert!(removed, "branch entry should be present while unwinding");
     None
+}
+
+fn term_check_consistency_rek_with_output(
+    term: &Term,
+    deref: DerefType,
+    branch: &mut BTreeSet<usize>,
+    output: &mut impl Write,
+) -> io::Result<Option<Term>> {
+    let (term, current_deref, limit) = lfho_deref_no_whnf(term, deref);
+    output.write_all(b".")?;
+    let key = term_identity_id(&term);
+    if !branch.insert(key) {
+        return Ok(Some(term));
+    }
+
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let Some(arg) = arg else {
+            continue;
+        };
+        if let Some(repeated) = term_check_consistency_rek_with_output(
+            &arg,
+            convert_lfho_deref(index, limit, current_deref),
+            branch,
+            output,
+        )? {
+            let removed = branch.remove(&key);
+            debug_assert!(removed, "branch entry should be present while unwinding");
+            return Ok(Some(repeated));
+        }
+    }
+
+    let removed = branch.remove(&key);
+    debug_assert!(removed, "branch entry should be present while unwinding");
+    Ok(None)
 }
 
 /// Copies a term using a precomputed free-variable renaming map.
@@ -1762,18 +1819,19 @@ mod tests {
         term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
         term_add_symbol_features, term_add_symbol_features_limited, term_add_type_distribution,
         term_app_encode, term_apply_arg, term_array_no_duplicates, term_check_consistency,
-        term_collect_fcodes, term_collect_ground_terms, term_collect_variables,
-        term_compute_function_ranks, term_compute_order, term_copy, term_copy_keep_vars,
-        term_copy_normalize_vars, term_copy_normalize_vars_alpha, term_copy_rename_vars,
-        term_copy_unify_vars, term_create_prefix, term_dag_weight, term_depth,
-        term_find_ite_subterm, term_find_max_var_code, term_has_f_code, term_has_unbound_variables,
-        term_is_db_closed, term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute,
-        term_is_subterm, term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
-        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
-        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
-        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
-        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
-        term_trim_implications, term_weight_compute, var_print_string, VarNormStyle,
+        term_check_consistency_with_output, term_collect_fcodes, term_collect_ground_terms,
+        term_collect_variables, term_compute_function_ranks, term_compute_order, term_copy,
+        term_copy_keep_vars, term_copy_normalize_vars, term_copy_normalize_vars_alpha,
+        term_copy_rename_vars, term_copy_unify_vars, term_create_prefix, term_dag_weight,
+        term_depth, term_find_ite_subterm, term_find_max_var_code, term_has_f_code,
+        term_has_unbound_variables, term_is_db_closed, term_is_def_term, term_is_flat,
+        term_is_ground, term_is_ground_compute, term_is_subterm, term_is_subterm_deref,
+        term_is_untyped, term_lex_compare, term_linearize, term_non_linear_weight, term_parse,
+        term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
+        term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
+        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
+        term_sym_type_weight, term_trim_implications, term_weight_compute, var_print_string,
+        VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -2074,6 +2132,16 @@ mod tests {
         root.set_argument(1, shared);
 
         assert_eq!(term_check_consistency(&root, DerefType::Never), None);
+
+        let mut output = Vec::new();
+        assert_eq!(
+            term_check_consistency_with_output(&root, DerefType::Never, &mut output).unwrap(),
+            None
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "TermCheckConsistency...\n......TermCheckConsistency\n"
+        );
     }
 
     #[test]
@@ -2081,7 +2149,20 @@ mod tests {
         let root = Term::top_alloc(310, 1);
         root.set_argument(0, root.clone());
 
-        assert_eq!(term_check_consistency(&root, DerefType::Never), Some(root));
+        assert_eq!(
+            term_check_consistency(&root, DerefType::Never),
+            Some(root.clone())
+        );
+
+        let mut output = Vec::new();
+        assert_eq!(
+            term_check_consistency_with_output(&root, DerefType::Never, &mut output).unwrap(),
+            Some(root)
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "TermCheckConsistency...\n.....TermCheckConsistency\n"
+        );
     }
 
     #[test]
