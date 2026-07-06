@@ -119,6 +119,34 @@ impl EPCtrl {
         Ok(control)
     }
 
+    pub fn create_shell(
+        prover: &str,
+        name: &str,
+        extra_options: &str,
+        cpu_limit: i64,
+        file: impl Into<PathBuf>,
+    ) -> Result<Self, Diagnostic> {
+        Self::create_generic_shell(prover, name, E_OPTIONS, extra_options, cpu_limit, file)
+    }
+
+    pub fn create_generic_shell(
+        prover: &str,
+        name: &str,
+        options: &str,
+        extra_options: &str,
+        cpu_limit: i64,
+        file: impl Into<PathBuf>,
+    ) -> Result<Self, Diagnostic> {
+        let input_file = file.into();
+        let file_arg = input_file.to_string_lossy();
+        let command_line = e_ctrl_command(prover, options, extra_options, cpu_limit, &file_arg);
+        let command = shell_command(&command_line);
+        let proc_name = format!("{name} => {options}");
+        let mut control = Self::spawn_command(command, proc_name, Some(input_file), cpu_limit)?;
+        control.start_time = current_sec_time();
+        Ok(control)
+    }
+
     pub fn spawn_command(
         mut command: Command,
         name: impl Into<String>,
@@ -585,6 +613,21 @@ pub fn e_ctrl_default_command(
     e_ctrl_command(prover, E_OPTIONS, extra_options, cpu_limit, file)
 }
 
+#[cfg(windows)]
+fn shell_command(command_line: &str) -> Command {
+    let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd".into());
+    let mut command = Command::new(shell);
+    command.args(["/C", command_line]);
+    command
+}
+
+#[cfg(not(windows))]
+fn shell_command(command_line: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", command_line]);
+    command
+}
+
 fn proc_ctrl_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::INTERFACE_ERROR, message)
 }
@@ -782,6 +825,21 @@ mod tests {
     }
 
     #[test]
+    fn create_generic_shell_executes_concatenated_command_line() {
+        let mut control =
+            EPCtrl::create_generic_shell(shell_test_prover(), "shell", "", "", 5, "problem.p")
+                .unwrap();
+        let mut buffer = String::with_capacity(EPCTRL_BUFSIZE);
+
+        assert_eq!(control.pid(), Some(123));
+        assert!(control.output().view().contains("% Pid: 123"));
+        assert!(!control.read_result_line(&mut buffer).unwrap());
+        assert_eq!(control.result(), ProverResult::Theorem);
+        assert!(control.read_result_line(&mut buffer).unwrap());
+        control.cleanup(false).unwrap();
+    }
+
+    #[test]
     fn process_set_indexes_by_descriptor_and_sets_read_interest() {
         let mut set = EPCtrlSet::new();
         set.add_proc(EPCtrl::with_descriptor("a", Descriptor::new(4)))
@@ -926,5 +984,15 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "printf '%s\\n' 'no pid'"]);
         command
+    }
+
+    #[cfg(windows)]
+    fn shell_test_prover() -> &'static str {
+        "cmd /C echo % Pid: 123& echo % SZS status Theorem& rem"
+    }
+
+    #[cfg(unix)]
+    fn shell_test_prover() -> &'static str {
+        "printf '%s\\n' '% Pid: 123' '% SZS status Theorem'; #"
     }
 }
