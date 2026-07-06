@@ -850,9 +850,9 @@ pub fn print_help() -> String {
         "\n\
 {PROGRAM_NAME} {VERSION} \"{E_NICKNAME}\"\n\
 \n\
-Usage: {PROGRAM_NAME} [options] <spec> [<path-to-eprover>]\n\
+Usage: {PROGRAM_NAME} [options] [Batchfile] [PATH_TO_EPROVER]\n\
 \n\
-Run E on a CASC LTB batch specification.\n\
+Read a CASC LTB batch specification file and process it.\n\
 \n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options:\n\n")));
@@ -969,8 +969,8 @@ mod tests {
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).unwrap();
-        assert!(help.contains("Usage: e_ltb_runner [options] <spec> [<path-to-eprover>]"));
-        assert!(help.contains("Run E on a CASC LTB batch specification."));
+        assert!(help.contains("Usage: e_ltb_runner [options] [Batchfile] [PATH_TO_EPROVER]"));
+        assert!(help.contains("Read a CASC LTB batch specification file and process it."));
 
         let mut stdout = Vec::new();
         let version_status = run([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).unwrap();
