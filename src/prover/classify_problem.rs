@@ -41,9 +41,13 @@ use crate::terms::termbanks::TermBank;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const PROGRAM_NAME: &str = "classify_problem";
 
+const INTERNAL_CNF_CHILD_ARG: &str = "--e-rust-port-classify-cnf-child";
 const DEFAULT_CLASSIFY_MASK: &str = "aaaa-aaaaaa-a";
 const DEFAULT_RAW_MASK: &str = "aaaaaaaaaa";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
@@ -676,6 +680,10 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+    if is_cnf_child_invocation(&argv) {
+        return run_cnf_child_from_args(&argv[2..], stdin, stdout);
+    }
     match process_options(argv, stdout)? {
         RunCommand::Exit(status) => Ok(status),
         RunCommand::Execute(config) => execute_classify_problem(&config, stdin, stdout),
@@ -938,10 +946,25 @@ fn process_merged_real_input_files(
 ) -> Result<(), Diagnostic> {
     for file in &config.files {
         let mut state = proof_state_alloc(config.free_symbol_properties)?;
-        parse_real_input_file(config, file, stdin, &mut state)?;
+        let stdin_data = if file == "-" {
+            Some(read_stdin_data(stdin)?)
+        } else {
+            None
+        };
+        if let Some(data) = &stdin_data {
+            parse_real_input_content(config, "-", data.clone(), &mut state)?;
+        } else {
+            parse_real_input_file(config, file, stdin, &mut state)?;
+        }
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
         let raw_features = raw_features_for_standard_classification(config, &state);
-        let cnf_class = classify_current_cnf_state(cnf_timeout, &mut state)?;
+        let cnf_class = classify_current_cnf_state(
+            cnf_timeout,
+            config,
+            file,
+            stdin_data.as_deref(),
+            &mut state,
+        )?;
         write_all(output, file.as_bytes())?;
         write_all(output, b" : (NULL) : ")?;
         write_all(output, raw_features.class.as_bytes())?;
@@ -1009,12 +1032,23 @@ fn raw_features_for_standard_classification(
 
 fn classify_current_cnf_state(
     cnf_timeout: i64,
+    config: &ClassifyProblemConfig,
+    file: &str,
+    stdin_data: Option<&[u8]>,
     state: &mut ProofState,
 ) -> Result<String, Diagnostic> {
     if cnf_timeout <= 0 {
-        return Ok("-".repeat(SPEC_STRING_MEM - 1));
+        return Ok(cnf_timeout_fallback_class());
     }
 
+    if current_executable_can_run_cnf_child() {
+        return classify_cnf_state_in_child(config, cnf_timeout, file, stdin_data);
+    }
+
+    classify_current_cnf_state_inline(state)
+}
+
+fn classify_current_cnf_state_inline(state: &mut ProofState) -> Result<String, Diagnostic> {
     let cnf_options = FormulaSetCnfOptions::new(MERGED_CNF_MINISCOPE_LIMIT, true, problem_type())
         .with_def_limit(FORMULA_DEF_LIMIT_DEFAULT)
         .with_lift_lambdas(false);
@@ -1034,6 +1068,104 @@ fn classify_current_cnf_state(
     let limits = create_default_spec_limits();
     spec_features_add_eval(&mut features, &limits);
     Ok(spec_type_print_string(&features, MERGED_CLASSIFY_MASK))
+}
+
+fn classify_cnf_state_in_child(
+    config: &ClassifyProblemConfig,
+    cnf_timeout: i64,
+    file: &str,
+    stdin_data: Option<&[u8]>,
+) -> Result<String, Diagnostic> {
+    let current_exe = std::env::current_exe().map_err(|error| {
+        io_diagnostic(format!(
+            "Cannot locate classify_problem executable for merged classification: {error}"
+        ))
+    })?;
+    let mut command = Command::new(current_exe);
+    command
+        .arg(INTERNAL_CNF_CHILD_ARG)
+        .arg(io_format_child_arg(config.parse_format))
+        .arg(child_bool_arg(
+            config
+                .free_symbol_properties
+                .intersects(FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT),
+        ))
+        .arg(child_bool_arg(
+            config.free_symbol_properties.contains_all(FP_IS_OBJECT),
+        ))
+        .arg(config.sine.as_deref().unwrap_or(""))
+        .stdout(Stdio::piped());
+
+    if stdin_data.is_some() {
+        command.arg("stdin").arg("-");
+        command.stdin(Stdio::piped());
+    } else {
+        command.arg("file").arg(file);
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        io_diagnostic(format!(
+            "Cannot start classify_problem merged-classification child: {error}"
+        ))
+    })?;
+    if let Some(data) = stdin_data {
+        if let Some(mut child_stdin) = child.stdin.take() {
+            let _write_result = child_stdin.write_all(data);
+        }
+    }
+    let completed = wait_for_cnf_child(&mut child, timeout_duration(cnf_timeout))?;
+    if !completed {
+        return Ok(cnf_timeout_fallback_class());
+    }
+    let mut output = Vec::new();
+    if let Some(mut child_stdout) = child.stdout.take() {
+        if child_stdout.read_to_end(&mut output).is_err() {
+            return Ok(cnf_timeout_fallback_class());
+        }
+    }
+    Ok(class_from_child_output(&output))
+}
+
+fn wait_for_cnf_child(child: &mut Child, timeout: Duration) -> Result<bool, Diagnostic> {
+    let start = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| {
+                io_diagnostic(format!("Cannot wait for classify_problem child: {error}"))
+            })?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        if start.elapsed() >= timeout {
+            let _kill_result = child.kill();
+            let _wait_result = child.wait();
+            return Ok(false);
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
+fn timeout_duration(cnf_timeout: i64) -> Duration {
+    Duration::from_secs(u64::try_from(cnf_timeout).unwrap_or(u64::MAX))
+}
+
+fn class_from_child_output(output: &[u8]) -> String {
+    if output.len() < SPEC_STRING_MEM {
+        return cnf_timeout_fallback_class();
+    }
+    let class = &output[..SPEC_STRING_MEM];
+    let end = class
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(SPEC_STRING_MEM - 1);
+    String::from_utf8_lossy(&class[..end]).into_owned()
+}
+
+fn cnf_timeout_fallback_class() -> String {
+    "-".repeat(SPEC_STRING_MEM - 1)
 }
 
 fn preprocess_real_input_clauses(
@@ -1267,6 +1399,24 @@ fn parse_real_input_file(
     state: &mut ProofState,
 ) -> Result<(), Diagnostic> {
     let mut scanner = real_input_scanner(file, stdin)?;
+    parse_real_input_scanner(config, &mut scanner, state)
+}
+
+fn parse_real_input_content(
+    config: &ClassifyProblemConfig,
+    source_name: &str,
+    data: Vec<u8>,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let mut scanner = Scanner::from_file_content(source_name, data, false)?;
+    parse_real_input_scanner(config, &mut scanner, state)
+}
+
+fn parse_real_input_scanner(
+    config: &ClassifyProblemConfig,
+    scanner: &mut Scanner,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
     let (terms, f_axioms, watchlist) = state.terms_f_axioms_watchlist_mut();
     let watchlist = watchlist.ok_or_else(|| {
         Diagnostic::new(
@@ -1275,7 +1425,7 @@ fn parse_real_input_file(
         )
     })?;
     let parsed_file = parse_clause_scanner_into_formula_set_with_options(
-        &mut scanner,
+        scanner,
         config.parse_format,
         FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
         ClauseParseOptions::default(),
@@ -1285,6 +1435,146 @@ fn parse_real_input_file(
     )?;
     state.add_raw_formula_features(parsed_file.raw_formula_features);
     Ok(())
+}
+
+fn is_cnf_child_invocation(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == INTERNAL_CNF_CHILD_ARG)
+}
+
+struct CnfChildConfig {
+    parse_format: IoFormat,
+    free_symbol_properties: FunctionProperties,
+    sine: Option<String>,
+    input: CnfChildInput,
+}
+
+enum CnfChildInput {
+    File(String),
+    Stdin,
+}
+
+fn run_cnf_child_from_args(
+    args: &[String],
+    stdin: &mut impl Read,
+    stdout: &mut impl Write,
+) -> Result<u8, Diagnostic> {
+    let config = parse_cnf_child_args(args)?;
+    let class = execute_cnf_child(&config, stdin)?;
+    write_all(stdout, class.as_bytes())?;
+    write_all(stdout, &[0])?;
+    Ok(0)
+}
+
+fn parse_cnf_child_args(args: &[String]) -> Result<CnfChildConfig, Diagnostic> {
+    if args.len() != 6 {
+        return Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Usage: {PROGRAM_NAME} {INTERNAL_CNF_CHILD_ARG} <format> <free-numbers> <free-objects> <sine> <file|stdin> <source>"
+            ),
+        ));
+    }
+    let parse_format = parse_child_io_format(&args[0])?;
+    let free_numbers = parse_child_bool(&args[1], "free-numbers")?;
+    let free_objects = parse_child_bool(&args[2], "free-objects")?;
+    let sine = if args[3].is_empty() {
+        None
+    } else {
+        Some(args[3].clone())
+    };
+    let mut free_symbol_properties = FP_IGNORE_PROPS;
+    if free_numbers {
+        free_symbol_properties |= FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT;
+    }
+    if free_objects {
+        free_symbol_properties |= FP_IS_OBJECT;
+    }
+    let input = match args[4].as_str() {
+        "file" => CnfChildInput::File(args[5].clone()),
+        "stdin" => CnfChildInput::Stdin,
+        other => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                format!("Invalid classify_problem CNF child input kind '{other}'"),
+            ));
+        }
+    };
+
+    Ok(CnfChildConfig {
+        parse_format,
+        free_symbol_properties,
+        sine,
+        input,
+    })
+}
+
+fn execute_cnf_child(config: &CnfChildConfig, stdin: &mut impl Read) -> Result<String, Diagnostic> {
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let parent_config = ClassifyProblemConfig {
+        parse_format: config.parse_format,
+        sine: config.sine.clone(),
+        free_symbol_properties: config.free_symbol_properties,
+        ..ClassifyProblemConfig::default()
+    };
+    match &config.input {
+        CnfChildInput::File(file) => {
+            parse_real_input_file(&parent_config, file, stdin, &mut state)?;
+        }
+        CnfChildInput::Stdin => {
+            parse_real_input_file(&parent_config, "-", stdin, &mut state)?;
+        }
+    }
+    apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
+    classify_current_cnf_state_inline(&mut state)
+}
+
+fn parse_child_bool(arg: &str, name: &str) -> Result<bool, Diagnostic> {
+    match arg {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!("Invalid classify_problem CNF child {name} flag '{other}'"),
+        )),
+    }
+}
+
+fn child_bool_arg(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+fn io_format_child_arg(format: IoFormat) -> &'static str {
+    match format {
+        IoFormat::Lop => "lop",
+        IoFormat::Tptp => "tptp",
+        IoFormat::Tstp => "tstp",
+        IoFormat::Auto => "auto",
+    }
+}
+
+fn parse_child_io_format(arg: &str) -> Result<IoFormat, Diagnostic> {
+    match arg {
+        "lop" => Ok(IoFormat::Lop),
+        "tptp" => Ok(IoFormat::Tptp),
+        "tstp" => Ok(IoFormat::Tstp),
+        "auto" => Ok(IoFormat::Auto),
+        other => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!("Invalid classify_problem CNF child input format '{other}'"),
+        )),
+    }
+}
+
+fn current_executable_can_run_cnf_child() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_stem().map(std::borrow::ToOwned::to_owned))
+        .and_then(|stem| stem.to_str().map(str::to_owned))
+        .is_some_and(|stem| stem == PROGRAM_NAME)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1320,10 +1610,7 @@ fn parse_raw_feature_line(scanner: &mut Scanner) -> Result<ParsedRawFeatureLine,
 
 fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagnostic> {
     if name == "-" {
-        let mut data = Vec::new();
-        stdin
-            .read_to_end(&mut data)
-            .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
+        let data = read_stdin_data(stdin)?;
         Scanner::from_file_content("-", data, true)
     } else {
         Scanner::from_file(Path::new(name), true).map_err(classify_scanner_open_diagnostic)
@@ -1332,14 +1619,19 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
 
 fn real_input_scanner(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagnostic> {
     if name == "-" {
-        let mut data = Vec::new();
-        stdin
-            .read_to_end(&mut data)
-            .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
+        let data = read_stdin_data(stdin)?;
         Scanner::from_file_content("-", data, false)
     } else {
         Scanner::from_file(Path::new(name), false).map_err(classify_scanner_open_diagnostic)
     }
+}
+
+fn read_stdin_data(stdin: &mut impl Read) -> Result<Vec<u8>, Diagnostic> {
+    let mut data = Vec::new();
+    stdin
+        .read_to_end(&mut data)
+        .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
+    Ok(data)
 }
 
 #[must_use]
@@ -2135,6 +2427,44 @@ mod tests {
         assert_eq!(classes.len(), 36);
         assert!(classes.starts_with('F'));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn internal_cnf_child_writes_c_width_class_buffer() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) = run_with_stdin(
+            &[
+                PROGRAM_NAME,
+                super::INTERNAL_CNF_CHILD_ARG,
+                "tstp",
+                "0",
+                "0",
+                "",
+                "stdin",
+                "-",
+            ],
+            input,
+        )
+        .expect("child run succeeds");
+
+        assert_eq!(status, 0);
+        assert_eq!(stdout.len(), super::SPEC_STRING_MEM);
+        assert_eq!(stdout.as_bytes().last(), Some(&0));
+        assert_eq!(
+            super::class_from_child_output(stdout.as_bytes()).len(),
+            super::SPEC_STRING_MEM - 1
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn short_cnf_child_output_uses_hyphen_fallback_class() {
+        assert_eq!(
+            super::class_from_child_output(b"short"),
+            "-".repeat(super::SPEC_STRING_MEM - 1)
+        );
     }
 
     #[test]

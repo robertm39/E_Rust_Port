@@ -268,5 +268,6 @@ Source files reviewed: `HEURISTICS/che_clausesetfeatures.h`, `HEURISTICS/che_cla
 ### Change Later
 
 - A cleaner API should split "recognize for classification" from "recognize and register for choice instantiation" explicitly instead of overloading a nullable map argument.
+- `ClausifyAndClassifyWTimeout` combines formula preprocessing, CNF conversion, feature extraction, POSIX `fork()`/`pipe()`, `RLIMIT_CPU`, fixed-width class-buffer I/O, and child-status collection in one helper. Rust now exposes the executable timeout as an explicit hidden child-process boundary; a later cleaned classifier should keep classification pure and let callers choose the isolation and timeout policy deliberately.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
