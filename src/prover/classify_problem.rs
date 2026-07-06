@@ -1,5 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{problem_type, reset_problem_type};
+use crate::basics::simple_stuff::{reset_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_archive_copy;
@@ -10,13 +10,14 @@ use crate::heuristics::clausesetfeatures::{
     clause_set_count_eqn_literals, clause_set_count_range_restricted, clause_set_count_singletons,
     clause_set_count_variables, clause_set_max_literal_number, create_default_spec_limits,
     spec_features_add_eval, spec_features_compute_with_choice_recognition, spec_features_parse,
-    spec_features_print_string, spec_type_print_string, SpecFeatureCell, SpecFeatureClass,
-    SpecLimits, SPEC_STRING_MEM,
+    spec_features_print_string, spec_type_print_string, spec_type_string_for_problem,
+    SpecFeatureCell, SpecFeatureClass, SpecLimits, SPEC_STRING_MEM,
 };
 use crate::heuristics::new_autoschedule::DEFAULT_MASK as MERGED_CLASSIFY_MASK;
 use crate::heuristics::rawspecfeatures::{
-    raw_spec_features_classify, raw_spec_features_compute, raw_spec_features_format,
-    raw_spec_features_parse, RawSpecFeatureCell, RAW_DEFAULT_MASK,
+    raw_spec_features_classify, raw_spec_features_classify_for_problem_type,
+    raw_spec_features_compute, raw_spec_features_format, raw_spec_features_parse,
+    RawSpecFeatureCell, RAW_DEFAULT_MASK,
 };
 use crate::heuristics::specsigfeatures::{
     clause_set_collect_sig_features, spec_sig_feature_format, SpecSigFeatureCell,
@@ -948,18 +949,20 @@ fn process_merged_real_input_files(
         } else {
             None
         };
-        if let Some(data) = &stdin_data {
-            parse_real_input_content(config, "-", data.clone(), &mut state)?;
+        let parsed_problem_type = if let Some(data) = &stdin_data {
+            parse_real_input_content(config, "-", data.clone(), &mut state)?
         } else {
-            parse_real_input_file(config, file, stdin, &mut state)?;
-        }
+            parse_real_input_file(config, file, stdin, &mut state)?
+        };
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
-        let raw_features = raw_features_for_standard_classification(config, &state);
+        let raw_features =
+            raw_features_for_standard_classification(config, &state, parsed_problem_type);
         let cnf_class = classify_current_cnf_state(
             cnf_timeout,
             config,
             file,
             stdin_data.as_deref(),
+            parsed_problem_type,
             &mut state,
         )?;
         write_all(output, file.as_bytes())?;
@@ -978,10 +981,11 @@ fn process_standard_real_input_files(
 ) -> Result<(), Diagnostic> {
     for file in &config.files {
         let mut state = proof_state_alloc(config.free_symbol_properties)?;
-        parse_real_input_file(config, file, stdin, &mut state)?;
+        let parsed_problem_type = parse_real_input_file(config, file, stdin, &mut state)?;
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
-        let raw_features = raw_features_for_standard_classification(config, &state);
-        preprocess_real_input_clauses(config, &mut state)?;
+        let raw_features =
+            raw_features_for_standard_classification(config, &state, parsed_problem_type);
+        preprocess_real_input_clauses(config, &mut state, parsed_problem_type)?;
         if config.specsig_classify {
             write_specs_sig_real_input(file, output, &mut state)?;
         } else {
@@ -991,6 +995,7 @@ fn process_standard_real_input_files(
                 output,
                 &mut state,
                 &raw_features,
+                parsed_problem_type,
             )?;
         }
     }
@@ -1004,11 +1009,16 @@ fn process_raw_real_input_files(
 ) -> Result<(), Diagnostic> {
     for file in &config.files {
         let mut state = proof_state_alloc(config.free_symbol_properties)?;
-        parse_real_input_file(config, file, stdin, &mut state)?;
+        let parsed_problem_type = parse_real_input_file(config, file, stdin, &mut state)?;
         apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
         let mut features = RawSpecFeatureCell::default();
         raw_spec_features_compute(&mut features, &state);
-        raw_spec_features_classify(&mut features, &config.limits, Some(&config.raw_mask));
+        raw_spec_features_classify_for_problem_type(
+            &mut features,
+            &config.limits,
+            Some(&config.raw_mask),
+            parsed_problem_type,
+        );
         write_all(output, file.as_bytes())?;
         write_all(output, b" : ")?;
         write_all(output, raw_spec_features_format(&features).as_bytes())?;
@@ -1020,10 +1030,16 @@ fn process_raw_real_input_files(
 fn raw_features_for_standard_classification(
     config: &ClassifyProblemConfig,
     state: &ProofState,
+    problem_type: ProblemType,
 ) -> RawSpecFeatureCell {
     let mut features = RawSpecFeatureCell::default();
     raw_spec_features_compute(&mut features, state);
-    raw_spec_features_classify(&mut features, &config.limits, Some(RAW_DEFAULT_MASK));
+    raw_spec_features_classify_for_problem_type(
+        &mut features,
+        &config.limits,
+        Some(RAW_DEFAULT_MASK),
+        problem_type,
+    );
     features
 }
 
@@ -1032,6 +1048,7 @@ fn classify_current_cnf_state(
     config: &ClassifyProblemConfig,
     file: &str,
     stdin_data: Option<&[u8]>,
+    problem_type: ProblemType,
     state: &mut ProofState,
 ) -> Result<String, Diagnostic> {
     if cnf_timeout <= 0 {
@@ -1042,11 +1059,14 @@ fn classify_current_cnf_state(
         return classify_cnf_state_in_child(config, cnf_timeout, file, stdin_data);
     }
 
-    classify_current_cnf_state_inline(state)
+    classify_current_cnf_state_inline(state, problem_type)
 }
 
-fn classify_current_cnf_state_inline(state: &mut ProofState) -> Result<String, Diagnostic> {
-    let cnf_options = FormulaSetCnfOptions::new(MERGED_CNF_MINISCOPE_LIMIT, true, problem_type())
+fn classify_current_cnf_state_inline(
+    state: &mut ProofState,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    let cnf_options = FormulaSetCnfOptions::new(MERGED_CNF_MINISCOPE_LIMIT, true, problem_type)
         .with_def_limit(FORMULA_DEF_LIMIT_DEFAULT)
         .with_lift_lambdas(false);
     clausify_real_input_formula_axioms_with_options(state, cnf_options)?;
@@ -1064,7 +1084,11 @@ fn classify_current_cnf_state_inline(state: &mut ProofState) -> Result<String, D
     }
     let limits = create_default_spec_limits();
     spec_features_add_eval(&mut features, &limits);
-    Ok(spec_type_print_string(&features, MERGED_CLASSIFY_MASK))
+    Ok(spec_type_string_for_problem(
+        &features,
+        MERGED_CLASSIFY_MASK,
+        problem_type,
+    ))
 }
 
 fn classify_cnf_state_in_child(
@@ -1168,8 +1192,9 @@ fn cnf_timeout_fallback_class() -> String {
 fn preprocess_real_input_clauses(
     config: &ClassifyProblemConfig,
     state: &mut ProofState,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
-    clausify_real_input_formula_axioms(config, state)?;
+    clausify_real_input_formula_axioms(config, state, problem_type)?;
 
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     {
@@ -1203,8 +1228,9 @@ fn preprocess_real_input_clauses(
 fn clausify_real_input_formula_axioms(
     config: &ClassifyProblemConfig,
     state: &mut ProofState,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
-    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type())
+    let options = FormulaSetCnfOptions::new(config.miniscope_limit, true, problem_type)
         .with_def_limit(config.formula_def_limit);
     clausify_real_input_formula_axioms_with_options(state, options)
 }
@@ -1226,6 +1252,7 @@ fn write_standard_real_input_classification(
     output: &mut impl Write,
     state: &mut ProofState,
     raw_features: &RawSpecFeatureCell,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
     let mut features = SpecFeatureCell::default();
     {
@@ -1253,7 +1280,7 @@ fn write_standard_real_input_classification(
         write_all(output, b" : ")?;
         write_all(
             output,
-            spec_type_print_string(&features, &config.mask).as_bytes(),
+            spec_type_string_for_problem(&features, &config.mask, problem_type).as_bytes(),
         )?;
         write_all(output, b"\n")
     }
@@ -1394,7 +1421,7 @@ fn parse_real_input_file(
     file: &str,
     stdin: &mut impl Read,
     state: &mut ProofState,
-) -> Result<(), Diagnostic> {
+) -> Result<ProblemType, Diagnostic> {
     let mut scanner = real_input_scanner(file, stdin)?;
     parse_real_input_scanner(config, &mut scanner, state)
 }
@@ -1404,7 +1431,7 @@ fn parse_real_input_content(
     source_name: &str,
     data: Vec<u8>,
     state: &mut ProofState,
-) -> Result<(), Diagnostic> {
+) -> Result<ProblemType, Diagnostic> {
     let mut scanner = Scanner::from_file_content(source_name, data, false)?;
     parse_real_input_scanner(config, &mut scanner, state)
 }
@@ -1413,7 +1440,7 @@ fn parse_real_input_scanner(
     config: &ClassifyProblemConfig,
     scanner: &mut Scanner,
     state: &mut ProofState,
-) -> Result<(), Diagnostic> {
+) -> Result<ProblemType, Diagnostic> {
     let (terms, f_axioms, watchlist) = state.terms_f_axioms_watchlist_mut();
     let watchlist = watchlist.ok_or_else(|| {
         Diagnostic::new(
@@ -1431,7 +1458,7 @@ fn parse_real_input_scanner(
         watchlist,
     )?;
     state.add_raw_formula_features(parsed_file.raw_formula_features);
-    Ok(())
+    Ok(parsed_file.problem_type)
 }
 
 fn is_cnf_child_invocation(argv: &[String]) -> bool {
@@ -1513,16 +1540,14 @@ fn execute_cnf_child(config: &CnfChildConfig, stdin: &mut impl Read) -> Result<S
         free_symbol_properties: config.free_symbol_properties,
         ..ClassifyProblemConfig::default()
     };
-    match &config.input {
+    let parsed_problem_type = match &config.input {
         CnfChildInput::File(file) => {
-            parse_real_input_file(&parent_config, file, stdin, &mut state)?;
+            parse_real_input_file(&parent_config, file, stdin, &mut state)?
         }
-        CnfChildInput::Stdin => {
-            parse_real_input_file(&parent_config, "-", stdin, &mut state)?;
-        }
-    }
+        CnfChildInput::Stdin => parse_real_input_file(&parent_config, "-", stdin, &mut state)?,
+    };
     apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
-    classify_current_cnf_state_inline(&mut state)
+    classify_current_cnf_state_inline(&mut state, parsed_problem_type)
 }
 
 fn parse_child_bool(arg: &str, name: &str) -> Result<bool, Diagnostic> {
@@ -1776,12 +1801,13 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clausify_real_input_formula_axioms, parse_feature_line, parse_raw_feature_line,
-        parse_real_input_file, process_options, run, ClassifyProblemConfig, RunCommand,
+        classify_current_cnf_state_inline, clausify_real_input_formula_axioms, parse_feature_line,
+        parse_raw_feature_line, parse_real_input_file, process_options,
+        raw_features_for_standard_classification, run, ClassifyProblemConfig, RunCommand,
         OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
-    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::verbose_level;
     use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::clausefunc::tformula_lit_alloc;
@@ -2279,8 +2305,12 @@ mod tests {
         wrapped.set_properties(CP_TYPE_AXIOM);
         state.f_axioms_mut().insert(wrapped);
 
-        clausify_real_input_formula_axioms(&ClassifyProblemConfig::default(), &mut state)
-            .expect("formula clausification succeeds");
+        clausify_real_input_formula_axioms(
+            &ClassifyProblemConfig::default(),
+            &mut state,
+            ProblemType::FirstOrder,
+        )
+        .expect("formula clausification succeeds");
 
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
@@ -2300,9 +2330,10 @@ mod tests {
             proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
         let mut stdin: &[u8] = b"fof(classify_owner_ax, axiom, (p(a) | q(a))).\n";
 
-        parse_real_input_file(&config, "-", &mut stdin, &mut state)
+        let parsed_problem_type = parse_real_input_file(&config, "-", &mut stdin, &mut state)
             .expect("real-input parsing succeeds");
 
+        assert_eq!(parsed_problem_type, ProblemType::FirstOrder);
         assert_eq!(state.axioms().members(), 0);
         assert_eq!(state.f_axioms().cardinality(), 1);
         let formula = state
@@ -2314,7 +2345,7 @@ mod tests {
         assert!(formula.query_prop(CP_INPUT_FORMULA));
         assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
 
-        clausify_real_input_formula_axioms(&config, &mut state)
+        clausify_real_input_formula_axioms(&config, &mut state, parsed_problem_type)
             .expect("formula-owner CNF succeeds");
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
@@ -2348,9 +2379,11 @@ mod tests {
             proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
         let mut stdin: &[u8] = b"";
 
-        parse_real_input_file(&config, &config.files[0], &mut stdin, &mut state)
-            .expect("selected include parsing succeeds");
+        let parsed_problem_type =
+            parse_real_input_file(&config, &config.files[0], &mut stdin, &mut state)
+                .expect("selected include parsing succeeds");
 
+        assert_eq!(parsed_problem_type, ProblemType::FirstOrder);
         assert_eq!(state.axioms().members(), 0);
         assert_eq!(state.f_axioms().cardinality(), 1);
         let formula = state
@@ -2360,7 +2393,7 @@ mod tests {
             .expect("selected formula owner exists");
         assert_eq!(formula.get_id(true), "selected");
 
-        clausify_real_input_formula_axioms(&config, &mut state)
+        clausify_real_input_formula_axioms(&config, &mut state, parsed_problem_type)
             .expect("selected included formula CNF succeeds");
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
@@ -2419,8 +2452,40 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(stdout.starts_with("- : ("));
+        assert!(stdout.contains(" : H"));
         assert!(stdout.ends_with('\n'));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn real_input_classification_uses_returned_thf_problem_type_after_global_reset() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(p_type, type, p: person > $o).\n\
+            thf(fact, axiom, p @ a).\n";
+
+        let parsed_problem_type = parse_real_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("THF real-input parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::HigherOrder);
+
+        reset_problem_type();
+        set_problem_type(ProblemType::FirstOrder).expect("test global can be reset to first-order");
+
+        let raw_features =
+            raw_features_for_standard_classification(&config, &state, parsed_problem_type);
+        assert!(raw_features.class.starts_with('H'));
+
+        let cnf_class = classify_current_cnf_state_inline(&mut state, parsed_problem_type)
+            .expect("THF CNF class uses returned problem type");
+        assert!(cnf_class.starts_with('H'));
     }
 
     #[test]
