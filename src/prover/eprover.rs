@@ -13751,6 +13751,11 @@ fn parse_simple_fof_tstp_application_formula(
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(simple_fof_unsupported_error(scanner));
     }
+    let formula = if formula.has_lambda_subterm() || formula.has_db_subterm() {
+        lambda_to_forall(bank, &formula)?
+    } else {
+        formula
+    };
     if formula.has_lambda_subterm() || formula.has_db_subterm() {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -18636,6 +18641,41 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_lambda_equality_formula() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff"] {
+            let path = temp_path(&format!("syntax-only-{formula_kind}-lambda-equality"));
+            std::fs::write(
+                &path,
+                format!(
+                    "tff(p_type, type, p: $i > $o).\n\
+                     tff(q_type, type, q: $i > $o).\n\
+                     {formula_kind}(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n"
+                ),
+            )
+            .unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                ["eprover", "--syntax-only", path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                "\n% Parsing successful!\n% SZS status Unknown\n"
+            );
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 
     #[test]
@@ -27854,6 +27894,38 @@ input_clause(c2,axiom,[++q(X)]).
              tff(f_type, type, f: $i > $i).\n\
              fof(fact, axiom, f @ a = b).\n\
              fof(goal, conjecture, ((^[X: $i]: f @ X) @ a) = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_fof_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("fof-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n\
+             fof(p_fact, axiom, p @ a).\n\
+             fof(goal, conjecture, q @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
