@@ -3,7 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
-use crate::basics::simple_stuff::{problem_type, reset_problem_type, ProblemType};
+use crate::basics::simple_stuff::{reset_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_remove_superfluous_literals;
@@ -610,14 +610,15 @@ fn execute_eground(
     let mut bank = eground_term_bank()?;
     let mut clauses = ClauseSet::new();
 
-    let output_format = parse_input_files(config, stdin, &mut bank, &mut clauses)?;
+    let parsed_input = parse_input_files(config, stdin, &mut bank, &mut clauses)?;
     let preparation = prepare_clauses_for_grounding(config, stderr, &mut bank, &mut clauses)?;
     let groundset = match create_groundset(
         config,
         &mut output,
         &mut bank,
         &clauses,
-        output_format,
+        parsed_input.output_format,
+        parsed_input.problem_type,
         preparation.selected_symbol,
     )? {
         GroundingRunResult::Grounded(groundset) => groundset,
@@ -637,7 +638,8 @@ fn execute_eground(
         config,
         &mut output,
         &mut bank,
-        output_format,
+        parsed_input.output_format,
+        parsed_input.problem_type,
         &groundset,
         preparation,
     )?;
@@ -668,16 +670,28 @@ enum GroundingRunResult {
     EstimateLimitExceeded,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParsedEgroundInput {
+    output_format: IoFormat,
+    problem_type: ProblemType,
+}
+
 fn parse_input_files(
     config: &EgroundConfig,
     stdin: &mut impl Read,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
-) -> Result<IoFormat, Diagnostic> {
+) -> Result<ParsedEgroundInput, Diagnostic> {
     let mut formulas = FormulaSet::new();
-    let output_format = parse_input_files_to_formula_set(config, stdin, bank, &mut formulas)?;
-    clausify_input_formulas(config, bank, &mut formulas, clauses)?;
-    Ok(output_format)
+    let parsed_input = parse_input_files_to_formula_set(config, stdin, bank, &mut formulas)?;
+    clausify_input_formulas(
+        config,
+        bank,
+        &mut formulas,
+        clauses,
+        parsed_input.problem_type,
+    )?;
+    Ok(parsed_input)
 }
 
 fn parse_input_files_to_formula_set(
@@ -685,9 +699,10 @@ fn parse_input_files_to_formula_set(
     stdin: &mut impl Read,
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
-) -> Result<IoFormat, Diagnostic> {
+) -> Result<ParsedEgroundInput, Diagnostic> {
     let mut ignored_watchlist = ClauseSet::new();
     let mut output_format = config.output_format;
+    let mut parsed_problem_type = ProblemType::FirstOrder;
     let clause_parse_options = clause_parse_options(config);
 
     for file in &config.files {
@@ -704,8 +719,13 @@ fn parse_input_files_to_formula_set(
         if config.parse_format == IoFormat::Auto && parsed.detected_format == IoFormat::Tstp {
             output_format = IoFormat::Tstp;
         }
+        parsed_problem_type =
+            combine_eground_problem_types(parsed_problem_type, parsed.problem_type);
     }
-    Ok(output_format)
+    Ok(ParsedEgroundInput {
+        output_format,
+        problem_type: eground_output_problem_type(parsed_problem_type),
+    })
 }
 
 fn clausify_input_formulas(
@@ -713,14 +733,30 @@ fn clausify_input_formulas(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     clauses: &mut ClauseSet,
+    problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
     let mut archive = FormulaSet::new();
     let _preprocessed = formulas.preproc_conjectures(bank, false, false)?;
     let fresh_vars = VarBank::new(bank.signature().type_bank());
-    let options = FormulaSetCnfOptions::new(EGROUND_CNF_MINISCOPE_LIMIT, true, problem_type())
+    let options = FormulaSetCnfOptions::new(EGROUND_CNF_MINISCOPE_LIMIT, true, problem_type)
         .with_def_limit(config.formula_def_limit);
     let _cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
     Ok(())
+}
+
+const fn eground_output_problem_type(problem_type: ProblemType) -> ProblemType {
+    match problem_type {
+        ProblemType::NotInitialized => ProblemType::FirstOrder,
+        problem_type => problem_type,
+    }
+}
+
+const fn combine_eground_problem_types(left: ProblemType, right: ProblemType) -> ProblemType {
+    if matches!(left, ProblemType::HigherOrder) || matches!(right, ProblemType::HigherOrder) {
+        ProblemType::HigherOrder
+    } else {
+        ProblemType::FirstOrder
+    }
 }
 
 fn clause_parse_options(config: &EgroundConfig) -> ClauseParseOptions {
@@ -785,13 +821,14 @@ fn create_groundset(
     bank: &mut TermBank,
     clauses: &ClauseSet,
     output_format: IoFormat,
+    problem_type: ProblemType,
     selected_symbol: FunCode,
 ) -> Result<GroundingRunResult, Diagnostic> {
     let mut groundset = GroundSet::new();
     let print_options = GroundInstancePrintOptions::new(
         config.output_level,
         proof_doc_output_format(output_format),
-        ProblemType::FirstOrder,
+        problem_type,
         config.unit_subsumption,
         config.unit_resolution,
         config.tautology_detection,
@@ -845,6 +882,7 @@ fn write_eground_result(
     output: &mut EgroundOutput<'_, impl Write>,
     bank: &mut TermBank,
     output_format: IoFormat,
+    problem_type: ProblemType,
     groundset: &GroundSet,
     preparation: GroundingPreparation,
 ) -> Result<(), Diagnostic> {
@@ -861,7 +899,7 @@ fn write_eground_result(
                     .print_format_string(
                         bank,
                         proof_doc_output_format(output_format),
-                        ProblemType::FirstOrder,
+                        problem_type,
                     )?
                     .as_bytes(),
             )?;
@@ -1153,6 +1191,7 @@ mod tests {
         DEFAULT_COMCHAR_RAW, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::ClauseParseOptions;
     use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::clausesets::ClauseSet;
@@ -1315,11 +1354,12 @@ mod tests {
         };
         let mut stdin: &[u8] = b"fof(ax, axiom, (p(a) | q(a))).\n";
 
-        let output_format =
+        let parsed_input =
             parse_input_files_to_formula_set(&config, &mut stdin, &mut bank, &mut formulas)
                 .expect("formula-owner parsing succeeds");
 
-        assert_eq!(output_format, IoFormat::Lop);
+        assert_eq!(parsed_input.output_format, IoFormat::Lop);
+        assert_eq!(parsed_input.problem_type, ProblemType::FirstOrder);
         assert_eq!(formulas.cardinality(), 1);
         let formula = formulas.iter().next().expect("formula owner exists");
         assert!(!formula.is_clause());
@@ -1327,8 +1367,14 @@ mod tests {
         assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
 
         let mut clauses = ClauseSet::new();
-        clausify_input_formulas(&config, &mut bank, &mut formulas, &mut clauses)
-            .expect("formula-owner CNF succeeds");
+        clausify_input_formulas(
+            &config,
+            &mut bank,
+            &mut formulas,
+            &mut clauses,
+            parsed_input.problem_type,
+        )
+        .expect("formula-owner CNF succeeds");
         assert_eq!(formulas.cardinality(), 0);
         assert_eq!(clauses.members(), 1);
     }
@@ -1357,6 +1403,35 @@ mod tests {
     }
 
     #[test]
+    fn run_tstp_thf_output_uses_higher_order_wrappers() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(p_type, type, p: person > $o).\n\
+            thf(fact, axiom, p @ a).\n";
+
+        let status = run(
+            [PROGRAM_NAME, "--tstp-format", "--output-level=2"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("THF input grounds and prints");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.contains("% thf("));
+        assert!(output.contains("\nthf("));
+        assert!(!output.contains("tcf("));
+        assert!(output.contains(&format!(
+            "{DEFAULT_COMCHAR_RAW} Full and complete proof state written!"
+        )));
+    }
+
+    #[test]
     fn tstp_include_selector_feeds_formula_owner_cnf_path() {
         let _guard = global_state_lock();
         let include_path = temp_path("eground-include-selected-inc");
@@ -1382,16 +1457,24 @@ mod tests {
         };
         let mut stdin: &[u8] = b"";
 
-        parse_input_files_to_formula_set(&config, &mut stdin, &mut bank, &mut formulas)
-            .expect("selected include parsing succeeds");
+        let parsed_input =
+            parse_input_files_to_formula_set(&config, &mut stdin, &mut bank, &mut formulas)
+                .expect("selected include parsing succeeds");
 
+        assert_eq!(parsed_input.problem_type, ProblemType::FirstOrder);
         assert_eq!(formulas.cardinality(), 1);
         let formula = formulas.iter().next().expect("selected formula is kept");
         assert_eq!(formula.get_id(true), "selected");
 
         let mut clauses = ClauseSet::new();
-        clausify_input_formulas(&config, &mut bank, &mut formulas, &mut clauses)
-            .expect("selected included formula CNF succeeds");
+        clausify_input_formulas(
+            &config,
+            &mut bank,
+            &mut formulas,
+            &mut clauses,
+            parsed_input.problem_type,
+        )
+        .expect("selected included formula CNF succeeds");
         assert_eq!(formulas.cardinality(), 0);
         assert_eq!(clauses.members(), 1);
 
