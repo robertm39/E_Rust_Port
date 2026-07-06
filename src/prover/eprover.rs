@@ -7392,7 +7392,7 @@ fn clause_proof_doc_session(
     proof_doc_session(
         config,
         start_ident,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
+        proof_output_problem_type(problem_type()),
     )
 }
 
@@ -14181,29 +14181,30 @@ mod tests {
     use super::{
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
         apply_proof_state_sine_silent, apply_relevance_pruning, auto_memory_limit_from_system_mb,
-        bundled_picosat_library_for_executable, core_limit_failure_messages, cpu_rlimit_to_apply,
-        filter_schedule_worker_original_args, fv_index_params_from_config,
-        heuristic_parms_from_config, open_configured_output, order_parms_from_config,
-        parse_app_encode_file, parse_clause_scanner_into_sets_with_options,
-        parse_input_files_into_formula_owners, parse_schedule_worker_args,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, proof_object_list_display_items,
-        proof_search_global_indices, proof_success_object_roots, proof_success_status,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, PdtConstraintRunGuard,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
-        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        bundled_picosat_library_for_executable, clause_proof_doc_session,
+        core_limit_failure_messages, cpu_rlimit_to_apply, filter_schedule_worker_original_args,
+        fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
+        order_parms_from_config, parse_app_encode_file,
+        parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
+        parse_schedule_worker_args, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, proof_object_list_display_clauses,
+        proof_object_list_display_items, proof_search_global_indices, proof_success_object_roots,
+        proof_success_status, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
+        ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
+        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
+        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -14225,6 +14226,7 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::clauses::freqvectors::FvIndexType;
+    use crate::clauses::inferencedoc::{ClauseCreationInference, ClauseCreationParents};
     use crate::clauses::proofstate::{
         proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge, ProofObjectGraphMixedEdge,
         ProofObjectGraphNode,
@@ -24555,6 +24557,39 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn clause_proof_doc_session_uses_current_higher_order_problem_type() {
+        let _guard = global_state_lock();
+        let _problem_type = ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut clause = Clause::empty();
+        let config = EProverConfig {
+            output_level: 2,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut session = clause_proof_doc_session(&config, 1).unwrap();
+        let mut printed = String::new();
+
+        session
+            .doc_clause_creation(
+                &mut printed,
+                &bank,
+                &mut clause,
+                ClauseCreationInference::Initial,
+                ClauseCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert!(
+            printed.starts_with("thf(c_0_1, plain, ($false), "),
+            "{printed}"
+        );
+        assert!(!printed.starts_with("cnf("), "{printed}");
     }
 
     #[test]
