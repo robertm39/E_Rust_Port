@@ -1080,8 +1080,9 @@ fn find_indexed_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    let clauses_by_id = first_demodulator_clause_by_id(demodulators);
     for &candidate in candidate_sides {
-        let Some(clause) = demodulators.find_by_id(candidate.clause_id) else {
+        let Some(&clause) = clauses_by_id.get(&candidate.clause_id) else {
             continue;
         };
         let Some(match_) = try_demodulator_clause_side(
@@ -1100,6 +1101,14 @@ fn find_indexed_demodulator<'a>(
         return Ok(Some(match_));
     }
     Ok(None)
+}
+
+fn first_demodulator_clause_by_id(demodulators: &ClauseSet) -> BTreeMap<i64, &Clause> {
+    let mut clauses_by_id = BTreeMap::new();
+    for clause in demodulators.iter().filter(|clause| clause.is_demodulator()) {
+        clauses_by_id.entry(clause.ident()).or_insert(clause);
+    }
+    clauses_by_id
 }
 
 fn find_set_order_demodulator<'a>(

@@ -10,6 +10,7 @@ use crate::clauses::subsumption::eqn_topsubsumes_termpair;
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termtypes::Term;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -248,8 +249,9 @@ fn find_indexed_top_simplifying_unit<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
+    let clauses_by_id = first_clause_by_id(units);
     candidate_sides.iter().find_map(|&candidate| {
-        let clause = units.find_by_id(candidate.clause_id)?;
+        let clause = *clauses_by_id.get(&candidate.clause_id)?;
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
             return None;
@@ -322,11 +324,9 @@ fn find_indexed_top_simplifying_unit_index(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<usize> {
+    let clauses_by_id = first_clause_index_by_id(units);
     candidate_sides.iter().find_map(|&candidate| {
-        let (index, clause) = units
-            .iter()
-            .enumerate()
-            .find(|(_, clause)| clause.ident() == candidate.clause_id)?;
+        let &(index, clause) = clauses_by_id.get(&candidate.clause_id)?;
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
             return None;
@@ -369,6 +369,24 @@ fn find_top_simplifying_unit_index(
     };
     units.record_demod_index_search_exit();
     result
+}
+
+fn first_clause_by_id(units: &ClauseSet) -> BTreeMap<i64, &Clause> {
+    let mut clauses_by_id = BTreeMap::new();
+    for clause in units.iter() {
+        clauses_by_id.entry(clause.ident()).or_insert(clause);
+    }
+    clauses_by_id
+}
+
+fn first_clause_index_by_id(units: &ClauseSet) -> BTreeMap<i64, (usize, &Clause)> {
+    let mut clauses_by_id = BTreeMap::new();
+    for (index, clause) in units.iter().enumerate() {
+        clauses_by_id
+            .entry(clause.ident())
+            .or_insert((index, clause));
+    }
+    clauses_by_id
 }
 
 fn find_simplifying_unit_index(
