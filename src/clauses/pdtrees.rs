@@ -714,19 +714,8 @@ impl PdTree {
         if state.term_code.len() != state.term_spans.len() {
             return None;
         }
-        if !self.root_satisfies_constraints(state.term_weight, state.term_date) {
-            return Some(Vec::new());
-        }
-
         let mut occurrences = Vec::new();
-        self.collect_matching_occurrences(
-            0,
-            0,
-            &state.term_code,
-            &state.term_spans,
-            state.traversal_order,
-            &mut occurrences,
-        );
+        self.collect_matching_occurrences(0, 0, state, &mut occurrences);
         Some(occurrences)
     }
 
@@ -777,12 +766,14 @@ impl PdTree {
         &self,
         node_index: usize,
         query_index: usize,
-        code: &[PrefixToken],
-        spans: &[usize],
-        traversal_order: PdtTraversalOrder,
+        state: &PdtSearchState,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        if query_index == code.len() {
+        if !self.node_satisfies_constraints(node_index, state.term_weight, state.term_date) {
+            return;
+        }
+
+        if query_index == state.term_code.len() {
             for occurrence in self.nodes[node_index]
                 .terminal_entries
                 .iter()
@@ -795,22 +786,18 @@ impl PdTree {
             return;
         }
 
-        for step in [traversal_order.first, traversal_order.second] {
+        for step in [state.traversal_order.first, state.traversal_order.second] {
             match step {
                 PdtTraversalStep::Symbols => self.collect_symbol_matching_occurrences(
                     node_index,
                     query_index,
-                    code,
-                    spans,
-                    traversal_order,
+                    state,
                     occurrences,
                 ),
                 PdtTraversalStep::Variables => self.collect_variable_matching_occurrences(
                     node_index,
                     query_index,
-                    code,
-                    spans,
-                    traversal_order,
+                    state,
                     occurrences,
                 ),
             }
@@ -821,22 +808,13 @@ impl PdTree {
         &self,
         node_index: usize,
         query_index: usize,
-        code: &[PrefixToken],
-        spans: &[usize],
-        traversal_order: PdtTraversalOrder,
+        state: &PdtSearchState,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let token = code[query_index];
+        let token = state.term_code[query_index];
         if !matches!(token, PrefixToken::FreeVar(_)) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
-                self.collect_matching_occurrences(
-                    next_index,
-                    query_index + 1,
-                    code,
-                    spans,
-                    traversal_order,
-                    occurrences,
-                );
+                self.collect_matching_occurrences(next_index, query_index + 1, state, occurrences);
             }
         }
     }
@@ -845,13 +823,11 @@ impl PdTree {
         &self,
         node_index: usize,
         query_index: usize,
-        code: &[PrefixToken],
-        spans: &[usize],
-        traversal_order: PdtTraversalOrder,
+        state: &PdtSearchState,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let next_query_index = query_index.saturating_add(spans[query_index]);
-        if next_query_index > code.len() {
+        let next_query_index = query_index.saturating_add(state.term_spans[query_index]);
+        if next_query_index > state.term_code.len() {
             return;
         }
         for next_index in self.nodes[node_index]
@@ -861,14 +837,7 @@ impl PdTree {
                 matches!(edge, PrefixToken::FreeVar(_)).then_some(*next_index)
             })
         {
-            self.collect_matching_occurrences(
-                next_index,
-                next_query_index,
-                code,
-                spans,
-                traversal_order,
-                occurrences,
-            );
+            self.collect_matching_occurrences(next_index, next_query_index, state, occurrences);
         }
     }
 }
@@ -1278,6 +1247,28 @@ mod tests {
         assert_eq!(
             tree.search_matching_occurrences(),
             Some(vec![specific, general])
+        );
+    }
+
+    #[test]
+    fn matching_occurrences_prune_branches_by_node_age_constraints() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_age_f(pdt_age_a)");
+        let variable = typed_var(&bank, -21);
+        let old_specific = PdtIndexedOccurrence::new(40, EqnSide::LeftSide);
+        let new_general = PdtIndexedOccurrence::new(50, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(3), old_specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), new_general));
+
+        tree.record_search_init(&query, SysDate::from_raw(5), false);
+        assert_eq!(tree.search_matching_occurrences(), Some(vec![new_general]));
+
+        tree.record_search_init(&query, SysDate::from_raw(2), false);
+        assert_eq!(
+            tree.search_matching_occurrences(),
+            Some(vec![new_general, old_specific])
         );
     }
 
