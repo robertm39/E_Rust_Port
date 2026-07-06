@@ -90,6 +90,7 @@ pub struct PdtSearchState {
     pub term_code: Vec<PrefixToken>,
     pub term_spans: Vec<usize>,
     pub term_type_uids: Vec<TypeUniqueId>,
+    pub term_weights: Vec<i64>,
     pub term_weight: i64,
     pub term_date: SysDate,
     pub traversal_order: PdtTraversalOrder,
@@ -98,7 +99,11 @@ pub struct PdtSearchState {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PrefixToken {
     Fun(FunCode),
-    FreeVar { id: usize, type_uid: TypeUniqueId },
+    FreeVar {
+        id: usize,
+        type_uid: TypeUniqueId,
+        weight: i64,
+    },
     DbLike(usize),
 }
 
@@ -119,6 +124,7 @@ struct PrefixQueryCell {
     token: PrefixToken,
     span: usize,
     type_uid: TypeUniqueId,
+    weight: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,7 +133,7 @@ struct QuerySubtree {
     end: usize,
 }
 
-type PdtQueryBindings = BTreeMap<(usize, TypeUniqueId), QuerySubtree>;
+type PdtQueryBindings = BTreeMap<(usize, TypeUniqueId, i64), QuerySubtree>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdTree {
@@ -371,6 +377,7 @@ impl PdTree {
             term_code: query.iter().map(|cell| cell.token).collect(),
             term_spans: query.iter().map(|cell| cell.span).collect(),
             term_type_uids: query.iter().map(|cell| cell.type_uid).collect(),
+            term_weights: query.iter().map(|cell| cell.weight).collect(),
             term_weight: term_standard_weight(term),
             term_date: age_constraint,
             traversal_order,
@@ -725,12 +732,20 @@ impl PdTree {
         let state = state.as_ref()?;
         if state.term_code.len() != state.term_spans.len()
             || state.term_code.len() != state.term_type_uids.len()
+            || state.term_code.len() != state.term_weights.len()
         {
             return None;
         }
         let mut occurrences = Vec::new();
         let mut bindings = PdtQueryBindings::new();
-        self.collect_matching_occurrences(0, 0, state, &mut bindings, &mut occurrences);
+        self.collect_matching_occurrences(
+            0,
+            0,
+            state,
+            state.term_weight,
+            &mut bindings,
+            &mut occurrences,
+        );
         Some(occurrences)
     }
 
@@ -782,10 +797,11 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        effective_term_weight: i64,
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        if !self.node_satisfies_constraints(node_index, state.term_weight, state.term_date) {
+        if !self.node_satisfies_constraints(node_index, effective_term_weight, state.term_date) {
             return;
         }
 
@@ -808,6 +824,7 @@ impl PdTree {
                     node_index,
                     query_index,
                     state,
+                    effective_term_weight,
                     bindings,
                     occurrences,
                 ),
@@ -815,6 +832,7 @@ impl PdTree {
                     node_index,
                     query_index,
                     state,
+                    effective_term_weight,
                     bindings,
                     occurrences,
                 ),
@@ -827,6 +845,7 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        effective_term_weight: i64,
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
@@ -837,6 +856,7 @@ impl PdTree {
                     next_index,
                     query_index + 1,
                     state,
+                    effective_term_weight,
                     bindings,
                     occurrences,
                 );
@@ -849,6 +869,7 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        effective_term_weight: i64,
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
@@ -860,12 +881,17 @@ impl PdTree {
             start: query_index,
             end: next_query_index,
         };
-        for (variable_id, variable_type_uid, next_index) in self.nodes[node_index]
+        for (variable_id, variable_type_uid, variable_weight, next_index) in self.nodes[node_index]
             .children
             .iter()
             .filter_map(|(edge, next_index)| {
-                if let PrefixToken::FreeVar { id, type_uid } = edge {
-                    Some((*id, *type_uid, *next_index))
+                if let PrefixToken::FreeVar {
+                    id,
+                    type_uid,
+                    weight,
+                } = edge
+                {
+                    Some((*id, *type_uid, *weight, *next_index))
                 } else {
                     None
                 }
@@ -874,13 +900,19 @@ impl PdTree {
             if state.term_type_uids[query_index] != variable_type_uid {
                 continue;
             }
-            let variable_key = (variable_id, variable_type_uid);
+            let variable_key = (variable_id, variable_type_uid, variable_weight);
+            let next_effective_term_weight = adjusted_variable_edge_weight(
+                effective_term_weight,
+                state.term_weights[query_index],
+                variable_weight,
+            );
             if let Some(bound) = bindings.get(&variable_key).copied() {
                 if query_subtrees_match(state, bound, current) {
                     self.collect_matching_occurrences(
                         next_index,
                         next_query_index,
                         state,
+                        next_effective_term_weight,
                         bindings,
                         occurrences,
                     );
@@ -891,6 +923,7 @@ impl PdTree {
                     next_index,
                     next_query_index,
                     state,
+                    next_effective_term_weight,
                     bindings,
                     occurrences,
                 );
@@ -984,6 +1017,7 @@ fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: &Term) -> usiz
         token: prefix_token(term),
         span: 0,
         type_uid: term_type_uid(term),
+        weight: term_standard_weight(term),
     });
 
     if !term.is_top_level_free_var() {
@@ -1033,6 +1067,7 @@ fn prefix_token(term: &Term) -> PrefixToken {
         PrefixToken::FreeVar {
             id: term_identity_id(term),
             type_uid: term_type_uid(term),
+            weight: term_standard_weight(term),
         }
     } else if term.is_db_var() || term.is_applied_db_var() || term.is_lambda() {
         let key = if term.is_db_var() {
@@ -1052,15 +1087,23 @@ fn term_type_uid(term: &Term) -> TypeUniqueId {
         .map_or(INVALID_TYPE_UID, |type_| type_.type_uid())
 }
 
+fn adjusted_variable_edge_weight(
+    effective_term_weight: i64,
+    query_subtree_weight: i64,
+    variable_weight: i64,
+) -> i64 {
+    effective_term_weight - query_subtree_weight + variable_weight
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
-        term_lr_traverse_query, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
-        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
-        PDTREE_IGNORE_TERM_WEIGHT,
+        adjusted_variable_edge_weight, prefix_code_ref_count, prefix_compute_term_code,
+        prefix_match_counts, term_lr_traverse_query, PdTree, PdtIndexedOccurrence,
+        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
+        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -1071,7 +1114,7 @@ mod tests {
     use crate::terms::simpletypes::{alloc_arrow_type, Type, INVALID_TYPE_UID};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, DEFAULT_VWEIGHT};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
@@ -1283,6 +1326,7 @@ mod tests {
             PrefixToken::FreeVar {
                 id: 17,
                 type_uid: INVALID_TYPE_UID,
+                weight: DEFAULT_VWEIGHT,
             },
             PrefixToken::Fun(a_code),
         ]));
@@ -1429,6 +1473,64 @@ mod tests {
     }
 
     #[test]
+    fn variable_edge_weight_adjustment_matches_c_descendant_size_pruning() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let a = typed_const(&mut bank, "pdt_weight_a");
+        let b = typed_const(&mut bank, "pdt_weight_b");
+        let variable = typed_var(&bank, -25);
+        let heavy_tail = typed_binary(&mut bank, "pdt_weight_tail", &a, &b);
+        let stored = typed_binary(&mut bank, "pdt_weight_f", &variable, &heavy_tail);
+        let query_head = typed_binary(&mut bank, "pdt_weight_big", &a, &b);
+        let query_tail = typed_const(&mut bank, "pdt_weight_small_tail");
+        let query = typed_binary(&mut bank, "pdt_weight_f", &query_head, &query_tail);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(
+            &stored,
+            SysDate::from_raw(7),
+            PdtIndexedOccurrence::new(80, EqnSide::LeftSide),
+        ));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        let state = tree.search_state().unwrap();
+        let root_child_index = tree.nodes[0]
+            .children
+            .get(&state.term_code[0])
+            .copied()
+            .unwrap();
+        let (variable_weight, variable_child_index) = tree.nodes[root_child_index]
+            .children
+            .iter()
+            .find_map(|(edge, next_index)| {
+                if let PrefixToken::FreeVar { weight, .. } = edge {
+                    Some((*weight, *next_index))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let adjusted_weight = adjusted_variable_edge_weight(
+            state.term_weight,
+            state.term_weights[1],
+            variable_weight,
+        );
+
+        assert_eq!(state.term_weight, term_standard_weight(&query));
+        assert_eq!(state.term_weights[1], term_standard_weight(&query_head));
+        assert_eq!(variable_weight, term_standard_weight(&variable));
+        assert!(tree.node_satisfies_constraints(
+            variable_child_index,
+            state.term_weight,
+            PDTREE_IGNORE_NF_DATE,
+        ));
+        assert!(!tree.node_satisfies_constraints(
+            variable_child_index,
+            adjusted_weight,
+            PDTREE_IGNORE_NF_DATE,
+        ));
+        assert_eq!(tree.search_matching_occurrences(), Some(Vec::new()));
+    }
+
+    #[test]
     fn constraints_track_minimum_weight_and_youngest_clause_date() {
         let _guard = global_state_lock();
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
@@ -1494,6 +1596,7 @@ mod tests {
             PrefixToken::FreeVar {
                 id: 7,
                 type_uid: INVALID_TYPE_UID,
+                weight: DEFAULT_VWEIGHT,
             },
             PrefixToken::DbLike(3),
         ]));
