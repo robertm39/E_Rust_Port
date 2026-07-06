@@ -541,6 +541,97 @@ pub fn deriv_stack_extract_parents(
     (parents, direct_parent_count)
 }
 
+/// Extracts original direct parents from a C-shaped derivation stack.
+///
+/// This mirrors C `DerivStackExtractOptParents`: direct clause/formula parent
+/// arguments are replaced in the derivation stack with the caller-resolved
+/// original parent reference before being returned. Expanded `DCACRes` parents
+/// are appended like [`deriv_stack_extract_parents`] and are not included in the
+/// returned direct-parent count.
+///
+/// # Panics
+///
+/// Panics if an opcode-declared argument is missing, has the wrong Rust stack
+/// entry shape, or if a `DCACRes` numeric argument requests more AC axioms than
+/// the caller supplied.
+pub fn deriv_stack_extract_opt_parents(
+    derivation: Option<&mut PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+    mut resolve_clause_parent: impl FnMut(ClauseDerivationRef) -> ClauseDerivationRef,
+    mut resolve_formula_parent: impl FnMut(FormulaDerivationRef) -> FormulaDerivationRef,
+) -> (Vec<DerivationParentRef>, usize) {
+    let Some(derivation) = derivation else {
+        return (Vec::new(), 0);
+    };
+
+    let mut parents = Vec::new();
+    let mut direct_parent_count = 0;
+    let mut numarg1 = 0;
+    let entries = derivation.as_mut_slice();
+    let mut index = 0;
+
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        if op_has_cnf_arg1(op) {
+            parents.push(resolve_clause_parent_arg(
+                entries,
+                &mut index,
+                &mut resolve_clause_parent,
+            ));
+            direct_parent_count += 1;
+        } else if op_has_fof_arg1(op) {
+            parents.push(resolve_formula_parent_arg(
+                entries,
+                &mut index,
+                &mut resolve_formula_parent,
+            ));
+            direct_parent_count += 1;
+        } else if op_has_num_arg1(op) {
+            numarg1 = read_numeric_arg(entries, &mut index);
+        }
+
+        if op_has_cnf_arg2(op) {
+            parents.push(resolve_clause_parent_arg(
+                entries,
+                &mut index,
+                &mut resolve_clause_parent,
+            ));
+            direct_parent_count += 1;
+        } else if op_has_fof_arg2(op) {
+            parents.push(resolve_formula_parent_arg(
+                entries,
+                &mut index,
+                &mut resolve_formula_parent,
+            ));
+            direct_parent_count += 1;
+        } else if op_has_num_arg2(op) {
+            skip_arg(entries, &mut index);
+        }
+
+        if op == DC_AC_RES {
+            let ac_count = usize::try_from(numarg1)
+                .unwrap_or_else(|_| panic!("DCACRes parent count must be non-negative"));
+            assert!(
+                ac_count <= ac_axioms.len(),
+                "DCACRes parent count exceeds supplied AC axioms"
+            );
+            parents.extend(
+                ac_axioms[..ac_count]
+                    .iter()
+                    .copied()
+                    .map(DerivationParentRef::Clause),
+            );
+        }
+    }
+
+    (parents, direct_parent_count)
+}
+
 #[must_use]
 pub fn deriv_stack_indicates_initial_clause(derivation: Option<&PStack<DerivationEntry>>) -> bool {
     let Some(derivation) = derivation else {
@@ -1143,6 +1234,56 @@ fn skip_arg(entries: &[DerivationEntry], index: &mut usize) {
     *index += 1;
 }
 
+fn resolve_clause_parent_arg(
+    entries: &mut [DerivationEntry],
+    index: &mut usize,
+    resolve_parent: &mut impl FnMut(ClauseDerivationRef) -> ClauseDerivationRef,
+) -> DerivationParentRef {
+    let arg_index = *index;
+    let entry = *entries
+        .get(arg_index)
+        .unwrap_or_else(|| panic!("derivation clause parent argument is missing"));
+    *index += 1;
+    match entry {
+        DerivationEntry::ClauseParent(parent) => {
+            let resolved = resolve_parent(parent);
+            entries[arg_index] = DerivationEntry::ClauseParent(resolved);
+            DerivationParentRef::Clause(resolved)
+        }
+        DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(demodulator),
+        DerivationEntry::Operation(_)
+        | DerivationEntry::FormulaParent(_)
+        | DerivationEntry::NumericArg(_) => {
+            panic!("derivation clause parent argument has the wrong entry shape");
+        }
+    }
+}
+
+fn resolve_formula_parent_arg(
+    entries: &mut [DerivationEntry],
+    index: &mut usize,
+    resolve_parent: &mut impl FnMut(FormulaDerivationRef) -> FormulaDerivationRef,
+) -> DerivationParentRef {
+    let arg_index = *index;
+    let entry = *entries
+        .get(arg_index)
+        .unwrap_or_else(|| panic!("derivation formula argument is missing"));
+    *index += 1;
+    match entry {
+        DerivationEntry::FormulaParent(parent) => {
+            let resolved = resolve_parent(parent);
+            entries[arg_index] = DerivationEntry::FormulaParent(resolved);
+            DerivationParentRef::Formula(resolved)
+        }
+        DerivationEntry::Operation(_)
+        | DerivationEntry::ClauseParent(_)
+        | DerivationEntry::NumericArg(_)
+        | DerivationEntry::Demodulator(_) => {
+            panic!("derivation formula argument has the wrong entry shape");
+        }
+    }
+}
+
 #[must_use]
 pub fn clause_is_eval_gc(clause: &Clause) -> bool {
     derivation_top_operation(clause) == Some(DC_CNF_EVAL_GC)
@@ -1234,7 +1375,8 @@ mod tests {
         clause_is_dummy_fof_quote, clause_is_dummy_quote, clause_is_eval_gc,
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
         clause_push_numeric_derivation, deriv_stack_count_search_inferences,
-        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
+        deriv_stack_extract_opt_parents, deriv_stack_extract_parents,
+        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
         deriv_stack_tstp_string_with_ac_axioms, derivation_entries, formula_dummy_quote_parent_ref,
         get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry,
@@ -1652,6 +1794,84 @@ mod tests {
                 DerivationParentRef::Clause(ac_second),
             ]
         );
+    }
+
+    #[test]
+    fn deriv_stack_extract_opt_parents_rewrites_direct_quote_parents() {
+        let original = ClauseDerivationRef::new(10, 1);
+        let quoted = ClauseDerivationRef::new(11, 2);
+        let untouched = ClauseDerivationRef::new(12, 3);
+        let ac_parent = ClauseDerivationRef::new(20, 4);
+        let formula_original = FormulaDerivationRef::new(30);
+        let formula_quote = FormulaDerivationRef::new(31);
+        let demodulator = RewriteDemodulator::new(99);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_PARAMOD));
+        derivation.push(DerivationEntry::ClauseParent(quoted));
+        derivation.push(DerivationEntry::ClauseParent(untouched));
+        derivation.push(DerivationEntry::Operation(DC_REWRITE));
+        derivation.push(DerivationEntry::Demodulator(demodulator));
+        derivation.push(DerivationEntry::Operation(DC_SPLIT_CONJUNCT));
+        derivation.push(DerivationEntry::FormulaParent(formula_quote));
+        derivation.push(DerivationEntry::Operation(DC_AC_RES));
+        derivation.push(DerivationEntry::NumericArg(1));
+
+        let (parents, direct_count) = deriv_stack_extract_opt_parents(
+            Some(&mut derivation),
+            &[ac_parent],
+            |parent| {
+                if parent == quoted {
+                    original
+                } else {
+                    parent
+                }
+            },
+            |parent| {
+                if parent == formula_quote {
+                    formula_original
+                } else {
+                    parent
+                }
+            },
+        );
+
+        assert_eq!(direct_count, 4);
+        assert_eq!(
+            parents,
+            vec![
+                DerivationParentRef::Clause(original),
+                DerivationParentRef::Clause(untouched),
+                DerivationParentRef::Demodulator(demodulator),
+                DerivationParentRef::Formula(formula_original),
+                DerivationParentRef::Clause(ac_parent),
+            ]
+        );
+        assert_eq!(
+            derivation.as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(original),
+                DerivationEntry::ClauseParent(untouched),
+                DerivationEntry::Operation(DC_REWRITE),
+                DerivationEntry::Demodulator(demodulator),
+                DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                DerivationEntry::FormulaParent(formula_original),
+                DerivationEntry::Operation(DC_AC_RES),
+                DerivationEntry::NumericArg(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn deriv_stack_extract_opt_parents_accepts_missing_derivation() {
+        let (parents, direct_count) = deriv_stack_extract_opt_parents(
+            None,
+            &[],
+            std::convert::identity,
+            std::convert::identity,
+        );
+        assert!(parents.is_empty());
+        assert_eq!(direct_count, 0);
     }
 
     #[test]
