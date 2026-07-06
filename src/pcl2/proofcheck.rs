@@ -748,15 +748,20 @@ fn write_prover_output_trace(
     output: &mut (impl IoWrite + ?Sized),
     prover_output: &[u8],
 ) -> Result<(), Diagnostic> {
-    let rendered = String::from_utf8_lossy(prover_output);
-    if rendered.is_empty() {
-        return Ok(());
-    }
-    for line in rendered.split_inclusive('\n') {
-        proofcheck_write_all(output, format!("{DEFAULT_COMCHAR_RAW}> {line}").as_bytes())?;
-    }
-    if !rendered.ends_with('\n') {
-        proofcheck_write_all(output, b"\n")?;
+    const C_FGETS_TEXT_LIMIT: usize = 179;
+
+    let mut start = 0;
+    while start < prover_output.len() {
+        let remaining = &prover_output[start..];
+        let chunk_len = remaining
+            .iter()
+            .take(C_FGETS_TEXT_LIMIT)
+            .position(|byte| *byte == b'\n')
+            .map_or(remaining.len().min(C_FGETS_TEXT_LIMIT), |index| index + 1);
+        let end = start + chunk_len;
+        proofcheck_write_all(output, format!("{DEFAULT_COMCHAR_RAW}> ").as_bytes())?;
+        proofcheck_write_all(output, &prover_output[start..end])?;
+        start = end;
     }
     Ok(())
 }
@@ -993,8 +998,8 @@ mod tests {
         neg_skolemize_clause, otter_clause_set_string, otter_problem_string, protocol_check,
         protocol_check_with_output, protocol_check_with_output_and_warnings,
         prover_invocation_for_problem, run_prover_invocation, run_prover_invocation_with_output,
-        spass_problem_string, step_check, step_check_with_runner, PclCheckType,
-        ProofcheckWarningOutput, ProverInvocation, ProverProblemFileUse, ProverType,
+        spass_problem_string, step_check, step_check_with_runner, write_prover_output_trace,
+        PclCheckType, ProofcheckWarningOutput, ProverInvocation, ProverProblemFileUse, ProverType,
         FOF_PROOFCHECK_WARNING,
     };
     use crate::basics::defines::DEFAULT_COMCHAR_RAW;
@@ -1398,6 +1403,27 @@ mod tests {
         assert!(output.contains("% ------------Problem begin--------------\n"));
         assert!(output.contains("payload\nPROOF-SUCCESS\n"));
         assert!(output.contains("% ------------Problem end----------------\n"));
+    }
+
+    #[test]
+    fn prover_output_trace_does_not_add_missing_final_newline() {
+        let mut output = Vec::new();
+
+        write_prover_output_trace(&mut output, b"unterminated").unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "%> unterminated");
+    }
+
+    #[test]
+    fn prover_output_trace_splits_like_c_fgets_buffer() {
+        let mut input = vec![b'a'; 180];
+        input.push(b'\n');
+        let mut output = Vec::new();
+
+        write_prover_output_trace(&mut output, &input).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output, format!("%> {}%> a\n", "a".repeat(179)));
     }
 
     #[test]
