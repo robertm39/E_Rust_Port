@@ -127,7 +127,7 @@ Source files reviewed: `CLAUSES/ccl_subterm_tree.h`, `CLAUSES/ccl_subterm_tree.c
 
 ### Change Later
 
-- `SubtermTreePrint` includes raw node/data/child pointers around the term text, and `SubtermTreePrintDot` can switch between real tree-shaped DOT output and a flattened record label at compile time. Rust now has explicit term-bank-backed term debug rendering and the flattened DOT payload renderer needed by `PRINT_INDEX_STATS`, but the tree-shaped compile-time branch should wait until these debug printers are compatibility-visible.
+- `SubtermTreePrint` includes raw C tree-node/data/child pointers around the term text, and `SubtermTreePrintDot` can switch between real tree-shaped DOT output and a flattened record label at compile time. Rust now exposes term-bank-backed term debug rendering plus the flattened DOT record-label and dummy outputs using explicit problem-type/`DEREF_ALWAYS` term printing. Exact raw C splay-node pointer layout and the optional tree-shaped `PRT_SUBTERM_SET_AS_TREE` branch remain later debug-compatibility work.
 
 ### Porting Focus
 

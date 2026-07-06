@@ -1,8 +1,9 @@
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausecpos::CompactPos;
 use crate::clauses::clausepos_tree::{clause_key, ClauseTPosTree};
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{term_identity_id, Term};
+use crate::terms::termtypes::{term_identity_id, DerefType, Term};
 use std::cmp::Ordering;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::fmt::{self, Write};
@@ -216,6 +217,94 @@ impl SubtermTree {
         let _ = self.write_term_debug(&mut output, bank);
         output
     }
+
+    /// Writes the flattened C `SubtermTreePrintDot` record-label branch.
+    ///
+    /// The C source uses raw tree pointers for the subgraph and node names.
+    /// Rust keeps that diagnostic-only shape with this `SubtermTree` object's
+    /// address while preserving the term list and `DEREF_ALWAYS` term printer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_dot_record(
+        &self,
+        output: &mut impl Write,
+        bank: &TermBank,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        let dot_id = format!("{self:p}");
+        write_subterm_occurrences_dot_record(
+            output,
+            &dot_id,
+            self.entries.values(),
+            bank,
+            problem_type,
+        )
+    }
+
+    #[must_use]
+    pub fn dot_record_string(&self, bank: &TermBank, problem_type: ProblemType) -> String {
+        let mut output = String::new();
+        let _ = self.write_dot_record(&mut output, bank, problem_type);
+        output
+    }
+
+    pub fn write_dot_dummy(&self, output: &mut impl Write) -> fmt::Result {
+        writeln!(
+            output,
+            "     t{self:p} [shape=box label=\"{} terms\"]",
+            self.len()
+        )
+    }
+
+    #[must_use]
+    pub fn dot_dummy_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_dot_dummy(&mut output);
+        output
+    }
+}
+
+pub fn write_subterm_occurrences_dot_record<'a>(
+    output: &mut impl Write,
+    dot_id: &str,
+    occurrences: impl IntoIterator<Item = &'a SubtermOcc>,
+    bank: &TermBank,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    writeln!(output, "     subgraph g{dot_id}{{")?;
+    output.write_str("     nodesep=0.05\n")?;
+    output.write_str(
+        "     node [shape=record,width=1.9,height=.1, penwidth=0, style=filled, fillcolor=gray80]\n",
+    )?;
+    write!(output, "     t{dot_id} [label=\"{{|{{")?;
+    let mut sep = "";
+    for occurrence in occurrences {
+        output.write_str(sep)?;
+        sep = "|";
+        bank.write_term_deref_for_problem(
+            output,
+            occurrence.term(),
+            problem_type,
+            DerefType::Always,
+        )?;
+    }
+    output.write_str("}}\"]\n")?;
+    output.write_str("     }\n")
+}
+
+#[must_use]
+pub fn subterm_occurrences_dot_record_string<'a>(
+    dot_id: &str,
+    occurrences: impl IntoIterator<Item = &'a SubtermOcc>,
+    bank: &TermBank,
+    problem_type: ProblemType,
+) -> String {
+    let mut output = String::new();
+    let _ =
+        write_subterm_occurrences_dot_record(&mut output, dot_id, occurrences, bank, problem_type);
+    output
 }
 
 #[must_use]
@@ -240,6 +329,7 @@ fn store_clause(target: &mut BTreeMap<i64, Clause>, clause: &Clause) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{cmp_subterm_cells, SubtermOcc, SubtermTree};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -249,7 +339,9 @@ mod tests {
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
-        TermBank::new(Signature::new(TypeBank::new())).unwrap()
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        TermBank::new(signature).unwrap()
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -372,5 +464,48 @@ mod tests {
         tree.insert_term(&left);
 
         assert_eq!(tree.term_debug_string(&bank), "Key: 7 = subterm_print_a\n");
+    }
+
+    #[test]
+    fn dot_record_output_matches_c_flattened_payload_shape() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "subterm_dot_left");
+        let right = typed_const(&mut bank, "subterm_dot_right");
+        let equality = Term::top_alloc(bank.signature().eqn_code(), 2);
+        equality.set_type(Some(bank.signature().type_bank().bool_type()));
+        equality.set_argument(0, left.clone());
+        equality.set_argument(1, right.clone());
+        let equality = bank.term_top_insert(equality).unwrap();
+        let mut tree = SubtermTree::new();
+        tree.insert_term(&left);
+        tree.insert_term(&equality);
+
+        let dot = tree.dot_record_string(&bank, ProblemType::FirstOrder);
+
+        assert!(dot.starts_with("     subgraph g"));
+        assert!(dot.contains("     nodesep=0.05\n"));
+        assert!(dot.contains(
+            "     node [shape=record,width=1.9,height=.1, penwidth=0, \
+             style=filled, fillcolor=gray80]\n"
+        ));
+        assert!(dot.contains(" [label=\"{|{"));
+        assert!(dot.contains("subterm_dot_left"));
+        assert!(dot.contains("subterm_dot_left=subterm_dot_right"));
+        assert!(dot.ends_with("     }\n"));
+    }
+
+    #[test]
+    fn dot_dummy_output_counts_terms_like_c_debug_helper() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "subterm_dummy_left");
+        let right = typed_const(&mut bank, "subterm_dummy_right");
+        let mut tree = SubtermTree::new();
+        tree.insert_term(&left);
+        tree.insert_term(&right);
+
+        let dummy = tree.dot_dummy_string();
+
+        assert!(dummy.starts_with("     t"));
+        assert!(dummy.ends_with(" [shape=box label=\"2 terms\"]\n"));
     }
 }

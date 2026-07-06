@@ -1,7 +1,5 @@
 #[cfg(feature = "print-index-stats")]
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
-#[cfg(feature = "print-index-stats")]
-use crate::basics::objtrees::ObjTree;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
@@ -12,6 +10,8 @@ use crate::clauses::overlap_index::{
     overlap_index_delete_into_clause2, overlap_index_insert_into_clause2, OverlapIndex,
 };
 use crate::clauses::subterm_index::SubtermIndex;
+#[cfg(feature = "print-index-stats")]
+use crate::clauses::subterm_tree::subterm_occurrences_dot_record_string;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::terms::idx_fp::get_fp_index_function;
 use crate::terms::signature::Signature;
@@ -425,7 +425,12 @@ impl<'sig> GlobalIndices<'sig> {
         );
         if let Some(index) = &self.pm_from_index {
             output.push_str(&index.dot_string("pm_from_index", |payload, _signature| {
-                subterm_payload_dot_string(payload, bank)
+                subterm_occurrences_dot_record_string(
+                    &format!("{payload:p}"),
+                    payload.iter(),
+                    bank,
+                    ProblemType::FirstOrder,
+                )
             }));
         }
         let _ = writeln!(
@@ -472,28 +477,6 @@ fn null_fp_index_distrib_data_string() -> String {
         stddev: 0.0,
     }
     .data_string()
-}
-
-#[cfg(feature = "print-index-stats")]
-fn subterm_payload_dot_string(payload: &ObjTree<SubtermOcc>, bank: &TermBank) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "     subgraph g{payload:p}{{");
-    output.push_str("     nodesep=0.05\n");
-    output.push_str(
-        "     node [shape=record,width=1.9,height=.1, penwidth=0, style=filled, fillcolor=gray80]\n",
-    );
-    let _ = write!(output, "     t{payload:p} [label=\"{{|{{");
-    let mut sep = "";
-    for occurrence in payload.iter() {
-        output.push_str(sep);
-        sep = "|";
-        let _ = bank.write_term(&mut output, occurrence.term(), true);
-    }
-    output.push_str("}}\"]\n");
-    output.push_str("     }\n");
-    output
 }
 
 #[cfg(test)]
