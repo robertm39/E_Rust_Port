@@ -107,8 +107,9 @@ use crate::heuristics::new_autoschedule::{
     DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init_with_formula_axioms, proof_state_filter_unprocessed,
-    proof_state_init_with_output, proof_state_reset_processed_with_global_indices,
+    preinstantiate_induction, proof_control_init_with_formula_axioms,
+    proof_state_filter_unprocessed, proof_state_init_with_output,
+    proof_state_reset_processed_with_global_indices,
     proof_state_saturate_with_global_indices_and_output, ProofControl, SaturateOutcome,
     SaturateReturnReason, SaturateStopReason,
 };
@@ -5373,6 +5374,14 @@ fn run_prune_only<W: Write + ?Sized>(
             .inst_choice_max_depth,
     )?;
     let _choice_axioms = apply_choice_axiom_recognition(&mut state, choice_max_depth)?;
+    let _induction_instances = apply_induction_preinstantiation(
+        &mut state,
+        config
+            .search
+            .inference
+            .higher_order_preprocessing
+            .preinstantiate_induction,
+    )?;
     let bce_max_occs = i32_from_i64_config("bce_max_occs", config.preprocessing.bce.max_occs)?;
     apply_blocked_clause_elimination(
         output,
@@ -5462,6 +5471,8 @@ fn run_proof_search<W: Write + ?Sized>(
     let preproc_removed = preproc_result.removed;
     let _choice_axioms =
         apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
+    let _induction_instances =
+        apply_induction_preinstantiation(&mut state, heuristic_params.preinstantiate_induction)?;
     apply_blocked_clause_elimination(
         output,
         heuristic_params.bce,
@@ -7108,6 +7119,16 @@ fn apply_choice_axiom_recognition(
 
     let (bank, axioms, choice_opcodes) = state.terms_axioms_choice_opcodes_mut();
     Ok(clause_set_recognize_choice(bank, axioms, choice_opcodes)?)
+}
+
+fn apply_induction_preinstantiation(
+    state: &mut crate::clauses::proofstate::ProofState,
+    enabled: bool,
+) -> Result<i64, EProverError> {
+    if !enabled {
+        return Ok(0);
+    }
+    Ok(preinstantiate_induction(state)?)
 }
 
 fn apply_blocked_clause_elimination<W: Write + ?Sized>(

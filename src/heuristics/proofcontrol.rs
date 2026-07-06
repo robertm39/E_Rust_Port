@@ -7,7 +7,8 @@ use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
-    CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
+    CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+    CP_WATCH_ONLY,
 };
 use crate::clauses::clausecpos::unpack_clause_pos;
 use crate::clauses::clausefunc::{
@@ -16,7 +17,7 @@ use crate::clauses::clausefunc::{
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
     clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
     clause_set_recognize_choice, tformula_clause_encode, tformula_conjunctive_nf3,
-    tformula_fcode_alloc, tformula_to_cnf,
+    tformula_fcode_alloc, tformula_is_quantified_nl, tformula_to_cnf,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
@@ -26,10 +27,10 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef,
-    DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF,
-    DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
-    DC_POS_EXT, DC_PRIM_ENUM,
+    clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
+    DerivationParentRef, FormulaDerivationRef, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST,
+    DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+    DC_EXT_SUP, DC_FOF_QUOTE, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM, DC_TRIGGER,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -48,7 +49,7 @@ use crate::clauses::factor::{
 };
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
-use crate::clauses::formulasets::FormulaSet;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
@@ -105,6 +106,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix, lambda_normalize_db,
+    post_cnf_encode_formulas, whnf_step,
 };
 use crate::terms::match_mgu::occur_check;
 use crate::terms::replace::tb_term_pos_replace;
@@ -114,7 +116,7 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_has_f_code;
+use crate::terms::termfunc::{term_has_f_code, term_is_db_closed};
 use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
 use crate::terms::termvars::VarBank;
 use std::{
@@ -3789,6 +3791,339 @@ pub fn proof_state_generate_new_clauses_with_global_indices_and_docs(
         Some(indices),
         Some((output, session)),
     )
+}
+
+#[derive(Clone, Debug)]
+struct InductionAbstractionBucket {
+    type_: Type,
+    pairs: Vec<(Term, Clause)>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct InductionAbstractionStore {
+    buckets: Vec<InductionAbstractionBucket>,
+}
+
+impl InductionAbstractionStore {
+    fn add(&mut self, abstraction: Term, clause: &Clause) {
+        let type_ = abstraction
+            .type_()
+            .expect("induction abstraction must be typed");
+        let bucket = if let Some(bucket) = self
+            .buckets
+            .iter_mut()
+            .find(|bucket| type_identity_cmp(&bucket.type_, &type_) == 0)
+        {
+            bucket
+        } else {
+            self.buckets.push(InductionAbstractionBucket {
+                type_: type_.clone(),
+                pairs: Vec::new(),
+            });
+            self.buckets
+                .last_mut()
+                .expect("new abstraction bucket was just inserted")
+        };
+
+        if bucket
+            .pairs
+            .iter()
+            .any(|(seen, _clause)| seen == &abstraction)
+        {
+            return;
+        }
+        bucket.pairs.push((abstraction, clause.clone()));
+    }
+
+    fn hits(&self, type_: &Type) -> Option<&[(Term, Clause)]> {
+        self.buckets
+            .iter()
+            .find(|bucket| type_identity_cmp(&bucket.type_, type_) == 0)
+            .map(|bucket| bucket.pairs.as_slice())
+    }
+}
+
+/// Applies the currently ported C `PreinstantiateInduction` preprocessing step.
+///
+/// The helper collects induction abstractions from archived conjecture formulas
+/// and single-literal conjecture clauses, then instantiates every active clause
+/// variable whose type matches a collected abstraction. Generated clauses are
+/// inserted after the scan in stack-pop order, matching C's `PStack` drain.
+///
+/// # Errors
+///
+/// Returns diagnostics from formula encoding, term-bank insertion,
+/// beta-normalization, literal allocation, or Boolean simplification.
+pub fn preinstantiate_induction(state: &mut ProofState) -> Result<i64, Diagnostic> {
+    let formula_archive = state.f_ax_archive().iter().cloned().collect::<Vec<_>>();
+    let (bank, clauses, archive) = state.terms_axioms_archive_mut();
+    preinstantiate_induction_sets(bank, &formula_archive, clauses, archive)
+}
+
+fn preinstantiate_induction_sets(
+    bank: &mut TermBank,
+    formula_archive: &[WrappedFormula],
+    clauses: &mut ClauseSet,
+    archive: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    bank.vars().set_v_counts_to_used();
+    let mut store = InductionAbstractionStore::default();
+
+    for formula in formula_archive {
+        if formula.query_tptp_type() == CP_TYPE_CONJECTURE {
+            store_induction_abstraction_form(bank, formula, archive, &mut store)?;
+        }
+    }
+    for clause in clauses.iter() {
+        if clause.is_conjecture() && clause.literal_number() == 1 {
+            store_induction_abstraction_clause(bank, clause, &mut store)?;
+        }
+    }
+
+    let mut generated = Vec::new();
+    for clause in clauses.iter() {
+        let mut vars = BTreeMap::new();
+        let _ = clause.collect_variables(&mut vars);
+        for var in vars.values() {
+            instantiate_induction_abstractions(bank, var, clause, &store, &mut generated)?;
+        }
+    }
+
+    let count = i64::try_from(generated.len()).unwrap_or(i64::MAX);
+    while let Some(clause) = generated.pop() {
+        clauses.insert(clause);
+    }
+    Ok(count)
+}
+
+fn store_induction_abstraction_form(
+    bank: &mut TermBank,
+    formula: &WrappedFormula,
+    archive: &mut ClauseSet,
+    store: &mut InductionAbstractionStore,
+) -> Result<(), Diagnostic> {
+    if !tformula_is_quantified_nl(bank, formula.formula()) || formula.formula().arity() != 2 {
+        return Ok(());
+    }
+
+    let encoded = post_cnf_encode_formulas(bank, formula.formula())?;
+    let true_term = bank.true_term().clone();
+    let literal = Eqn::alloc(encoded.clone(), true_term, bank, true)?;
+    let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+    clause_push_formula_derivation(
+        &mut clause,
+        DC_FOF_QUOTE,
+        Some(FormulaDerivationRef::new(formula.ident())),
+        None,
+    );
+    archive.insert(clause.clone());
+
+    let mut quantified = encoded;
+    while tformula_is_quantified_nl(bank, &quantified) && quantified.arity() == 1 {
+        let lambda = quantified
+            .argument(0)
+            .expect("encoded quantified formula must have a lambda argument");
+        store.add(lambda.clone(), &clause);
+        let binder_type = lambda
+            .argument(0)
+            .and_then(|binder| binder.type_())
+            .expect("encoded quantified lambda binder must be typed");
+        let fresh_var = bank.vars().get_fresh_var(&binder_type);
+        let applied = bank.term_apply_arg(&lambda, &fresh_var);
+        let applied = bank.term_top_insert(applied)?;
+        quantified = whnf_step(bank, &applied)?;
+    }
+
+    Ok(())
+}
+
+fn store_induction_abstraction_clause(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut InductionAbstractionStore,
+) -> Result<(), Diagnostic> {
+    debug_assert_eq!(clause.literal_number(), 1);
+    let literal = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("single-literal clause must have a literal");
+
+    if literal.left().f_code() <= bank.signature().internal_symbols() {
+        return Ok(());
+    }
+
+    let terms = [literal.left().clone(), literal.right().clone()];
+    for term_index in 0..2 {
+        let term = &terms[term_index];
+        let other = &terms[1 - term_index];
+        if term.f_code() == other.f_code() {
+            for argument in term.argument_clones().into_iter().flatten() {
+                if term_is_db_closed(&argument) && term_contains_subterm(other, &argument) {
+                    let abstraction = abstract_induction_arg(
+                        bank,
+                        term,
+                        other,
+                        &argument,
+                        !literal.is_positive(),
+                    )?;
+                    store.add(abstraction, clause);
+                }
+            }
+        } else {
+            debug_assert!(term_is_db_closed(term));
+            debug_assert!(term_is_db_closed(other));
+            if term_contains_subterm(other, term) {
+                let abstraction =
+                    abstract_induction_arg(bank, term, other, term, !literal.is_positive())?;
+                store.add(abstraction, clause);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn instantiate_induction_abstractions(
+    bank: &mut TermBank,
+    var: &Term,
+    orig_clause: &Clause,
+    store: &InductionAbstractionStore,
+    generated: &mut Vec<Clause>,
+) -> Result<(), Diagnostic> {
+    let Some(var_type) = var.type_() else {
+        return Ok(());
+    };
+    let Some(hits) = store.hits(&var_type) else {
+        return Ok(());
+    };
+
+    assert!(
+        var.binding().is_none(),
+        "induction preinstantiation variable must be unbound"
+    );
+    for (target, other_clause) in hits {
+        debug_assert_eq!(var.type_(), target.type_());
+        var.set_binding(Some(target.clone()));
+        let result = (|| {
+            let mut new_literals = Vec::with_capacity(orig_clause.literal_number());
+            for literal in orig_clause.literals().as_slice() {
+                new_literals.push(literal.copy_instantiated_ho(bank)?);
+            }
+            let mut new_literals = EqnList::from_vec(new_literals);
+            beta_normalize_eqn_list(bank, &mut new_literals)?;
+            let _ = new_literals.remove_resolved(bank);
+            let _ = new_literals.remove_duplicates(bank);
+
+            let mut new_clause = Clause::alloc(new_literals);
+            let _ = clause_normalize_equations(&mut new_clause, bank);
+            set_ho_generation_proof_object(
+                &mut new_clause,
+                orig_clause,
+                Some(other_clause),
+                DC_TRIGGER,
+                1,
+            );
+            let _ = clause_boolean_simplification(&mut new_clause, bank)?;
+            generated.push(new_clause);
+            Ok(())
+        })();
+        var.set_binding(None);
+        result?;
+    }
+    Ok(())
+}
+
+fn abstract_induction_arg(
+    bank: &mut TermBank,
+    lhs: &Term,
+    rhs: &Term,
+    arg: &Term,
+    sign: bool,
+) -> Result<Term, Diagnostic> {
+    let mut refreshed_vars = Vec::new();
+    let result = (|| {
+        let lhs_abs = do_induction_abstract(lhs, arg, bank, 0, &mut refreshed_vars)?;
+        let rhs_abs = do_induction_abstract(rhs, arg, bank, 0, &mut refreshed_vars)?;
+        let matrix =
+            Eqn::terms_tb_term_encode(bank, &lhs_abs, &rhs_abs, sign, PatEqnDirection::Normal)?;
+        let arg_type = arg
+            .type_()
+            .expect("induction abstraction argument must be typed");
+        close_with_db_var(bank, &arg_type, &matrix)
+    })();
+    for var in refreshed_vars {
+        var.set_binding(None);
+    }
+    result
+}
+
+fn do_induction_abstract(
+    term: &Term,
+    arg: &Term,
+    bank: &mut TermBank,
+    depth: i64,
+    refreshed_vars: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    if term == arg {
+        let arg_type = arg
+            .type_()
+            .expect("induction abstraction argument must be typed");
+        return Ok(bank.request_db_var(&arg_type, depth));
+    }
+    if term.is_lambda() {
+        let old_matrix = term
+            .argument(1)
+            .expect("lambda term must have a matrix argument");
+        let new_matrix = do_induction_abstract(&old_matrix, arg, bank, depth + 1, refreshed_vars)?;
+        if new_matrix == old_matrix {
+            return Ok(term.clone());
+        }
+        let binder_type = term
+            .argument(0)
+            .and_then(|binder| binder.type_())
+            .expect("lambda binder must be typed");
+        return close_with_db_var(bank, &binder_type, &new_matrix);
+    }
+    if term.is_free_var() {
+        if let Some(binding) = term.binding() {
+            return Ok(binding);
+        }
+        let var_type = term
+            .type_()
+            .expect("induction abstraction free variable must be typed");
+        let fresh_var = bank.vars().get_fresh_var(&var_type);
+        term.set_binding(Some(fresh_var.clone()));
+        refreshed_vars.push(term.clone());
+        return Ok(fresh_var);
+    }
+    if term.arity() == 0 {
+        return Ok(term.clone());
+    }
+
+    let new_term = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, old_arg) in term.argument_clones().into_iter().enumerate() {
+        let old_arg = old_arg.expect("induction abstraction argument must be initialized");
+        let new_arg = do_induction_abstract(&old_arg, arg, bank, depth, refreshed_vars)?;
+        changed |= new_arg != old_arg;
+        new_term.set_argument(index, new_arg);
+    }
+
+    if changed {
+        bank.term_top_insert(new_term)
+    } else {
+        Ok(term.clone())
+    }
+}
+
+fn term_contains_subterm(term: &Term, needle: &Term) -> bool {
+    term == needle
+        || term
+            .argument_clones()
+            .into_iter()
+            .flatten()
+            .any(|argument| term_contains_subterm(&argument, needle))
 }
 
 fn compute_ho_inferences(
@@ -8059,7 +8394,8 @@ mod tests {
     use super::{
         apply_terms, close_with_db_var, compute_ext_eq_fact, compute_ext_eq_res, compute_ext_sup,
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_clause_set_filter_reweigth_with_bank,
+        preinstantiate_induction, proof_control_alloc,
+        proof_control_clause_set_filter_reweigth_with_bank,
         proof_control_clause_set_reweight_with_bank, proof_control_init,
         proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_check_ac_status,
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
@@ -8114,7 +8450,7 @@ mod tests {
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
         DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP,
         DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LOCAL_REWRITE, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR,
-        DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
+        DC_POS_EXT, DC_PRIM_ENUM, DC_SR, DC_TRIGGER,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -8123,6 +8459,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
+    use crate::clauses::formulasets::WrappedFormula;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::{global_indices_null, GlobalIndices};
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
@@ -8394,6 +8731,93 @@ mod tests {
                     0,
                 )))
         })
+    }
+
+    #[test]
+    fn preinstantiate_induction_generates_trigger_instance_from_conjecture_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (source, target, source_ident, target_ident) = {
+            let bank = state.terms_mut();
+            let a = typed_const(bank, "pi_clause_a");
+            let b = typed_const(bank, "pi_clause_b");
+            let f_a = typed_unary(bank, "pi_clause_f", &a);
+            let p_code = unary_predicate_code(bank, "pi_clause_p");
+            let p_a = unary_predicate(bank, p_code, &a);
+            let p_f_a = unary_predicate(bank, p_code, &f_a);
+            let mut source =
+                Clause::alloc(EqnList::from_vec(vec![literal(bank, &p_a, &p_f_a, true)]));
+            source.set_tptp_type(CP_TYPE_CONJECTURE);
+            source.set_ident(71_001);
+
+            let predicate = unary_predicate_var(bank, -42);
+            let predicate_b = apply_terms(bank, &predicate, std::slice::from_ref(&b)).unwrap();
+            let true_term = bank.true_term().clone();
+            let mut target = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+                predicate_b,
+                true_term,
+                bank,
+                true,
+            )
+            .unwrap()]));
+            target.set_ident(71_002);
+            (source, target, 71_001, 71_002)
+        };
+        state.axioms_mut().insert(source);
+        state.axioms_mut().insert(target);
+
+        let generated = preinstantiate_induction(&mut state).unwrap();
+
+        assert_eq!(generated, 1);
+        let generated_clause = state
+            .axioms()
+            .iter()
+            .find(|clause| derivation_contains_operation(clause, DC_TRIGGER))
+            .expect("trigger instance should be inserted into active axioms");
+        assert!(derivation_contains_parent(generated_clause, target_ident));
+        assert!(derivation_contains_parent(generated_clause, source_ident));
+    }
+
+    #[test]
+    fn preinstantiate_induction_uses_archived_quantified_formula_triggers() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (formula, target, target_ident) = {
+            let bank = state.terms_mut();
+            let b = typed_const(bank, "pi_formula_b");
+            let x = typed_var(bank, -44);
+            let p_code = unary_predicate_code(bank, "pi_formula_p");
+            let p_x = unary_predicate(bank, p_code, &x);
+            let qall_code = bank.signature().qall_code();
+            let quantified = super::tformula_fcode_alloc(bank, qall_code, x, Some(p_x)).unwrap();
+            let mut formula = WrappedFormula::wt_formula_alloc(quantified);
+            formula.set_tptp_type(CP_TYPE_CONJECTURE);
+            formula.set_ident(72_001);
+
+            let predicate = unary_predicate_var(bank, -46);
+            let predicate_b = apply_terms(bank, &predicate, std::slice::from_ref(&b)).unwrap();
+            let true_term = bank.true_term().clone();
+            let mut target = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+                predicate_b,
+                true_term,
+                bank,
+                true,
+            )
+            .unwrap()]));
+            target.set_ident(72_002);
+            (formula, target, 72_002)
+        };
+        state.f_ax_archive_mut().insert(formula);
+        state.axioms_mut().insert(target);
+
+        let generated = preinstantiate_induction(&mut state).unwrap();
+
+        assert_eq!(generated, 1);
+        assert_eq!(state.archive().members(), 1);
+        let generated_clause = state
+            .axioms()
+            .iter()
+            .find(|clause| derivation_contains_operation(clause, DC_TRIGGER))
+            .expect("formula trigger instance should be inserted into active axioms");
+        assert!(derivation_contains_parent(generated_clause, target_ident));
     }
 
     fn commutativity_axiom(bank: &mut TermBank, name: &str, ident: i64) -> (Clause, i64) {
