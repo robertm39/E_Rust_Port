@@ -6202,6 +6202,9 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     let mut clause = match replacing {
         ReplacingInferenceOutcome::Survivor(clause) => clause,
         ReplacingInferenceOutcome::Replaced { empty } => {
+            if let Some(empty) = empty.as_ref() {
+                state.push_extract_root(empty.clone());
+            }
             return Ok(ProcessClauseOutcome::Replaced { empty });
         }
     };
@@ -6363,6 +6366,9 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     } else {
         proof_state_insert_new_clauses(state, control)?
     };
+    if let Some(empty) = generated_empty.as_ref() {
+        state.push_extract_root(empty.clone());
+    }
 
     Ok(ProcessClauseOutcome::Processed {
         class,
@@ -6764,24 +6770,22 @@ fn proof_state_saturate_impl(
             }
             ProcessClauseOutcome::Replaced { empty } => {
                 if let Some(clause) = empty {
-                    return Ok(proof_state_saturate_return_with_extract_root(
-                        state,
-                        clause,
-                        SaturateReturnReason::ReplacingInference,
+                    return Ok(SaturateOutcome::Returned {
+                        clause: Box::new(clause),
+                        reason: SaturateReturnReason::ReplacingInference,
                         processed_steps,
-                    ));
+                    });
                 }
             }
             ProcessClauseOutcome::Processed {
                 generated_empty, ..
             } => {
                 if let Some(clause) = generated_empty {
-                    return Ok(proof_state_saturate_return_with_extract_root(
-                        state,
-                        clause,
-                        SaturateReturnReason::GeneratedClause,
+                    return Ok(SaturateOutcome::Returned {
+                        clause: Box::new(clause),
+                        reason: SaturateReturnReason::GeneratedClause,
                         processed_steps,
-                    ));
+                    });
                 }
             }
         }
@@ -8108,9 +8112,9 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_INV_REC,
-        DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM,
-        DC_SR,
+        DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP,
+        DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT,
+        DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -13888,10 +13892,74 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_process_clause_records_replacement_empty_extract_root() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected = {
+            let terms = state.terms_mut();
+            let left = typed_var(terms, -76);
+            let right = typed_var(terms, -78);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &left, &right, false,
+            )]));
+            clause.set_ident(4_162);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().er_varlit_destructive = true;
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Replaced { empty } = outcome else {
+            panic!("destructive equality resolution should replace the selected clause");
+        };
+        let empty = empty.expect("destructive equality resolution should derive empty clause");
+        assert!(empty.is_empty());
+        assert!(derivation_contains_operation(&empty, DC_DES_EQ_RES));
+        assert_eq!(state.extract_roots(), std::slice::from_ref(&empty));
+    }
+
+    #[test]
+    fn proof_state_process_clause_records_generated_empty_extract_root() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -78);
+            let constant = typed_const(terms, "pc_process_generated_empty_const");
+            let mut literal = literal(terms, &variable, &constant, false);
+            literal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_ident(4_163);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ProcessClauseGeneratedRootTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().enable_neg_unit_paramod = false;
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            generated_empty, ..
+        } = outcome
+        else {
+            panic!("negative unit should process and generate an empty resolvent");
+        };
+        let empty = generated_empty.expect("equality resolution should generate empty clause");
+        assert!(empty.is_empty());
+        assert_eq!(state.statistics().resolv_count, 1);
+        assert_eq!(state.extract_roots(), std::slice::from_ref(&empty));
+    }
+
+    #[test]
     fn proof_state_saturate_return_with_extract_root_records_root() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut empty = Clause::empty();
-        empty.set_ident(4_162);
+        empty.set_ident(4_164);
 
         let outcome = super::proof_state_saturate_return_with_extract_root(
             &mut state,
