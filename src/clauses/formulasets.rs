@@ -39,11 +39,13 @@ use crate::clauses::inferencedoc::{
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
-    abstract_vars, apply_terms, beta_normalize_db, decode_formulas_for_cnf, lambda_normalize_db,
-    lambda_to_forall, named_to_db, unfold_lambda, whnf_step,
+    abstract_vars, apply_terms, beta_normalize_db, decode_formulas_for_cnf, lambda_eta_reduce_db,
+    lambda_normalize_db, lambda_to_forall, named_to_db, unfold_lambda, whnf_step,
 };
+use crate::terms::match_mgu::subst_compute_match;
 use crate::terms::signature::{Signature, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::{arrow_type_flattened, type_is_predicate};
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::tb_term_collect_subterms;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
@@ -673,6 +675,24 @@ fn unbind_loose_db_vars(
     }
 }
 
+fn bind_loose_db_replacements(replacements: &BTreeMap<FunCode, LooseDbReplacement>) {
+    for replacement in replacements.values() {
+        assert!(
+            replacement.fresh_var.binding().is_none(),
+            "fresh loose-DB replacement variable must be unbound"
+        );
+        replacement
+            .fresh_var
+            .set_binding(Some(replacement.db_var.clone()));
+    }
+}
+
+fn clear_loose_db_replacements(replacements: &BTreeMap<FunCode, LooseDbReplacement>) {
+    for replacement in replacements.values() {
+        replacement.fresh_var.set_binding(None);
+    }
+}
+
 fn lift_lambdas_in_term(
     bank: &mut TermBank,
     term: &Term,
@@ -746,11 +766,19 @@ fn lift_lambda_prefix(
         let type_ = variable.type_().expect("lambda binder must have a type");
         closed = crate::terms::lambda::close_with_db_var(bank, &type_, &closed)?;
     }
+    bind_loose_db_replacements(&loose_replacements);
     let lifting_key = term_identity_id(&closed);
-    if let Some(entry) = state.exact_liftings.get(&lifting_key) {
-        used_defs.push(entry.definition.clone());
-        return Ok(entry.lifted.clone());
+    if let Some(entry) = state.exact_liftings.get(&lifting_key).cloned() {
+        clear_loose_db_replacements(&loose_replacements);
+        used_defs.push(entry.definition);
+        return Ok(entry.lifted);
     }
+    if let Some(entry) = state.find_generalization(bank, &closed)? {
+        clear_loose_db_replacements(&loose_replacements);
+        used_defs.push(entry.definition);
+        return Ok(entry.lifted);
+    }
+    clear_loose_db_replacements(&loose_replacements);
 
     let loose_fresh_vars = loose_replacements
         .values()
@@ -808,9 +836,14 @@ fn lift_lambda_prefix(
         lifting_key,
         LambdaLiftReuseEntry {
             lifted: lifted.clone(),
-            definition: wrapped,
+            definition: wrapped.clone(),
         },
     );
+    state.general_liftings.push(LambdaLiftGeneralizationEntry {
+        closed,
+        lifted_template: lhs_wo_bound,
+        definition: wrapped,
+    });
     Ok(lifted)
 }
 
@@ -1354,12 +1387,69 @@ pub struct ClauseSetLiftLambdasResult {
 struct LambdaLiftState {
     definitions: Vec<WrappedFormula>,
     exact_liftings: BTreeMap<usize, LambdaLiftReuseEntry>,
+    general_liftings: Vec<LambdaLiftGeneralizationEntry>,
 }
 
 #[derive(Clone)]
 struct LambdaLiftReuseEntry {
     lifted: Term,
     definition: WrappedFormula,
+}
+
+#[derive(Clone)]
+struct LambdaLiftGeneralizationEntry {
+    closed: Term,
+    lifted_template: Term,
+    definition: WrappedFormula,
+}
+
+impl LambdaLiftState {
+    fn find_generalization(
+        &self,
+        bank: &mut TermBank,
+        query: &Term,
+    ) -> Result<Option<LambdaLiftReuseEntry>, Diagnostic> {
+        let mut subst = Substitution::new();
+        for entry in &self.general_liftings {
+            let subst_start = subst.len();
+            if !subst_compute_match(&entry.closed, query, &mut subst) {
+                continue;
+            }
+
+            let matcher_derefed = match bank.insert_instantiated_ho(&entry.lifted_template, true) {
+                Ok(term) => term,
+                Err(err) => {
+                    subst.backtrack_to_pos(subst_start);
+                    return Err(err);
+                }
+            };
+            let matched_vars = subst.bindings()[subst_start..].to_vec();
+            let saved_bindings = matched_vars.iter().map(Term::binding).collect::<Vec<_>>();
+            for var in &matched_vars {
+                var.set_binding(None);
+            }
+
+            let candidate = (|| {
+                let matcher_derefed = bank.insert_instantiated_ho(&matcher_derefed, true)?;
+                let beta_normal = beta_normalize_db(bank, &matcher_derefed)?;
+                lambda_eta_reduce_db(bank, &beta_normal)
+            })();
+
+            for (var, binding) in matched_vars.iter().zip(saved_bindings) {
+                var.set_binding(binding);
+            }
+            subst.backtrack_to_pos(subst_start);
+
+            let candidate = candidate?;
+            if !candidate.has_lambda_subterm() {
+                return Ok(Some(LambdaLiftReuseEntry {
+                    lifted: candidate,
+                    definition: entry.definition.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -6565,6 +6655,63 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_lift_lambdas_reuses_generalized_liftings() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let x = typed_var(&bank, -901);
+        let a = typed_const(&mut bank, "set_lift_generalize_a");
+        let generic_body = typed_unary(&mut bank, "set_lift_generalize_body", &x);
+        let specific_body = typed_unary(&mut bank, "set_lift_generalize_body", &a);
+        let generic_lambda = close_with_db_var(&mut bank, &i_type, &generic_body).unwrap();
+        let specific_lambda = close_with_db_var(&mut bank, &i_type, &specific_body).unwrap();
+        let lambda_type = generic_lambda.type_().expect("lambda term is typed");
+        let generic_wrapped = typed_unary_with_types(
+            &mut bank,
+            "set_lift_generalize_wrapper",
+            &generic_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let specific_wrapped = typed_unary_with_types(
+            &mut bank,
+            "set_lift_generalize_wrapper",
+            &specific_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let eqn_code = bank.signature().eqn_code();
+        let formula =
+            bool_binary_with_code(&mut bank, eqn_code, &generic_wrapped, &specific_wrapped);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+
+        let result = set
+            .lift_lambdas(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lambdas_lifted, 1);
+        assert_eq!(result.lambda_lift_definitions_inserted, 2);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_INTRO_DEF]
+        );
+        assert_eq!(set.cardinality(), 2);
+        let formulas = set.iter().collect::<Vec<_>>();
+        let rewritten = formulas[0].formula();
+        let left_lifted = rewritten
+            .argument(0)
+            .and_then(|term| term.argument(0))
+            .expect("left wrapper contains lifted lambda replacement");
+        let right_lifted = rewritten
+            .argument(1)
+            .and_then(|term| term.argument(0))
+            .expect("right wrapper contains lifted lambda replacement");
+        assert_eq!(left_lifted.f_code(), right_lifted.f_code());
+        assert_eq!(left_lifted.argument(0).as_ref(), Some(&x));
+        assert_eq!(right_lifted.argument(0).as_ref(), Some(&a));
+    }
+
+    #[test]
     fn formula_set_lambda_normalize_forall_is_higher_order_gated() {
         let mut bank = test_bank();
         let formula = db_lambda_equality(&mut bank, "set_lambda_norm");
@@ -7479,6 +7626,68 @@ mod tests {
         let lifted_clause = clauses.iter().next().unwrap();
         let lifted_literal = lifted_clause.literals().as_slice().first().unwrap();
         assert_eq!(lifted_literal.left(), lifted_literal.right());
+    }
+
+    #[test]
+    fn clause_set_lift_lambdas_reuses_generalized_liftings() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let x = typed_var(&bank, -902);
+        let a = typed_const(&mut bank, "clause_lift_generalize_a");
+        let generic_body = typed_unary(&mut bank, "clause_lift_generalize_body", &x);
+        let specific_body = typed_unary(&mut bank, "clause_lift_generalize_body", &a);
+        let generic_lambda = close_with_db_var(&mut bank, &i_type, &generic_body).unwrap();
+        let specific_lambda = close_with_db_var(&mut bank, &i_type, &specific_body).unwrap();
+        let lambda_type = generic_lambda.type_().expect("lambda term is typed");
+        let generic_wrapped = typed_unary_with_types(
+            &mut bank,
+            "clause_lift_generalize_wrapper",
+            &generic_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let specific_wrapped = typed_unary_with_types(
+            &mut bank,
+            "clause_lift_generalize_wrapper",
+            &specific_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &generic_wrapped,
+            &specific_wrapped,
+            true,
+        )]));
+        let mut clauses = ClauseSet::new();
+        clauses.insert(clause);
+        let mut archive = FormulaSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result =
+            clause_set_lift_lambdas(&mut clauses, &mut archive, &mut bank, &fresh_vars, false)
+                .unwrap();
+
+        assert_eq!(result.clauses_changed, 1);
+        assert_eq!(result.definitions_archived, 1);
+        assert_eq!(
+            result.clause_derivation_ops,
+            vec![DC_LIFT_LAMBDAS, DC_LIFT_LAMBDAS]
+        );
+        assert_eq!(archive.cardinality(), 2);
+        let lifted_clause = clauses.iter().next().unwrap();
+        let lifted_literal = lifted_clause.literals().as_slice().first().unwrap();
+        let left_lifted = lifted_literal
+            .left()
+            .argument(0)
+            .expect("left wrapper contains lifted lambda replacement");
+        let right_lifted = lifted_literal
+            .right()
+            .argument(0)
+            .expect("right wrapper contains lifted lambda replacement");
+        assert_eq!(left_lifted.f_code(), right_lifted.f_code());
+        assert_eq!(left_lifted.argument(0).as_ref(), Some(&x));
+        assert_eq!(right_lifted.argument(0).as_ref(), Some(&a));
     }
 
     #[test]
