@@ -5146,7 +5146,7 @@ fn simple_app_encoded_formula_owner(
 ) -> Result<WrappedFormula, Diagnostic> {
     let term_formula = simple_fof_formulas_to_tformula(&formula.formulas, bank)?;
     let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
-    wrapped.set_properties(formula.type_);
+    wrapped.set_properties(formula.type_ | CP_INITIAL);
     wrapped.set_info(Some(ClauseInfo::new(Some(&formula.name), None, -1, -1)));
     Ok(wrapped)
 }
@@ -5162,7 +5162,7 @@ fn simple_fof_formula_owner(
 ) -> Result<Option<WrappedFormula>, Diagnostic> {
     let term_formula = simple_fof_formulas_to_tformula(formulas, bank)?;
     let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
-    wrapped.set_properties(properties);
+    wrapped.set_properties(properties | CP_INITIAL);
     wrapped.set_info(Some(ClauseInfo::new(Some(name), source, line, column)));
     Ok(Some(wrapped))
 }
@@ -13635,7 +13635,9 @@ mod tests {
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::clauses::clause::{clause_parse, Clause, ClauseParseOptions};
-    use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
+    use crate::clauses::clause_props::{
+        CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+    };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -16359,6 +16361,9 @@ input_clause(c2,axiom,[++q(X)]).
             parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank, &mut plain_set).unwrap();
         assert!(plain.saw_formula_owner);
         assert_eq!(plain_set.cardinality(), 1);
+        let plain_owner = plain_set.iter().next().unwrap();
+        assert!(plain_owner.query_prop(CP_INITIAL));
+        assert!(plain_owner.query_prop(CP_INPUT_FORMULA));
         let rendered = plain_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
@@ -16370,6 +16375,10 @@ input_clause(c2,axiom,[++q(X)]).
             parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank, &mut fool_set).unwrap();
         assert!(fool.saw_formula_owner);
         assert_eq!(fool_set.cardinality(), 3);
+        for formula in fool_set.iter() {
+            assert!(formula.query_prop(CP_INITIAL));
+            assert!(formula.query_prop(CP_INPUT_FORMULA));
+        }
         let rendered = fool_set
             .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
             .unwrap();
@@ -18480,6 +18489,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(problem_type, ProblemType::FirstOrder);
         assert_eq!(state.axioms().members(), 0);
         assert_eq!(state.f_axioms().cardinality(), 2);
+        for formula in state.f_axioms().iter() {
+            assert!(formula.query_prop(CP_INITIAL));
+            assert!(formula.query_prop(CP_INPUT_FORMULA));
+        }
         let rendered = {
             let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
             formulas
