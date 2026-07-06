@@ -8585,7 +8585,11 @@ fn proof_success_object_roots<'a>(
     state: &'a ProofState,
     clause: &'a Clause,
 ) -> Vec<&'a Clause> {
-    let mut roots = vec![clause];
+    let mut roots = if state.extract_roots().is_empty() {
+        vec![clause]
+    } else {
+        state.extract_roots().iter().collect()
+    };
     if config.flags.contains(EProverFlag::FullDerivation) {
         roots.extend(proof_object_saturation_roots(state));
         roots.extend(state.unprocessed().iter());
@@ -13885,11 +13889,12 @@ mod tests {
         parse_input_files_into_formula_owners, parse_schedule_worker_args,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
         proof_object_list_display_clauses, proof_object_list_display_items,
-        proof_search_global_indices, proof_success_status, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
-        write_proof_object_list_graph, write_proof_statistics, write_resource_setup_messages,
+        proof_search_global_indices, proof_success_object_roots, proof_success_status,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
+        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
+        write_proof_statistics, write_resource_setup_messages,
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
         ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
@@ -24193,6 +24198,45 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains(": 'proof'\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn proof_success_object_roots_falls_back_to_returned_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let returned = parse_lop_test_clause(state.terms_mut(), "p(a).", 24_001);
+        let config = EProverConfig::default();
+
+        let roots = proof_success_object_roots(&config, &state, &returned);
+
+        assert_eq!(
+            roots
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![24_001]
+        );
+    }
+
+    #[test]
+    fn proof_success_object_roots_prefers_recorded_extract_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let returned = parse_lop_test_clause(state.terms_mut(), "p(a).", 24_002);
+        let recorded = parse_lop_test_clause(state.terms_mut(), "q(a).", 24_003);
+        let processed = parse_lop_test_clause(state.terms_mut(), "r(a).", 24_004);
+        state.push_extract_root(recorded);
+        state.processed_non_units_mut().insert(processed);
+        let mut config = EProverConfig::default();
+        config.flags.set(EProverFlag::FullDerivation);
+
+        let roots = proof_success_object_roots(&config, &state, &returned);
+
+        assert_eq!(
+            roots
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![24_003, 24_004]
+        );
     }
 
     #[test]
