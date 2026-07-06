@@ -3,7 +3,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_answer_output_string, Clause};
 use crate::clauses::clause_props::{
-    CP_IS_DEAD, CP_IS_PROOF_CLAUSE, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
+    CP_IS_DEAD, CP_IS_PROOF_CLAUSE, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
 };
 use crate::clauses::clausefunc::tformula_expand_distinct;
 use crate::clauses::clausesets::ClauseSet;
@@ -195,6 +196,113 @@ pub fn derived_is_eval_gc(derived: DerivedView<'_>) -> bool {
     match derived {
         DerivedView::Clause(clause) => clause_is_eval_gc(clause),
         DerivedView::Formula(_) => false,
+    }
+}
+
+const DOT_NODE_GRAY: &str = ",color=gray, fillcolor=gray";
+const DOT_NODE_AX_GRAY: &str = ",color=gray, fillcolor=gray66";
+const DOT_NODE_GREEN: &str = ",color=green,fillcolor=palegreen";
+const DOT_NODE_AX_GREEN: &str = ",color=green,fillcolor=forestgreen";
+const DOT_NODE_RED: &str = ",color=red,fillcolor=lightpink1";
+const DOT_NODE_AX_RED: &str = ",color=red,fillcolor=firebrick1";
+const DOT_NODE_PURPLE: &str = ",color=blue,fillcolor=darkorchid1";
+const DOT_NODE_BLUE: &str = ",color=blue,fillcolor=lightskyblue1";
+const DOT_NODE_AX_BLUE: &str = ",color=blue,fillcolor=dodgerblue";
+
+#[must_use]
+pub fn derived_dot_node_colour(derived: DerivedView<'_>) -> &'static str {
+    derived_dot_node_colour_with_proof_status(derived, derived_in_proof(derived))
+}
+
+#[must_use]
+pub fn derived_dot_node_colour_for_proof_member(derived: DerivedView<'_>) -> &'static str {
+    derived_dot_node_colour_with_proof_status(derived, true)
+}
+
+#[must_use]
+fn derived_dot_node_colour_with_proof_status(
+    derived: DerivedView<'_>,
+    in_proof: bool,
+) -> &'static str {
+    if !in_proof {
+        return if derived_has_derivation(derived) {
+            DOT_NODE_GRAY
+        } else {
+            DOT_NODE_AX_GRAY
+        };
+    }
+
+    match derived {
+        DerivedView::Clause(clause) => {
+            if clause.is_empty() {
+                DOT_NODE_PURPLE
+            } else if matches!(
+                clause.query_tptp_type(),
+                CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE
+            ) {
+                if derived_has_derivation(derived) {
+                    DOT_NODE_BLUE
+                } else {
+                    DOT_NODE_AX_BLUE
+                }
+            } else if derived_has_derivation(derived) {
+                DOT_NODE_GREEN
+            } else {
+                DOT_NODE_AX_GREEN
+            }
+        }
+        DerivedView::Formula(formula) => match formula.query_tptp_type() {
+            CP_TYPE_CONJECTURE => {
+                if derived_has_derivation(derived) {
+                    DOT_NODE_RED
+                } else {
+                    DOT_NODE_AX_RED
+                }
+            }
+            CP_TYPE_NEG_CONJECTURE => {
+                if derived_has_derivation(derived) {
+                    DOT_NODE_BLUE
+                } else {
+                    DOT_NODE_AX_BLUE
+                }
+            }
+            _ => {
+                if derived_has_derivation(derived) {
+                    DOT_NODE_GREEN
+                } else {
+                    DOT_NODE_AX_GREEN
+                }
+            }
+        },
+    }
+}
+
+#[must_use]
+pub fn derived_dot_clause_link_colour(child: DerivedView<'_>, parent: &Clause) -> &'static str {
+    if !parent.query_prop(CP_IS_PROOF_CLAUSE) || !derived_in_proof(child) {
+        DOT_NODE_GRAY
+    } else {
+        derived_dot_node_colour(child)
+    }
+}
+
+#[must_use]
+pub fn derived_dot_formula_link_colour(
+    child: DerivedView<'_>,
+    parent: &WrappedFormula,
+) -> &'static str {
+    if !parent.query_prop(CP_IS_PROOF_CLAUSE) || !derived_in_proof(child) {
+        DOT_NODE_GRAY
+    } else {
+        derived_dot_node_colour(child)
+    }
+}
+
+#[must_use]
+fn derived_has_derivation(derived: DerivedView<'_>) -> bool {
+    match derived {
+        DerivedView::Clause(clause) => clause.derivation().is_some(),
+        DerivedView::Formula(formula) => formula.derivation().is_some(),
     }
 }
 
@@ -2085,7 +2193,8 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_rewrite_steps, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
+        cached_rewrite_steps, derived_dot_clause_link_colour, derived_dot_formula_link_colour,
+        derived_dot_node_colour, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
         generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
         DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge, ProofState,
         ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
@@ -2094,12 +2203,13 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
-        CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROOF_CLAUSE, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE,
+        CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROOF_CLAUSE, CP_IS_S_INDEXED, CP_TYPE_AXIOM,
+        CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
         CP_WATCH_ONLY,
     };
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -2239,6 +2349,156 @@ mod tests {
         derived_set_in_proof(DerivedViewMut::Formula(&mut formula), false);
         assert!(!formula.query_prop(CP_IS_PROOF_CLAUSE));
         assert!(!derived_in_proof(DerivedView::Formula(&formula)));
+    }
+
+    #[test]
+    fn derived_dot_node_colours_follow_c_clause_rules() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        let out_of_proof_axiom = simple_clause(&mut state, "dot_out_axiom", 20);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&out_of_proof_axiom)),
+            ",color=gray, fillcolor=gray66"
+        );
+
+        let mut out_of_proof_derived = simple_clause(&mut state, "dot_out_derived", 21);
+        clause_push_derivation(&mut out_of_proof_derived, DC_CNF_EVAL_GC, None, None);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&out_of_proof_derived)),
+            ",color=gray, fillcolor=gray"
+        );
+
+        let empty = Clause::empty();
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&empty)),
+            ",color=blue,fillcolor=darkorchid1"
+        );
+
+        let mut initial_axiom = simple_clause(&mut state, "dot_initial_axiom", 22);
+        initial_axiom.set_tptp_type(CP_TYPE_AXIOM);
+        derived_set_in_proof(DerivedViewMut::Clause(&mut initial_axiom), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&initial_axiom)),
+            ",color=green,fillcolor=forestgreen"
+        );
+
+        let mut derived_axiom = simple_clause(&mut state, "dot_derived_axiom", 23);
+        derived_axiom.set_tptp_type(CP_TYPE_AXIOM);
+        clause_push_derivation(&mut derived_axiom, DC_CNF_EVAL_GC, None, None);
+        derived_set_in_proof(DerivedViewMut::Clause(&mut derived_axiom), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&derived_axiom)),
+            ",color=green,fillcolor=palegreen"
+        );
+
+        let mut initial_conjecture = simple_clause(&mut state, "dot_initial_conj", 24);
+        initial_conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        derived_set_in_proof(DerivedViewMut::Clause(&mut initial_conjecture), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&initial_conjecture)),
+            ",color=blue,fillcolor=dodgerblue"
+        );
+
+        let mut derived_neg_conjecture = simple_clause(&mut state, "dot_derived_neg_conj", 25);
+        derived_neg_conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        clause_push_derivation(&mut derived_neg_conjecture, DC_CNF_EVAL_GC, None, None);
+        derived_set_in_proof(DerivedViewMut::Clause(&mut derived_neg_conjecture), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Clause(&derived_neg_conjecture)),
+            ",color=blue,fillcolor=lightskyblue1"
+        );
+    }
+
+    #[test]
+    fn derived_dot_node_colours_follow_c_formula_rules() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        let out_of_proof_formula = wrapped_formula(&mut state, "dot_out_formula");
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&out_of_proof_formula)),
+            ",color=gray, fillcolor=gray66"
+        );
+
+        let mut out_of_proof_derived = wrapped_formula(&mut state, "dot_out_formula_derived");
+        out_of_proof_derived.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&out_of_proof_derived)),
+            ",color=gray, fillcolor=gray"
+        );
+
+        let mut initial_conjecture = wrapped_formula(&mut state, "dot_formula_conj");
+        initial_conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        derived_set_in_proof(DerivedViewMut::Formula(&mut initial_conjecture), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&initial_conjecture)),
+            ",color=red,fillcolor=firebrick1"
+        );
+
+        let mut derived_conjecture = wrapped_formula(&mut state, "dot_formula_derived_conj");
+        derived_conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        derived_conjecture.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
+        derived_set_in_proof(DerivedViewMut::Formula(&mut derived_conjecture), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&derived_conjecture)),
+            ",color=red,fillcolor=lightpink1"
+        );
+
+        let mut initial_neg_conjecture = wrapped_formula(&mut state, "dot_formula_neg_conj");
+        initial_neg_conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        derived_set_in_proof(DerivedViewMut::Formula(&mut initial_neg_conjecture), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&initial_neg_conjecture)),
+            ",color=blue,fillcolor=dodgerblue"
+        );
+
+        let mut question = wrapped_formula(&mut state, "dot_formula_question");
+        question.set_tptp_type(CP_TYPE_QUESTION);
+        derived_set_in_proof(DerivedViewMut::Formula(&mut question), true);
+        assert_eq!(
+            derived_dot_node_colour(DerivedView::Formula(&question)),
+            ",color=green,fillcolor=forestgreen"
+        );
+    }
+
+    #[test]
+    fn derived_dot_link_colours_follow_c_parent_proof_rules() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        let mut parent = simple_clause(&mut state, "dot_clause_parent", 26);
+        let mut child = simple_clause(&mut state, "dot_clause_child", 27);
+        child.set_tptp_type(CP_TYPE_AXIOM);
+        derived_set_in_proof(DerivedViewMut::Clause(&mut child), true);
+        assert_eq!(
+            derived_dot_clause_link_colour(DerivedView::Clause(&child), &parent),
+            ",color=gray, fillcolor=gray"
+        );
+
+        parent.set_prop(CP_IS_PROOF_CLAUSE);
+        assert_eq!(
+            derived_dot_clause_link_colour(DerivedView::Clause(&child), &parent),
+            ",color=green,fillcolor=forestgreen"
+        );
+
+        derived_set_in_proof(DerivedViewMut::Clause(&mut child), false);
+        assert_eq!(
+            derived_dot_clause_link_colour(DerivedView::Clause(&child), &parent),
+            ",color=gray, fillcolor=gray"
+        );
+
+        let mut formula_parent = wrapped_formula(&mut state, "dot_formula_parent");
+        let mut formula_child = wrapped_formula(&mut state, "dot_formula_child");
+        formula_child.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        derived_set_in_proof(DerivedViewMut::Formula(&mut formula_child), true);
+        assert_eq!(
+            derived_dot_formula_link_colour(DerivedView::Formula(&formula_child), &formula_parent),
+            ",color=gray, fillcolor=gray"
+        );
+
+        formula_parent.set_prop(CP_IS_PROOF_CLAUSE);
+        assert_eq!(
+            derived_dot_formula_link_colour(DerivedView::Formula(&formula_child), &formula_parent),
+            ",color=blue,fillcolor=dodgerblue"
+        );
     }
 
     fn test_ocb(state: &ProofState) -> OrderControlBlock {

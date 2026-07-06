@@ -71,8 +71,8 @@ use crate::clauses::pred_elim::{
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
 };
 use crate::clauses::proofstate::{
-    proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
-    WatchlistSource as ProofStateWatchlistSource,
+    derived_dot_node_colour_for_proof_member, proof_state_alloc, DerivedView, ProofObjectAnalysis,
+    ProofObjectGraph, ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
@@ -8086,7 +8086,9 @@ fn write_proof_object_dot(
             "    {} -> {} [style=\"bold\"{}]",
             proof_object_dot_node_id(graph, edge.parent_index),
             proof_object_dot_node_id(graph, edge.child_index),
-            proof_object_dot_node_colour(graph.clauses[edge.child_index])
+            derived_dot_node_colour_for_proof_member(DerivedView::Clause(
+                graph.clauses[edge.child_index],
+            ))
         )?;
     }
     output.write_all(b"}\n")?;
@@ -8133,7 +8135,7 @@ fn write_proof_object_dot_clause(
         output,
         "  {} [shape=box{},style=filled,label=\"{}\"]",
         node_id,
-        proof_object_dot_node_colour(clause),
+        derived_dot_node_colour_for_proof_member(DerivedView::Clause(clause)),
         dot_label_escape(&label)
     )?;
     Ok(())
@@ -8141,18 +8143,6 @@ fn write_proof_object_dot_clause(
 
 fn proof_object_dot_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
     graph.clauses.len().saturating_sub(index)
-}
-
-fn proof_object_dot_node_colour(clause: &Clause) -> &'static str {
-    if clause.is_empty() {
-        ",color=blue,fillcolor=darkorchid1"
-    } else if clause.is_conjecture() {
-        ",color=blue,fillcolor=lightskyblue1"
-    } else if clause.derivation().is_some() {
-        ",color=green,fillcolor=palegreen"
-    } else {
-        ",color=green,fillcolor=forestgreen"
-    }
 }
 
 fn dot_label_escape(label: &str) -> String {
