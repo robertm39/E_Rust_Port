@@ -99,6 +99,7 @@ Source files reviewed: `PROVER/eground.c`.
 - `app_encode` is initialized but unused. Remove it only after the executable option surface and any historical scripts depending on it are audited.
 - DIMACS output goes through `GroundSetPrintDimacs`, which delegates non-empty non-unit clause literal printing to `ClausePrintDimacs`; that helper writes literal integers to `stdout` while writing only terminators to the passed `FILE* out`. This is surprising for `--output-file` and should be cleaned only outside drop-in compatibility mode.
 - Equational clauses are recoded into predicate literals after a warning, shifting equality semantics onto explicit equality axioms supplied by the user. Keep the warning/output order for compatibility, but consider a clearer user-facing mode after parity.
+- `--give-up` estimate-limit handling exits the whole process from inside the grounding helper after printing a failure line to `GlobalOut`, bypassing normal result, statistics, and resource-footer output. Rust preserves the executable behavior while keeping the library-level estimate outcome explicit; a cleaned C API should return this status to the caller instead of calling `exit()`.
 - The completion-status switch handles complete, low-memory, and timeout, then asserts on any unknown state. Release builds may not surface a helpful diagnostic for impossible states; a modernized path should use an explicit error or internal invariant check.
 
 ### Porting Focus
@@ -111,5 +112,5 @@ Source files reviewed: `PROVER/eground.c`.
 
 - `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
 - The Rust wrapper parses supported normal input owners into a represented `FormulaSet`, runs `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` with C's hard-coded `1048576` miniscope limit and parsed definitional-CNF limit, then continues through the grounding pipeline.
-- The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C DIMACS split between the configured output stream and raw stdout.
+- The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, `--give-up` success-status failure exits, and the C DIMACS split between the configured output stream and raw stdout.
 <!-- END MANUAL REVIEW: c_source_docs -->

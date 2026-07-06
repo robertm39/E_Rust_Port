@@ -14,7 +14,8 @@ use crate::clauses::formulasets::{FormulaSet, FormulaSetCnfOptions};
 use crate::clauses::grounding::{
     clause_cmp_by_len, clause_set_create_constrained_ground_instances_with_output,
     clause_set_create_ground_instances_with_output, clause_set_eqlit_recode,
-    print_dimacs_header_string, GroundInstancePrintOptions, GroundSet, GroundSetState,
+    print_dimacs_header_string, GroundInstanceOutcome, GroundInstancePrintOptions, GroundSet,
+    GroundSetState,
 };
 use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::clauses::splitting::clause_set_split_clauses_general_fresh;
@@ -614,14 +615,26 @@ fn execute_eground(
 
     let output_format = parse_input_files(config, stdin, &mut bank, &mut clauses)?;
     let preparation = prepare_clauses_for_grounding(config, stderr, &mut bank, &mut clauses)?;
-    let groundset = create_groundset(
+    let groundset = match create_groundset(
         config,
         &mut output,
         &mut bank,
         &clauses,
         output_format,
         preparation.selected_symbol,
-    )?;
+    )? {
+        GroundingRunResult::Grounded(groundset) => groundset,
+        GroundingRunResult::EstimateLimitExceeded => {
+            write_give_up_failure(&mut output)?;
+            output
+                .flush()
+                .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
+            stderr
+                .flush()
+                .map_err(|error| io_diagnostic(error.to_string()))?;
+            return Ok(0);
+        }
+    };
 
     write_eground_result(
         config,
@@ -651,6 +664,11 @@ struct GroundingPreparation {
     selected_symbol: FunCode,
     initial_clauses: i64,
     initial_literals: i64,
+}
+
+enum GroundingRunResult {
+    Grounded(GroundSet),
+    EstimateLimitExceeded,
 }
 
 fn parse_input_files(
@@ -771,7 +789,7 @@ fn create_groundset(
     clauses: &ClauseSet,
     output_format: IoFormat,
     selected_symbol: FunCode,
-) -> Result<GroundSet, Diagnostic> {
+) -> Result<GroundingRunResult, Diagnostic> {
     let mut groundset = GroundSet::new();
     let print_options = GroundInstancePrintOptions::new(
         config.output_level,
@@ -782,7 +800,7 @@ fn create_groundset(
         config.tautology_detection,
     );
     let give_up = Some(config.give_up);
-    if config.constraints {
+    let outcome = if config.constraints {
         clause_set_create_constrained_ground_instances_with_output(
             &mut *output,
             print_options,
@@ -791,7 +809,7 @@ fn create_groundset(
             &mut groundset,
             give_up,
             None,
-        )?;
+        )?
     } else {
         clause_set_create_ground_instances_with_output(
             &mut *output,
@@ -800,12 +818,15 @@ fn create_groundset(
             clauses,
             &mut groundset,
             give_up,
-        )?;
+        )?
+    };
+    if outcome == GroundInstanceOutcome::EstimateLimitExceeded {
+        return Ok(GroundingRunResult::EstimateLimitExceeded);
     }
 
     if groundset.complete() != GroundSetState::Complete && config.add_single_instance {
         let cached_state = groundset.complete();
-        clause_set_create_constrained_ground_instances_with_output(
+        let retry_outcome = clause_set_create_constrained_ground_instances_with_output(
             &mut *output,
             print_options,
             &mut *bank,
@@ -814,9 +835,12 @@ fn create_groundset(
             give_up,
             Some(selected_symbol),
         )?;
+        if retry_outcome == GroundInstanceOutcome::EstimateLimitExceeded {
+            return Ok(GroundingRunResult::EstimateLimitExceeded);
+        }
         groundset.set_complete(cached_state);
     }
-    Ok(groundset)
+    Ok(GroundingRunResult::Grounded(groundset))
 }
 
 fn write_eground_result(
@@ -906,6 +930,15 @@ fn write_completion_message(
         GroundSetState::Unknown => "Proof state incomplete!",
     };
     writeln_diag(output, &format!("{DEFAULT_COMCHAR_RAW} {message}"))
+}
+
+fn write_give_up_failure(output: &mut impl Write) -> Result<(), Diagnostic> {
+    writeln_diag(
+        output,
+        &format!(
+            "\n{DEFAULT_COMCHAR_RAW} Failure: User resource limit exceeded (estimated number of instances)!"
+        ),
+    )
 }
 
 fn write_statistics(
@@ -1326,6 +1359,69 @@ mod tests {
         assert!(output.contains(&format!(
             "{DEFAULT_COMCHAR_RAW} Full and complete proof state written!"
         )));
+    }
+
+    #[test]
+    fn give_up_estimate_limit_exits_with_c_failure_status() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"p(a).\np(b).\nq(X).\n";
+
+        let status = run(
+            [PROGRAM_NAME, "--lop-in", "--silent", "--give-up=1"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "\n{DEFAULT_COMCHAR_RAW} Failure: User resource limit exceeded (estimated number of instances)!\n"
+            )
+        );
+    }
+
+    #[test]
+    fn constrained_give_up_failure_uses_configured_output() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("eground-give-up-output");
+        let _ = fs::remove_file(&output_path);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"p(a).\np(b).\n~q(Y).\nq(X).\n";
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "--silent",
+                "--constraints",
+                "--give-up=2",
+                "-o",
+                output_path.to_str().unwrap(),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, 0);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        assert_eq!(
+            fs::read_to_string(&output_path).unwrap(),
+            format!(
+                "\n{DEFAULT_COMCHAR_RAW} Failure: User resource limit exceeded (estimated number of instances)!\n"
+            )
+        );
+
+        fs::remove_file(output_path).unwrap();
     }
 
     #[test]
