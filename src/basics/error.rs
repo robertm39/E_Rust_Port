@@ -1,5 +1,8 @@
+use crate::basics::os_wrapper::get_usec_clock;
 use std::fmt;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -204,6 +207,61 @@ pub fn write_sys_warning_message(
 }
 
 #[must_use]
+pub fn elog_file_name(process_id: u32) -> String {
+    format!("elog{process_id}.log")
+}
+
+#[must_use]
+pub fn render_elog_record(process_id: u32, cpu_time_seconds: f64, message: &str) -> String {
+    format!("{process_id}: {cpu_time_seconds:4.9}: {message}")
+}
+
+pub fn write_elog_message(
+    log_output: &mut impl Write,
+    stderr: &mut impl Write,
+    process_id: u32,
+    cpu_time_seconds: f64,
+    message: &str,
+) -> io::Result<()> {
+    log_output.write_all(render_elog_record(process_id, cpu_time_seconds, message).as_bytes())?;
+    stderr.write_all(b"\n")
+}
+
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn current_elog_cpu_time_seconds() -> f64 {
+    get_usec_clock() as f64 / 1_000_000.0
+}
+
+pub fn elog(message: &str) -> io::Result<PathBuf> {
+    elog_in_dir(Path::new("."), message)
+}
+
+pub fn elog_in_dir(directory: impl AsRef<Path>, message: &str) -> io::Result<PathBuf> {
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    elog_in_dir_with_stderr(directory, message, &mut stderr)
+}
+
+pub fn elog_in_dir_with_stderr(
+    directory: impl AsRef<Path>,
+    message: &str,
+    stderr: &mut impl Write,
+) -> io::Result<PathBuf> {
+    let process_id = std::process::id();
+    let path = directory.as_ref().join(elog_file_name(process_id));
+    let mut log_output = OpenOptions::new().append(true).create(true).open(&path)?;
+    write_elog_message(
+        &mut log_output,
+        stderr,
+        process_id,
+        current_elog_cpu_time_seconds(),
+        message,
+    )?;
+    Ok(path)
+}
+
+#[must_use]
 pub fn test_letter_string(to_check: &str, options: &str) -> bool {
     to_check
         .bytes()
@@ -228,11 +286,13 @@ pub fn check_option_letter_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_option_letter_string, init_error, program_name, render_error_message,
-        render_sys_error_message, render_sys_warning_message, render_tmp_errno_error_message,
+        check_option_letter_string, elog_file_name, elog_in_dir_with_stderr, init_error,
+        program_name, render_elog_record, render_error_message, render_sys_error_message,
+        render_sys_warning_message, render_tmp_errno_error_message,
         render_tmp_errno_warning_message, render_warning_message, set_tmp_errno,
-        test_letter_string, tmp_errno, write_error_message, write_sys_error_message,
-        write_sys_warning_message, write_warning_message, Diagnostic, ErrorCode,
+        test_letter_string, tmp_errno, write_elog_message, write_error_message,
+        write_sys_error_message, write_sys_warning_message, write_warning_message, Diagnostic,
+        ErrorCode,
     };
     use crate::test_support::global_state_lock;
     use std::io;
@@ -339,6 +399,54 @@ mod tests {
                 "eprover: fatal\neprover: Warning: warn\neprover: sys\neprover: {system_error}\neprover: Warning: syswarn\neprover: {system_error}\n"
             )
         );
+    }
+
+    #[test]
+    fn elog_helpers_preserve_c_record_and_stderr_newline_split() {
+        let mut log_output = Vec::new();
+        let mut stderr = Vec::new();
+
+        write_elog_message(&mut log_output, &mut stderr, 1234, 12.5, "trace point").unwrap();
+
+        assert_eq!(elog_file_name(1234), "elog1234.log");
+        assert_eq!(
+            render_elog_record(1234, -1.0, "failed clock"),
+            "1234: -1.000000000: failed clock"
+        );
+        assert_eq!(
+            String::from_utf8(log_output).unwrap(),
+            "1234: 12.500000000: trace point"
+        );
+        assert_eq!(String::from_utf8(stderr).unwrap(), "\n");
+    }
+
+    #[test]
+    fn elog_in_dir_appends_to_pid_named_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "e_rust_port_elog_test_{}_{}",
+            std::process::id(),
+            crate::basics::os_wrapper::get_usec_time()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut stderr = Vec::new();
+
+        let path = elog_in_dir_with_stderr(&directory, "first", &mut stderr).unwrap();
+        let second_path = elog_in_dir_with_stderr(&directory, "second", &mut stderr).unwrap();
+
+        assert_eq!(path, second_path);
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(elog_file_name(std::process::id()).as_str())
+        );
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with(&format!("{}: ", std::process::id())));
+        assert!(contents.contains(": first"));
+        assert!(contents.contains(": second"));
+        assert!(!contents.contains('\n'));
+        assert_eq!(String::from_utf8(stderr).unwrap(), "\n\n");
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
