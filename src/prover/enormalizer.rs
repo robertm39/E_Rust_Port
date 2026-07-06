@@ -14,7 +14,7 @@ use crate::clauses::clause::{
     clause_print_tptp_format_string_with_options, clause_tstp_string, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
-    clause_type_from_identifier, FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
+    clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -845,7 +845,7 @@ fn wrapped_formula(
 ) -> WrappedFormula {
     let mut wrapper = WrappedFormula::wt_formula_alloc(formula);
     wrapper.set_tptp_type(type_);
-    wrapper.set_prop(CP_INPUT_FORMULA);
+    wrapper.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
     wrapper.set_info(Some(ClauseInfo::new(
         Some(name),
         Some(source),
@@ -1147,11 +1147,12 @@ impl<W: Write> Write for EnormalizerOutput<'_, W> {
 #[cfg(test)]
 mod tests {
     use super::{
-        memory_limit_bytes_from_mb, print_help, process_options, run, RunCommand,
-        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        memory_limit_bytes_from_mb, new_term_bank, parse_wrapped_formula, print_help,
+        process_options, run, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
-    use crate::inout::scanner::IoFormat;
+    use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA};
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::test_support::global_state_lock;
     use std::fs;
     use std::io::{self, Write};
@@ -1238,6 +1239,25 @@ mod tests {
         assert!(String::from_utf8(stdout)
             .expect("utf8")
             .contains("enormalizer "));
+    }
+
+    #[test]
+    fn parsed_formula_targets_set_initial_and_input_formula_props_like_c() {
+        let _guard = global_state_lock();
+        for (format, input) in [
+            (IoFormat::Tptp, "input_formula(form1,axiom,p(a))."),
+            (IoFormat::Tstp, "fof(form1, axiom, p(a))."),
+            (IoFormat::Tstp, "tff(person_type, type, person: $tType)."),
+        ] {
+            let mut bank = new_term_bank().expect("term bank");
+            let mut scanner = Scanner::from_user_string(input, true).expect("scanner");
+            scanner.set_format(format);
+
+            let target = parse_wrapped_formula(&mut scanner, &mut bank).expect("formula target");
+
+            assert!(target.formula.query_prop(CP_INITIAL));
+            assert!(target.formula.query_prop(CP_INPUT_FORMULA));
+        }
     }
 
     #[test]
