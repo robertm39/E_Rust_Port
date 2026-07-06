@@ -1050,65 +1050,191 @@ fn find_plain_demodulator<'a>(
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     let candidate_sides = demodulators.demod_index_search_candidate_sides();
-    let candidate_sides = candidate_sides.as_deref();
+    if let Some(candidate_sides) = candidate_sides.as_deref() {
+        return find_indexed_demodulator(
+            ocb,
+            bank,
+            term,
+            date,
+            demodulators,
+            candidate_sides,
+            subst,
+            restricted_rw,
+        );
+    }
+
+    find_set_order_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C indexed demodulator search state"
+)]
+fn find_indexed_demodulator<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    demodulators: &'a ClauseSet,
+    candidate_sides: &[PdtIndexedOccurrence],
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    for &candidate in candidate_sides {
+        let Some(clause) = demodulators.find_by_id(candidate.clause_id) else {
+            continue;
+        };
+        let Some(match_) = try_demodulator_clause_side(
+            ocb,
+            bank,
+            term,
+            date,
+            clause,
+            candidate.side,
+            subst,
+            restricted_rw,
+        )?
+        else {
+            continue;
+        };
+        return Ok(Some(match_));
+    }
+    Ok(None)
+}
+
+fn find_set_order_demodulator<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    demodulators: &'a ClauseSet,
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     for clause in demodulators.iter() {
         if !clause.is_demodulator() {
             continue;
         }
-        if !date.is_earlier_than(clause.date()) {
-            continue;
+
+        if let Some(match_) = try_demodulator_clause_side(
+            ocb,
+            bank,
+            term,
+            date,
+            clause,
+            EqnSide::LeftSide,
+            subst,
+            restricted_rw,
+        )? {
+            return Ok(Some(match_));
         }
 
-        let eqn = clause
-            .literals()
-            .as_slice()
-            .first()
-            .expect("positive unit demodulator has one literal");
-        if demodulator_date_blocks_term(term, clause, eqn) {
-            continue;
-        }
-
-        if demod_candidate_allows_side(candidate_sides, clause, EqnSide::LeftSide) {
-            let backtrack = subst.len();
-            if subst_match_complete(eqn.left(), term, subst)
-                && (eqn.is_oriented()
-                    || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
-                && (!restricted_rw || !subst.is_renaming())
-            {
-                return Ok(Some(PlainDemodulatorMatch {
-                    clause,
-                    replacement: eqn.right(),
-                }));
-            }
-            subst.backtrack_to_pos(backtrack);
-        }
-
-        if !eqn.is_oriented()
-            && demod_candidate_allows_side(candidate_sides, clause, EqnSide::RightSide)
-        {
-            let backtrack = subst.len();
-            if subst_match_complete(eqn.right(), term, subst)
-                && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)?
-            {
-                return Ok(Some(PlainDemodulatorMatch {
-                    clause,
-                    replacement: eqn.left(),
-                }));
-            }
-            subst.backtrack_to_pos(backtrack);
+        if let Some(match_) = try_demodulator_clause_side(
+            ocb,
+            bank,
+            term,
+            date,
+            clause,
+            EqnSide::RightSide,
+            subst,
+            restricted_rw,
+        )? {
+            return Ok(Some(match_));
         }
     }
     Ok(None)
 }
 
-fn demod_candidate_allows_side(
-    candidates: Option<&[PdtIndexedOccurrence]>,
-    clause: &Clause,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C indexed side checks with explicit state"
+)]
+fn try_demodulator_clause_side<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    clause: &'a Clause,
     side: EqnSide,
-) -> bool {
-    candidates.is_none_or(|candidates| {
-        candidates.contains(&PdtIndexedOccurrence::new(clause.ident(), side))
-    })
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    if !clause.is_demodulator() || !date.is_earlier_than(clause.date()) {
+        return Ok(None);
+    }
+
+    let eqn = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("positive unit demodulator has one literal");
+    if demodulator_date_blocks_term(term, clause, eqn) {
+        return Ok(None);
+    }
+
+    match side {
+        EqnSide::NoSide => Ok(None),
+        EqnSide::LeftSide => {
+            try_left_demodulator_side(ocb, bank, term, clause, eqn, subst, restricted_rw)
+        }
+        EqnSide::RightSide => try_right_demodulator_side(ocb, bank, term, clause, eqn, subst),
+        EqnSide::BothSides => {
+            if let Some(match_) =
+                try_left_demodulator_side(ocb, bank, term, clause, eqn, subst, restricted_rw)?
+            {
+                return Ok(Some(match_));
+            }
+            try_right_demodulator_side(ocb, bank, term, clause, eqn, subst)
+        }
+    }
+}
+
+fn try_left_demodulator_side<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    clause: &'a Clause,
+    eqn: &'a Eqn,
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    let backtrack = subst.len();
+    if subst_match_complete(eqn.left(), term, subst)
+        && (eqn.is_oriented() || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
+        && (!restricted_rw || !subst.is_renaming())
+    {
+        return Ok(Some(PlainDemodulatorMatch {
+            clause,
+            replacement: eqn.right(),
+        }));
+    }
+    subst.backtrack_to_pos(backtrack);
+    Ok(None)
+}
+
+fn try_right_demodulator_side<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    clause: &'a Clause,
+    eqn: &'a Eqn,
+    subst: &mut Substitution,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    if eqn.is_oriented() {
+        return Ok(None);
+    }
+
+    let backtrack = subst.len();
+    if subst_match_complete(eqn.right(), term, subst)
+        && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)?
+    {
+        return Ok(Some(PlainDemodulatorMatch {
+            clause,
+            replacement: eqn.left(),
+        }));
+    }
+    subst.backtrack_to_pos(backtrack);
+    Ok(None)
 }
 
 fn demodulator_date_blocks_term(term: &Term, clause: &Clause, eqn: &Eqn) -> bool {
@@ -1972,6 +2098,51 @@ mod tests {
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn indexed_clause_set_rewrite_uses_pdt_candidate_order_before_set_order() {
+        let _counter_guard = reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -12);
+        let b = typed_const(&mut bank, "rw_order_b");
+        let specific_replacement = typed_const(&mut bank, "rw_order_specific");
+        let general_replacement = typed_const(&mut bank, "rw_order_general");
+        let f_x = typed_unary(&mut bank, "rw_order_f", &x);
+        let f_b = typed_unary(&mut bank, "rw_order_f", &b);
+        let mut specific_lit = eqn(&mut bank, &f_b, &specific_replacement, true);
+        let mut general_lit = eqn(&mut bank, &f_x, &general_replacement, true);
+        oriented_demod(&mut specific_lit);
+        oriented_demod(&mut general_lit);
+        let mut specific = Clause::alloc(EqnList::from_vec(vec![specific_lit]));
+        let mut general = Clause::alloc(EqnList::from_vec(vec![general_lit]));
+        let mut demods = ClauseSet::new_demod_indexed();
+        let mut ocb = kbo_ocb(&bank);
+
+        specific.set_date(SysDate::from_raw(5));
+        general.set_date(SysDate::from_raw(5));
+        specific.set_weight(specific.standard_weight());
+        general.set_weight(general.standard_weight());
+        demods.indexed_insert_clause_owned(specific, &bank);
+        demods.indexed_insert_clause_owned(general, &bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, general_replacement);
+        assert_eq!(f_b.rw_replace_field(), Some(general_replacement));
+        assert_eq!(
+            demods.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::variables_first())
+        );
     }
 
     #[test]
