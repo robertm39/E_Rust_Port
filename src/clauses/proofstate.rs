@@ -3011,6 +3011,32 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_proof_object_analysis_counts_formula_archive_parents() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut formula = wrapped_formula(&mut state, "proof_analysis_f_archive_parent");
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(formula_ref), None);
+
+        state.f_archive_mut().insert(formula);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 1,
+                formula_step_count: 1,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 1,
+                initial_clause_count: 1,
+                initial_formula_count: 1,
+                generating_inference_count: 0,
+                simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
     fn proof_state_proof_object_analysis_follows_formula_quote_source() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut original = wrapped_formula(&mut state, "proof_analysis_original_formula");
@@ -3244,6 +3270,43 @@ mod tests {
             vec![formula_ref.ident()]
         );
         assert_eq!(graph.edges, Vec::new());
+        assert_eq!(
+            graph.mixed_edges,
+            vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_collects_formula_archive_parent_nodes() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_formula(&mut state, "proof_graph_f_archive_parent");
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_022);
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(formula_ref), None);
+
+        state.f_archive_mut().insert(formula);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_022]
+        );
+        assert_eq!(
+            graph
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![formula_ref.ident()]
+        );
         assert_eq!(
             graph.mixed_edges,
             vec![ProofObjectGraphMixedEdge {
