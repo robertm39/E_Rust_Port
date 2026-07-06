@@ -1,5 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 
 pub const TCP_BACKLOG: usize = 10;
@@ -172,7 +172,11 @@ pub fn tcp_msg_write_to(writer: &mut impl Write, message: &mut TcpMessage) -> Ms
 }
 
 pub fn tcp_msg_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> MsgStatus {
-    tcp_msg_read_from_impl(reader, message, |_| {})
+    tcp_msg_read_from_impl(reader, message, false, |_| {})
+}
+
+pub fn tcp_msg_try_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> MsgStatus {
+    tcp_msg_read_from_impl(reader, message, true, |_| {})
 }
 
 pub fn tcp_msg_read_from_tracing(
@@ -180,7 +184,7 @@ pub fn tcp_msg_read_from_tracing(
     message: &mut TcpMessage,
     trace: &mut impl Write,
 ) -> MsgStatus {
-    tcp_msg_read_from_impl(reader, message, |event| {
+    tcp_msg_read_from_impl(reader, message, false, |event| {
         let _ = match event {
             TcpMsgReadTrace::HeaderRead(count) => writeln!(trace, "read(Size)={count}"),
             TcpMsgReadTrace::ExpectedLength(len) => {
@@ -204,6 +208,7 @@ fn read_trace_count(read: usize) -> isize {
 fn tcp_msg_read_from_impl(
     reader: &mut impl Read,
     message: &mut TcpMessage,
+    incomplete_on_would_block: bool,
     mut trace: impl FnMut(TcpMsgReadTrace),
 ) -> MsgStatus {
     if message.transmission_count < TCP_HEADER_SIZE {
@@ -226,9 +231,13 @@ fn tcp_msg_read_from_impl(
                     return MsgStatus::Error;
                 }
             }
-            Err(_) => {
+            Err(error) => {
                 trace(TcpMsgReadTrace::HeaderRead(-1));
-                return MsgStatus::Error;
+                return if incomplete_on_would_block && error.kind() == ErrorKind::WouldBlock {
+                    MsgStatus::Incomplete
+                } else {
+                    MsgStatus::Error
+                };
             }
         }
     }
@@ -260,9 +269,13 @@ fn tcp_msg_read_from_impl(
                 MsgStatus::Incomplete
             }
         }
-        Err(_) => {
+        Err(error) => {
             trace(TcpMsgReadTrace::PayloadRead(-1));
-            MsgStatus::Error
+            if incomplete_on_would_block && error.kind() == ErrorKind::WouldBlock {
+                MsgStatus::Incomplete
+            } else {
+                MsgStatus::Error
+            }
         }
     }
 }
@@ -700,8 +713,9 @@ mod platform_server_socket {
 mod tests {
     use super::{
         connect_client_like_c, create_server_socket, tcp_msg_read_from, tcp_msg_read_from_tracing,
-        tcp_msg_recv_from, tcp_msg_recv_from_tracing, tcp_msg_send_to, tcp_msg_write_to,
-        tcp_string_recv_from, tcp_string_send_to, MsgStatus, TcpMessage, TCP_HEADER_SIZE,
+        tcp_msg_recv_from, tcp_msg_recv_from_tracing, tcp_msg_send_to, tcp_msg_try_read_from,
+        tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to, MsgStatus, TcpMessage,
+        TCP_HEADER_SIZE,
     };
     use std::io::{self, Cursor, Read, Write};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -724,6 +738,14 @@ mod tests {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             let limit = buffer.len().min(self.max_read);
             self.inner.read(&mut buffer[..limit])
+        }
+    }
+
+    struct WouldBlockReader;
+
+    impl Read for WouldBlockReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
         }
     }
 
@@ -870,6 +892,30 @@ mod tests {
         assert_eq!(message.transmission_count(), TCP_HEADER_SIZE + 3);
         assert_eq!(message.raw_payload_bytes(), b"a");
         assert_eq!(message.unpack(), b"a");
+    }
+
+    #[test]
+    fn try_read_treats_would_block_as_incomplete_without_mutating_message() {
+        let mut reader = WouldBlockReader;
+        let mut message = TcpMessage::new();
+
+        assert_eq!(
+            tcp_msg_try_read_from(&mut reader, &mut message),
+            MsgStatus::Incomplete
+        );
+        assert_eq!(message.transmission_count(), 0);
+        assert_eq!(message.message_len(), None);
+    }
+
+    #[test]
+    fn blocking_read_treats_would_block_as_error() {
+        let mut reader = WouldBlockReader;
+        let mut message = TcpMessage::new();
+
+        assert_eq!(
+            tcp_msg_read_from(&mut reader, &mut message),
+            MsgStatus::Error
+        );
     }
 
     #[test]

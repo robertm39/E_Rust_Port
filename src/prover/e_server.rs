@@ -1,6 +1,9 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
@@ -13,7 +16,8 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::network::{
-    create_server_socket, listen, tcp_string_recv_from, tcp_string_send_to_or_error, MsgStatus,
+    create_server_socket, listen, tcp_msg_read_from, tcp_msg_try_read_from, tcp_string_recv_from,
+    tcp_string_send_to_or_error, MsgStatus, TcpMessage,
 };
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner};
@@ -240,6 +244,27 @@ pub struct LegacyServerReport {
     pub read_error: bool,
 }
 
+#[derive(Debug)]
+struct LegacyActiveConnection {
+    stream: TcpStream,
+    descriptor: u64,
+    message: TcpMessage,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LegacyServerStepReport {
+    active_read: bool,
+    accepted: bool,
+    rejected: bool,
+}
+
+impl LegacyServerStepReport {
+    #[must_use]
+    const fn made_progress(self) -> bool {
+        self.active_read || self.accepted || self.rejected
+    }
+}
+
 pub fn run<I, S>(
     argv: I,
     stdout: &mut impl Write,
@@ -400,22 +425,167 @@ where
 fn serve_legacy_server(port: u16, stdout: &mut impl Write) -> Result<(), Diagnostic> {
     let listener = create_server_socket(port)?;
     listen(&listener)?;
+    listener.set_nonblocking(true).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!("Cannot set server socket nonblocking: {error}"),
+        )
+    })?;
+    let mut active = None;
+    let mut printed_loop_marker = false;
     loop {
-        writeln_diag(stdout, "Main loop")?;
-        match listener.accept() {
-            Ok((mut stream, _addr)) => {
-                let descriptor = descriptor_from_tcp_stream(&stream)?;
-                writeln_diag(stdout, &format!("Accepted {}", descriptor.value()))?;
-                let _report = process_legacy_connection(&mut stream, stdout)?;
-            }
-            Err(error) => {
-                return Err(Diagnostic::new(
-                    ErrorCode::SYSTEM_ERROR,
-                    format!("Failure to accept connection: {error}"),
-                ));
-            }
+        if !printed_loop_marker {
+            writeln_diag(stdout, "Main loop")?;
+            stdout.flush().map_err(|error| {
+                io_diagnostic(format!("Cannot flush legacy server output: {error}"))
+            })?;
+            printed_loop_marker = true;
+        }
+        if poll_legacy_server_once(&listener, &mut active, stdout)?.made_progress() {
+            printed_loop_marker = false;
+        } else {
+            thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+fn poll_legacy_server_once(
+    listener: &TcpListener,
+    active: &mut Option<LegacyActiveConnection>,
+    output: &mut impl Write,
+) -> Result<LegacyServerStepReport, Diagnostic> {
+    let mut report = LegacyServerStepReport::default();
+    if process_active_connection_once(active, output)? {
+        report.active_read = true;
+    }
+    match listener.accept() {
+        Ok((stream, _addr)) => {
+            if active.is_none() {
+                *active = Some(accept_legacy_connection(stream, output)?);
+                report.accepted = true;
+            } else {
+                drop(stream);
+                report.rejected = true;
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+        Err(error) => {
+            return Err(Diagnostic::new(
+                ErrorCode::SYSTEM_ERROR,
+                format!("Failure to accept connection: {error}"),
+            ));
+        }
+    }
+    Ok(report)
+}
+
+fn accept_legacy_connection(
+    stream: TcpStream,
+    output: &mut impl Write,
+) -> Result<LegacyActiveConnection, Diagnostic> {
+    let descriptor = descriptor_from_tcp_stream(&stream)?.value();
+    stream.set_nonblocking(true).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!("Cannot set accepted socket nonblocking: {error}"),
+        )
+    })?;
+    writeln_diag(output, &format!("Accepted {descriptor}"))?;
+    Ok(LegacyActiveConnection {
+        stream,
+        descriptor,
+        message: TcpMessage::new(),
+    })
+}
+
+fn process_active_connection_once(
+    active: &mut Option<LegacyActiveConnection>,
+    output: &mut impl Write,
+) -> Result<bool, Diagnostic> {
+    let Some(connection) = active.as_mut() else {
+        return Ok(false);
+    };
+    let before = connection.message.transmission_count();
+    let mut status = tcp_msg_try_read_from(&mut connection.stream, &mut connection.message);
+    if status == MsgStatus::Incomplete && connection.message.transmission_count() > before {
+        status = finish_active_message_read(connection)?;
+    }
+    match status {
+        MsgStatus::Success => {
+            let message = std::mem::take(&mut connection.message).unpack_string_lossy();
+            writeln_diag(output, &format!("Received: {message}"))?;
+            send_legacy_responses(connection)?;
+            Ok(true)
+        }
+        MsgStatus::Error => {
+            writeln_diag(output, "Read error")?;
+            *active = None;
+            Ok(true)
+        }
+        MsgStatus::ConnClosed => {
+            writeln_diag(output, "Connection closed")?;
+            *active = None;
+            Ok(true)
+        }
+        MsgStatus::Incomplete => Ok(false),
+    }
+}
+
+fn finish_active_message_read(
+    connection: &mut LegacyActiveConnection,
+) -> Result<MsgStatus, Diagnostic> {
+    connection.stream.set_nonblocking(false).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!(
+                "Cannot set accepted socket {} blocking: {error}",
+                connection.descriptor
+            ),
+        )
+    })?;
+    let status = loop {
+        match tcp_msg_read_from(&mut connection.stream, &mut connection.message) {
+            MsgStatus::Incomplete => {}
+            status => break status,
+        }
+    };
+    connection.stream.set_nonblocking(true).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!(
+                "Cannot restore accepted socket {} nonblocking: {error}",
+                connection.descriptor
+            ),
+        )
+    })?;
+    Ok(status)
+}
+
+fn send_legacy_responses(connection: &mut LegacyActiveConnection) -> Result<(), Diagnostic> {
+    connection.stream.set_nonblocking(false).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!(
+                "Cannot set accepted socket {} blocking: {error}",
+                connection.descriptor
+            ),
+        )
+    })?;
+    let send_result = (|| {
+        tcp_string_send_to_or_error(&mut connection.stream, "wait")?;
+        tcp_string_send_to_or_error(&mut connection.stream, "ready")
+    })();
+    let restore_result = connection.stream.set_nonblocking(true).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!(
+                "Cannot restore accepted socket {} nonblocking: {error}",
+                connection.descriptor
+            ),
+        )
+    });
+    send_result?;
+    restore_result
 }
 
 fn load_filters(filter_file: Option<&Path>) -> Result<AxFilterSet, Diagnostic> {
@@ -598,16 +768,19 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Cursor, Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
 
     use super::{
-        init_domain_spec, load_filters, open_output_file, parse_port, print_help,
-        process_legacy_connection, process_options, run, EServerConfig, LegacyServerReport,
-        RunCommand, C_USAGE_ERROR, DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
+        init_domain_spec, load_filters, open_output_file, parse_port, poll_legacy_server_once,
+        print_help, process_legacy_connection, process_options, run, EServerConfig,
+        LegacyServerReport, RunCommand, C_USAGE_ERROR, DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
-    use crate::inout::network::{tcp_string_recv_from_or_error, TcpMessage};
+    use crate::inout::network::{
+        tcp_string_recv_from_or_error, tcp_string_send_to_or_error, TcpMessage,
+    };
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
     use crate::test_support::global_state_lock;
@@ -672,6 +845,16 @@ mod tests {
             result.push(tcp_string_recv_from_or_error(&mut cursor).expect("sent message decodes"));
         }
         result
+    }
+
+    fn loopback_listener() -> (TcpListener, SocketAddr) {
+        let listener =
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("loopback listener binds");
+        listener
+            .set_nonblocking(true)
+            .expect("listener can be nonblocking");
+        let address = listener.local_addr().expect("listener has address");
+        (listener, address)
     }
 
     #[test]
@@ -905,6 +1088,64 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).expect("output utf8"),
             "Received: hello\nReceived: add\nConnection closed\n"
+        );
+    }
+
+    #[test]
+    fn legacy_poll_keeps_one_active_connection_and_rejects_second_client() {
+        let (listener, address) = loopback_listener();
+        let _first_client = TcpStream::connect(address).expect("first client connects");
+        let mut active = None;
+        let mut output = Vec::new();
+
+        let accepted =
+            poll_legacy_server_once(&listener, &mut active, &mut output).expect("accept first");
+
+        assert!(accepted.accepted);
+        assert!(!accepted.rejected);
+        assert!(active.is_some());
+
+        let _second_client = TcpStream::connect(address).expect("second client connects");
+        let rejected =
+            poll_legacy_server_once(&listener, &mut active, &mut output).expect("reject second");
+
+        assert!(!rejected.accepted);
+        assert!(rejected.rejected);
+        assert!(active.is_some());
+        let output = String::from_utf8(output).expect("output utf8");
+        assert_eq!(output.matches("Accepted ").count(), 1);
+    }
+
+    #[test]
+    fn legacy_poll_processes_active_message_before_rejecting_pending_client() {
+        let (listener, address) = loopback_listener();
+        let mut first_client = TcpStream::connect(address).expect("first client connects");
+        let mut active = None;
+        let mut output = Vec::new();
+
+        poll_legacy_server_once(&listener, &mut active, &mut output).expect("accept first");
+        tcp_string_send_to_or_error(&mut first_client, "hello").expect("client sends message");
+        let _second_client = TcpStream::connect(address).expect("second client connects");
+
+        let report = poll_legacy_server_once(&listener, &mut active, &mut output)
+            .expect("read active and reject second");
+
+        assert!(report.active_read);
+        assert!(report.rejected);
+        assert_eq!(
+            tcp_string_recv_from_or_error(&mut first_client).expect("wait response"),
+            "wait"
+        );
+        assert_eq!(
+            tcp_string_recv_from_or_error(&mut first_client).expect("ready response"),
+            "ready"
+        );
+        assert_eq!(
+            String::from_utf8(output)
+                .expect("output utf8")
+                .lines()
+                .last(),
+            Some("Received: hello")
         );
     }
 
