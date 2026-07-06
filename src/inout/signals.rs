@@ -7,7 +7,9 @@ use crate::basics::os_wrapper::set_rlimit;
 use crate::basics::os_wrapper::{get_hard_rlimit, RLIMIT_CPU_COMPAT};
 use crate::inout::tempfile::temp_file_cleanup;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 
 pub const RLIM_INFINITY_COMPAT: u64 = u64::MAX;
 pub const SIGINT_COMPAT: i32 = 2;
@@ -31,6 +33,7 @@ static TIME_LIMIT_EXPIRED_KIND: AtomicU8 = AtomicU8::new(TIME_LIMIT_KIND_NONE);
 static SIG_TERM_CAUGHT: AtomicUsize = AtomicUsize::new(0);
 static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
+static SIGNAL_GLOBAL_OUT_FD: AtomicI32 = AtomicI32::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CpuSoftTimeoutRLimitSequence {
@@ -227,6 +230,16 @@ pub fn set_silent_time_out(value: bool) -> bool {
 }
 
 #[must_use]
+pub fn signal_global_out_fd() -> i32 {
+    SIGNAL_GLOBAL_OUT_FD.load(Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn set_signal_global_out_fd(fd: i32) -> i32 {
+    SIGNAL_GLOBAL_OUT_FD.swap(fd, Ordering::SeqCst)
+}
+
+#[must_use]
 pub fn e_signal_setup(signal: i32) -> SignalOutcome {
     #[cfg(target_os = "linux")]
     {
@@ -399,19 +412,27 @@ const fn cpu_soft_timeout_rlimit_sequence(
     }
 }
 
-// Allowed external shared-library boundary: POSIX signal registration uses
-// libc's process-global ABI and exposes only boolean install/reset helpers.
+// Allowed external shared-library boundary: POSIX signal registration and
+// signal-time descriptor writes use libc's process-global ABI.
 #[cfg(all(target_os = "linux", not(test)))]
 #[allow(unsafe_code)]
 mod linux_signal {
-    use super::e_signal_handler;
+    use super::{e_signal_handler, signal_global_out_fd, ErrorCode, SignalOutcome};
+    use std::ffi::c_void;
 
     type SignalHandler = extern "C" fn(i32);
 
     const SIG_ERR_COMPAT: usize = usize::MAX;
+    const STDERR_FILENO_COMPAT: i32 = 2;
+    const HARD_CPU_TIMEOUT_OUTPUT: &[u8] =
+        b"\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n";
+    const HARD_CPU_TIMEOUT_ERROR: &[u8] = b"eprover: CPU time limit exceeded, terminating\n";
+    const UNEXPECTED_SIGNAL_WARNING: &[u8] = b"Warning: Unexpected signal caught, continuing";
 
     extern "C" {
+        fn exit(status: i32) -> !;
         fn raise(signal_number: i32) -> i32;
+        fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
         #[link_name = "signal"]
         fn signal_handler(signum: i32, handler: SignalHandler) -> usize;
         #[link_name = "signal"]
@@ -441,10 +462,47 @@ mod linux_signal {
         let _ = unsafe { raise(signal_number) };
     }
 
+    fn write_fd_all(fd: i32, mut buffer: &[u8]) {
+        while !buffer.is_empty() {
+            // SAFETY: write is called with a raw file descriptor and a pointer
+            // into the live byte slice for exactly its current length, matching
+            // C `WriteStr` use from `ESignalHandler`.
+            let result = unsafe { write(fd, buffer.as_ptr().cast::<c_void>(), buffer.len()) };
+            let Ok(written) = usize::try_from(result) else {
+                break;
+            };
+            if written == 0 {
+                break;
+            }
+            buffer = &buffer[written.min(buffer.len())..];
+        }
+    }
+
+    fn finalize_hard_cpu_signal_and_exit(outcome: &SignalOutcome) -> ! {
+        if matches!(
+            outcome,
+            SignalOutcome::CpuLimitExceeded { silent: false, .. }
+        ) {
+            write_fd_all(signal_global_out_fd(), HARD_CPU_TIMEOUT_OUTPUT);
+            write_fd_all(STDERR_FILENO_COMPAT, HARD_CPU_TIMEOUT_ERROR);
+        }
+        // SAFETY: exit is libc's process-termination API. C `ESignalHandler`
+        // calls exit directly for silent hard CPU timeouts and reaches it via
+        // Error(...) for non-silent hard CPU timeouts.
+        unsafe { exit(i32::from(ErrorCode::CPU_LIMIT_ERROR.exit_status())) }
+    }
+
     extern "C" fn signal_trampoline(signal_number: i32) {
         let outcome = e_signal_handler(signal_number);
-        if matches!(outcome, super::SignalOutcome::Terminate { .. }) {
-            restore_default_and_reraise(signal_number);
+        match &outcome {
+            SignalOutcome::Terminate { .. } => restore_default_and_reraise(signal_number),
+            SignalOutcome::CpuLimitExceeded { .. } => finalize_hard_cpu_signal_and_exit(&outcome),
+            SignalOutcome::UnexpectedSignal { .. } => {
+                write_fd_all(STDERR_FILENO_COMPAT, UNEXPECTED_SIGNAL_WARNING);
+            }
+            SignalOutcome::HandlerInstalled { .. }
+            | SignalOutcome::HandlerInstallFailed { .. }
+            | SignalOutcome::SoftTimeLimitReached { .. } => {}
         }
     }
 }
@@ -464,6 +522,7 @@ fn reset_signal_state_for_tests() {
     SIG_TERM_CAUGHT.store(0, Ordering::SeqCst);
     FATAL_ERROR_IN_PROGRESS.store(false, Ordering::SeqCst);
     SILENT_TIME_OUT.store(false, Ordering::SeqCst);
+    SIGNAL_GLOBAL_OUT_FD.store(1, Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -472,11 +531,12 @@ mod tests {
         configure_time_limits, e_sig_term_sched_handler, e_signal_handler, e_signal_setup,
         finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
         reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
-        set_schedule_time_limit, set_silent_time_out, set_soft_time_limit, set_system_time_limit,
-        set_time_is_up, set_time_limit_is_soft, sig_term_caught, silent_time_out, soft_time_limit,
-        system_time_limit, time_is_up, time_limit_expired_kind, time_limit_is_soft,
-        SchedulerSignalOutcome, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT,
-        SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        set_schedule_time_limit, set_signal_global_out_fd, set_silent_time_out,
+        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
+        sig_term_caught, signal_global_out_fd, silent_time_out, soft_time_limit, system_time_limit,
+        time_is_up, time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome,
+        SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
+        SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
@@ -496,6 +556,7 @@ mod tests {
         assert!(!time_limit_is_soft());
         assert_eq!(sig_term_caught(), 0);
         assert!(!silent_time_out());
+        assert_eq!(signal_global_out_fd(), 1);
     }
 
     #[test]
@@ -510,6 +571,7 @@ mod tests {
         assert!(!set_time_is_up(true));
         assert!(!set_time_limit_is_soft(true));
         assert!(!set_silent_time_out(true));
+        assert_eq!(set_signal_global_out_fd(9), 1);
 
         assert_eq!(schedule_time_limit(), 10);
         assert_eq!(soft_time_limit(), 20);
@@ -518,6 +580,7 @@ mod tests {
         assert!(time_is_up());
         assert!(time_limit_is_soft());
         assert!(silent_time_out());
+        assert_eq!(signal_global_out_fd(), 9);
     }
 
     #[test]

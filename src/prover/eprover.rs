@@ -3,6 +3,8 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -125,8 +127,9 @@ use crate::inout::scanner::{
     TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL, MAX_TOKEN_LOOKAHEAD,
 };
 use crate::inout::signals::{
-    configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, silent_time_out,
-    time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
+    configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, set_signal_global_out_fd,
+    silent_time_out, time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT,
+    SIGXCPU_COMPAT,
 };
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
@@ -2401,6 +2404,7 @@ impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
 impl<W: Write + ?Sized> Drop for ConfiguredOutput<'_, W> {
     fn drop(&mut self) {
         let _ = self.flush();
+        let _ = set_signal_global_out_fd(1);
     }
 }
 
@@ -2428,6 +2432,7 @@ fn open_configured_output<'a, W: Write + ?Sized>(
     stdout: &'a mut W,
     output_file: Option<&str>,
 ) -> Result<ConfiguredOutput<'a, W>, Diagnostic> {
+    let _ = set_signal_global_out_fd(1);
     let Some(name) = output_file else {
         return Ok(ConfiguredOutput::Writer {
             writer: stdout,
@@ -2443,10 +2448,16 @@ fn open_configured_output<'a, W: Write + ?Sized>(
 
     let path = Path::new(name);
     File::create(path)
-        .map(|file| ConfiguredOutput::File {
-            file,
-            buffer: Vec::new(),
-            stdout,
+        .map(|file| {
+            #[cfg(unix)]
+            {
+                let _ = set_signal_global_out_fd(file.as_raw_fd());
+            }
+            ConfiguredOutput::File {
+                file,
+                buffer: Vec::new(),
+                stdout,
+            }
         })
         .map_err(|error| {
             eprover_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
