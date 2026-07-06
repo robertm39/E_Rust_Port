@@ -17,6 +17,10 @@ use crate::terms::idx_fp::get_fp_index_function;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
+#[cfg(feature = "print-index-stats")]
+use std::fmt::{self, Write as FmtWrite};
+#[cfg(feature = "print-index-stats")]
+use std::io::{self, Write as IoWrite};
 
 pub struct GlobalIndices<'sig> {
     signature: Option<&'sig Signature>,
@@ -410,40 +414,52 @@ impl<'sig> GlobalIndices<'sig> {
     #[cfg(feature = "print-index-stats")]
     #[must_use]
     pub fn index_statistics_string(&self, bank: &TermBank) -> String {
-        use std::fmt::Write as _;
-
         let mut output = String::new();
-        let _ = writeln!(
-            output,
-            "{DEFAULT_COMCHAR_RAW} Backwards rewriting index : {}",
-            subterm_index_distrib_data_string(self.bw_rw_index.as_ref())
-        );
-        let _ = writeln!(
-            output,
-            "{DEFAULT_COMCHAR_RAW} Paramod-from index        : {}",
-            overlap_index_distrib_data_string(self.pm_from_index.as_ref())
-        );
+        let _ = self.write_index_statistics(&mut output, bank);
+        output
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    pub fn write_index_statistics(
+        &self,
+        output: &mut impl FmtWrite,
+        bank: &TermBank,
+    ) -> fmt::Result {
+        write!(output, "{DEFAULT_COMCHAR_RAW} Backwards rewriting index : ")?;
+        write_subterm_index_distrib_data(output, self.bw_rw_index.as_ref())?;
+        output.write_char('\n')?;
+        write!(output, "{DEFAULT_COMCHAR_RAW} Paramod-from index        : ")?;
+        write_overlap_index_distrib_data(output, self.pm_from_index.as_ref())?;
+        output.write_char('\n')?;
         if let Some(index) = &self.pm_from_index {
-            output.push_str(&index.dot_string("pm_from_index", |payload, _signature| {
+            output.write_str(&index.dot_string("pm_from_index", |payload, _signature| {
                 subterm_occurrences_dot_record_string(
                     &format!("{payload:p}"),
                     payload.iter(),
                     bank,
                     ProblemType::FirstOrder,
                 )
-            }));
+            }))?;
         }
-        let _ = writeln!(
-            output,
-            "{DEFAULT_COMCHAR_RAW} Paramod-into index        : {}",
-            overlap_index_distrib_data_string(self.pm_into_index.as_ref())
-        );
-        let _ = writeln!(
-            output,
-            "{DEFAULT_COMCHAR_RAW} Paramod-neg-atom index    : {}",
-            overlap_index_distrib_data_string(self.pm_negp_index.as_ref())
-        );
-        output
+        write!(output, "{DEFAULT_COMCHAR_RAW} Paramod-into index        : ")?;
+        write_overlap_index_distrib_data(output, self.pm_into_index.as_ref())?;
+        output.write_char('\n')?;
+        write!(output, "{DEFAULT_COMCHAR_RAW} Paramod-neg-atom index    : ")?;
+        write_overlap_index_distrib_data(output, self.pm_negp_index.as_ref())?;
+        output.write_char('\n')?;
+        Ok(())
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    pub fn write_index_statistics_io(
+        &self,
+        output: &mut impl IoWrite,
+        bank: &TermBank,
+    ) -> io::Result<()> {
+        let mut text = String::new();
+        self.write_index_statistics(&mut text, bank)
+            .map_err(|_| io::Error::other("failed to format global index statistics"))?;
+        output.write_all(text.as_bytes())
     }
 }
 
@@ -453,30 +469,36 @@ pub fn global_indices_null<'sig>() -> GlobalIndices<'sig> {
 }
 
 #[cfg(feature = "print-index-stats")]
-fn subterm_index_distrib_data_string(index: Option<&SubtermIndex<'_>>) -> String {
-    index.map_or_else(
-        null_fp_index_distrib_data_string,
-        SubtermIndex::distrib_data_string,
-    )
+fn write_subterm_index_distrib_data(
+    output: &mut impl FmtWrite,
+    index: Option<&SubtermIndex<'_>>,
+) -> fmt::Result {
+    match index {
+        Some(index) => index.write_distrib_data(output),
+        None => write_null_fp_index_distrib_data(output),
+    }
 }
 
 #[cfg(feature = "print-index-stats")]
-fn overlap_index_distrib_data_string(index: Option<&OverlapIndex<'_>>) -> String {
-    index.map_or_else(
-        null_fp_index_distrib_data_string,
-        OverlapIndex::distrib_data_string,
-    )
+fn write_overlap_index_distrib_data(
+    output: &mut impl FmtWrite,
+    index: Option<&OverlapIndex<'_>>,
+) -> fmt::Result {
+    match index {
+        Some(index) => index.write_distrib_data(output),
+        None => write_null_fp_index_distrib_data(output),
+    }
 }
 
 #[cfg(feature = "print-index-stats")]
-fn null_fp_index_distrib_data_string() -> String {
+fn write_null_fp_index_distrib_data(output: &mut impl FmtWrite) -> fmt::Result {
     crate::terms::fp_index::FPIndexDistrib {
         nodes: 0,
         leaves: 0,
         average: 0.0,
         stddev: 0.0,
     }
-    .data_string()
+    .write_data(output)
 }
 
 #[cfg(test)]
@@ -885,6 +907,16 @@ mod tests {
         indices.insert_clause(&mut clause, &bank, false);
 
         let stats = indices.index_statistics_string(&bank);
+        let mut written_stats = String::new();
+        indices
+            .write_index_statistics(&mut written_stats, &bank)
+            .unwrap();
+        assert_eq!(written_stats, stats);
+        let mut io_stats = Vec::new();
+        indices
+            .write_index_statistics_io(&mut io_stats, &bank)
+            .unwrap();
+        assert_eq!(String::from_utf8(io_stats).unwrap(), stats);
         assert!(stats.contains("% Backwards rewriting index :"));
         assert!(stats.contains("% Paramod-from index        :"));
         assert!(stats.contains("graph pm_from_index{\n   rankdir=LR\n   nodesep=0.05\n"));

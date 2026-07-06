@@ -9133,7 +9133,7 @@ fn write_proof_statistics(
     output.write_all(crate::basics::perf_counters::statistics_string().as_bytes())?;
     #[cfg(feature = "print-index-stats")]
     if let Some(indices) = global_indices {
-        output.write_all(indices.index_statistics_string(state.terms()).as_bytes())?;
+        indices.write_index_statistics_io(output, state.terms())?;
     }
     Ok(())
 }

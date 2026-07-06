@@ -6,6 +6,8 @@ use crate::terms::signature::Signature;
 use crate::terms::termfunc::term_is_db_closed;
 use crate::terms::termtypes::{term_identity_id, Term};
 use std::collections::{btree_map::Entry, BTreeMap};
+#[cfg(feature = "print-index-stats")]
+use std::fmt;
 
 pub type TermIdentitySet = BTreeMap<usize, Term>;
 
@@ -52,6 +54,11 @@ impl<'sig> SubtermIndex<'sig> {
     #[must_use]
     pub fn distrib_data_string(&self) -> String {
         self.index.collect_distrib().data_string()
+    }
+
+    #[cfg(feature = "print-index-stats")]
+    pub fn write_distrib_data(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        self.index.collect_distrib().write_data(output)
     }
 
     pub fn collect_matchable_occurrences<'idx>(

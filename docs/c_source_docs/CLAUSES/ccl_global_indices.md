@@ -118,7 +118,7 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - `GlobalIndicesInsertClause` calls `OverlapIndexInsertIntoClause2` when `pm_into_index` exists, so the matching negative-atom index is expected to exist too. Rust preserves that invariant with a paired `pm_negp_index` allocation and assertion.
 - Extension index insertion runs after backward-rewrite and PM indexes, applies the configured max-depth gate inside `ExtIndexInsert*Clause`, and deletes without a depth gate. Rust preserves that call order and gating.
 - `GlobalIndicesInsertClauseSet` returns immediately if `bw_rw_index` is null, so a PM-only configuration would not mark or insert the set through this helper. Rust preserves that no-op gate.
-- Rust's optional `print-index-stats` Cargo feature exposes C-shaped distribution lines for the four proof-search global indexes and the `pm_from_index` DOT graph over the caller-owned executable global-index bridge.
+- Rust's optional `print-index-stats` Cargo feature exposes writer-style C-shaped distribution lines for the four proof-search global indexes and the `pm_from_index` DOT graph over the caller-owned executable global-index bridge.
 
 ### Change Later
 
@@ -127,4 +127,5 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - Indexed clause occurrences are keyed by live clause identity in C, so delete must happen before a clause is extracted, archived, or moved out of its owning set. Rust's caller-owned wrappers preserve that ordering; a future stable-handle index can make the lifecycle less pointer-shaped after compatibility is secured.
 - Rust global-index clause insert/delete take an explicit `&TermBank` so the overlap split helper can distinguish equational literals until equations have a typed owner-bank back-pointer.
 - C uses process-global `problemType` during initialization, so the same argument list can allocate different index sets depending on earlier parser/control state. Rust's explicit `ProblemType` initializer is easier to audit; keep state-owned proof-session construction responsible for passing the C-equivalent value when caller-owned executable indexes are replaced.
+- `PRINT_INDEX_STATS` in `eprover.c` uses null-tolerant compact distribution prints but then calls `FPIndexPrintDot` for `pm_from_index` without a null guard. Rust keeps the compact null behavior but omits the DOT graph when the index is absent; reproduce the C debug-build crash surface only if exact debug-output parity requires it.
 <!-- END MANUAL REVIEW: c_source_docs -->

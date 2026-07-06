@@ -568,12 +568,19 @@ pub struct FPIndexDistrib {
 }
 
 impl FPIndexDistrib {
-    #[must_use]
-    pub fn data_string(self) -> String {
-        format!(
+    pub fn write_data(self, output: &mut impl Write) -> fmt::Result {
+        write!(
+            output,
             "{:5} nodes, {:5} leaves, {:6.2}+/-{:4.3} terms/leaf",
             self.nodes, self.leaves, self.average, self.stddev
         )
+    }
+
+    #[must_use]
+    pub fn data_string(self) -> String {
+        let mut output = String::new();
+        let _ = self.write_data(&mut output);
+        output
     }
 }
 

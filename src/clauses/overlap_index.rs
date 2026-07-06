@@ -119,6 +119,11 @@ impl<'sig> OverlapIndex<'sig> {
     }
 
     #[cfg(feature = "print-index-stats")]
+    pub fn write_distrib_data(&self, output: &mut impl Write) -> fmt::Result {
+        self.index.collect_distrib().write_data(output)
+    }
+
+    #[cfg(feature = "print-index-stats")]
     #[must_use]
     pub fn dot_string<F>(&self, name: &str, print_payload: F) -> String
     where

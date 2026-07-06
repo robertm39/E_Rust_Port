@@ -165,6 +165,7 @@ Source files reviewed: `TERMS/cte_fp_index.h`, `TERMS/cte_fp_index.c`.
 ### Compatibility Notes
 
 - Rust ports the fingerprint-trie insertion/find/delete/search/distribution core, plus C-shaped `FPIndexPrint`/`FPIndexDistribPrint` writer-style rendering with string helpers layered on top.
+- Rust ports `FPIndexDistribDataPrint` as compact distribution-data formatting with a fallible writer path and keeps the existing string helper layered over it.
 - Rust uses the generic DOT scaffolding plus term-bank-backed flattened subterm and overlap-index payload renderers for `eprover`'s optional `PRINT_INDEX_STATS`/`print-index-stats` path; other payload renderers should still be added only when a C diagnostic path needs them.
 
 ### Change Later
@@ -172,6 +173,7 @@ Source files reviewed: `TERMS/cte_fp_index.h`, `TERMS/cte_fp_index.c`.
 - `FPIndexPrintDot` uses raw pointer addresses as DOT node identifiers and does not escape symbol labels; this is useful for C-debug parity but should not become the final reproducible user-facing graph format without a compatibility decision.
 - `FPIndexPrintDot` connects payload boxes only for structural leaves collected by `FPIndexCollectLeaves`, while `FPIndexDistribPrint`/`FPIndexPrint` visit every node with a payload. Preserve that split for compatibility, but consider a clearer diagnostic renderer after the clause/subterm payload printers are integrated.
 - `FPIndexDistribPrint` computes `entries/leaves` directly, so an empty index is an unguarded floating-point division. A cleaned wrapper should handle empty indexes explicitly once callers are known.
+- `FPIndexDistribDataPrint` treats a null index as an all-zero distribution, while `FPIndexPrint` and `FPIndexPrintDot` dereference the index. Keep that nullable diagnostic behavior localized instead of making every fingerprint-index printer nullable by default.
 
 ### Porting Focus
 
