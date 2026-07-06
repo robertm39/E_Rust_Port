@@ -16,7 +16,7 @@ use crate::clauses::clause::{
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
 };
-use crate::clauses::clausefunc::tformula_has_free_vars;
+use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_has_free_vars};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::EqnPrintOptions;
@@ -823,7 +823,13 @@ fn parse_tstp_wrapped_formula(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
     let formula_position = token_pos_rep(scanner.current_token());
-    let formula = bank.parse_tformula_tstp(scanner)?;
+    let formula = if scanner.test_id("$distinct") {
+        bank.parse_tstp_distinct(scanner)?
+    } else if formula_kind == "tcf" {
+        tcf_tstp_parse(scanner, bank, formula_problem_type)?
+    } else {
+        bank.parse_tformula_tstp(scanner)?
+    };
     if tformula_has_free_vars(bank, &formula).is_some() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
@@ -1662,6 +1668,85 @@ mod tests {
         assert!(error
             .message()
             .contains(TSTP_FORMULA_FREE_VARIABLES_MESSAGE));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn tstp_formula_targets_parse_distinct_body_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tstp_distinct_rules");
+        let formula_path = temp_path("tstp_distinct_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "fof(distinct_caps, axiom, $distinct(X,Y)).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("TSTP $distinct formula target is accepted");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("utf8");
+        assert!(rendered.contains("fof(distinct_caps, axiom, $distinct("));
+        assert!(rendered.contains(" ==> fof(distinct_caps, axiom, $distinct("));
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn tcf_formula_targets_use_clause_body_parser_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tcf_bad_body_rules");
+        let formula_path = temp_path("tcf_bad_body_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "tcf(bad_tcf_body, axiom, ![X]:(p(X)&q(X))).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("TCF parenthesized bodies are parsed as clauses");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
 
