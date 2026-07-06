@@ -411,7 +411,7 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 
 - `src/heuristics/litselection.rs` ports the C-order literal-selection name table, table-index lookup, known-name checks, and `LitSelAppendNames`-style comma-separated rendering plus the C table-visible selector bodies currently exercised by selector-family tests.
 - The Rust selector table keeps `NoSelection` and `NoGeneration` as distinct names even though their bodies are both no-ops, preserving the C distinction used by proof-control generation gates.
-- The proof-control banked selector entry point now threads a mutable term bank through the largest/smallest-orientable, unless-maximal, MaxLComplex, base NewComplex, and MinInfpos selector families so their `ClauseCondMarkMaximalTerms` equivalents can use bank-backed LPO4/KBO6 ordering preparation. Other selector families that call `ClauseCondMarkMaximalTerms` still use the immutable compatibility path and need the same mutable-bank treatment before LFHO ordering through literal selection is complete.
+- The proof-control banked selector entry point now threads a mutable term bank through the table-visible selector families that call `ClauseCondMarkMaximalTerms`, including largest/smallest-orientable, unless-maximal, complex unique-max Horn, MaxLComplex, base NewComplex, MinInfpos, AHP/VGNonCR, and CQ/UnlessPDom selectors. Their proof-control `ClauseCondMarkMaximalTerms` equivalents can use bank-backed LPO4/KBO6 ordering preparation; legacy immutable selector helpers remain only for compatibility callers outside the proof-control banked entry point.
 - Tests cover selector table order, uniqueness, lookup misses, and rendered comma-separated output alongside selector-family behavior tests.
 
 ### Change Later

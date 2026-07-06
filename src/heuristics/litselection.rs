@@ -787,6 +787,54 @@ impl MaximalComplexSelector {
             }
         }
     }
+
+    fn apply_with_mut_bank(
+        self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::Standard => select_complex_except_max_horn_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                ComplexMaxGate::UniqueMaximal,
+            ),
+            Self::Positive => select_complex_except_max_horn_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                ComplexMaxGate::UniqueMaximal,
+            ),
+            Self::Mixed => {
+                let positive_variant = clause.is_horn();
+                select_complex_except_max_horn_impl_with_bank(
+                    ocb,
+                    bank,
+                    clause,
+                    positive_variant,
+                    ComplexMaxGate::UniqueMaximal,
+                )
+            }
+            Self::StandardPositiveMax => select_complex_except_max_horn_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                ComplexMaxGate::UniquePositiveMaximal,
+            ),
+            Self::PositivePositiveMax => select_complex_except_max_horn_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                ComplexMaxGate::UniquePositiveMaximal,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1171,6 +1219,81 @@ impl AhpLiteralSelector {
             Self::NewComplexNoSplit => select_new_complex_ahp_ns(ocb, bank, clause),
         }
     }
+
+    fn apply_with_mut_bank(
+        self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::Complex => select_complex_ahp_impl_with_bank(ocb, bank, clause, false),
+            Self::PositiveComplex => select_complex_ahp_impl_with_bank(ocb, bank, clause, true),
+            Self::ComplexExceptRRHorn => {
+                if !(clause.is_horn() && clause.is_range_restricted()) {
+                    select_complex_ahp_impl_with_bank(ocb, bank, clause, false)?;
+                }
+                Ok(())
+            }
+            Self::PositiveComplexExceptRRHorn => {
+                if !(clause.is_horn() && clause.is_range_restricted()) {
+                    select_complex_ahp_impl_with_bank(ocb, bank, clause, true)?;
+                }
+                Ok(())
+            }
+            Self::NewComplex => select_new_complex_ahp_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                NewComplexAhpMode::Standard,
+            ),
+            Self::PositiveNewComplex => select_new_complex_ahp_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                NewComplexAhpMode::Standard,
+            ),
+            Self::NewComplexExceptRRHorn => {
+                if !(clause.is_horn() && clause.is_range_restricted()) {
+                    select_new_complex_ahp_impl_with_bank(
+                        ocb,
+                        bank,
+                        clause,
+                        false,
+                        NewComplexAhpMode::Standard,
+                    )?;
+                }
+                Ok(())
+            }
+            Self::PositiveNewComplexExceptRRHorn => {
+                if !(clause.is_horn() && clause.is_range_restricted()) {
+                    select_new_complex_ahp_impl_with_bank(
+                        ocb,
+                        bank,
+                        clause,
+                        true,
+                        NewComplexAhpMode::Standard,
+                    )?;
+                }
+                Ok(())
+            }
+            Self::NewComplexExceptUniqueMaxHorn => {
+                select_new_complex_ahp_except_uniq_max_horn_impl_with_bank(ocb, bank, clause, false)
+            }
+            Self::PositiveNewComplexExceptUniqueMaxHorn => {
+                select_new_complex_ahp_except_uniq_max_horn_impl_with_bank(ocb, bank, clause, true)
+            }
+            Self::NewComplexNoSplit => select_new_complex_ahp_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                NewComplexAhpMode::NoSplit,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1277,6 +1400,177 @@ impl CqLiteralSelector {
             Self::IPrecW => select_cqi_prec_w(ocb, bank, clause),
             Self::PrecWNtNp => select_cq_prec_w_nt_np(ocb, bank, clause),
             Self::IPrecWNtNp => select_cqi_prec_w_nt_np(ocb, bank, clause),
+        }
+    }
+
+    fn apply_with_mut_bank(
+        self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<(), Diagnostic> {
+        if self == Self::VgNonCr {
+            return select_vg_non_cr_impl_with_bank(ocb, bank, clause);
+        }
+        if let Some(spec) = self.unless_pdom_spec() {
+            return select_unless_pdom_with_bank(ocb, bank, clause, spec);
+        }
+        if let Some(spec) = self.weight_spec() {
+            return select_cq_with_spec_with_bank(ocb, bank, clause, spec);
+        }
+        if let Some(spec) = self.precedence_spec() {
+            return select_cq_precedence_with_spec_with_bank(ocb, bank, clause, spec);
+        }
+        unreachable!("all CQ selectors have a mutable-bank dispatch")
+    }
+
+    fn weight_spec(self) -> Option<CqWeightSpec> {
+        self.unfiltered_weight_spec()
+            .or_else(|| self.filtered_eq_first_weight_spec())
+            .or_else(|| self.filter_only_weight_spec())
+    }
+
+    fn unfiltered_weight_spec(self) -> Option<CqWeightSpec> {
+        match self {
+            Self::ArEqLast => Some(cq_spec(
+                CqArityPreference::High,
+                Some(1_000_000),
+                CqFilter::None,
+            )),
+            Self::ArEqFirst => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::None,
+            )),
+            Self::IArEqLast => Some(cq_spec(
+                CqArityPreference::Low,
+                Some(100_000),
+                CqFilter::None,
+            )),
+            Self::IArEqFirst => Some(cq_spec(
+                CqArityPreference::Low,
+                Some(-100_000),
+                CqFilter::None,
+            )),
+            Self::Ar => Some(cq_spec(CqArityPreference::High, None, CqFilter::None)),
+            Self::IAr => Some(cq_spec(CqArityPreference::Low, None, CqFilter::None)),
+            Self::GrCqArEqFirst => Some(cq_spec_with(
+                CqArityPreference::High,
+                Some(-1_000_000),
+                CqFilter::None,
+                CqGroundBias::PreferGroundBeforeSymbol,
+                CQ_FORBIDDEN_WEIGHT,
+            )),
+            Self::GrArEqFirst => Some(cq_spec_with(
+                CqArityPreference::High,
+                Some(-1_000_000),
+                CqFilter::None,
+                CqGroundBias::PreferGroundWithinSymbol,
+                CQ_FORBIDDEN_WEIGHT,
+            )),
+            _ => None,
+        }
+    }
+
+    fn filtered_eq_first_weight_spec(self) -> Option<CqWeightSpec> {
+        match self {
+            Self::ArNpEqFirst => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoPropositional,
+            )),
+            Self::IArNpEqFirst => Some(cq_spec_with(
+                CqArityPreference::Low,
+                Some(-1_000_000),
+                CqFilter::NoPropositional,
+                CqGroundBias::None,
+                1_000_000,
+            )),
+            Self::ArNtEqFirst => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoType,
+            )),
+            Self::IArNtEqFirst => Some(cq_spec(
+                CqArityPreference::Low,
+                Some(-100_000),
+                CqFilter::NoType,
+            )),
+            Self::ArNtNpEqFirst => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoTypeOrPropositional,
+            )),
+            Self::IArNtNpEqFirst => Some(cq_spec(
+                CqArityPreference::Low,
+                Some(-100_000),
+                CqFilter::NoTypeOrPropositional,
+            )),
+            Self::ArNxtEqFirst => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoXType,
+            )),
+            Self::IArNxtEqFirst => Some(cq_spec(
+                CqArityPreference::Low,
+                Some(-100_000),
+                CqFilter::NoXType,
+            )),
+            _ => None,
+        }
+    }
+
+    fn filter_only_weight_spec(self) -> Option<CqWeightSpec> {
+        match self {
+            Self::ArNtNp => Some(cq_spec(
+                CqArityPreference::High,
+                None,
+                CqFilter::NoTypeOrPropositional,
+            )),
+            Self::IArNtNp => Some(cq_spec(
+                CqArityPreference::Low,
+                None,
+                CqFilter::NoTypeOrPropositional,
+            )),
+            Self::ArNt => Some(cq_spec(CqArityPreference::High, None, CqFilter::NoType)),
+            Self::IArNt => Some(cq_spec(CqArityPreference::Low, None, CqFilter::NoType)),
+            Self::ArNp => Some(cq_spec(
+                CqArityPreference::High,
+                None,
+                CqFilter::NoPropositional,
+            )),
+            Self::IArNp => Some(cq_spec(
+                CqArityPreference::Low,
+                None,
+                CqFilter::NoPropositional,
+            )),
+            _ => None,
+        }
+    }
+
+    fn unless_pdom_spec(self) -> Option<CqWeightSpec> {
+        match self {
+            Self::ArNpEqFirstUnlessPDom => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoPropositional,
+            )),
+            Self::ArNtEqFirstUnlessPDom => Some(cq_spec(
+                CqArityPreference::High,
+                Some(-100_000),
+                CqFilter::NoType,
+            )),
+            _ => None,
+        }
+    }
+
+    fn precedence_spec(self) -> Option<CqPrecedenceWeightSpec> {
+        match self {
+            Self::PrecW => Some(cq_precedence_spec(false, CqFilter::None)),
+            Self::IPrecW => Some(cq_precedence_spec(true, CqFilter::None)),
+            Self::PrecWNtNp => Some(cq_precedence_spec(false, CqFilter::NoTypeOrPropositional)),
+            Self::IPrecWNtNp => Some(cq_precedence_spec(true, CqFilter::NoTypeOrPropositional)),
+            _ => None,
         }
     }
 }
@@ -3076,6 +3370,15 @@ pub fn apply_ported_literal_selector_with_mut_bank(
         };
         selector.apply_with_mut_bank(ocb, bank, clause)?;
         Ok(())
+    } else if let Some(selector) = MaximalComplexSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        let Some(bank) = bank else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        selector.apply_with_mut_bank(ocb, bank, clause)?;
+        Ok(())
     } else if let Some(selector) = MaxLComplexSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(LiteralSelectionError::unsupported(name));
@@ -3104,6 +3407,24 @@ pub fn apply_ported_literal_selector_with_mut_bank(
         selector.apply_with_mut_bank(ocb, bank, clause)?;
         Ok(())
     } else if let Some(selector) = MinInfposSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        let Some(bank) = bank else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        selector.apply_with_mut_bank(ocb, bank, clause)?;
+        Ok(())
+    } else if let Some(selector) = AhpLiteralSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        let Some(bank) = bank else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        selector.apply_with_mut_bank(ocb, bank, clause)?;
+        Ok(())
+    } else if let Some(selector) = CqLiteralSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(LiteralSelectionError::unsupported(name));
         };
@@ -3220,6 +3541,29 @@ fn select_complex_except_max_horn_impl(
         select_complex(Some(ocb), clause);
     }
     clause.del_prop(CP_IS_ORIENTED);
+}
+
+fn select_complex_except_max_horn_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    gate: ComplexMaxGate,
+) -> Result<(), Diagnostic> {
+    if clause.is_horn() {
+        clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+        if complex_max_horn_gate_blocks(clause, gate) {
+            return Ok(());
+        }
+    }
+
+    if positive_variant {
+        p_select_complex(Some(ocb), clause);
+    } else {
+        select_complex(Some(ocb), clause);
+    }
+    clause.del_prop(CP_IS_ORIENTED);
+    Ok(())
 }
 
 fn complex_max_horn_gate_blocks(clause: &Clause, gate: ComplexMaxGate) -> bool {
@@ -4247,6 +4591,24 @@ fn select_complex_ahp_impl(
     );
 }
 
+fn select_complex_ahp_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) -> Result<(), Diagnostic> {
+    let pred_dist = positive_predicate_distribution(clause, bank);
+    generic_uniq_selection_with_ordering_and_bank(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        |_, eval, literal, _| {
+            complex_ahp_weight(eval, literal, &pred_dist);
+        },
+    )
+}
+
 fn select_new_complex_ahp_impl(
     ocb: &mut OrderControlBlock,
     bank: &TermBank,
@@ -4264,6 +4626,25 @@ fn select_new_complex_ahp_impl(
             new_complex_ahp_weight(eval, literal, bank, &pred_dist, mode);
         },
     );
+}
+
+fn select_new_complex_ahp_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    mode: NewComplexAhpMode,
+) -> Result<(), Diagnostic> {
+    let pred_dist = positive_predicate_distribution(clause, bank);
+    generic_uniq_selection_with_ordering_and_bank(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        |weight_bank, eval, literal, _| {
+            new_complex_ahp_weight(eval, literal, weight_bank, &pred_dist, mode);
+        },
+    )
 }
 
 fn select_new_complex_ahp_except_uniq_max_horn_impl(
@@ -4288,14 +4669,56 @@ fn select_new_complex_ahp_except_uniq_max_horn_impl(
     );
 }
 
+fn select_new_complex_ahp_except_uniq_max_horn_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) -> Result<(), Diagnostic> {
+    if clause.is_horn() {
+        clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+        if clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1 {
+            return Ok(());
+        }
+    }
+
+    select_new_complex_ahp_impl_with_bank(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        NewComplexAhpMode::Standard,
+    )
+}
+
 const fn cq_spec(arity: CqArityPreference, eq_w1: Option<i64>, filter: CqFilter) -> CqWeightSpec {
+    cq_spec_with(
+        arity,
+        eq_w1,
+        filter,
+        CqGroundBias::None,
+        CQ_FORBIDDEN_WEIGHT,
+    )
+}
+
+const fn cq_spec_with(
+    arity: CqArityPreference,
+    eq_w1: Option<i64>,
+    filter: CqFilter,
+    ground_bias: CqGroundBias,
+    forbidden_w1: i64,
+) -> CqWeightSpec {
     CqWeightSpec {
         arity,
         eq_w1,
         filter,
-        ground_bias: CqGroundBias::None,
-        forbidden_w1: CQ_FORBIDDEN_WEIGHT,
+        ground_bias,
+        forbidden_w1,
     }
+}
+
+const fn cq_precedence_spec(inverted: bool, filter: CqFilter) -> CqPrecedenceWeightSpec {
+    CqPrecedenceWeightSpec { inverted, filter }
 }
 
 fn select_vg_non_cr_impl(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
@@ -4325,6 +4748,37 @@ fn select_vg_non_cr_impl(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &
     select_new_complex_ahp_impl(ocb, bank, clause, false, NewComplexAhpMode::NoSplit);
 }
 
+fn select_vg_non_cr_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    if let Some(index) = clause.literals().find_neg_pure_var_lit_index() {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        return Ok(());
+    }
+
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    if let Some(index) = find_min_weight_negative_literal(clause, true) {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        return Ok(());
+    }
+
+    if clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1
+        && clause
+            .literals()
+            .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+            == 1
+    {
+        return Ok(());
+    }
+
+    select_new_complex_ahp_impl_with_bank(ocb, bank, clause, false, NewComplexAhpMode::NoSplit)
+}
+
 fn select_cq_with_spec(
     ocb: &mut OrderControlBlock,
     bank: &TermBank,
@@ -4334,6 +4788,23 @@ fn select_cq_with_spec(
     generic_uniq_selection_with_ordering(ocb, bank, clause, false, |eval, literal, _| {
         cq_weight(eval, literal, bank, spec);
     });
+}
+
+fn select_cq_with_spec_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    spec: CqWeightSpec,
+) -> Result<(), Diagnostic> {
+    generic_uniq_selection_with_ordering_and_bank(
+        ocb,
+        bank,
+        clause,
+        false,
+        |weight_bank, eval, literal, _| {
+            cq_weight(eval, literal, weight_bank, spec);
+        },
+    )
 }
 
 fn select_cq_precedence_with_spec(
@@ -4347,6 +4818,32 @@ fn select_cq_precedence_with_spec(
     generic_uniq_selection_with_ordering(ocb, bank, clause, false, |eval, literal, _| {
         cq_precedence_weight(eval, literal, sig_size, prec_weights.as_deref(), bank, spec);
     });
+}
+
+fn select_cq_precedence_with_spec_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    spec: CqPrecedenceWeightSpec,
+) -> Result<(), Diagnostic> {
+    let sig_size = ocb.sig_size;
+    let prec_weights = ocb.prec_weights.clone();
+    generic_uniq_selection_with_ordering_and_bank(
+        ocb,
+        bank,
+        clause,
+        false,
+        |weight_bank, eval, literal, _| {
+            cq_precedence_weight(
+                eval,
+                literal,
+                sig_size,
+                prec_weights.as_deref(),
+                weight_bank,
+                spec,
+            );
+        },
+    )
 }
 
 fn cq_weight(eval: &mut LitEval, literal: &Eqn, bank: &TermBank, spec: CqWeightSpec) {
@@ -4489,6 +4986,34 @@ fn select_unless_pdom(
     }
 
     selector(ocb, bank, clause);
+}
+
+fn select_unless_pdom_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    spec: CqWeightSpec,
+) -> Result<(), Diagnostic> {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+
+    let pos_max_predicates = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .filter(|literal| literal.is_positive() && literal.is_maximal())
+        .map(|literal| literal.pred_code_fo(bank))
+        .collect::<BTreeSet<_>>();
+
+    if clause.literals().as_slice().iter().any(|literal| {
+        literal.is_negative() && pos_max_predicates.contains(&literal.pred_code_fo(bank))
+    }) {
+        return Ok(());
+    }
+
+    select_cq_with_spec_with_bank(ocb, bank, clause, spec)
 }
 
 fn positive_predicate_distribution(clause: &Clause, bank: &TermBank) -> BTreeMap<i64, i64> {
@@ -7254,6 +7779,38 @@ mod tests {
     }
 
     #[test]
+    fn mutable_bank_ahp_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_COMPLEX_AHP,
+            super::P_SELECT_COMPLEX_AHP,
+            super::SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::P_SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::SELECT_NEW_COMPLEX_AHP,
+            super::P_SELECT_NEW_COMPLEX_AHP,
+            super::SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::P_SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+            super::P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+            super::SELECT_NEW_COMPLEX_AHP_NS,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = ahp_non_horn_head_sharing_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_mut_bank(
+                name,
+                Some(&mut ocb),
+                Some(&mut bank),
+                &mut clause,
+            )
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
     fn bank_aware_cq_selectors_are_available_by_c_strategy_name() {
         for name in [
             super::SELECT_VG_NON_CR,
@@ -7294,6 +7851,56 @@ mod tests {
                 .unwrap_or_else(|err| {
                     panic!("{err}");
                 });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
+    fn mutable_bank_cq_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_VG_NON_CR,
+            super::SELECT_CQ_AR_EQ_LAST,
+            super::SELECT_CQ_AR_EQ_FIRST,
+            super::SELECT_CQI_AR_EQ_LAST,
+            super::SELECT_CQI_AR_EQ_FIRST,
+            super::SELECT_CQ_AR,
+            super::SELECT_CQI_AR,
+            super::SELECT_CQ_AR_NP_EQ_FIRST,
+            super::SELECT_CQI_AR_NP_EQ_FIRST,
+            super::SELECT_GR_CQ_AR_EQ_FIRST,
+            super::SELECT_CQ_GR_AR_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_EQ_FIRST,
+            super::SELECT_CQI_AR_NT_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_NP_EQ_FIRST,
+            super::SELECT_CQI_AR_NT_NP_EQ_FIRST,
+            super::SELECT_CQ_AR_NXT_EQ_FIRST,
+            super::SELECT_CQI_AR_NXT_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_NP,
+            super::SELECT_CQI_AR_NT_NP,
+            super::SELECT_CQ_AR_NT,
+            super::SELECT_CQI_AR_NT,
+            super::SELECT_CQ_AR_NP,
+            super::SELECT_CQI_AR_NP,
+            super::SELECT_CQ_AR_NP_EQ_FIRST_UNLESS_PDOM,
+            super::SELECT_CQ_AR_NT_EQ_FIRST_UNLESS_PDOM,
+            super::SELECT_CQ_PREC_W,
+            super::SELECT_CQI_PREC_W,
+            super::SELECT_CQ_PREC_W_NT_NP,
+            super::SELECT_CQI_PREC_W_NT_NP,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = cq_arity_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_mut_bank(
+                name,
+                Some(&mut ocb),
+                Some(&mut bank),
+                &mut clause,
+            )
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
             assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
         }
     }
@@ -7483,6 +8090,102 @@ mod tests {
     }
 
     #[test]
+    fn mutable_bank_complex_max_horn_selector_uses_lpo4_instantiation_context() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = higher_order_test_bank();
+        let head_binding = typed_unary_const(&mut bank, "lit_sel_complex_max_lpo4_applied_head");
+        let head_type = head_binding.type_().expect("test head has a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let arg = typed_const(&mut bank, "lit_sel_complex_max_lpo4_arg");
+        let applied = phony_app(&mut bank, &head, &arg);
+        let mut substitution = Substitution::new();
+        substitution.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(&bank);
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(arg.f_code(), 10);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &applied, &arg, false,
+        )]));
+
+        apply_ported_literal_selector_with_mut_bank(
+            super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+            Some(&mut ocb),
+            Some(&mut bank),
+            &mut clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(selected_indices(&clause), vec![0]);
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        substitution.backtrack();
+    }
+
+    #[test]
+    fn mutable_bank_ahp_selector_uses_lpo4_instantiation_context() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = higher_order_test_bank();
+        let head_binding = typed_unary_const(&mut bank, "lit_sel_ahp_lpo4_applied_head");
+        let head_type = head_binding.type_().expect("test head has a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let arg = typed_const(&mut bank, "lit_sel_ahp_lpo4_arg");
+        let applied = phony_app(&mut bank, &head, &arg);
+        let mut substitution = Substitution::new();
+        substitution.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(&bank);
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(arg.f_code(), 10);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &applied, &arg, false,
+        )]));
+
+        apply_ported_literal_selector_with_mut_bank(
+            super::SELECT_NEW_COMPLEX_AHP,
+            Some(&mut ocb),
+            Some(&mut bank),
+            &mut clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(selected_indices(&clause), vec![0]);
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        substitution.backtrack();
+    }
+
+    #[test]
+    fn mutable_bank_cq_selector_uses_lpo4_instantiation_context() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = higher_order_test_bank();
+        let head_binding = typed_unary_const(&mut bank, "lit_sel_cq_lpo4_applied_head");
+        let head_type = head_binding.type_().expect("test head has a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let arg = typed_const(&mut bank, "lit_sel_cq_lpo4_arg");
+        let applied = phony_app(&mut bank, &head, &arg);
+        let mut substitution = Substitution::new();
+        substitution.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(&bank);
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(arg.f_code(), 10);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &applied, &arg, false,
+        )]));
+
+        apply_ported_literal_selector_with_mut_bank(
+            super::SELECT_CQ_AR,
+            Some(&mut ocb),
+            Some(&mut bank),
+            &mut clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(selected_indices(&clause), vec![0]);
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        substitution.backtrack();
+    }
+
+    #[test]
     fn bank_aware_complex_max_horn_wrappers_are_available_by_c_strategy_name() {
         for name in [
             super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
@@ -7500,6 +8203,33 @@ mod tests {
                 .unwrap_or_else(|err| {
                     panic!("{err}");
                 });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
+    fn mutable_bank_complex_max_horn_wrappers_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+            super::P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = complex_diff_fallback_clause();
+            mark_maximal_literals(&mut clause, &[1, 2]);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_mut_bank(
+                name,
+                Some(&mut ocb),
+                Some(&mut bank),
+                &mut clause,
+            )
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
             assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
         }
     }
