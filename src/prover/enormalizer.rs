@@ -25,6 +25,7 @@ use crate::clauses::formulasets::{
 };
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, term_li_normalform_plain};
 use crate::heuristics::to_params::TermOrdering;
+use crate::inout::basicparser::parse_skip_parenthesized_expr;
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
@@ -1031,36 +1032,24 @@ fn skip_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
         return Ok(());
     }
     scanner.accept_tok(TokenType::COMMA)?;
-    skip_parenthesized_or_atom(scanner)?;
+    skip_tstp_source(scanner)?;
     if scanner.test_tok(TokenType::COMMA) {
         scanner.accept_tok(TokenType::COMMA)?;
-        skip_parenthesized_or_atom(scanner)?;
+        scanner.check_tok(TokenType::OPEN_SQUARE)?;
+        parse_skip_parenthesized_expr(scanner)?;
     }
     Ok(())
 }
 
-fn skip_parenthesized_or_atom(scanner: &mut Scanner) -> Result<(), Diagnostic> {
-    let mut depth = 0_i32;
-    loop {
-        if scanner.test_tok(TokenType::NO_TOKEN) {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Unexpected end of input while skipping TSTP source",
-            ));
-        }
-        if depth == 0 && scanner.test_tok(TokenType::COMMA | TokenType::CLOSE_BRACKET) {
-            return Ok(());
-        }
-        if scanner.test_tok(TokenType::OPEN_BRACKET | TokenType::OPEN_SQUARE) {
-            depth += 1;
-        } else if scanner.test_tok(TokenType::CLOSE_BRACKET | TokenType::CLOSE_SQUARE) {
-            if depth == 0 {
-                return Ok(());
-            }
-            depth -= 1;
-        }
-        scanner.next_token()?;
+fn skip_tstp_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::OPEN_SQUARE) {
+        return parse_skip_parenthesized_expr(scanner);
     }
+    scanner.accept_tok(TokenType::IDENTIFIER | TokenType::POS_INT)?;
+    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        parse_skip_parenthesized_expr(scanner)?;
+    }
+    Ok(())
 }
 
 fn token_source_string(bytes: &[u8]) -> String {
@@ -1431,6 +1420,48 @@ mod tests {
     }
 
     #[test]
+    fn tstp_formula_targets_accept_bracketed_useful_info_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tstp_useful_info_rules");
+        let formula_path = temp_path("tstp_useful_info_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "fof(with_info, axiom, p(a), file('x.p', with_info), [status(thm)]).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("utf8"),
+            "fof(with_info, axiom, p(a)). ==> fof(with_info, axiom, p(a)).\n"
+        );
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
     fn tff_type_declaration_formula_targets_print_true_wrapper() {
         let _guard = global_state_lock();
         let rule_path = temp_path("tff_type_decl_rules");
@@ -1545,6 +1576,45 @@ mod tests {
             let _ = fs::remove_file(rule_path);
             let _ = fs::remove_file(formula_path);
         }
+    }
+
+    #[test]
+    fn tstp_formula_targets_reject_non_bracketed_useful_info_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tstp_bad_useful_info_rules");
+        let formula_path = temp_path("tstp_bad_useful_info_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "fof(bad_info, axiom, p(a), file('x.p', bad_info), status(thm)).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("non-bracketed useful info is rejected");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Opening square brace"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
     }
 
     #[test]
