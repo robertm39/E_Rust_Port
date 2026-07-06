@@ -1,17 +1,21 @@
-#[cfg(feature = "print-index-stats")]
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::objtrees::ObjTree;
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausecpos::{clause_cpos_get_subterm, CompactPos};
+use crate::clauses::clausepos_tree::ClauseTPosTree;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::subterm_index::TermIdentitySet;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::terms::fp_index::{FPIndex, FPTree};
+use crate::terms::functypes::FunCode;
 use crate::terms::idx_fp::FingerprintIndexFunction;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
-use crate::terms::termtypes::{term_identity_id, Term, DEFAULT_FWEIGHT};
+use crate::terms::termtypes::{term_identity_id, DerefType, Term, DEFAULT_FWEIGHT};
 use std::collections::btree_map::Entry;
+use std::fmt::{self, Write};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OverlapTermPos {
@@ -88,6 +92,13 @@ impl<'sig> OverlapIndex<'sig> {
     #[must_use]
     pub fn collect_leaves<'idx>(&'idx self, result: &mut Vec<&'idx FPTree<SubtermOcc>>) -> usize {
         self.index.collect_leaves(result)
+    }
+
+    #[must_use]
+    pub fn leaf_debug_string(&self, bank: &TermBank, problem_type: ProblemType) -> String {
+        self.index.print_with(|path, leaf, output| {
+            let _ = write_overlap_index_fp_leaf_debug(output, path, leaf, bank, problem_type);
+        })
     }
 
     #[cfg(feature = "print-index-stats")]
@@ -210,6 +221,56 @@ impl<'sig> OverlapIndex<'sig> {
         }
         deleted
     }
+}
+
+pub fn write_overlap_index_fp_leaf_debug(
+    output: &mut impl Write,
+    path: &[FunCode],
+    leaf: &FPTree<SubtermOcc>,
+    bank: &TermBank,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    write!(output, "{DEFAULT_COMCHAR_RAW} ")?;
+    for sample in path {
+        write!(output, "{sample:4}.")?;
+    }
+    writeln!(output, ":{} terms", leaf.payload_nodes())?;
+    if let Some(payload) = leaf.payload() {
+        write_overlap_index_subterm_payload_debug(output, payload, bank, problem_type)?;
+    }
+    Ok(())
+}
+
+pub fn write_overlap_index_subterm_payload_debug(
+    output: &mut impl Write,
+    payload: &ObjTree<SubtermOcc>,
+    bank: &TermBank,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    for occurrence in payload.iter() {
+        writeln!(output, "Node: {occurrence:p} data={occurrence:p}")?;
+        write!(output, "Key: {} = ", occurrence.term().entry_no())?;
+        bank.write_term_deref_for_problem(
+            output,
+            occurrence.term(),
+            problem_type,
+            DerefType::Always,
+        )?;
+        writeln!(output)?;
+        write_overlap_index_clause_tree_debug(output, occurrence.position_clauses(), bank)?;
+    }
+    Ok(())
+}
+
+pub fn write_overlap_index_clause_tree_debug(
+    output: &mut impl Write,
+    tree: &ClauseTPosTree,
+    bank: &TermBank,
+) -> fmt::Result {
+    for entry in tree.entries() {
+        entry.write_lop_debug(output, bank)?;
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -499,6 +560,7 @@ mod tests {
         clause_collect_into_terms2, clause_collect_into_terms_pos, clause_collect_into_terms_pos2,
         overlap_index_delete_into_clause2, overlap_index_insert_into_clause2, OverlapIndex,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_SELECTED};
@@ -704,6 +766,30 @@ mod tests {
         assert!(index.find_occurrence(&left).is_none());
         assert!(index.find_leaf(&left).is_none());
         assert!(!index.delete_pos(&clause, 0, Some(&left)));
+    }
+
+    #[test]
+    fn leaf_debug_string_matches_c_leaf_header_and_payload_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "oi_leaf_a");
+        let b = typed_const(&mut bank, "oi_leaf_b");
+        let left = typed_unary(&mut bank, "oi_leaf_f", &a);
+        let literal = eqn(&mut bank, &left, &b, true);
+        let clause = singleton_clause(literal, 12);
+        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+
+        assert!(index.insert_pos(&clause, 0, Some(&left)));
+
+        let debug = index.leaf_debug_string(&bank, ProblemType::FirstOrder);
+
+        assert!(debug.starts_with("% "));
+        assert!(debug.contains(&format!("{:4}.:1 terms\n", left.f_code())));
+        assert!(debug.contains("Node: "));
+        assert!(debug.contains(" data="));
+        assert!(debug.contains("Key: "));
+        assert!(debug.contains("oi_leaf_f(oi_leaf_a)"));
+        assert!(debug.contains("OLs: "));
+        assert!(debug.contains("occ: 0\n"));
     }
 
     #[expect(
