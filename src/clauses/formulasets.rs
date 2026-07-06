@@ -1600,6 +1600,10 @@ impl WrappedFormula {
         self.ident
     }
 
+    pub fn set_ident(&mut self, ident: i64) {
+        self.ident = ident;
+    }
+
     #[must_use]
     pub const fn info(&self) -> Option<&ClauseInfo> {
         self.info.as_ref()

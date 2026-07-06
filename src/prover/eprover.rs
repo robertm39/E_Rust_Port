@@ -48,22 +48,23 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
     deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::{eqn_fof_parse, prepare_predicate_literal, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::formulasets::{
-    FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, WrappedFormula,
-    WrappedFormulaCnfDocContext,
+    FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, FormulaTstpClauseMode,
+    FormulaTstpCompleteness, FormulaTstpPrintOptions, WrappedFormula, WrappedFormulaCnfDocContext,
 };
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{
-    pcl_print_end, pcl_print_start, ClauseCreationInference, ClauseCreationParents,
-    PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
+    pcl_formula_print_start, pcl_print_end, pcl_print_start, ClauseCreationInference,
+    ClauseCreationParents, PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat,
+    ProofDocSession,
 };
 use crate::clauses::picosat::PicoSat;
 use crate::clauses::pred_elim::{
@@ -72,8 +73,8 @@ use crate::clauses::pred_elim::{
 };
 use crate::clauses::proofstate::{
     derived_dot_node_colour_for_proof_member, proof_state_alloc, DerivedView, ProofObjectAnalysis,
-    ProofObjectGraph, ProofObjectGraphNode, ProofState, RawFormulaFeatures,
-    WatchlistSource as ProofStateWatchlistSource,
+    ProofObjectGraph, ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState,
+    RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
@@ -7697,7 +7698,7 @@ fn write_proof_success_list_output(
             parent_ident,
         )?;
     } else {
-        write_proof_object_list_graph(output, config, state, &graph)?;
+        write_proof_object_list_graph(output, config, state.terms(), &graph)?;
     }
     write_comment_line(output, "SZS output end CNFRefutation")?;
     Ok(())
@@ -7706,66 +7707,129 @@ fn write_proof_success_list_output(
 fn write_proof_object_list_graph(
     output: &mut impl Write,
     config: &EProverConfig,
-    state: &ProofState,
+    bank: &TermBank,
     graph: &ProofObjectGraph<'_>,
 ) -> Result<(), EProverError> {
-    for (proof_clause, is_root) in proof_object_list_display_clauses(graph) {
-        write_saturation_proof_object_clause(
-            output,
-            config,
-            state.terms(),
-            &proof_clause,
-            is_root,
-        )?;
+    let mut formula_bank = bank.clone();
+    for item in proof_object_list_display_items(graph) {
+        match item {
+            ProofObjectListDisplayItem::Clause {
+                clause: proof_clause,
+                is_root,
+            } => {
+                write_saturation_proof_object_clause(output, config, bank, &proof_clause, is_root)?;
+            }
+            ProofObjectListDisplayItem::Formula(formula) => {
+                write_saturation_proof_object_formula(output, config, &mut formula_bank, &formula)?;
+            }
+        }
     }
     Ok(())
 }
 
-fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Clause, bool)> {
-    let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
-    let display_order = proof_object_list_display_order(graph);
-    let print_clauses: Vec<(usize, &Clause)> = display_order
-        .iter()
-        .map(|index| (*index, graph.clauses[*index]))
-        .collect();
-    let mut display_ids_by_index = vec![0; graph.clauses.len()];
-    let mut fallback_display_ids = BTreeMap::new();
-    for (print_index, (graph_index, clause)) in print_clauses.iter().enumerate() {
-        let display_id = usize_to_i64(print_index.saturating_add(1));
-        display_ids_by_index[*graph_index] = display_id;
-        fallback_display_ids
-            .entry(ClauseDerivationRef::from(*clause))
-            .or_insert(display_id);
-    }
+#[derive(Debug)]
+enum ProofObjectListDisplayItem {
+    Clause { clause: Clause, is_root: bool },
+    Formula(WrappedFormula),
+}
 
-    print_clauses
+#[cfg(test)]
+fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Clause, bool)> {
+    proof_object_list_display_items(graph)
         .into_iter()
-        .map(|(graph_index, clause)| {
-            let mut display = clause.clone();
-            display.set_ident(display_ids_by_index[graph_index]);
-            if let Some(derivation) = clause.derivation() {
-                display.set_derivation(Some(remap_derivation_for_display(
-                    derivation,
-                    graph,
-                    graph_index,
-                    &display_ids_by_index,
-                    &fallback_display_ids,
-                )));
-            }
-            let is_root = root_indices.contains(&graph_index);
-            (display, is_root)
+        .filter_map(|item| match item {
+            ProofObjectListDisplayItem::Clause { clause, is_root } => Some((clause, is_root)),
+            ProofObjectListDisplayItem::Formula(_) => None,
         })
         .collect()
 }
 
-fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<usize> {
-    let mut children_by_parent = vec![Vec::new(); graph.clauses.len()];
-    let mut remaining_parent_counts = vec![0_usize; graph.clauses.len()];
-    for edge in &graph.edges {
-        if edge.parent_index < graph.clauses.len() && edge.child_index < graph.clauses.len() {
-            children_by_parent[edge.parent_index].push(edge.child_index);
-            remaining_parent_counts[edge.child_index] =
-                remaining_parent_counts[edge.child_index].saturating_add(1);
+fn proof_object_list_display_items(
+    graph: &ProofObjectGraph<'_>,
+) -> Vec<ProofObjectListDisplayItem> {
+    let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
+    let display_order = proof_object_list_display_order(graph);
+    let mut display_ids_by_ordinal = vec![0; proof_object_list_node_count(graph)];
+    let mut fallback_clause_display_ids = BTreeMap::new();
+    let mut fallback_formula_display_ids = BTreeMap::new();
+    for (print_index, node) in display_order.iter().copied().enumerate() {
+        let display_id = usize_to_i64(print_index.saturating_add(1));
+        if let Some(ordinal) = proof_object_list_node_ordinal(graph, node) {
+            display_ids_by_ordinal[ordinal] = display_id;
+        }
+        match node {
+            ProofObjectGraphNode::Clause(index) => {
+                fallback_clause_display_ids
+                    .entry(ClauseDerivationRef::from(graph.clauses[index]))
+                    .or_insert(display_id);
+            }
+            ProofObjectGraphNode::Formula(index) => {
+                fallback_formula_display_ids
+                    .entry(FormulaDerivationRef::new(graph.formulas[index].ident()))
+                    .or_insert(display_id);
+            }
+        }
+    }
+
+    display_order
+        .into_iter()
+        .map(|node| match node {
+            ProofObjectGraphNode::Clause(index) => {
+                let mut display = graph.clauses[index].clone();
+                display.set_ident(proof_object_display_id_for_node(
+                    graph,
+                    node,
+                    &display_ids_by_ordinal,
+                ));
+                if let Some(derivation) = graph.clauses[index].derivation() {
+                    display.set_derivation(Some(remap_derivation_for_display(
+                        derivation,
+                        graph,
+                        node,
+                        &display_ids_by_ordinal,
+                        &fallback_clause_display_ids,
+                        &fallback_formula_display_ids,
+                    )));
+                }
+                ProofObjectListDisplayItem::Clause {
+                    clause: display,
+                    is_root: root_indices.contains(&index),
+                }
+            }
+            ProofObjectGraphNode::Formula(index) => {
+                let mut display = graph.formulas[index].clone();
+                display.set_ident(proof_object_display_id_for_node(
+                    graph,
+                    node,
+                    &display_ids_by_ordinal,
+                ));
+                if let Some(derivation) = graph.formulas[index].derivation() {
+                    display.set_derivation(Some(remap_derivation_for_display(
+                        derivation,
+                        graph,
+                        node,
+                        &display_ids_by_ordinal,
+                        &fallback_clause_display_ids,
+                        &fallback_formula_display_ids,
+                    )));
+                }
+                ProofObjectListDisplayItem::Formula(display)
+            }
+        })
+        .collect()
+}
+
+fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphNode> {
+    let node_count = proof_object_list_node_count(graph);
+    let mut children_by_parent = vec![Vec::new(); node_count];
+    let mut remaining_parent_counts = vec![0_usize; node_count];
+    for edge in proof_object_list_mixed_edges(graph) {
+        if let (Some(parent), Some(child)) = (
+            proof_object_list_node_ordinal(graph, edge.parent),
+            proof_object_list_node_ordinal(graph, edge.child),
+        ) {
+            children_by_parent[parent].push(child);
+            remaining_parent_counts[child] = remaining_parent_counts[child].saturating_add(1);
         }
     }
 
@@ -7776,10 +7840,10 @@ fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<usize> {
         }
     }
 
-    let mut order = Vec::with_capacity(graph.clauses.len());
-    while let Some(index) = ready.pop_last() {
-        order.push(index);
-        for child_index in &children_by_parent[index] {
+    let mut order = Vec::with_capacity(node_count);
+    while let Some(ordinal) = ready.pop_last() {
+        order.push(ordinal);
+        for child_index in &children_by_parent[ordinal] {
             let remaining = &mut remaining_parent_counts[*child_index];
             *remaining = remaining.saturating_sub(1);
             if *remaining == 0 {
@@ -7788,43 +7852,110 @@ fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<usize> {
         }
     }
 
-    if order.len() != graph.clauses.len() {
+    if order.len() != node_count {
         let ordered: BTreeSet<usize> = order.iter().copied().collect();
         order.extend(
-            (0..graph.clauses.len())
+            (0..node_count)
                 .rev()
                 .filter(|index| !ordered.contains(index)),
         );
     }
     order
+        .into_iter()
+        .map(|ordinal| proof_object_list_node_from_ordinal(graph, ordinal))
+        .collect()
+}
+
+fn proof_object_list_mixed_edges(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphMixedEdge> {
+    if graph.mixed_edges.is_empty() {
+        graph
+            .edges
+            .iter()
+            .map(|edge| ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Clause(edge.parent_index),
+                child: ProofObjectGraphNode::Clause(edge.child_index),
+            })
+            .collect()
+    } else {
+        graph.mixed_edges.clone()
+    }
+}
+
+const fn proof_object_list_node_count(graph: &ProofObjectGraph<'_>) -> usize {
+    graph.clauses.len() + graph.formulas.len()
+}
+
+fn proof_object_list_node_ordinal(
+    graph: &ProofObjectGraph<'_>,
+    node: ProofObjectGraphNode,
+) -> Option<usize> {
+    match node {
+        ProofObjectGraphNode::Clause(index) if index < graph.clauses.len() => Some(index),
+        ProofObjectGraphNode::Formula(index) if index < graph.formulas.len() => {
+            Some(graph.clauses.len() + index)
+        }
+        ProofObjectGraphNode::Clause(_) | ProofObjectGraphNode::Formula(_) => None,
+    }
+}
+
+fn proof_object_list_node_from_ordinal(
+    graph: &ProofObjectGraph<'_>,
+    ordinal: usize,
+) -> ProofObjectGraphNode {
+    if ordinal < graph.clauses.len() {
+        ProofObjectGraphNode::Clause(ordinal)
+    } else {
+        ProofObjectGraphNode::Formula(ordinal - graph.clauses.len())
+    }
+}
+
+fn proof_object_display_id_for_node(
+    graph: &ProofObjectGraph<'_>,
+    node: ProofObjectGraphNode,
+    display_ids_by_ordinal: &[i64],
+) -> i64 {
+    proof_object_list_node_ordinal(graph, node)
+        .and_then(|ordinal| display_ids_by_ordinal.get(ordinal).copied())
+        .unwrap_or_default()
 }
 
 fn remap_derivation_for_display(
     derivation: &PStack<DerivationEntry>,
     graph: &ProofObjectGraph<'_>,
-    child_index: usize,
-    display_ids_by_index: &[i64],
-    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+    child: ProofObjectGraphNode,
+    display_ids_by_ordinal: &[i64],
+    fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+    fallback_formula_display_ids: &BTreeMap<FormulaDerivationRef, i64>,
 ) -> PStack<DerivationEntry> {
     let mut remapped = PStack::new();
     for entry in derivation.as_slice() {
         remapped.push(match *entry {
             DerivationEntry::ClauseParent(parent) => {
-                let ident = proof_object_display_parent_ident(
+                let ident = proof_object_display_clause_parent_ident(
                     graph,
-                    child_index,
+                    child,
                     parent,
-                    display_ids_by_index,
-                    fallback_display_ids,
+                    display_ids_by_ordinal,
+                    fallback_clause_display_ids,
                 );
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, parent.source()))
             }
+            DerivationEntry::FormulaParent(parent) => {
+                let ident = proof_object_display_formula_parent_ident(
+                    graph,
+                    child,
+                    parent,
+                    display_ids_by_ordinal,
+                    fallback_formula_display_ids,
+                );
+                DerivationEntry::FormulaParent(FormulaDerivationRef::new(ident))
+            }
             DerivationEntry::Demodulator(demodulator) => remap_demodulator_for_display(
                 graph,
-                child_index,
+                child,
                 demodulator,
-                display_ids_by_index,
-                fallback_display_ids,
+                display_ids_by_ordinal,
+                fallback_clause_display_ids,
             )
             .unwrap_or(*entry),
             entry => entry,
@@ -7835,59 +7966,110 @@ fn remap_derivation_for_display(
 
 fn remap_demodulator_for_display(
     graph: &ProofObjectGraph<'_>,
-    child_index: usize,
+    child: ProofObjectGraphNode,
     demodulator: crate::terms::termtypes::RewriteDemodulator,
-    display_ids_by_index: &[i64],
-    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+    display_ids_by_ordinal: &[i64],
+    fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> Option<DerivationEntry> {
     demodulator_clause_refs(demodulator)
         .into_iter()
         .find_map(|parent| {
-            proof_object_display_parent_ident_if_known(
+            proof_object_display_clause_parent_ident_if_known(
                 graph,
-                child_index,
+                child,
                 parent,
-                display_ids_by_index,
-                fallback_display_ids,
+                display_ids_by_ordinal,
+                fallback_clause_display_ids,
             )
         })
         .map(|ident| DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, 0)))
 }
 
-fn proof_object_display_parent_ident(
+fn proof_object_display_clause_parent_ident(
     graph: &ProofObjectGraph<'_>,
-    child_index: usize,
+    child: ProofObjectGraphNode,
     parent: ClauseDerivationRef,
-    display_ids_by_index: &[i64],
-    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+    display_ids_by_ordinal: &[i64],
+    fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> i64 {
-    proof_object_display_parent_ident_if_known(
+    proof_object_display_clause_parent_ident_if_known(
         graph,
-        child_index,
+        child,
         parent,
-        display_ids_by_index,
-        fallback_display_ids,
+        display_ids_by_ordinal,
+        fallback_clause_display_ids,
     )
     .unwrap_or(parent.ident())
 }
 
-fn proof_object_display_parent_ident_if_known(
+fn proof_object_display_clause_parent_ident_if_known(
     graph: &ProofObjectGraph<'_>,
-    child_index: usize,
+    child: ProofObjectGraphNode,
     parent: ClauseDerivationRef,
-    display_ids_by_index: &[i64],
-    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+    display_ids_by_ordinal: &[i64],
+    fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> Option<i64> {
-    graph
-        .edges
+    proof_object_list_mixed_edges(graph)
         .iter()
         .find(|edge| {
-            edge.child_index == child_index
-                && ClauseDerivationRef::from(graph.clauses[edge.parent_index]) == parent
+            edge.child == child
+                && matches!(
+                    edge.parent,
+                    ProofObjectGraphNode::Clause(parent_index)
+                        if parent_index < graph.clauses.len()
+                            && ClauseDerivationRef::from(graph.clauses[parent_index]) == parent
+                )
         })
         .map_or_else(
-            || fallback_display_ids.get(&parent).copied(),
-            |edge| Some(display_ids_by_index[edge.parent_index]),
+            || fallback_clause_display_ids.get(&parent).copied(),
+            |edge| {
+                Some(proof_object_display_id_for_node(
+                    graph,
+                    edge.parent,
+                    display_ids_by_ordinal,
+                ))
+            },
+        )
+}
+
+fn proof_object_display_formula_parent_ident(
+    graph: &ProofObjectGraph<'_>,
+    child: ProofObjectGraphNode,
+    parent: FormulaDerivationRef,
+    display_ids_by_ordinal: &[i64],
+    fallback_formula_display_ids: &BTreeMap<FormulaDerivationRef, i64>,
+) -> i64 {
+    proof_object_display_formula_parent_ident_if_known(
+        graph,
+        child,
+        parent,
+        display_ids_by_ordinal,
+        fallback_formula_display_ids,
+    )
+    .unwrap_or(parent.ident())
+}
+
+fn proof_object_display_formula_parent_ident_if_known(
+    graph: &ProofObjectGraph<'_>,
+    child: ProofObjectGraphNode,
+    parent: FormulaDerivationRef,
+    display_ids_by_ordinal: &[i64],
+    fallback_formula_display_ids: &BTreeMap<FormulaDerivationRef, i64>,
+) -> Option<i64> {
+    proof_object_list_mixed_edges(graph)
+        .iter()
+        .find(|edge| {
+            edge.child == child
+                && matches!(
+                    edge.parent,
+                    ProofObjectGraphNode::Formula(parent_index)
+                        if parent_index < graph.formulas.len()
+                            && FormulaDerivationRef::new(graph.formulas[parent_index].ident()) == parent
+                )
+        })
+        .map_or_else(
+            || fallback_formula_display_ids.get(&parent).copied(),
+            |edge| Some(proof_object_display_id_for_node(graph, edge.parent, display_ids_by_ordinal)),
         )
 }
 
@@ -7974,7 +8156,7 @@ fn write_stopped_proof_output(
 
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
     let graph = state.proof_object_graph_for_roots(stopped_proof_object_roots(config, state));
-    write_proof_object_list_graph(output, config, state, &graph)?;
+    write_proof_object_list_graph(output, config, state.terms(), &graph)?;
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output end {status}")?;
     Ok(())
 }
@@ -8036,6 +8218,68 @@ fn write_saturation_proof_object_clause(
                 rendered.push_str(", [");
                 rendered.push_str(proof_object_root_marker(clause));
                 rendered.push(']');
+            }
+            rendered.push_str(").");
+            rendered.push('\n');
+        }
+        _ => write_comment_line(output, "Output format not implemented.")?,
+    }
+    output.write_all(rendered.as_bytes())?;
+    Ok(())
+}
+
+fn write_saturation_proof_object_formula(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &mut TermBank,
+    formula: &WrappedFormula,
+) -> Result<(), EProverError> {
+    let mut rendered = String::new();
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => {
+            let body =
+                formula.proof_doc_formula_body_string(bank, true, ProblemType::FirstOrder)?;
+            pcl_formula_print_start(
+                &mut rendered,
+                formula.ident(),
+                formula.query_tptp_type(),
+                Some(&body),
+                pcl_step_print_options(config),
+            )
+            .map_err(proof_doc_write_error)?;
+            if let Some(derivation) = deriv_stack_pcl_string_with_ac_axioms(
+                formula.derivation(),
+                bank.signature().ac_axioms(),
+            ) {
+                rendered.push_str(&derivation);
+            } else {
+                rendered.push_str(&source_info_pcl_string(formula.info()));
+            }
+            rendered.push('\n');
+        }
+        DocOutputFormat::Tstp => {
+            rendered.push_str(&formula.tstp_string_flex(
+                bank,
+                ProblemType::FirstOrder,
+                FormulaTstpPrintOptions {
+                    full_terms: true,
+                    completeness: FormulaTstpCompleteness::Open,
+                    clause_mode: FormulaTstpClauseMode::AsClauseCore,
+                    keep_input_names: true,
+                },
+            )?);
+            if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
+                formula.derivation(),
+                bank.signature().ac_axioms(),
+            ) {
+                rendered.push_str(", ");
+                rendered.push_str(&derivation);
+            } else {
+                let source_info = source_info_tstp_string(formula.info());
+                if !source_info.is_empty() {
+                    rendered.push_str(", ");
+                    rendered.push_str(&source_info);
+                }
             }
             rendered.push_str(").");
             rendered.push('\n');
@@ -13684,18 +13928,19 @@ mod tests {
         parse_app_encode_file, parse_clause_scanner_into_sets_with_options,
         parse_input_files_into_formula_owners, parse_schedule_worker_args,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, proof_search_global_indices,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_object_dot, write_proof_statistics,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
-        ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
-        ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula,
-        TermOrdering, UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        proof_object_list_display_clauses, proof_object_list_display_items,
+        proof_search_global_indices, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
+        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
+        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
         INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
         PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
@@ -24015,7 +24260,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(
-            printed.contains("inference(rw,[status(thm)],[c_0_1, c_0_4])"),
+            printed.contains("inference(rw,[status(thm)],[c_0_4, c_0_7])"),
             "{printed}"
         );
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
@@ -24476,6 +24721,105 @@ input_clause(c2,axiom,[++q(X)]).
             .is_some_and(|derivation| derivation.as_slice().contains(
                 &DerivationEntry::ClauseParent(ClauseDerivationRef::new(1, 0)),
             )));
+    }
+
+    #[test]
+    fn proof_object_list_display_items_prints_formula_parents_before_clause_children() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formula =
+            WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "list_display_formula"));
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(formula_ref), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: vec![&formula],
+            edges: Vec::new(),
+            mixed_edges: vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }],
+            root_indices: vec![0],
+        };
+
+        let displayed = proof_object_list_display_items(&graph);
+
+        match &displayed[..] {
+            [ProofObjectListDisplayItem::Formula(display_formula), ProofObjectListDisplayItem::Clause {
+                clause: display_clause,
+                is_root,
+            }] => {
+                assert_eq!(display_formula.ident(), 1);
+                assert_eq!(display_clause.ident(), 2);
+                assert!(*is_root);
+                assert!(display_clause.derivation().is_some_and(|derivation| {
+                    derivation
+                        .as_slice()
+                        .contains(&DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+                            1,
+                        )))
+                }));
+            }
+            _ => panic!("unexpected displayed proof-object items: {displayed:?}"),
+        }
+    }
+
+    #[test]
+    fn proof_object_list_graph_prints_formula_nodes_and_remapped_edges() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formula =
+            WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "list_output_formula"));
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(formula_ref), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: vec![&formula],
+            edges: Vec::new(),
+            mixed_edges: vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }],
+            root_indices: vec![0],
+        };
+
+        let tstp_config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+        write_proof_object_list_graph(&mut output, &tstp_config, &bank, &graph).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        let formula_position = printed
+            .find("fof(c_0_1, conjecture, list_output_formula")
+            .unwrap_or_else(|| panic!("missing formula list node in:\n{printed}"));
+        let clause_position = printed
+            .find(
+                "cnf(c_0_2, plain, ($false), inference(QUOTE,[status(unknown)],[c_0_1]), ['proof']).",
+            )
+            .unwrap_or_else(|| panic!("missing remapped clause list node in:\n{printed}"));
+        assert!(formula_position < clause_position, "{printed}");
+
+        let pcl_config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Pcl,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+        write_proof_object_list_graph(&mut output, &pcl_config, &bank, &graph).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        let formula_position = printed
+            .find("list_output_formula")
+            .unwrap_or_else(|| panic!("missing formula PCL node in:\n{printed}"));
+        let clause_position = printed
+            .find("     2 : :[] : QUOTE(1) : 'proof'")
+            .unwrap_or_else(|| panic!("missing remapped clause PCL node in:\n{printed}"));
+        assert!(formula_position < clause_position, "{printed}");
     }
 
     #[test]
