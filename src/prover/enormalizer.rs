@@ -814,9 +814,7 @@ fn parse_tstp_wrapped_formula(
             problem_type: formula_problem_type,
         });
     }
-    scanner.check_id(
-        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist",
-    )?;
+    scanner.check_id(tstp_formula_roles(&formula_kind))?;
     let role = scanner.current_token().literal();
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
@@ -1008,6 +1006,14 @@ fn old_tptp_input_formula_type(role: &str) -> FormulaProperties {
         "axiom" | "hypothesis" | "conjecture" | "negated_conjecture" | "question" | "lemma"
         | "unknown" => clause_type_from_identifier(role, ProblemType::FirstOrder),
         _ => CP_TYPE_AXIOM,
+    }
+}
+
+fn tstp_formula_roles(formula_kind: &str) -> &'static str {
+    if formula_kind == "tcf" {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
+    } else {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
     }
 }
 
@@ -1477,6 +1483,47 @@ mod tests {
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn non_tcf_formula_targets_reject_watchlist_role_like_c() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff", "thf"] {
+            let rule_path = temp_path(&format!("{formula_kind}_watchlist_rules"));
+            let formula_path = temp_path(&format!("{formula_kind}_watchlist_formulas"));
+            fs::write(&rule_path, "").expect("rules written");
+            fs::write(
+                &formula_path,
+                format!("{formula_kind}(watch, watchlist, p(a)).\n"),
+            )
+            .expect("formulas written");
+
+            let stdin_data = empty_stdin();
+            let mut stdin = stdin_data.as_slice();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let error = run(
+                [
+                    PROGRAM_NAME,
+                    "--tstp-in",
+                    "-f",
+                    formula_path.to_str().expect("utf8 path"),
+                    rule_path.to_str().expect("utf8 path"),
+                ],
+                &mut stdin,
+                &mut stdout,
+                &mut stderr,
+            )
+            .expect_err("non-tcf watchlist roles are rejected");
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(error.message().contains("watchlist"));
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+
+            let _ = fs::remove_file(rule_path);
+            let _ = fs::remove_file(formula_path);
+        }
     }
 
     #[test]
