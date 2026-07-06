@@ -118,6 +118,14 @@ struct PrefixQueryCell {
     span: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct QuerySubtree {
+    start: usize,
+    end: usize,
+}
+
+type PdtQueryBindings = BTreeMap<usize, QuerySubtree>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdTree {
     nodes: Vec<PdNode>,
@@ -715,7 +723,8 @@ impl PdTree {
             return None;
         }
         let mut occurrences = Vec::new();
-        self.collect_matching_occurrences(0, 0, state, &mut occurrences);
+        let mut bindings = PdtQueryBindings::new();
+        self.collect_matching_occurrences(0, 0, state, &mut bindings, &mut occurrences);
         Some(occurrences)
     }
 
@@ -767,6 +776,7 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
         if !self.node_satisfies_constraints(node_index, state.term_weight, state.term_date) {
@@ -792,12 +802,14 @@ impl PdTree {
                     node_index,
                     query_index,
                     state,
+                    bindings,
                     occurrences,
                 ),
                 PdtTraversalStep::Variables => self.collect_variable_matching_occurrences(
                     node_index,
                     query_index,
                     state,
+                    bindings,
                     occurrences,
                 ),
             }
@@ -809,12 +821,19 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
         let token = state.term_code[query_index];
         if !matches!(token, PrefixToken::FreeVar(_)) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
-                self.collect_matching_occurrences(next_index, query_index + 1, state, occurrences);
+                self.collect_matching_occurrences(
+                    next_index,
+                    query_index + 1,
+                    state,
+                    bindings,
+                    occurrences,
+                );
             }
         }
     }
@@ -824,22 +843,63 @@ impl PdTree {
         node_index: usize,
         query_index: usize,
         state: &PdtSearchState,
+        bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
         let next_query_index = query_index.saturating_add(state.term_spans[query_index]);
         if next_query_index > state.term_code.len() {
             return;
         }
-        for next_index in self.nodes[node_index]
-            .children
-            .iter()
-            .filter_map(|(edge, next_index)| {
-                matches!(edge, PrefixToken::FreeVar(_)).then_some(*next_index)
-            })
+        let current = QuerySubtree {
+            start: query_index,
+            end: next_query_index,
+        };
+        for (variable_id, next_index) in
+            self.nodes[node_index]
+                .children
+                .iter()
+                .filter_map(|(edge, next_index)| {
+                    if let PrefixToken::FreeVar(variable_id) = edge {
+                        Some((*variable_id, *next_index))
+                    } else {
+                        None
+                    }
+                })
         {
-            self.collect_matching_occurrences(next_index, next_query_index, state, occurrences);
+            if let Some(bound) = bindings.get(&variable_id).copied() {
+                if query_subtrees_match(state, bound, current) {
+                    self.collect_matching_occurrences(
+                        next_index,
+                        next_query_index,
+                        state,
+                        bindings,
+                        occurrences,
+                    );
+                }
+            } else {
+                bindings.insert(variable_id, current);
+                self.collect_matching_occurrences(
+                    next_index,
+                    next_query_index,
+                    state,
+                    bindings,
+                    occurrences,
+                );
+                bindings.remove(&variable_id);
+            }
         }
     }
+}
+
+fn query_subtrees_match(
+    state: &PdtSearchState,
+    expected: QuerySubtree,
+    actual: QuerySubtree,
+) -> bool {
+    state.term_code.get(expected.start..expected.end)
+        == state.term_code.get(actual.start..actual.end)
+        && state.term_spans.get(expected.start..expected.end)
+            == state.term_spans.get(actual.start..actual.end)
 }
 
 #[cfg(feature = "pdt-count-nodes")]
@@ -990,9 +1050,10 @@ mod tests {
     use crate::clauses::eqn_props::EqnSide;
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::Term;
+    use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
@@ -1004,6 +1065,35 @@ mod tests {
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_binary(bank: &mut TermBank, name: &str, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_.clone()]),
+                )
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     #[test]
@@ -1270,6 +1360,27 @@ mod tests {
             tree.search_matching_occurrences(),
             Some(vec![new_general, old_specific])
         );
+    }
+
+    #[test]
+    fn matching_occurrences_reject_repeated_variable_on_different_query_subtrees() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let a = typed_const(&mut bank, "pdt_repeat_a");
+        let b = typed_const(&mut bank, "pdt_repeat_b");
+        let variable = typed_var(&bank, -22);
+        let repeated_pattern = typed_binary(&mut bank, "pdt_repeat_f", &variable, &variable);
+        let different_query = typed_binary(&mut bank, "pdt_repeat_f", &a, &b);
+        let same_query = typed_binary(&mut bank, "pdt_repeat_f", &a, &a);
+        let repeated = PdtIndexedOccurrence::new(60, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&repeated_pattern, SysDate::from_raw(7), repeated));
+
+        tree.record_search_init(&different_query, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(tree.search_matching_occurrences(), Some(Vec::new()));
+
+        tree.record_search_init(&same_query, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(tree.search_matching_occurrences(), Some(vec![repeated]));
     }
 
     #[test]
