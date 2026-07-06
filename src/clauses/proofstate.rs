@@ -336,10 +336,24 @@ pub struct ProofObjectGraphEdge {
     pub child_index: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProofObjectGraphNode {
+    Clause(usize),
+    Formula(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofObjectGraphMixedEdge {
+    pub parent: ProofObjectGraphNode,
+    pub child: ProofObjectGraphNode,
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct ProofObjectGraph<'a> {
     pub clauses: Vec<&'a Clause>,
+    pub formulas: Vec<&'a WrappedFormula>,
     pub edges: Vec<ProofObjectGraphEdge>,
+    pub mixed_edges: Vec<ProofObjectGraphMixedEdge>,
     pub root_indices: Vec<usize>,
 }
 
@@ -1237,7 +1251,8 @@ impl ProofState {
         I: IntoIterator<Item = &'a Clause>,
     {
         let mut graph = ProofObjectGraph::default();
-        let mut visited = Vec::new();
+        let mut clause_visited = Vec::new();
+        let mut formula_visited = Vec::new();
         let mut pending_edges = Vec::new();
 
         for root in roots {
@@ -1245,7 +1260,7 @@ impl ProofState {
             let root_index = Self::collect_proof_object_graph_clause(
                 root,
                 &mut graph,
-                &mut visited,
+                &mut clause_visited,
                 &mut pending_edges,
             );
             if !graph.root_indices.contains(&root_index) {
@@ -1253,19 +1268,43 @@ impl ProofState {
             }
         }
 
-        while let Some((child_index, edge)) = pending_edges.pop() {
-            for clause in self.proof_object_edge_clauses(edge) {
-                let clause = self.proof_object_first_clause(clause);
-                let parent_index = Self::collect_proof_object_graph_clause(
-                    clause,
-                    &mut graph,
-                    &mut visited,
-                    &mut pending_edges,
-                );
-                graph.edges.push(ProofObjectGraphEdge {
-                    parent_index,
-                    child_index,
-                });
+        while let Some((child, edge)) = pending_edges.pop() {
+            match edge.parent {
+                DerivationParentRef::Clause(_) | DerivationParentRef::Demodulator(_) => {
+                    for clause in self.proof_object_edge_clauses(edge) {
+                        let clause = self.proof_object_first_clause(clause);
+                        let parent_index = Self::collect_proof_object_graph_clause(
+                            clause,
+                            &mut graph,
+                            &mut clause_visited,
+                            &mut pending_edges,
+                        );
+                        let parent = ProofObjectGraphNode::Clause(parent_index);
+                        graph
+                            .mixed_edges
+                            .push(ProofObjectGraphMixedEdge { parent, child });
+                        if let ProofObjectGraphNode::Clause(child_index) = child {
+                            graph.edges.push(ProofObjectGraphEdge {
+                                parent_index,
+                                child_index,
+                            });
+                        }
+                    }
+                }
+                DerivationParentRef::Formula(parent_ref) => {
+                    if let Some(formula) = self.proof_object_formula_by_derivation_ref(parent_ref) {
+                        let parent_index = Self::collect_proof_object_graph_formula(
+                            formula,
+                            &mut graph,
+                            &mut formula_visited,
+                            &mut pending_edges,
+                        );
+                        graph.mixed_edges.push(ProofObjectGraphMixedEdge {
+                            parent: ProofObjectGraphNode::Formula(parent_index),
+                            child,
+                        });
+                    }
+                }
             }
         }
 
@@ -1341,7 +1380,7 @@ impl ProofState {
         clause: &'a Clause,
         graph: &mut ProofObjectGraph<'a>,
         visited: &mut Vec<(*const Clause, usize)>,
-        pending_edges: &mut Vec<(usize, ProofObjectParentEdge)>,
+        pending_edges: &mut Vec<(ProofObjectGraphNode, ProofObjectParentEdge)>,
     ) -> usize {
         let key = std::ptr::from_ref(clause);
         if let Some((_, index)) = visited.iter().find(|(visited, _)| *visited == key) {
@@ -1353,7 +1392,28 @@ impl ProofState {
         pending_edges.extend(
             proof_object_parent_edges(clause.derivation())
                 .into_iter()
-                .map(|edge| (index, edge)),
+                .map(|edge| (ProofObjectGraphNode::Clause(index), edge)),
+        );
+        index
+    }
+
+    fn collect_proof_object_graph_formula<'a>(
+        formula: &'a WrappedFormula,
+        graph: &mut ProofObjectGraph<'a>,
+        visited: &mut Vec<(*const WrappedFormula, usize)>,
+        pending_edges: &mut Vec<(ProofObjectGraphNode, ProofObjectParentEdge)>,
+    ) -> usize {
+        let key = std::ptr::from_ref(formula);
+        if let Some((_, index)) = visited.iter().find(|(visited, _)| *visited == key) {
+            return *index;
+        }
+        let index = graph.formulas.len();
+        visited.push((key, index));
+        graph.formulas.push(formula);
+        pending_edges.extend(
+            proof_object_parent_edges(formula.derivation())
+                .into_iter()
+                .map(|edge| (ProofObjectGraphNode::Formula(index), edge)),
         );
         index
     }
@@ -2271,8 +2331,9 @@ mod tests {
         cached_rewrite_steps, derived_dot_clause_link_colour, derived_dot_formula_link_colour,
         derived_dot_node_colour, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
         generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
-        DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge, ProofState,
-        ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
+        DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge,
+        ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, ProofStateGcAnalysis,
+        ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2284,8 +2345,8 @@ mod tests {
     };
     use crate::clauses::derivation::{
         clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
-        DerivationParentRef, FormulaDerivationRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES,
-        DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
+        DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -2988,6 +3049,116 @@ mod tests {
                 parent_index: 2,
                 child_index: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_collects_formula_parent_nodes() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_formula(&mut state, "proof_graph_formula_parent");
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_019);
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(formula_ref), None);
+
+        state.f_ax_archive_mut().insert(formula);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_019]
+        );
+        assert_eq!(
+            graph
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![formula_ref.ident()]
+        );
+        assert_eq!(graph.edges, Vec::new());
+        assert_eq!(
+            graph.mixed_edges,
+            vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_uses_formula_quote_source() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = wrapped_formula(&mut state, "proof_graph_formula_original");
+        let original_ref = FormulaDerivationRef::new(original.ident());
+        let mut quote = wrapped_formula(&mut state, "proof_graph_formula_quote");
+        quote.push_formula_derivation(DC_FOF_QUOTE, Some(original_ref), None);
+        let quote_ref = FormulaDerivationRef::new(quote.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_020);
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(quote_ref), None);
+
+        state.f_ax_archive_mut().insert(original);
+        state.f_axioms_mut().insert(quote);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![original_ref.ident()]
+        );
+        assert_eq!(
+            graph.mixed_edges,
+            vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_collects_formula_to_formula_edges() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let definition = wrapped_formula(&mut state, "proof_graph_formula_definition");
+        let definition_ref = FormulaDerivationRef::new(definition.ident());
+        let mut rewritten = wrapped_formula(&mut state, "proof_graph_formula_rewritten");
+        rewritten.push_formula_derivation(DC_APPLY_DEF, Some(definition_ref), None);
+        let rewritten_ref = FormulaDerivationRef::new(rewritten.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_021);
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(rewritten_ref), None);
+
+        state.f_ax_archive_mut().insert(definition);
+        state.f_axioms_mut().insert(rewritten);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![rewritten_ref.ident(), definition_ref.ident()]
+        );
+        assert_eq!(
+            graph.mixed_edges,
+            vec![
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Formula(0),
+                    child: ProofObjectGraphNode::Clause(0),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Formula(1),
+                    child: ProofObjectGraphNode::Formula(0),
+                },
+            ]
         );
     }
 

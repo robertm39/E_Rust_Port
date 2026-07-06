@@ -24328,10 +24328,12 @@ input_clause(c2,axiom,[++q(X)]).
         clause_push_derivation(&mut child, DC_EQ_RES, Some(&parent), None);
         let graph = ProofObjectGraph {
             clauses: vec![&parent, &child],
+            formulas: Vec::new(),
             edges: vec![ProofObjectGraphEdge {
                 parent_index: 0,
                 child_index: 1,
             }],
+            mixed_edges: Vec::new(),
             root_indices: vec![1],
         };
 
