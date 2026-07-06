@@ -2054,7 +2054,6 @@ fn clause_ordered_paramod_with_subst(
     let mut new_literals = EqnList::new();
     new_literals.push(new_literal);
     new_literals.append(into_copy);
-    new_literals.lambda_normalize(bank)?;
     new_literals.remove_resolved(bank);
     new_literals.remove_duplicates(bank);
     Ok(Some(Clause::alloc(new_literals)))
@@ -2210,7 +2209,6 @@ fn clause_ordered_sim_paramod_active_subst(
         into_copy.del_prop(EP_FROM_CLAUSE_LIT);
         from_copy.set_prop(EP_FROM_CLAUSE_LIT);
         into_copy.append(from_copy);
-        into_copy.lambda_normalize(bank)?;
         into_copy.remove_resolved(bank);
         into_copy.remove_duplicates(bank);
         Ok(Some(Clause::alloc(into_copy)))
@@ -3055,6 +3053,64 @@ mod tests {
             .any(|literal| { literal.left().is_applied_free_var() && literal.right() == &truth }));
     }
 
+    fn assert_unindexed_paramodulation_preserves_copied_beta_literal(pm_type: ParamodulationType) {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_unindexed_norm_source_left");
+        let source_right = typed_const(&mut bank, "pm_unindexed_norm_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_unindexed_norm_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_unindexed_norm_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let identity_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &db0).unwrap();
+        let beta_arg = typed_const(&mut bank, "pm_unindexed_norm_arg");
+        let beta_applied =
+            apply_terms(&mut bank, &identity_lambda, std::slice::from_ref(&beta_arg)).unwrap();
+        let beta_rhs = typed_const(&mut bank, "pm_unindexed_norm_beta_rhs");
+
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        let copied_literal = lit(&mut bank, &beta_applied, &beta_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal, copied_literal]));
+        let mut ocb = kbo6_lambda_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank, &mut ocb, &source, &source, &target, &mut store, pm_type,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store.iter().next().expect("one paramodulant inserted");
+        assert!(stored
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| { literal.left() == &beta_applied && literal.right() == &beta_rhs }));
+        assert!(!stored
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| literal.left() == &beta_arg && literal.right() == &beta_rhs));
+    }
+
+    #[test]
+    fn unindexed_plain_paramodulation_preserves_c_copied_beta_literals() {
+        assert_unindexed_paramodulation_preserves_copied_beta_literal(ParamodulationType::Plain);
+    }
+
+    #[test]
+    fn unindexed_sim_paramodulation_preserves_c_copied_beta_literals() {
+        assert_unindexed_paramodulation_preserves_copied_beta_literal(
+            ParamodulationType::Simultaneous,
+        );
+    }
+
     #[test]
     fn compute_clause_clause_paramodulants_higher_order_allows_first_order_shaped_binding() {
         let _guard = global_state_lock();
@@ -3336,7 +3392,7 @@ mod tests {
     }
 
     #[test]
-    fn clause_ordered_sim_paramod_lambda_normalizes_generated_literal_list() {
+    fn clause_ordered_sim_paramod_preserves_c_non_normalized_generated_literal_list() {
         let mut bank = test_bank();
         let source_left = typed_const(&mut bank, "pm_lambda_sim_a");
         let source_right = typed_const(&mut bank, "pm_lambda_sim_b");
@@ -3348,7 +3404,8 @@ mod tests {
         let lambda =
             close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
         let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_left)).unwrap();
-        let expected = typed_unary(&mut bank, f_code, &source_right);
+        let expected =
+            apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_right)).unwrap();
         let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
         let mut target_literal = lit(&mut bank, &applied, &target_rhs, true);
         maximal_oriented(&mut source_literal);
@@ -3956,7 +4013,7 @@ mod tests {
     }
 
     #[test]
-    fn clause_ordered_paramod_lambda_normalizes_generated_literal_list() {
+    fn clause_ordered_paramod_preserves_c_non_normalized_generated_literal_list() {
         let mut bank = test_bank();
         let source_left = typed_const(&mut bank, "pm_lambda_plain_a");
         let source_right = typed_const(&mut bank, "pm_lambda_plain_b");
@@ -3968,7 +4025,8 @@ mod tests {
         let lambda =
             close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
         let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_left)).unwrap();
-        let expected = typed_unary(&mut bank, f_code, &source_right);
+        let expected =
+            apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_right)).unwrap();
         let mut from_lit = lit(&mut bank, &source_left, &source_right, true);
         let mut into_lit = lit(&mut bank, &applied, &target_rhs, true);
         maximal_oriented(&mut from_lit);
