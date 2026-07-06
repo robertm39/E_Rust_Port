@@ -27918,6 +27918,41 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_print_formulas_preserves_repeated_include_like_c() {
+        let _guard = global_state_lock();
+        let dir = temp_path("print-repeated-include-dir");
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("inc.ax"), "fof(repeated_fact, axiom, p(a)).\n").unwrap();
+        let path = dir.join("main.p");
+        std::fs::write(
+            &path,
+            "include('inc.ax').\ninclude('inc.ax').\nfof(main_fact, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(
+            printed.matches("fof(repeated_fact, axiom, p(a)).").count(),
+            2
+        );
+        assert!(printed.contains("fof(main_fact, axiom, q(a))."));
+        assert!(stderr.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_accepts_lfhol_partial_application_term_equality() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-lfhol-partial-application-term-equality");
