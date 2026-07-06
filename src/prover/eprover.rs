@@ -72,7 +72,8 @@ use crate::clauses::pred_elim::{
 };
 use crate::clauses::proofstate::{
     derived_dot_node_colour_for_proof_member, proof_state_alloc, DerivedView, ProofObjectAnalysis,
-    ProofObjectGraph, ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
+    ProofObjectGraph, ProofObjectGraphNode, ProofState, RawFormulaFeatures,
+    WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
@@ -8077,18 +8078,31 @@ fn write_proof_object_dot(
             proof_object_dot_node_id(graph, index),
         )?;
     }
+    let mut formula_bank = bank.clone();
+    for index in (0..graph.formulas.len()).rev() {
+        let formula = graph.formulas[index];
+        if axiom_open && formula.derivation().is_some() {
+            output.write_all(b"   }\n")?;
+            axiom_open = false;
+        }
+        write_proof_object_dot_formula(
+            output,
+            config,
+            &mut formula_bank,
+            formula,
+            proof_object_dot_formula_node_id(graph, index),
+        )?;
+    }
     if axiom_open {
         output.write_all(b"   }\n")?;
     }
-    for edge in &graph.edges {
+    for edge in &graph.mixed_edges {
         writeln!(
             output,
             "    {} -> {} [style=\"bold\"{}]",
-            proof_object_dot_node_id(graph, edge.parent_index),
-            proof_object_dot_node_id(graph, edge.child_index),
-            derived_dot_node_colour_for_proof_member(DerivedView::Clause(
-                graph.clauses[edge.child_index],
-            ))
+            proof_object_dot_graph_node_id(graph, edge.parent),
+            proof_object_dot_graph_node_id(graph, edge.child),
+            proof_object_dot_graph_node_colour(graph, edge.child)
         )?;
     }
     output.write_all(b"}\n")?;
@@ -8141,8 +8155,74 @@ fn write_proof_object_dot_clause(
     Ok(())
 }
 
+fn write_proof_object_dot_formula(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &mut TermBank,
+    formula: &WrappedFormula,
+    node_id: usize,
+) -> Result<(), EProverError> {
+    let label = if config.proof_output > 2 {
+        let mut rendered = formula.tstp_string(bank, true, false, ProblemType::FirstOrder, true)?;
+        if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(formula.derivation(), &[])
+        {
+            rendered.push_str(",\n");
+            rendered.push_str(&derivation);
+        } else {
+            let source_info = source_info_tstp_string(formula.info());
+            if !source_info.is_empty() {
+                rendered.push_str(",\n");
+                rendered.push_str(&source_info);
+            }
+        }
+        rendered.push_str(").");
+        rendered
+    } else {
+        formula.get_id(true)
+    };
+    writeln!(
+        output,
+        "  {} [shape=box{},style=filled,label=\"{}\"]",
+        node_id,
+        derived_dot_node_colour_for_proof_member(DerivedView::Formula(formula)),
+        dot_label_escape(&label)
+    )?;
+    Ok(())
+}
+
 fn proof_object_dot_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
     graph.clauses.len().saturating_sub(index)
+}
+
+fn proof_object_dot_formula_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
+    graph
+        .clauses
+        .len()
+        .saturating_add(graph.formulas.len().saturating_sub(index))
+}
+
+fn proof_object_dot_graph_node_id(
+    graph: &ProofObjectGraph<'_>,
+    node: ProofObjectGraphNode,
+) -> usize {
+    match node {
+        ProofObjectGraphNode::Clause(index) => proof_object_dot_node_id(graph, index),
+        ProofObjectGraphNode::Formula(index) => proof_object_dot_formula_node_id(graph, index),
+    }
+}
+
+fn proof_object_dot_graph_node_colour(
+    graph: &ProofObjectGraph<'_>,
+    node: ProofObjectGraphNode,
+) -> &'static str {
+    match node {
+        ProofObjectGraphNode::Clause(index) => {
+            derived_dot_node_colour_for_proof_member(DerivedView::Clause(graph.clauses[index]))
+        }
+        ProofObjectGraphNode::Formula(index) => {
+            derived_dot_node_colour_for_proof_member(DerivedView::Formula(graph.formulas[index]))
+        }
+    }
 }
 
 fn dot_label_escape(label: &str) -> String {
@@ -13608,16 +13688,17 @@ mod tests {
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_statistics, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, PdtConstraintRunGuard,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofStatisticsInput,
-        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        temporary_executable_term_bank, write_proof_object_dot, write_proof_statistics,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
+        ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
+        ProblemTypeRunGuard, ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula,
+        TermOrdering, UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -13631,13 +13712,17 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE, DC_EQ_RES,
+        clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
+        DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES, DC_FOF_QUOTE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::clauses::freqvectors::FvIndexType;
-    use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
+    use crate::clauses::proofstate::{
+        proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge, ProofObjectGraphMixedEdge,
+        ProofObjectGraphNode,
+    };
     use crate::clauses::rewrite::{
         BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
     };
@@ -24024,6 +24109,48 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("inference("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn proof_graph_dot_writer_prints_formula_nodes_and_edges() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formula = WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "dot_formula"));
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(formula_ref), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: vec![&formula],
+            edges: Vec::new(),
+            mixed_edges: vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }],
+            root_indices: vec![0],
+        };
+        let config = EProverConfig {
+            proof_output: 3,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_dot(&mut output, &config, &bank, &graph).unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains(
+                "  2 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"fof("
+            ),
+            "{printed}"
+        );
+        assert!(printed.contains("conjecture"), "{printed}");
+        assert!(printed.contains("dot_formula"), "{printed}");
+        assert!(
+            printed.contains("    2 -> 1 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
+            "{printed}"
+        );
     }
 
     #[test]
