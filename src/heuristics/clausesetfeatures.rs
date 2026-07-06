@@ -909,6 +909,7 @@ pub fn proof_state_print_selective_string(
     descriptor: &str,
     print_info: bool,
     output_format: IoFormat,
+    problem_type: ProblemType,
     eqn_print_options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     let mut output = String::new();
@@ -916,14 +917,15 @@ pub fn proof_state_print_selective_string(
         bank: state.terms(),
         print_info,
         output_format,
+        problem_type,
         eqn_print_options,
     };
     for current in descriptor.bytes() {
         match current {
             b't' => {
-                if problem_type() == ProblemType::HigherOrder || !state.axioms().is_untyped() {
+                if problem_type == ProblemType::HigherOrder || !state.axioms().is_untyped() {
                     push_comment_line(&mut output, "Type declarations:");
-                    output.push_str(&type_decls_tstp_string(state)?);
+                    output.push_str(&type_decls_tstp_string(state, problem_type)?);
                 }
             }
             b'e' => {
@@ -1011,11 +1013,18 @@ struct SelectiveClausePrintContext<'bank> {
     bank: &'bank TermBank,
     print_info: bool,
     output_format: IoFormat,
+    problem_type: ProblemType,
     eqn_print_options: EqnPrintOptions,
 }
 
-type SelectiveClausePrintFn =
-    fn(&TermBank, &ClauseSet, bool, IoFormat, EqnPrintOptions) -> Result<String, Diagnostic>;
+type SelectiveClausePrintFn = fn(
+    &TermBank,
+    &ClauseSet,
+    bool,
+    IoFormat,
+    ProblemType,
+    EqnPrintOptions,
+) -> Result<String, Diagnostic>;
 
 fn push_selective_clause_section(
     output: &mut String,
@@ -1031,6 +1040,7 @@ fn push_selective_clause_section(
             set,
             context.print_info,
             context.output_format,
+            context.problem_type,
             context.eqn_print_options,
         )?);
     }
@@ -1050,6 +1060,7 @@ fn clause_set_print_pos_units_with_options(
     set: &ClauseSet,
     print_info: bool,
     output_format: IoFormat,
+    problem_type: ProblemType,
     options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     clause_set_print_pos_units_format_string(
@@ -1057,7 +1068,7 @@ fn clause_set_print_pos_units_with_options(
         set,
         print_info,
         output_format,
-        problem_type(),
+        problem_type,
         options,
     )
 }
@@ -1067,6 +1078,7 @@ fn clause_set_print_neg_units_with_options(
     set: &ClauseSet,
     print_info: bool,
     output_format: IoFormat,
+    problem_type: ProblemType,
     options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     clause_set_print_neg_units_format_string(
@@ -1074,7 +1086,7 @@ fn clause_set_print_neg_units_with_options(
         set,
         print_info,
         output_format,
-        problem_type(),
+        problem_type,
         options,
     )
 }
@@ -1084,6 +1096,7 @@ fn clause_set_print_non_units_with_options(
     set: &ClauseSet,
     print_info: bool,
     output_format: IoFormat,
+    problem_type: ProblemType,
     options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     clause_set_print_non_units_format_string(
@@ -1091,17 +1104,20 @@ fn clause_set_print_non_units_with_options(
         set,
         print_info,
         output_format,
-        problem_type(),
+        problem_type,
         options,
     )
 }
 
-fn type_decls_tstp_string(state: &ProofState) -> Result<String, Diagnostic> {
+fn type_decls_tstp_string(
+    state: &ProofState,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
     let mut output = Vec::new();
     state
         .terms()
         .signature()
-        .print_type_decls_tstp(&mut output, problem_type())
+        .print_type_decls_tstp(&mut output, problem_type)
         .map_err(|error| {
             Diagnostic::new(
                 ErrorCode::OTHER_ERROR,
@@ -1995,12 +2011,12 @@ mod tests {
         clause_set_print_non_units_string, clause_set_print_pos_units_default_string,
         clause_set_print_pos_units_format_string, clause_set_print_pos_units_string,
         clause_set_term_cells, clause_set_tptp_depth_info_add, create_default_spec_limits,
-        spec_features_add_basic_eval, spec_features_add_eval, spec_features_compute,
-        spec_features_compute_clause_set, spec_features_compute_with_choice_recognition,
-        spec_features_parse, spec_features_print_string, spec_limits_print_string,
-        spec_type_print_string, spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell,
-        SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR,
-        SPEC_STRING_MEM,
+        proof_state_print_selective_string, spec_features_add_basic_eval, spec_features_add_eval,
+        spec_features_compute, spec_features_compute_clause_set,
+        spec_features_compute_with_choice_recognition, spec_features_parse,
+        spec_features_print_string, spec_limits_print_string, spec_type_print_string,
+        spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass,
+        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -2010,6 +2026,7 @@ mod tests {
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
+    use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::clausefeatures::{
         clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
         clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
@@ -2017,7 +2034,7 @@ mod tests {
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::functypes::FunCode;
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_HAS_LAMBDA_SUBTERM};
@@ -2452,6 +2469,30 @@ mod tests {
         assert!(non_unit_tstp.contains("format_selective_a"));
         assert!(non_unit_tstp.contains(" % info("));
         assert!(!non_unit_tstp.contains("<-"));
+    }
+
+    #[test]
+    fn proof_state_print_selective_uses_explicit_higher_order_problem_type() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap_or_else(|err| panic!("{err}"));
+        let mut clause = Clause::empty();
+        clause.set_ident(19);
+        state.processed_non_units_mut().insert(clause);
+
+        let printed = proof_state_print_selective_string(
+            &state,
+            "g",
+            false,
+            IoFormat::Tstp,
+            ProblemType::HigherOrder,
+            EqnPrintOptions::lop(),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(
+            printed.contains("% Processed non-unit clauses:\nthf("),
+            "{printed}"
+        );
+        assert!(!printed.contains("\ncnf("), "{printed}");
     }
 
     #[test]

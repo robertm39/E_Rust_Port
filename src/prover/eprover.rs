@@ -8979,6 +8979,7 @@ fn write_training_clause_examples(
             state.terms(),
             clause,
             config.output_format,
+            proof_output_problem_type(problem_type()),
             eqn_print_options,
             config.encoding.print_types,
         )?;
@@ -9033,6 +9034,7 @@ fn write_saturated_output(
         return Ok(());
     }
     let section_output_format = saturated_clause_section_output_format(config);
+    let section_problem_type = proof_output_problem_type(problem_type());
     let eqn_print_options = config
         .equation_print
         .into_eqn_print_options(section_output_format)
@@ -9043,6 +9045,7 @@ fn write_saturated_output(
             state.terms(),
             success,
             section_output_format,
+            section_problem_type,
             eqn_print_options,
             config.encoding.print_types,
         )?;
@@ -9054,6 +9057,7 @@ fn write_saturated_output(
         &config.saturated_output_descriptor,
         config.flags.contains(EProverFlag::PrintSaturatedInfo),
         section_output_format,
+        section_problem_type,
         eqn_print_options,
     )?;
     output.write_all(rendered.as_bytes())?;
@@ -9073,6 +9077,7 @@ fn clause_print_for_output_format(
     bank: &TermBank,
     clause: &Clause,
     output_format: IoFormat,
+    problem_type: ProblemType,
     eqn_print_options: EqnPrintOptions,
     print_types: bool,
 ) -> Result<String, Diagnostic> {
@@ -9090,7 +9095,7 @@ fn clause_print_for_output_format(
                 clause,
                 true,
                 true,
-                ProblemType::FirstOrder,
+                problem_type,
                 print_types,
             )?;
             Ok(rendered)
@@ -23387,6 +23392,45 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Saturated system contains the empty clause:\ncnf("));
         assert!(printed.contains(", ($false)).\n\n% Processed positive unit clauses:\n"));
         assert!(!printed.contains("\n <- .\n\n% Processed positive unit clauses:\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_saturated_thf_success_clause_in_tstp() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-saturated-success-thf-tstp");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ a).\n\
+             thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-out",
+                "--print-saturated=e",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(printed.contains("% Saturated system contains the empty clause:\nthf("));
+        assert!(printed.contains(", ($false)).\n\n% Processed positive unit clauses:\n"));
+        assert!(!printed.contains("% Saturated system contains the empty clause:\ncnf("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
