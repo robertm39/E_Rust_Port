@@ -166,7 +166,7 @@ fn execute_term2dag(
     stdin: &mut impl Read,
     stdout: &mut impl Write,
 ) -> Result<u8, Diagnostic> {
-    let mut output = Term2dagOutput::open(config.output_file.as_deref(), stdout)?;
+    let mut output = Term2dagOutput::open(config.output_file.as_deref())?;
     let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
 
     for file in &config.files {
@@ -177,13 +177,15 @@ fn execute_term2dag(
         }
     }
 
-    bank.signature()
-        .print(&mut output)
+    output
+        .write_signature(bank.signature(), stdout)
         .map_err(|error| io_diagnostic(format!("Cannot write output: {error}")))?;
     let dag = bank.bank_in_order_string_with_internal_info(true);
-    write_all(&mut output, dag.as_bytes())?;
     output
-        .flush()
+        .write_all(stdout, dag.as_bytes())
+        .map_err(|error| io_diagnostic(format!("Cannot write output: {error}")))?;
+    output
+        .flush(stdout)
         .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(0)
 }
@@ -215,36 +217,45 @@ Read a set of terms and print a DAG representing it.\n\
     result
 }
 
-enum Term2dagOutput<'a, W: Write> {
-    Stdout(&'a mut W),
+enum Term2dagOutput {
+    Stdout,
     File(File),
 }
 
-impl<'a, W: Write> Term2dagOutput<'a, W> {
-    fn open(path: Option<&Path>, stdout: &'a mut W) -> Result<Self, Diagnostic> {
+impl Term2dagOutput {
+    fn open(path: Option<&Path>) -> Result<Self, Diagnostic> {
         let Some(path) = path else {
-            return Ok(Self::Stdout(stdout));
+            return Ok(Self::Stdout);
         };
         if path == Path::new("-") {
-            return Ok(Self::Stdout(stdout));
+            return Ok(Self::Stdout);
         }
         File::create(path).map(Self::File).map_err(|error| {
             term2dag_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
         })
     }
-}
 
-impl<W: Write> Write for Term2dagOutput<'_, W> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+    fn write_signature(
+        &mut self,
+        signature: &Signature,
+        stdout: &mut impl Write,
+    ) -> io::Result<()> {
         match self {
-            Self::Stdout(output) => output.write(buffer),
-            Self::File(file) => file.write(buffer),
+            Self::Stdout => signature.print(stdout),
+            Self::File(file) => signature.print_with_c_stdout_side_channel(file, stdout),
         }
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn write_all(&mut self, stdout: &mut impl Write, buffer: &[u8]) -> io::Result<()> {
         match self {
-            Self::Stdout(output) => output.flush(),
+            Self::Stdout => stdout.write_all(buffer),
+            Self::File(file) => file.write_all(buffer),
+        }
+    }
+
+    fn flush(&mut self, stdout: &mut impl Write) -> io::Result<()> {
+        match self {
+            Self::Stdout => stdout.flush(),
             Self::File(file) => file.flush(),
         }
     }
@@ -427,9 +438,11 @@ mod tests {
         .expect("file run succeeds");
 
         assert_eq!(status, 0);
-        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+        let stdout = String::from_utf8(stdout).expect("stdout is utf8");
+        assert_eq!(stdout, "\n\n\n\n");
         let output = std::fs::read_to_string(&output_path).expect("output file is readable");
+        assert!(!output.contains("(no type)"));
         assert!(output.contains("*4 : f(*3)   =   f(a)\t/*  Properties:"));
 
         remove_if_present(&input_path);

@@ -83,7 +83,7 @@ Source files reviewed: `SIMPLE_APPS/term2dag.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `src/simple_apps/term2dag.rs` and the `term2dag` Cargo binary now port the standalone wrapper: C-shaped help/verbosity/output/print-reference option parsing, default stdin input through `-`, sequential term parsing through one shared term bank, `TPTopPos` marking, signature printing, entry-number-ordered DAG output with forced internal property comments, C-shaped two-line input/output file-open diagnostics, and `OutClose`-style final flush diagnostics.
+- `src/simple_apps/term2dag.rs` and the `term2dag` Cargo binary now port the standalone wrapper: C-shaped help/verbosity/output/print-reference option parsing, default stdin input through `-`, sequential term parsing through one shared term bank, `TPTopPos` marking, signature printing including C's stdout side channel for per-symbol newlines and missing-type markers when `-o` selects a file, entry-number-ordered DAG output with forced internal property comments, C-shaped two-line input/output file-open diagnostics, and `OutClose`-style final flush diagnostics.
 
 ### Porting Focus
 
@@ -95,4 +95,5 @@ Source files reviewed: `SIMPLE_APPS/term2dag.c`.
 
 - `process_options()` accepts `-r`/`--print-reference-number` and mutates `TBPrintInternalInfo`, but `main()` unconditionally sets `TBPrintInternalInfo = true` after options have been processed. The Rust wrapper validates the option and keeps comments forced on for compatibility; after drop-in compatibility is secured, decide whether this option should be honored or removed.
 - `TBPrintBankInOrder` builds a temporary numeric tree solely to sort term-bank cells by `entry_no`. The Rust port sorts the collected shared terms directly; if profiling ever identifies this path as hot, keep the observable order while choosing the simpler allocation strategy.
+- `SigPrint` inherits `sig_print_operator`'s mixed-stream behavior: the signature line prefix and type text go to `out`, but the per-symbol newline and `(no type)` marker go to stdout. Rust preserves this only at the `term2dag` executable boundary; a cleaned signature-printing API should keep one destination unless compatibility mode asks for the split.
 <!-- END MANUAL REVIEW: c_source_docs -->

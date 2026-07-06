@@ -269,11 +269,13 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 - `SigInsertInternalCodes` reserves fixed function codes for `$true`, `$false`, `$@_var`, named/DB lambdas, `$ite`, `$let`, and related built-ins before normal user symbols are parsed. Rust proof-state allocation, including supported syntax-only, print-formulas, and app-encode formula-owner paths, and the remaining executable temporary parser banks now perform that reservation before inserting user symbols; otherwise an ordinary user predicate can receive `SIG_PHONY_APP_CODE` and be misclassified as a phony application.
 - `SigSupportLists` is process-global in C and affects `SigAlloc`: when true, `$nil` and `$cons` are inserted as fixed internal symbols immediately after `$false`. Rust makes this state explicit on each `Signature` so term printers can distinguish real list-enabled signatures from ordinary user symbols named `$nil` or `$cons`.
 - C `Signature` owns `ac_axioms` as a pointer stack of recognized AC clauses while the actual clauses remain owned elsewhere. Rust mirrors this as compact clause derivation refs on `Signature`; replace them with stable clause handles only when proof-state ownership can represent the same lifetime explicitly.
+- `sig_print_operator` writes the signature operator prefix and type text to the requested `FILE*`, but writes the missing-type marker and every per-operator newline to stdout. Rust exposes an explicit C-compatible side-channel printer and uses it at the `term2dag` file-output boundary while keeping the ordinary reusable signature printer single-stream.
 
 ### Change Later
 
 - Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so helper parser banks cannot bypass fixed-code reservation accidentally.
 - If command-line parsing eventually allows list support to change after some signatures exist, compare C's global `SigSupportLists` timing against Rust's per-signature flag before exposing a higher-level API.
+- The C-compatible signature side-channel printer intentionally models a debug-output leak. Keep it isolated to executable compatibility paths; cleaned library diagnostics should continue writing complete records to the requested writer.
 
 ### Porting Focus
 

@@ -602,7 +602,7 @@ C source references:
 
 Implemented:
 
-- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank, top-position marking of parsed terms, signature printing, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank, top-position marking of parsed terms, signature printing including C's `sig_print_operator` stdout side-channel for per-symbol newlines and missing-type markers under file output, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
@@ -612,6 +612,7 @@ Change-later notes:
 
 - C parses `-r`/`--print-reference-number` into the global `TBPrintInternalInfo`, then `main` immediately sets `TBPrintInternalInfo = true` before printing. Rust validates the option but preserves the observable forced-on comments; a cleaned CLI should either honor the option or remove it.
 - C's `TBPrintBankInOrder` builds a temporary numeric tree by traversing all term-store hash buckets before printing in ascending `entry_no`. Rust sorts the collected bank terms directly, which preserves the observable order; revisit only if future profiling needs to model the temporary allocation shape.
+- C `sig_print_operator` writes per-symbol newlines and the missing-type marker to stdout even when the signature itself is being printed to an output file. Rust preserves this for `term2dag` through an explicit side-channel helper; keep that compatibility boundary narrow so ordinary in-memory signature debug output can remain single-stream.
 
 ## ex_commandline Executable
 
@@ -1945,7 +1946,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `SigFCodesCollectTypes` allocates a `PStack` named `to_process` but exits through `PTreeTraverseExit(to_process)` instead of a stack-freeing call. Rust uses normal vector ownership and does not mirror this deallocation mismatch.
 - `SigPrintTypeDeclsTSTP` prints the raw internal `name`, while `SigPrintTypeDeclsTSTPSelective` prints `pname`; quoted symbols can therefore render differently between the two paths. Rust preserves this inconsistency until output consumers and reference tests define whether both should use printable names.
 - `SigPrintAppEncodedDecls` numbers the first external symbol as `symboltypedecl2` because it prints `(i+1)-internal_symbols`, and it assumes every printed external symbol has a declared type. Rust preserves the numbering and precondition; revisit only after app-encoding output consumers are covered by reference tests.
-- C `sig_print_operator` writes the no-type marker and trailing newline to `stdout` instead of the requested output stream. Rust's signature debug printer writes the whole record to the supplied writer; compare against reference callers before deciding whether a strict stream-leak compatibility shim is needed.
+- C `sig_print_operator` writes the no-type marker and trailing newline to `stdout` instead of the requested output stream. Rust now exposes an explicit C-compatible side-channel printer and uses it for `term2dag` file output, while ordinary in-memory signature debug helpers remain single-stream; compare any future executable callers against reference output before broadening the stream leak.
 - `SigEnterLetScope` depends on a caller-provided `PStack` layout and reads only odd stack indices as f-codes, then mixes `SigFindFCode` quote stripping with raw `StrTreeFind`/`StrTreeStore` on the printable name. Rust exposes the f-code list directly and preserves ordinary shadow/restore behavior; quoted let-local names should be audited against the C reference before broad parser integration.
 - `SigParseTFFTypeDeclaration` leaves the terminating full stop for its caller and routes declarations whose type is `$tType` or `$tType`-headed arrows into the type-bank constructor table. Rust preserves both rules with an explicit problem-type parameter instead of the C global `problemType`.
 - The lazy negative branch of C `SigGetEqnCode` appears to set properties on `sig->eqn_code` instead of `sig->neqn_code`, which can assert if `$neq` is requested before `$eq`. Rust's lazy helper sets the properties on the created code to keep the API usable; compare against reference call order before deciding whether this bug needs a stricter compatibility shim.

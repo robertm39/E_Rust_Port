@@ -871,6 +871,35 @@ impl Signature {
         }
     }
 
+    fn print_operator_c_stdout_split(
+        &self,
+        output: &mut impl Write,
+        stdout_side_channel: &mut impl Write,
+        f_code: FunCode,
+        comments: bool,
+        problem_type: ProblemType,
+    ) -> io::Result<()> {
+        let fun = self.func(f_code);
+        if comments {
+            write!(
+                output,
+                "   {:<13} : {:2}    %  {:2} {:2} ",
+                fun.pname,
+                fun.arity,
+                f_code,
+                fun.properties.bits()
+            )?;
+            if let Some(type_) = &fun.type_ {
+                self.type_bank.print_tstp(output, type_, problem_type)?;
+            } else {
+                stdout_side_channel.write_all(b"(no type)")?;
+            }
+            stdout_side_channel.write_all(b"\n")
+        } else {
+            writeln!(output, "   {:<13} : {:2}", fun.pname, fun.arity)
+        }
+    }
+
     pub fn print(&self, output: &mut impl Write) -> io::Result<()> {
         writeln!(
             output,
@@ -880,6 +909,35 @@ impl Signature {
         writeln!(output, "%     -Symbol-    -Arity- -Encoding-")?;
         for f_code in 1..=self.f_count {
             self.print_operator(output, f_code, true, problem_type())?;
+        }
+        Ok(())
+    }
+
+    /// Print using C `SigPrint`'s mixed-stream behavior.
+    ///
+    /// In comment mode, C's internal `sig_print_operator` writes the operator
+    /// prefix and type to `out`, but writes the `(no type)` marker and every
+    /// trailing newline to process stdout. Use this only at executable
+    /// compatibility boundaries that intentionally preserve that split.
+    pub fn print_with_c_stdout_side_channel(
+        &self,
+        output: &mut impl Write,
+        stdout_side_channel: &mut impl Write,
+    ) -> io::Result<()> {
+        writeln!(
+            output,
+            "% Signature ({:2} symbols out of {:2} allocated):",
+            self.f_count, self.size
+        )?;
+        writeln!(output, "%     -Symbol-    -Arity- -Encoding-")?;
+        for f_code in 1..=self.f_count {
+            self.print_operator_c_stdout_split(
+                output,
+                stdout_side_channel,
+                f_code,
+                true,
+                problem_type(),
+            )?;
         }
         Ok(())
     }
@@ -1976,6 +2034,21 @@ mod tests {
         assert!(printed.contains("($i * $i) > $i") || printed.contains("$i > $i > $i"));
         assert!(printed.contains("   untyped       :  0    %"));
         assert!(printed.contains("(no type)"));
+
+        let mut split_output = Vec::new();
+        let mut split_stdout = Vec::new();
+        sig.print_with_c_stdout_side_channel(&mut split_output, &mut split_stdout)
+            .unwrap();
+        let split_printed = string_from(split_output);
+        let split_side_channel = string_from(split_stdout);
+        assert!(split_printed.starts_with(
+            "% Signature ( 5 symbols out of 20 allocated):\n%     -Symbol-    -Arity- -Encoding-\n"
+        ));
+        assert!(split_printed.contains("   f             :  2    %"));
+        assert!(split_printed.contains("($i * $i) > $i") || split_printed.contains("$i > $i > $i"));
+        assert!(split_printed.contains("   untyped       :  0    %"));
+        assert!(!split_printed.contains("(no type)"));
+        assert!(split_side_channel.contains("(no type)\n"));
 
         let mut special_output = Vec::new();
         sig.print_special(&mut special_output).unwrap();
