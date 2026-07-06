@@ -272,8 +272,9 @@ pub fn clause_split_fresh(
 /// Performs the C `ClauseSplit` path, including non-fresh definition reuse.
 ///
 /// When `fresh_defs` is false, this uses `store` to find variant definition
-/// bodies and reuses their generated split predicate. Formula archive and
-/// proof-output side effects remain with the future formula owner.
+/// bodies and reuses their generated split predicate. When `store` carries a
+/// formula archive, arity-zero split definitions are represented there so
+/// proof-control wrappers can emit the corresponding split proof docs.
 ///
 /// # Errors
 ///

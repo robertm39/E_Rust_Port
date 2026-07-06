@@ -3213,8 +3213,9 @@ fn proof_state_clause_er_normalize_var_maybe_docs<W: fmt::Write>(
 /// equality resolution is available for the first-order destructive
 /// variable-literal path, with opt-in proof-documentation output, and controlled
 /// clause splitting is available for fresh definitions plus clause-level reused
-/// definitions. Split-definition formula archives and proof-output side effects
-/// remain with the future formula/proof-documentation owners.
+/// definitions. Arity-zero split-definition formula archive parents are
+/// represented on split clauses so opt-in wrappers can emit split proof docs;
+/// executable-wide proof-documentation session ownership remains separate.
 ///
 /// # Errors
 ///
