@@ -27613,6 +27613,31 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_vendored_old_tptp_formula_sample() {
+        let _guard = global_state_lock();
+        let path = PathBuf::from("eprover")
+            .join("PROVER")
+            .join("SET366+4+rm_eq_rstfp.tptp");
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn run_syntax_only_parses_tstp_mode_old_tptp_input_formula() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tstp-input-formula");
