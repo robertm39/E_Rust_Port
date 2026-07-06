@@ -829,7 +829,8 @@ fn lift_lambda_prefix(
         definition = tformula_add_quantor(bank, &definition, true, &argument)?;
     }
 
-    let wrapped = WrappedFormula::wt_formula_alloc(definition);
+    let mut wrapped = WrappedFormula::wt_formula_alloc(definition);
+    wrapped.push_formula_derivation(DC_INTRO_DEF, None, None);
     state.definitions.push(wrapped.clone());
     used_defs.push(wrapped.clone());
     state.exact_liftings.insert(
@@ -6608,7 +6609,10 @@ mod tests {
         );
         assert_eq!(formulas[1].formula().f_code(), bank.signature().qall_code());
         assert!(!formulas[1].formula().has_lambda_subterm());
-        assert_eq!(formulas[1].derivation_entries(), &[]);
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
     }
 
     #[test]
@@ -6651,6 +6655,10 @@ mod tests {
                 DerivationEntry::Operation(DC_INTRO_DEF),
                 DerivationEntry::Operation(DC_INTRO_DEF),
             ]
+        );
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
         );
     }
 
@@ -6709,6 +6717,10 @@ mod tests {
         assert_eq!(left_lifted.f_code(), right_lifted.f_code());
         assert_eq!(left_lifted.argument(0).as_ref(), Some(&x));
         assert_eq!(right_lifted.argument(0).as_ref(), Some(&a));
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
     }
 
     #[test]
@@ -7510,6 +7522,11 @@ mod tests {
         assert!(result.definition_clauses_generated > 0);
         assert_eq!(result.clause_derivation_ops, vec![DC_LIFT_LAMBDAS]);
         assert_eq!(archive.cardinality(), 2);
+        let archived = archive.iter().collect::<Vec<_>>();
+        assert_eq!(
+            archived[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
         assert_eq!(
             clauses
                 .iter()
