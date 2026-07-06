@@ -25,9 +25,9 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, push_formula_derivation_stack, DerivationEntry,
-    FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ,
-    DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
+    clause_push_formula_derivation, formula_dummy_quote_parent_ref, push_formula_derivation_stack,
+    DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_DIST_DISJUNCTIONS,
+    DC_EQ_TO_EQ, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
     DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_EQUIV,
     DC_VAR_RENAME,
 };
@@ -1475,6 +1475,38 @@ pub struct WrappedFormula {
     info: Option<ClauseInfo>,
     derivation: Option<PStack<DerivationEntry>>,
     formula: Option<Term>,
+}
+
+#[must_use]
+pub fn wformula_dummy_quote_parent_ref(formula: &WrappedFormula) -> Option<FormulaDerivationRef> {
+    formula_dummy_quote_parent_ref(formula.derivation())
+}
+
+#[must_use]
+pub fn wformula_deriv_find_first<'a>(
+    formula: &'a WrappedFormula,
+    mut resolve_parent: impl FnMut(FormulaDerivationRef) -> Option<&'a WrappedFormula>,
+) -> &'a WrappedFormula {
+    let mut current = formula;
+    let mut visited = Vec::new();
+
+    while let Some(parent_ref) = wformula_dummy_quote_parent_ref(current) {
+        let key = std::ptr::from_ref(current);
+        if visited.contains(&key) {
+            break;
+        }
+        visited.push(key);
+
+        let Some(parent) = resolve_parent(parent_ref) else {
+            break;
+        };
+        if std::ptr::eq(parent, current) {
+            break;
+        }
+        current = parent;
+    }
+
+    current
 }
 
 impl WrappedFormula {
@@ -4456,9 +4488,10 @@ fn formula_set_write_error(message: &'static str) -> Diagnostic {
 mod tests {
     use super::{
         clause_set_lift_lambdas, formula_set_definition_statistics, formula_set_stack_cardinality,
-        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat,
-        FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, FormulaTstpClauseMode,
-        FormulaTstpPrintOptions, WrappedFormula, WrappedFormulaCnfDocContext,
+        formula_stack_cond_set_type, wformula_deriv_find_first, wformula_dummy_quote_parent_ref,
+        FormulaDefinitionStatistics, FormulaPrintFormat, FormulaProofDocRenderOptions, FormulaSet,
+        FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
+        WrappedFormulaCnfDocContext,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -4775,6 +4808,64 @@ mod tests {
             vec![third_id, moved_first_id]
         );
         assert_eq!(formula_set_stack_cardinality(&[&to, &from]), 2);
+    }
+
+    #[test]
+    fn wformula_deriv_find_first_follows_dummy_quote_cascade() {
+        let mut bank = test_bank();
+        let original_term = typed_const(&mut bank, "wform_quote_original");
+        let quote_term = typed_const(&mut bank, "wform_quote_copy");
+        let second_quote_term = typed_const(&mut bank, "wform_second_quote_copy");
+
+        let original = WrappedFormula::wt_formula_alloc(original_term);
+        let original_ref = FormulaDerivationRef::new(original.ident());
+        let mut quote = WrappedFormula::wt_formula_alloc(quote_term);
+        quote.push_formula_derivation(DC_FOF_QUOTE, Some(original_ref), None);
+        let quote_ref = FormulaDerivationRef::new(quote.ident());
+        let mut second_quote = WrappedFormula::wt_formula_alloc(second_quote_term);
+        second_quote.push_formula_derivation(DC_FOF_QUOTE, Some(quote_ref), None);
+
+        assert_eq!(wformula_dummy_quote_parent_ref(&quote), Some(original_ref));
+        let formulas = [&original, &quote, &second_quote];
+        let first = wformula_deriv_find_first(&second_quote, |parent| {
+            formulas
+                .iter()
+                .copied()
+                .find(|formula| FormulaDerivationRef::new(formula.ident()) == parent)
+        });
+
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&original)
+        ));
+    }
+
+    #[test]
+    fn wformula_deriv_find_first_stops_when_parent_is_missing_or_cyclic() {
+        let mut bank = test_bank();
+        let mut missing_parent_quote =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "wform_missing_parent_quote"));
+        missing_parent_quote.push_formula_derivation(
+            DC_FOF_QUOTE,
+            Some(FormulaDerivationRef::new(9_999)),
+            None,
+        );
+        let first = wformula_deriv_find_first(&missing_parent_quote, |_| None);
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&missing_parent_quote)
+        ));
+
+        let mut cyclic = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "wform_cyclic"));
+        let cyclic_ref = FormulaDerivationRef::new(cyclic.ident());
+        cyclic.push_formula_derivation(DC_FOF_QUOTE, Some(cyclic_ref), None);
+
+        let first =
+            wformula_deriv_find_first(&cyclic, |parent| (parent == cyclic_ref).then_some(&cyclic));
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(first),
+            std::ptr::from_ref(&cyclic)
+        ));
     }
 
     #[test]

@@ -1165,6 +1165,29 @@ pub fn clause_dummy_quote_parent_ref(clause: &Clause) -> Option<ClauseDerivation
 }
 
 #[must_use]
+pub fn clause_is_dummy_fof_quote(clause: &Clause) -> bool {
+    clause_dummy_fof_quote_parent_ref(clause).is_some()
+}
+
+#[must_use]
+pub fn clause_dummy_fof_quote_parent_ref(clause: &Clause) -> Option<FormulaDerivationRef> {
+    formula_dummy_quote_parent_ref(clause.derivation())
+}
+
+#[must_use]
+pub fn formula_dummy_quote_parent_ref(
+    derivation: Option<&PStack<DerivationEntry>>,
+) -> Option<FormulaDerivationRef> {
+    let derivation = derivation?;
+    match derivation.as_slice() {
+        [DerivationEntry::Operation(DC_FOF_QUOTE), DerivationEntry::FormulaParent(parent)] => {
+            Some(*parent)
+        }
+        _ => None,
+    }
+}
+
+#[must_use]
 pub fn clause_deriv_find_first<'a>(
     clause: &'a Clause,
     mut resolve_parent: impl FnMut(ClauseDerivationRef) -> Option<&'a Clause>,
@@ -1207,35 +1230,35 @@ pub fn derivation_entries(clause: &Clause) -> &[DerivationEntry] {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_deriv_find_first, clause_dummy_quote_parent_ref, clause_is_dummy_quote,
-        clause_is_eval_gc, clause_push_ac_res_derivation, clause_push_derivation,
-        clause_push_formula_derivation, clause_push_numeric_derivation,
-        deriv_stack_count_search_inferences, deriv_stack_extract_parents,
-        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
+        clause_deriv_find_first, clause_dummy_fof_quote_parent_ref, clause_dummy_quote_parent_ref,
+        clause_is_dummy_fof_quote, clause_is_dummy_quote, clause_is_eval_gc,
+        clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
+        clause_push_numeric_derivation, deriv_stack_count_search_inferences,
+        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
-        deriv_stack_tstp_string_with_ac_axioms, derivation_entries, get_is_ho, op_code,
-        op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        FormulaDerivationRef, ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF,
-        ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG,
-        DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS, DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF,
-        DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES, DC_EQ_TO_EQ, DC_EVAL_ANSWERS,
-        DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF,
-        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM,
-        DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE, DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP,
-        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM,
-        DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN, DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE,
-        DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR, DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES,
-        DO_ADD_CNF_ARG, DO_ANNO_QUESTION, DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST,
-        DO_CONDENSE, DO_CONTEXT_SR, DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE,
-        DO_DYNAMIC_CNF, DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS,
-        DO_EVAL_GC, DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE,
-        DO_FNNF, DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM,
-        DO_LIFT_ITE, DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP,
-        DO_NORMALIZE, DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM,
-        DO_PRUNE_ARG, DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD,
-        DO_SKOLEMIZE, DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD,
-        DO_VAR_RENAME,
+        deriv_stack_tstp_string_with_ac_axioms, derivation_entries, formula_dummy_quote_parent_ref,
+        get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry,
+        DerivationParentRef, FormulaDerivationRef, ProofObjectType, ProofOutput, ARG1_CNF,
+        ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION,
+        DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC,
+        DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS,
+        DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES,
+        DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+        DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
+        DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE,
+        DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
+        DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM, DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN,
+        DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR,
+        DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES, DO_ADD_CNF_ARG, DO_ANNO_QUESTION,
+        DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST, DO_CONDENSE, DO_CONTEXT_SR,
+        DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE, DO_DYNAMIC_CNF,
+        DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS, DO_EVAL_GC,
+        DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE, DO_FNNF,
+        DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM, DO_LIFT_ITE,
+        DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP, DO_NORMALIZE,
+        DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM, DO_PRUNE_ARG,
+        DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD, DO_SKOLEMIZE,
+        DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD, DO_VAR_RENAME,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1517,6 +1540,20 @@ mod tests {
         assert!(clause_is_eval_gc(&eval_gc));
         assert!(!clause_is_dummy_quote(&eval_gc));
         assert_eq!(clause_dummy_quote_parent_ref(&eval_gc), None);
+
+        let mut fof_quoted = Clause::alloc(EqnList::new());
+        let formula_parent = FormulaDerivationRef::new(99);
+        clause_push_formula_derivation(&mut fof_quoted, DC_FOF_QUOTE, Some(formula_parent), None);
+        assert!(clause_is_dummy_fof_quote(&fof_quoted));
+        assert_eq!(
+            clause_dummy_fof_quote_parent_ref(&fof_quoted),
+            Some(formula_parent)
+        );
+        assert_eq!(
+            formula_dummy_quote_parent_ref(fof_quoted.derivation()),
+            Some(formula_parent)
+        );
+        assert!(!clause_is_dummy_quote(&fof_quoted));
     }
 
     #[test]
