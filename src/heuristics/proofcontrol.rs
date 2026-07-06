@@ -11446,7 +11446,8 @@ mod tests {
         assert_eq!(state.definition_store().members(), 0);
         assert_eq!(state.definition_assocs().len(), 0);
         assert_eq!(state.definition_formula_assocs().len(), 0);
-        assert_eq!(state.f_archive().cardinality(), 2);
+        assert_eq!(state.definition_formula_archive().cardinality(), 2);
+        assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.unprocessed().members(), 3);
         assert_eq!(state.statistics().generated_count, 4);
         assert_eq!(state.statistics().generated_lit_count, 2);
@@ -11507,7 +11508,8 @@ mod tests {
         assert_eq!(state.definition_store().members(), 2);
         assert_eq!(state.definition_assocs().len(), 2);
         assert_eq!(state.definition_formula_assocs().len(), 2);
-        assert_eq!(state.f_archive().cardinality(), 2);
+        assert_eq!(state.definition_formula_archive().cardinality(), 2);
+        assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.unprocessed().members(), 4);
         assert_eq!(state.statistics().generated_count, 8);
         assert_eq!(state.statistics().generated_lit_count, 4);
@@ -11717,7 +11719,8 @@ mod tests {
         assert_eq!(state.definition_store().members(), 0);
         assert_eq!(state.definition_assocs().len(), 0);
         assert_eq!(state.definition_formula_assocs().len(), 0);
-        assert_eq!(state.f_archive().cardinality(), 2);
+        assert_eq!(state.definition_formula_archive().cardinality(), 2);
+        assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.unprocessed().members(), 3);
         assert_eq!(state.statistics().generated_count, 3);
         assert_eq!(state.statistics().generated_lit_count, 6);
@@ -11779,7 +11782,8 @@ mod tests {
         assert_eq!(state.definition_store().members(), 2);
         assert_eq!(state.definition_assocs().len(), 2);
         assert_eq!(state.definition_formula_assocs().len(), 2);
-        assert_eq!(state.f_archive().cardinality(), 2);
+        assert_eq!(state.definition_formula_archive().cardinality(), 2);
+        assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.unprocessed().members(), 4);
         assert_eq!(state.statistics().generated_count, 4);
         assert_eq!(state.statistics().generated_lit_count, 8);

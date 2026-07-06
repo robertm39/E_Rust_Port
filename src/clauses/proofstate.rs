@@ -54,7 +54,8 @@ const GC_DEFINITION_STORE: GcSetHandle = GcSetHandle::new(12);
 
 const GC_F_AXIOMS: GcSetHandle = GcSetHandle::new(101);
 const GC_F_AX_ARCHIVE: GcSetHandle = GcSetHandle::new(102);
-const GC_F_ARCHIVE: GcSetHandle = GcSetHandle::new(103);
+const GC_DEFINITION_FORMULA_ARCHIVE: GcSetHandle = GcSetHandle::new(103);
+const GC_F_ARCHIVE: GcSetHandle = GcSetHandle::new(104);
 
 const PROOF_STATE_CLAUSE_GC_ROOTS: [GcSetHandle; 12] = [
     GC_AXIOMS,
@@ -71,7 +72,12 @@ const PROOF_STATE_CLAUSE_GC_ROOTS: [GcSetHandle; 12] = [
     GC_DEFINITION_STORE,
 ];
 
-const PROOF_STATE_FORMULA_GC_ROOTS: [GcSetHandle; 3] = [GC_F_AXIOMS, GC_F_AX_ARCHIVE, GC_F_ARCHIVE];
+const PROOF_STATE_FORMULA_GC_ROOTS: [GcSetHandle; 4] = [
+    GC_F_AXIOMS,
+    GC_F_AX_ARCHIVE,
+    GC_DEFINITION_FORMULA_ARCHIVE,
+    GC_F_ARCHIVE,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WatchlistSource<'a> {
@@ -433,6 +439,7 @@ pub struct ProofState {
     watchlist: Option<ClauseSet>,
     watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
+    definition_formula_archive: FormulaSet,
     definition_assocs: BTreeMap<i64, FunCode>,
     definition_formula_assocs: BTreeMap<i64, FormulaDerivationRef>,
     fvi_initialized: bool,
@@ -517,6 +524,7 @@ impl ProofState {
             watchlist: Some(ClauseSet::new()),
             watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
+            definition_formula_archive: FormulaSet::new(),
             definition_assocs: BTreeMap::new(),
             definition_formula_assocs: BTreeMap::new(),
             fvi_initialized: false,
@@ -951,6 +959,15 @@ impl ProofState {
     }
 
     #[must_use]
+    pub const fn definition_formula_archive(&self) -> &FormulaSet {
+        &self.definition_formula_archive
+    }
+
+    pub fn definition_formula_archive_mut(&mut self) -> &mut FormulaSet {
+        &mut self.definition_formula_archive
+    }
+
+    #[must_use]
     pub const fn definition_assocs(&self) -> &BTreeMap<i64, FunCode> {
         &self.definition_assocs
     }
@@ -971,8 +988,8 @@ impl ProofState {
     pub fn terms_and_definition_store_mut(&mut self) -> ProofStateDefinitionStoreMut<'_> {
         let Self {
             terms,
-            f_archive,
             definition_store,
+            definition_formula_archive,
             definition_assocs,
             definition_formula_assocs,
             ..
@@ -982,7 +999,7 @@ impl ProofState {
             definition_store,
             definition_assocs,
             definition_formula_assocs,
-            f_archive,
+            definition_formula_archive,
         )
     }
 
@@ -1143,7 +1160,12 @@ impl ProofState {
     }
 
     fn proof_formula_sets(&self) -> Vec<&FormulaSet> {
-        vec![&self.f_archive, &self.f_ax_archive, &self.f_axioms]
+        vec![
+            &self.definition_formula_archive,
+            &self.f_archive,
+            &self.f_ax_archive,
+            &self.f_axioms,
+        ]
     }
 
     #[must_use]
@@ -1699,9 +1721,10 @@ impl ProofState {
 
     /// Clears the clause/formula sets covered by C `ProofStateResetClauseSets`.
     ///
-    /// The C helper does not clear `definition_store` or `f_archive`, despite
-    /// its comment saying all clause and formula sets are emptied. Rust
-    /// preserves that until reset semantics are audited with callers.
+    /// The C helper does not clear `definition_store`, its definition formula
+    /// archive, or `f_archive`, despite its comment saying all clause and
+    /// formula sets are emptied. Rust preserves that until reset semantics are
+    /// audited with callers.
     pub fn reset_clause_sets(&mut self) {
         self.axioms.clear();
         self.f_axioms.clear();
@@ -1746,6 +1769,10 @@ impl ProofState {
         let formula_roots = [
             (GC_F_AXIOMS, &self.f_axioms),
             (GC_F_AX_ARCHIVE, &self.f_ax_archive),
+            (
+                GC_DEFINITION_FORMULA_ARCHIVE,
+                &self.definition_formula_archive,
+            ),
             (GC_F_ARCHIVE, &self.f_archive),
         ];
 
@@ -2443,8 +2470,9 @@ mod tests {
         generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
         DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge,
         ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, ProofStateGcAnalysis,
-        ProofStateStatistics, WatchlistSource, GC_F_ARCHIVE, GC_F_AXIOMS, GC_F_AX_ARCHIVE,
-        GC_WATCHLIST, PROOF_STATE_CLAUSE_GC_ROOTS, PROOF_STATE_FORMULA_GC_ROOTS,
+        ProofStateStatistics, WatchlistSource, GC_DEFINITION_FORMULA_ARCHIVE, GC_F_ARCHIVE,
+        GC_F_AXIOMS, GC_F_AX_ARCHIVE, GC_WATCHLIST, PROOF_STATE_CLAUSE_GC_ROOTS,
+        PROOF_STATE_FORMULA_GC_ROOTS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2784,6 +2812,7 @@ mod tests {
         assert_eq!(state.archive().members(), 0);
         assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.definition_store().members(), 0);
+        assert_eq!(state.definition_formula_archive().cardinality(), 0);
         assert_eq!(state.definition_assocs().len(), 0);
         assert_eq!(state.definition_formula_assocs().len(), 0);
         assert!(state.state_is_complete());
@@ -2811,6 +2840,7 @@ mod tests {
         assert!(gc.has_clause_set(GC_WATCHLIST));
         assert!(gc.has_formula_set(GC_F_AXIOMS));
         assert!(gc.has_formula_set(GC_F_AX_ARCHIVE));
+        assert!(gc.has_formula_set(GC_DEFINITION_FORMULA_ARCHIVE));
         assert!(gc.has_formula_set(GC_F_ARCHIVE));
 
         assert!(state.discard_watchlist().is_some());
@@ -2849,6 +2879,22 @@ mod tests {
         assert!(state.clause_parent_is_dead(DerivationParentRef::Clause(
             ClauseDerivationRef::new(20_001, 3)
         )));
+    }
+
+    #[test]
+    fn proof_state_formula_parent_lookup_uses_definition_formula_archive() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_formula(&mut state, "definition_formula_parent_lookup");
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+
+        state.definition_formula_archive_mut().insert(formula);
+
+        assert_eq!(
+            state
+                .proof_formula_by_derivation_ref(formula_ref)
+                .map(WrappedFormula::ident),
+            Some(formula_ref.ident())
+        );
     }
 
     #[test]
@@ -3656,21 +3702,35 @@ mod tests {
     #[test]
     fn proof_state_collect_term_garbage_marks_registered_formula_roots() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (formula_arg, formula_term, dropped) = {
+        let (formula_arg, formula_term, definition_arg, definition_term, dropped) = {
             let bank = state.terms_mut();
             let formula_arg = typed_const(bank, "registered_gc_formula_arg");
             let formula_term = typed_unary(bank, "registered_gc_formula", &formula_arg);
+            let definition_arg = typed_const(bank, "registered_gc_definition_arg");
+            let definition_term =
+                typed_unary(bank, "registered_gc_definition_formula", &definition_arg);
             let dropped = typed_const(bank, "registered_gc_dropped");
-            (formula_arg, formula_term, dropped)
+            (
+                formula_arg,
+                formula_term,
+                definition_arg,
+                definition_term,
+                dropped,
+            )
         };
 
         state
             .f_axioms_mut()
             .insert(WrappedFormula::wt_formula_alloc(formula_term.clone()));
+        state
+            .definition_formula_archive_mut()
+            .insert(WrappedFormula::wt_formula_alloc(definition_term.clone()));
 
         assert_eq!(state.collect_term_garbage(), 1);
         assert!(state.terms_mut().find(&formula_arg).is_some());
         assert!(state.terms_mut().find(&formula_term).is_some());
+        assert!(state.terms_mut().find(&definition_arg).is_some());
+        assert!(state.terms_mut().find(&definition_term).is_some());
         assert!(state.terms_mut().find(&dropped).is_none());
     }
 
@@ -3808,20 +3868,26 @@ mod tests {
         let formula_axiom = wrapped_formula(&mut state, "reset_formula_axiom");
         let formula_ax_archive = wrapped_formula(&mut state, "reset_formula_ax_archive");
         let formula_archive = wrapped_formula(&mut state, "reset_formula_archive");
-        let formula_archive_ident = formula_archive.ident();
+        let definition_formula_archive =
+            wrapped_formula(&mut state, "reset_definition_formula_archive");
+        let definition_formula_archive_ident = definition_formula_archive.ident();
         let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
 
         state.axioms_mut().insert(axiom);
         state.f_axioms_mut().insert(formula_axiom);
         state.f_ax_archive_mut().insert(formula_ax_archive);
         state.f_archive_mut().insert(formula_archive);
+        state
+            .definition_formula_archive_mut()
+            .insert(definition_formula_archive);
         state.processed_non_units_mut().insert(processed);
         state.unprocessed_mut().insert(unprocessed);
         state.watchlist_mut().unwrap().insert(watch);
         state.definition_store_mut().insert(def);
-        state
-            .definition_formula_assocs_mut()
-            .insert(34, FormulaDerivationRef::new(formula_archive_ident));
+        state.definition_formula_assocs_mut().insert(
+            34,
+            FormulaDerivationRef::new(definition_formula_archive_ident),
+        );
         state.init_fvi_anchors(&params).unwrap();
 
         state.reset_clause_sets();
@@ -3831,6 +3897,7 @@ mod tests {
         assert_eq!(state.f_axioms().cardinality(), 0);
         assert_eq!(state.f_ax_archive().cardinality(), 0);
         assert_eq!(state.f_archive().cardinality(), 1);
+        assert_eq!(state.definition_formula_archive().cardinality(), 1);
         assert_eq!(state.processed_non_units().members(), 0);
         assert_eq!(state.unprocessed().members(), 0);
         assert_eq!(state.watchlist().unwrap().members(), 0);
