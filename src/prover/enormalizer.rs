@@ -24,6 +24,7 @@ use crate::clauses::formulasets::{
     FormulaPrintFormat, FormulaSet, FormulaSetCnfOptions, WrappedFormula,
 };
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, term_li_normalform_plain};
+use crate::heuristics::to_params::TermOrdering;
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
@@ -41,7 +42,6 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{RewriteLevel, Term};
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
-use crate::{heuristics::to_params::TermOrdering, terms::termfunc::term_is_untyped};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -699,11 +699,11 @@ fn process_formulas(
 ) -> Result<(), Diagnostic> {
     let mut scanner = formatted_scanner_for_input(name, stdin, config.parse_format)?;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        let mut formula = parse_wrapped_formula(&mut scanner, bank)?;
-        let original = render_formula(bank, &formula, config)?;
-        let normalized = normalize_term(bank, ocb, formula.formula(), demodulators)?;
-        formula.set_formula(normalized);
-        let normalized = render_formula(bank, &formula, config)?;
+        let mut target = parse_wrapped_formula(&mut scanner, bank)?;
+        let original = render_formula(bank, &target.formula, target.problem_type, config)?;
+        let normalized = normalize_term(bank, ocb, target.formula.formula(), demodulators)?;
+        target.formula.set_formula(normalized);
+        let normalized = render_formula(bank, &target.formula, target.problem_type, config)?;
         writeln_diag(output, &format!("{original} ==> {normalized}"))?;
     }
     Ok(())
@@ -730,7 +730,7 @@ fn normalize_term(
 fn parse_wrapped_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<WrappedFormula, Diagnostic> {
+) -> Result<FormulaTarget, Diagnostic> {
     match scanner.format() {
         IoFormat::Tptp => parse_old_tptp_wrapped_formula(scanner, bank),
         IoFormat::Tstp => parse_tstp_wrapped_formula(scanner, bank),
@@ -741,10 +741,15 @@ fn parse_wrapped_formula(
     }
 }
 
+struct FormulaTarget {
+    formula: WrappedFormula,
+    problem_type: ProblemType,
+}
+
 fn parse_old_tptp_wrapped_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<WrappedFormula, Diagnostic> {
+) -> Result<FormulaTarget, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
@@ -761,20 +766,23 @@ fn parse_old_tptp_wrapped_formula(
     let formula = bank.parse_tformula_tptp(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
-    Ok(wrapped_formula(
-        formula,
-        old_tptp_input_formula_type(&role),
-        &name,
-        &start_source,
-        start_line,
-        start_column,
-    ))
+    Ok(FormulaTarget {
+        formula: wrapped_formula(
+            formula,
+            old_tptp_input_formula_type(&role),
+            &name,
+            &start_source,
+            start_line,
+            start_column,
+        ),
+        problem_type: ProblemType::FirstOrder,
+    })
 }
 
 fn parse_tstp_wrapped_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<WrappedFormula, Diagnostic> {
+) -> Result<FormulaTarget, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
@@ -794,7 +802,17 @@ fn parse_tstp_wrapped_formula(
         skip_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
-        return parse_wrapped_formula(scanner, bank);
+        return Ok(FormulaTarget {
+            formula: wrapped_formula(
+                bank.true_term().clone(),
+                CP_TYPE_AXIOM,
+                &name,
+                &start_source,
+                start_line,
+                start_column,
+            ),
+            problem_type: formula_problem_type,
+        });
     }
     scanner.check_id(
         "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist",
@@ -806,14 +824,17 @@ fn parse_tstp_wrapped_formula(
     skip_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
-    Ok(wrapped_formula(
-        formula,
-        clause_type_from_identifier(&role, formula_problem_type),
-        &name,
-        &start_source,
-        start_line,
-        start_column,
-    ))
+    Ok(FormulaTarget {
+        formula: wrapped_formula(
+            formula,
+            clause_type_from_identifier(&role, formula_problem_type),
+            &name,
+            &start_source,
+            start_line,
+            start_column,
+        ),
+        problem_type: formula_problem_type,
+    })
 }
 
 fn wrapped_formula(
@@ -839,16 +860,13 @@ fn wrapped_formula(
 fn render_formula(
     bank: &mut TermBank,
     formula: &WrappedFormula,
+    problem_type: ProblemType,
     config: &EnormalizerConfig,
 ) -> Result<String, Diagnostic> {
     formula.print_string(
         bank,
         true,
-        if term_is_untyped(formula.formula()) {
-            ProblemType::FirstOrder
-        } else {
-            ProblemType::HigherOrder
-        },
+        problem_type,
         formula_print_format(config.output_format),
         true,
     )
@@ -1380,6 +1398,82 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("utf8");
         assert!(rendered.contains("fof(form1, axiom, "));
         assert!(rendered.contains("p(a)"));
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn tff_type_declaration_formula_targets_print_true_wrapper() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("tff_type_decl_rules");
+        let formula_path = temp_path("tff_type_decl_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(&formula_path, "tff(person_type, type, person: $tType).\n")
+            .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("utf8");
+        assert!(rendered.contains("fof(person_type, axiom, $true)."));
+        assert!(rendered.contains(" ==> fof(person_type, axiom, $true)."));
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn thf_type_declaration_formula_targets_keep_thf_output_kind() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("thf_type_decl_rules");
+        let formula_path = temp_path("thf_type_decl_formulas");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(&formula_path, "thf(person_type, type, person: $tType).\n")
+            .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("utf8");
+        assert!(rendered.contains("thf(person_type, axiom, $true)."));
+        assert!(rendered.contains(" ==> thf(person_type, axiom, $true)."));
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);
