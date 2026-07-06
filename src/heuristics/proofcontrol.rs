@@ -1950,11 +1950,13 @@ fn proof_state_move_processed_set_to_tmp_by(
 /// Applies the currently ported modifying forward-inference prefix from C
 /// `ForwardModifyClause`.
 ///
-/// This covers the first-order/local mutation path: demodulation by the
-/// processed positive-unit demodulator sets, superfluous literal removal,
-/// optional AC-resolved literal cleanup, optional local rewriting, literal
-/// orientation, optional condensation, triviality detection, and positive/negative
-/// simplify-reflect against processed unit sets.
+/// This covers the currently ported mutation path: demodulation by the processed
+/// positive-unit demodulator sets, superfluous literal removal, optional
+/// AC-resolved literal cleanup, optional local rewriting, literal orientation,
+/// optional condensation, triviality detection, and positive/negative
+/// simplify-reflect against processed unit sets. Higher-order runs are admitted
+/// for first-order-shaped legacy ordering surfaces and for the bank-backed
+/// KBO6/LPO4 surfaces covered by the ordering layer.
 ///
 /// # Errors
 ///
@@ -2138,6 +2140,10 @@ fn forward_modify_check_higher_order_ordering(
     demodulators: &[&ClauseSet],
 ) -> Result<(), Diagnostic> {
     if !higher_order || ocb.ordering_type == TermOrdering::Empty {
+        return Ok(());
+    }
+
+    if ocb.ordering_type == TermOrdering::Lpo4 && ocb.ho_order_kind == HoOrderKind::LfhoOrder {
         return Ok(());
     }
 
@@ -10635,6 +10641,47 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(error.message().contains("term ordering"));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_lpo4_surface_runs() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let predicate = unary_predicate_var(terms, -4_093);
+            let arg = typed_const(terms, "pc_ho_order_lpo4_app_arg");
+            let applied = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let rhs_predicate = unary_predicate_const(terms, "pc_ho_order_lpo4_rhs_pred");
+            let right = apply_terms(terms, &rhs_predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &applied, &right, true,
+            )]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(OrderControlBlock::alloc(
+            TermOrdering::Lpo4,
+            true,
+            state.terms().signature(),
+            HoOrderKind::LfhoOrder,
+        ));
+
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]
