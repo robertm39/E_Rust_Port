@@ -84,7 +84,7 @@ impl<T> PQueue<T> {
             self.head = 0;
         }
         if self.head == self.tail {
-            self.grow_after_full_wrap();
+            self.grow_c_raw();
         }
     }
 
@@ -96,7 +96,7 @@ impl<T> PQueue<T> {
         };
         self.queue[self.tail] = Some(value);
         if self.head == self.tail {
-            self.grow_after_full_wrap();
+            self.grow_c_raw();
         }
     }
 
@@ -219,7 +219,19 @@ impl<T> PQueue<T> {
             .unwrap_or_else(|| panic!("PQueueElement called on an uninitialized slot {index}"))
     }
 
-    fn grow_after_full_wrap(&mut self) {
+    /// Increase the backing ring size using the exported C `PQueueGrow`
+    /// layout.
+    ///
+    /// C normally reaches this only when `store`/`bury` has made the ring
+    /// full. Direct calls on a non-full queue still double the allocation and
+    /// shift `tail` by the old size, which can make old uninitialized slots
+    /// appear live. Rust preserves that raw shape with `None` sentinel slots,
+    /// so reading such slots through `element` remains an invariant failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if doubling the allocated size overflows.
+    pub fn grow_c_raw(&mut self) {
         let old_size = self.size;
         let old_head = self.head;
         let Some(new_size) = old_size.checked_mul(2) else {
@@ -399,6 +411,49 @@ mod tests {
         assert_eq!(queue.get_next(), 1);
         assert_eq!(queue.get_next(), 2);
         assert_eq!(queue.get_next(), 3);
+    }
+
+    #[test]
+    fn direct_raw_grow_preserves_c_full_ring_layout() {
+        let mut queue = PQueue {
+            size: 4,
+            head: 1,
+            tail: 1,
+            queue: vec![Some(4), Some(1), Some(2), Some(3)],
+        };
+
+        queue.grow_c_raw();
+
+        assert_eq!(queue.allocated_size(), 8);
+        assert_eq!(queue.head_index(), 1);
+        assert_eq!(queue.tail_index(), 5);
+        assert_eq!(queue.cardinality(), 4);
+        assert_eq!(queue.element(5), &1);
+        assert_eq!(queue.element(6), &2);
+        assert_eq!(queue.element(7), &3);
+        assert_eq!(queue.element(0), &4);
+        assert_eq!(queue.get_next(), 1);
+        assert_eq!(queue.get_next(), 2);
+        assert_eq!(queue.get_next(), 3);
+        assert_eq!(queue.get_next(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueElement called on an uninitialized slot 4")]
+    fn direct_raw_grow_on_nonfull_queue_preserves_c_hazard_as_uninitialized_slot() {
+        let mut queue = PQueue::with_size(4);
+        queue.store(10);
+        queue.store(20);
+
+        queue.grow_c_raw();
+
+        assert_eq!(queue.allocated_size(), 8);
+        assert_eq!(queue.head_index(), 2);
+        assert_eq!(queue.tail_index(), 4);
+        assert_eq!(queue.cardinality(), 6);
+        assert_eq!(queue.element(0), &10);
+        assert_eq!(queue.element(1), &20);
+        let _value = queue.element(4);
     }
 
     #[test]

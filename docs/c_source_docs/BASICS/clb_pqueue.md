@@ -142,6 +142,7 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - `PQueueGetNext`, `PQueueGetLast`, `PQueueLook`, and `PQueueLookLast` assert that the queue is non-empty before accessing the backing ring. Rust preserves these as explicit panics on the C-shaped methods.
 - `PQueueElement` is raw absolute-slot access (`queue->queue[index]`) with no optional result. Valid callers supply an allocated slot that has been initialized by earlier store/bury activity; out-of-range or never-initialized slots are invariant violations in the Rust compatibility surface.
 - `PQueueIncIndex` applies raw C modulo arithmetic to the supplied absolute slot and only returns `-1` when the resulting next slot equals `head`. Rust preserves that modulo shape for representable indices instead of treating invalid raw indices as checked lookup failures.
+- `PQueueGrow` doubles the ring, copies slots before `head` to the same absolute indexes, copies slots from `head..size` to `old_size`-shifted indexes, and then adds the old size to `tail`. Rust now exposes this raw layout helper as a compatibility method; direct non-full calls preserve the C state-shape hazard by leaving the newly logical slots uninitialized.
 
 ### Porting Focus
 
@@ -154,4 +155,5 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 
 - Empty queue extraction/look operations are assertion failures in the C API. The Rust compatibility surface now panics the same way, but higher-level Rust-only callers that naturally model optional work queues should use a separate `try_` API rather than weakening the C-shaped methods.
 - Absolute-slot access exposes stale payloads after extraction/reset, and `PQueueIncIndex` can alias out-of-range raw indices through modulo arithmetic. A cleaned queue API should hide absolute slots behind iteration or return checked `Option` values outside the compatibility layer.
+- Direct `PQueueGrow` calls on a non-full queue can make uninitialized backing slots appear live because the function blindly shifts `tail` after copying the old layout. Rust keeps that behavior quarantined in `grow_c_raw`; ordinary callers should continue growing only through `store`/`bury` or use a checked capacity-reserve API if one is added later.
 <!-- END MANUAL REVIEW: c_source_docs -->
