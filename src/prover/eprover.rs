@@ -9753,7 +9753,19 @@ fn parse_tstp_app_encode_entry_list(
 ) -> Result<ParsedAppEncodeEntries, Diagnostic> {
     let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        if scanner.test_id("cnf") {
+        if scanner.test_id("input_clause") {
+            set_problem_type(ProblemType::FirstOrder)?;
+            let clause = parse_old_tptp_clause_record(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                ClauseParseOptions::default(),
+            )?;
+            result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+        } else if scanner.test_id("input_formula") {
+            let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
+            result.add_formula_owner(&formula, bank, formulas)?;
+        } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
@@ -9771,7 +9783,7 @@ fn parse_tstp_app_encode_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): --app-encode currently supports cnf clauses and fof/tff/tcf/thf formula entries for TSTP input",
+                    "{}(just read '{}'): --app-encode currently supports legacy input_clause/input_formula records, cnf clauses, and fof/tff/tcf/thf formula entries for TSTP input",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -9790,6 +9802,19 @@ fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<String, Dia
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
     Ok(format!("include({name}).\n"))
+}
+
+fn parse_old_tptp_clause_record(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    options: ClauseParseOptions,
+) -> Result<Clause, Diagnostic> {
+    let saved_format = scanner.format();
+    scanner.set_format(IoFormat::Tptp);
+    let result = clause_parse_with_options(scanner, bank, problem_type, options);
+    scanner.set_format(saved_format);
+    result
 }
 
 fn parse_tptp_entry_list(
@@ -9880,7 +9905,40 @@ fn parse_tstp_entry_list(
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        if scanner.test_id("cnf") {
+        if scanner.test_id("input_clause") {
+            set_problem_type(ProblemType::FirstOrder)?;
+            let clause = parse_old_tptp_clause_record(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                clause_parse_options,
+            )?;
+            let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+            if tstp_entry_selected(
+                clause.info().and_then(ClauseInfo::name),
+                selectors.as_deref_mut(),
+            ) {
+                result.input_owner_seen |= is_input_owner;
+                insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
+            }
+        } else if scanner.test_id("input_formula") {
+            let parsed = parse_simple_tptp_formula_clause(
+                scanner,
+                bank,
+                formula_preprocessing,
+                destination.formula_owner_handling(),
+            )?;
+            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+                if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.input_owner_seen = true;
+                    result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                    result.raw_formula_features.add(parsed.raw_formula_features);
+                    result.problem_type =
+                        combine_problem_types(result.problem_type, parsed.problem_type);
+                }
+                insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
+            }
+        } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse_with_options(
                 scanner,
@@ -9933,7 +9991,7 @@ fn parse_tstp_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses, fof/tff/tcf/thf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf/thf bridge",
+                    "{}(just read '{}'): TSTP input currently supports legacy input_clause/input_formula records, cnf clauses, fof/tff/tcf/thf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf/thf bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -17434,6 +17492,36 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_accepts_tstp_mode_legacy_input_records() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tstp-legacy-input-records");
+        std::fs::write(
+            &path,
+            "input_clause(c1, axiom, [++p(a)]).\n\
+             input_formula(f1, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(f1, axiom, "));
+        assert!(!printed.contains("input_clause"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_accepts_old_tptp_existential_fool_body() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-old-tptp-existential-fool-body");
@@ -19981,6 +20069,35 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_accepts_tstp_mode_legacy_input_records() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tstp-legacy-input-records");
+        std::fs::write(
+            &path,
+            "input_clause(fact, axiom, [++p(a)]).\n\
+             input_formula(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_preserves_old_tptp_right_recursive_binary_parse() {
         let _guard = global_state_lock();
         let path = temp_path("proof-tptp-input-formula-right-recursive-binary");
@@ -22392,6 +22509,45 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             ["eprover", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_honors_tstp_mode_old_input_formula_include_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-tstp-input-formula-include-selected-inc");
+        let path = temp_path("proof-tstp-input-formula-include-selected-main");
+        std::fs::write(
+            &include_path,
+            "input_formula(selected, axiom, p(a)).\n\
+             input_formula(unselected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!(
+                "include('{include_arg}',[selected]).\ninput_formula(goal, conjecture, p(a)).\n"
+            ),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -27205,6 +27361,31 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_mode_old_tptp_input_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tstp-input-formula");
+        std::fs::write(&path, "input_formula(goal, conjecture, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
