@@ -95,7 +95,8 @@ use crate::heuristics::hcb::{
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
 use crate::heuristics::litselection::{
-    apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection, NO_GENERATION,
+    apply_ported_literal_selector_with_bank, apply_ported_literal_selector_with_mut_bank,
+    LiteralSelectionError, UnsupportedLiteralSelection, NO_GENERATION,
 };
 use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::to_params::TermOrdering;
@@ -2364,8 +2365,11 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
     }
 
     clause.del_prop(CP_IS_ORIENTED);
-    do_literal_selection_with_bank(control, state.terms(), clause)
-        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    {
+        let terms = state.terms_mut();
+        do_literal_selection_with_bank(control, terms, clause)
+            .map_err(literal_selection_error_to_diagnostic)?;
+    }
     let ocb = control.ocb.as_mut().ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -2984,8 +2988,9 @@ pub fn proof_state_queue_generated_clause_for_eval(
     if control.heuristic_parms().select_on_proc_only {
         clause.literals_mut().del_prop(EP_IS_SELECTED);
     } else {
-        do_literal_selection_with_bank(control, state.terms(), &mut clause)
-            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        let terms = state.terms_mut();
+        do_literal_selection_with_bank(control, terms, &mut clause)
+            .map_err(literal_selection_error_to_diagnostic)?;
     }
     let create_date = i64::try_from(state.statistics().proc_non_trivial_count).unwrap_or(i64::MAX);
     clause.set_create_date(create_date);
@@ -8310,21 +8315,21 @@ pub fn do_literal_selection(
     do_literal_selection_impl(control, None, clause)
 }
 
-/// Runs the C `DoLiteralSelection` wrapper using ported selector bodies,
-/// including selector bodies whose Rust implementation needs the term bank for
-/// maximality marking.
+/// Runs the C `DoLiteralSelection` wrapper using ported selector bodies and a
+/// mutable term bank for selector bodies that need bank-backed ordering
+/// preparation during maximality marking.
 ///
 /// # Errors
 ///
-/// Returns `UnsupportedLiteralSelection` if the configured selector is unknown,
-/// or if the wrapper reaches an ordering-dependent selector without an
-/// initialized proof-control OCB.
+/// Returns [`LiteralSelectionError`] if the configured selector is unknown,
+/// required selector context is missing, or bank-backed ordering preparation
+/// fails.
 pub fn do_literal_selection_with_bank(
     control: &mut ProofControl,
-    bank: &TermBank,
+    bank: &mut TermBank,
     clause: &mut Clause,
-) -> Result<LiteralSelectionOutcome, UnsupportedLiteralSelection> {
-    do_literal_selection_impl(control, Some(bank), clause)
+) -> Result<LiteralSelectionOutcome, LiteralSelectionError> {
+    do_literal_selection_with_mut_bank_impl(control, bank, clause)
 }
 
 fn do_literal_selection_impl(
@@ -8349,6 +8354,40 @@ fn do_literal_selection_impl(
     } else {
         crate::heuristics::litselection::select_no_literals(control.ocb.as_mut(), clause);
         Ok(LiteralSelectionOutcome::SelectionSkipped)
+    }
+}
+
+fn do_literal_selection_with_mut_bank_impl(
+    control: &mut ProofControl,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<LiteralSelectionOutcome, LiteralSelectionError> {
+    clear_literal_selection_state(clause);
+    let parms = control.heuristic_parms();
+    if should_try_inherited_selection(parms, clause) && select_inherited_literal(clause) {
+        return Ok(LiteralSelectionOutcome::Inherited);
+    }
+    if literal_selection_conditions_hold(parms, clause) {
+        debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+        apply_ported_literal_selector_with_mut_bank(
+            control.heuristic_parms.selection_strategy.as_str(),
+            control.ocb.as_mut(),
+            Some(bank),
+            clause,
+        )?;
+        Ok(LiteralSelectionOutcome::SelectorApplied)
+    } else {
+        crate::heuristics::litselection::select_no_literals(control.ocb.as_mut(), clause);
+        Ok(LiteralSelectionOutcome::SelectionSkipped)
+    }
+}
+
+fn literal_selection_error_to_diagnostic(error: LiteralSelectionError) -> Diagnostic {
+    match error {
+        LiteralSelectionError::Unsupported(error) => {
+            Diagnostic::new(ErrorCode::OTHER_ERROR, error.to_string())
+        }
+        LiteralSelectionError::Ordering(error) => error,
     }
 }
 
@@ -16054,7 +16093,7 @@ mod tests {
         let mut clause = negative_clause(&mut bank);
         control.set_ocb(kbo_ocb(&bank));
 
-        let outcome = do_literal_selection_with_bank(&mut control, &bank, &mut clause)
+        let outcome = do_literal_selection_with_bank(&mut control, &mut bank, &mut clause)
             .unwrap_or_else(|err| {
                 panic!("{err}");
             });

@@ -411,6 +411,7 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 
 - `src/heuristics/litselection.rs` ports the C-order literal-selection name table, table-index lookup, known-name checks, and `LitSelAppendNames`-style comma-separated rendering plus the C table-visible selector bodies currently exercised by selector-family tests.
 - The Rust selector table keeps `NoSelection` and `NoGeneration` as distinct names even though their bodies are both no-ops, preserving the C distinction used by proof-control generation gates.
+- The proof-control banked selector entry point now threads a mutable term bank through the largest/smallest-orientable selector family so its `ClauseCondMarkMaximalTerms` equivalent can use bank-backed LPO4/KBO6 ordering preparation. Other selector families that call `ClauseCondMarkMaximalTerms` still use the immutable compatibility path and need the same mutable-bank treatment before LFHO ordering through literal selection is complete.
 - Tests cover selector table order, uniqueness, lookup misses, and rendered comma-separated output alongside selector-family behavior tests.
 
 ### Change Later
@@ -435,6 +436,7 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 - The CQ selector family has many near-duplicate C weight helpers with magic constants and subtle differences in whether filtering preserves or skips alpha-rank assignment. Rust should keep the declarative spec close to C for now, but after strategy traces exist the repeated helpers are good candidates for a clearer scoring API with explicit "forbidden candidate blocks" behavior.
 - `SelectVGNonCR` and the `UnlessPDom` CQ wrappers rely on the outer proof-control wrapper to start from a clean selected-bit state, yet direct no-op branches preserve stale selected bits and orientation flags. Keep this direct-call compatibility, but a later Rust API should make "gate blocked" observable instead of encoding it only through unchanged side effects.
 - `select_unless_pdom()` uses `EqnGetPredCode`, which is problem-type dependent in C. The current Rust port uses first-order predicate codes consistently with the rest of the literal-selection helpers; revisit this if the higher-order problem-type global starts affecting selector behavior.
+- C hides ordering-preparation mutation behind selector signatures that take only `OCB_p` and `Clause_p`; `ClauseCondMarkMaximalTerms` reaches the needed term context through C's implicit ownership graph. Rust should keep the explicit mutable-bank selector boundary until every ordering-dependent family has been threaded through it, then consider replacing the split bankless/banked API with one proof-state-owned selection interface.
 - Diversification selector state is process-global (`static long literal_weight_counter`) and the C evaluation weights are `int`. Preserve the sequence for compatibility, but revisit counter ownership, deterministic reset hooks, and native-width overflow behavior if Rust later supports parallel proof search or target-specific C reference builds.
 
 ### Porting Focus

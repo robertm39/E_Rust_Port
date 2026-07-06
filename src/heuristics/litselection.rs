@@ -1,4 +1,5 @@
 use crate::basics::dstrings::DynamicString;
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::eqn::Eqn;
@@ -547,6 +548,64 @@ impl OrientableLiteralSelector {
             Self::Smallest => select_smallest_orientable_literal(ocb, bank, clause),
             Self::PSmallest => p_select_smallest_orientable_literal(ocb, bank, clause),
             Self::MSmallest => m_select_smallest_orientable_literal(ocb, bank, clause),
+        }
+    }
+
+    fn apply_with_mut_bank(
+        self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<(), Diagnostic> {
+        match self {
+            Self::Largest => select_orientable_literal_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                OrientableWeightChoice::Largest,
+            ),
+            Self::PLargest => select_orientable_literal_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                OrientableWeightChoice::Largest,
+            ),
+            Self::MLargest => {
+                let positive_variant = clause.is_horn();
+                select_orientable_literal_impl_with_bank(
+                    ocb,
+                    bank,
+                    clause,
+                    positive_variant,
+                    OrientableWeightChoice::Largest,
+                )
+            }
+            Self::Smallest => select_orientable_literal_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                false,
+                OrientableWeightChoice::Smallest,
+            ),
+            Self::PSmallest => select_orientable_literal_impl_with_bank(
+                ocb,
+                bank,
+                clause,
+                true,
+                OrientableWeightChoice::Smallest,
+            ),
+            Self::MSmallest => {
+                let positive_variant = clause.is_horn();
+                select_orientable_literal_impl_with_bank(
+                    ocb,
+                    bank,
+                    clause,
+                    positive_variant,
+                    OrientableWeightChoice::Smallest,
+                )
+            }
         }
     }
 }
@@ -1205,6 +1264,52 @@ impl std::fmt::Display for UnsupportedLiteralSelection {
         )
     }
 }
+
+impl std::error::Error for UnsupportedLiteralSelection {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LiteralSelectionError {
+    Unsupported(UnsupportedLiteralSelection),
+    Ordering(Diagnostic),
+}
+
+impl LiteralSelectionError {
+    #[must_use]
+    pub fn unsupported(strategy: impl Into<String>) -> Self {
+        Self::Unsupported(UnsupportedLiteralSelection::new(strategy))
+    }
+
+    #[must_use]
+    pub fn strategy(&self) -> Option<&str> {
+        match self {
+            Self::Unsupported(error) => Some(error.strategy()),
+            Self::Ordering(_) => None,
+        }
+    }
+}
+
+impl From<UnsupportedLiteralSelection> for LiteralSelectionError {
+    fn from(error: UnsupportedLiteralSelection) -> Self {
+        Self::Unsupported(error)
+    }
+}
+
+impl From<Diagnostic> for LiteralSelectionError {
+    fn from(error: Diagnostic) -> Self {
+        Self::Ordering(error)
+    }
+}
+
+impl std::fmt::Display for LiteralSelectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported(error) => error.fmt(formatter),
+            Self::Ordering(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for LiteralSelectionError {}
 
 fn require_selector_bank<'bank>(
     name: &str,
@@ -2707,6 +2812,35 @@ pub fn apply_ported_literal_selector_with_bank(
     }
 }
 
+/// Applies the ported literal-selection functions with mutable term-bank
+/// access for selector families that need bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns [`LiteralSelectionError::Unsupported`] for unknown selector names
+/// or missing selector context, and [`LiteralSelectionError::Ordering`] if a
+/// bank-backed ordering operation fails.
+pub fn apply_ported_literal_selector_with_mut_bank(
+    name: &str,
+    ocb: Option<&mut OrderControlBlock>,
+    bank: Option<&mut TermBank>,
+    clause: &mut Clause,
+) -> Result<(), LiteralSelectionError> {
+    if let Some(selector) = OrientableLiteralSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        let Some(bank) = bank else {
+            return Err(LiteralSelectionError::unsupported(name));
+        };
+        selector.apply_with_mut_bank(ocb, bank, clause)?;
+        Ok(())
+    } else {
+        apply_ported_literal_selector_with_bank(name, ocb, bank.as_deref(), clause)
+            .map_err(LiteralSelectionError::from)
+    }
+}
+
 fn select_positive_literals(clause: &mut Clause) {
     debug_assert_ne!(clause.negative_literal_count(), 0);
     for literal in clause.literals_mut().as_mut_slice() {
@@ -2724,7 +2858,26 @@ fn select_orientable_literal_impl(
     weight_choice: OrientableWeightChoice,
 ) {
     clause.cond_mark_maximal_terms(ocb, bank);
+    finish_orientable_literal_selection(clause, positive_variant, weight_choice);
+}
 
+fn select_orientable_literal_impl_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    weight_choice: OrientableWeightChoice,
+) -> Result<(), Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    finish_orientable_literal_selection(clause, positive_variant, weight_choice);
+    Ok(())
+}
+
+fn finish_orientable_literal_selection(
+    clause: &mut Clause,
+    positive_variant: bool,
+    weight_choice: OrientableWeightChoice,
+) {
     let selected = find_orientable_negative_literal(clause, weight_choice);
     debug_assert!(
         selected.is_some(),
@@ -4077,14 +4230,15 @@ fn min_optimal_filter_rejects(
 mod tests {
     use super::{
         apply_ported_literal_selector, apply_ported_literal_selector_with_bank,
-        literal_weight_counter_test_guard, m_select_largest_orientable_literal,
-        m_select_smallest_orientable_literal, p_select_all_cond_optimal_literal, p_select_complex,
-        p_select_complex_except_rr_horn, p_select_complex_prefer_eq, p_select_complex_prefer_neq,
-        p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
-        p_select_diff_negative_literal, p_select_first_variable_literal,
-        p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
-        p_select_largest_orientable_literal, p_select_min2_infpos, p_select_min_optimal_literal,
-        p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
+        apply_ported_literal_selector_with_mut_bank, literal_weight_counter_test_guard,
+        m_select_largest_orientable_literal, m_select_smallest_orientable_literal,
+        p_select_all_cond_optimal_literal, p_select_complex, p_select_complex_except_rr_horn,
+        p_select_complex_prefer_eq, p_select_complex_prefer_neq, p_select_cond_optimal_literal,
+        p_select_depth2_optimal_literal, p_select_diff_negative_literal,
+        p_select_first_variable_literal, p_select_ground_negative_literal, p_select_l_complex,
+        p_select_largest_negative_literal, p_select_largest_orientable_literal,
+        p_select_min2_infpos, p_select_min_optimal_literal, p_select_negative_literals,
+        p_select_optimal_literal, p_select_smallest_negative_literal,
         p_select_smallest_orientable_literal, p_select_strong_rr_non_rr_optimal_literal,
         p_select_unless_uniq_max_optimal_literal, p_select_unless_uniq_max_smallest_orientable,
         reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
@@ -4127,6 +4281,7 @@ mod tests {
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
@@ -4136,13 +4291,37 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_IS_GROUND};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::collections::BTreeSet;
 
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn higher_order_test_bank() -> TermBank {
+        let mut signature = Signature::new(TypeBank::new());
+        signature
+            .insert_internal_codes()
+            .unwrap_or_else(|err| panic!("{err}"));
+        TermBank::new(signature).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     #[test]
@@ -4191,10 +4370,47 @@ mod tests {
         var
     }
 
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_unary_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let symbol_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, symbol_type)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
     fn applied_free_var(bank: &mut TermBank, code: i64, arg: &Term) -> Term {
         let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
         app.set_type(Some(bank.signature().type_bank().default_type()));
         app.set_argument(0, typed_var(bank, code));
+        app.set_argument(1, arg.clone());
+        bank.insert(&app, DerefType::Never)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn phony_app(bank: &mut TermBank, head: &Term, arg: &Term) -> Term {
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(bank.signature().type_bank().default_type()));
+        app.set_argument(0, head.clone());
         app.set_argument(1, arg.clone());
         bank.insert(&app, DerefType::Never)
             .unwrap_or_else(|err| panic!("{err}"))
@@ -4322,6 +4538,15 @@ mod tests {
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
         OrderControlBlock::alloc(
             TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn lpo4_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Lpo4,
             true,
             bank.signature(),
             HoOrderKind::LfhoOrder,
@@ -6449,6 +6674,38 @@ mod tests {
                 });
             assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
         }
+    }
+
+    #[test]
+    fn mutable_bank_orientable_selector_uses_lpo4_instantiation_context() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = higher_order_test_bank();
+        let head_binding = typed_unary_const(&mut bank, "lit_sel_lpo4_applied_head");
+        let head_type = head_binding.type_().expect("test head has a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let arg = typed_const(&mut bank, "lit_sel_lpo4_arg");
+        let applied = phony_app(&mut bank, &head, &arg);
+        let mut substitution = Substitution::new();
+        substitution.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(&bank);
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(arg.f_code(), 10);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &applied, &arg, false,
+        )]));
+
+        apply_ported_literal_selector_with_mut_bank(
+            SELECT_LARGEST_ORIENTABLE,
+            Some(&mut ocb),
+            Some(&mut bank),
+            &mut clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(selected_indices(&clause), vec![0]);
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        substitution.backtrack();
     }
 
     #[test]
