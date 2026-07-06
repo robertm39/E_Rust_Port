@@ -78,6 +78,10 @@ Source files reviewed: `CLAUSES/ccl_garbage_coll.h`, `CLAUSES/ccl_garbage_coll.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `TBGCCollect` dispatches through untyped pointers stored in the term bank's GC admin and assumes every registered pointer still names a live `ClauseSet` or `FormulaSet`. Rust should keep compatibility with the registration surface, but the long-term owner model should use typed stable handles so stale or wrong-kind registrations cannot be observed as memory-unsafe behavior.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -5,7 +5,9 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::inout::scanner::{test_tok as scanner_test_tok, token_pos_rep, Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
-use crate::terms::garbage_coll::GcAdmin;
+use crate::terms::garbage_coll::{
+    gc_deregister_clause_set, gc_register_clause_set, gc_register_formula_set, GcAdmin, GcSetHandle,
+};
 use crate::terms::lambda::apply_terms as lambda_apply_terms;
 use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
 use crate::terms::signature::{
@@ -143,6 +145,18 @@ impl TermBank {
     #[must_use]
     pub const fn gc(&self) -> &GcAdmin {
         &self.gc
+    }
+
+    pub(crate) fn register_gc_clause_set(&mut self, set: GcSetHandle) {
+        gc_register_clause_set(&mut self.gc, set);
+    }
+
+    pub(crate) fn register_gc_formula_set(&mut self, set: GcSetHandle) {
+        gc_register_formula_set(&mut self.gc, set);
+    }
+
+    pub(crate) fn deregister_gc_clause_set(&mut self, set: GcSetHandle) {
+        gc_deregister_clause_set(&mut self.gc, set);
     }
 
     #[must_use]

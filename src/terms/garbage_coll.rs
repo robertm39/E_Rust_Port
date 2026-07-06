@@ -11,7 +11,7 @@ impl GcSetHandle {
     /// Panics if `id` is zero. The C registration helpers assert that set
     /// pointers are non-null.
     #[must_use]
-    pub fn new(id: usize) -> Self {
+    pub const fn new(id: usize) -> Self {
         assert!(id != 0, "GC set handle must be nonzero");
         Self(id)
     }
@@ -55,6 +55,14 @@ impl GcAdmin {
     #[must_use]
     pub fn has_formula_set(&self, set: GcSetHandle) -> bool {
         self.formula_sets.contains(&set)
+    }
+
+    pub fn clause_set_handles(&self) -> impl Iterator<Item = GcSetHandle> + '_ {
+        self.clause_sets.iter().copied()
+    }
+
+    pub fn formula_set_handles(&self) -> impl Iterator<Item = GcSetHandle> + '_ {
+        self.formula_sets.iter().copied()
     }
 }
 

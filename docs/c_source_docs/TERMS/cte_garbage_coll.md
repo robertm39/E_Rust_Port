@@ -93,6 +93,10 @@ Source files reviewed: `TERMS/cte_garbage_coll.h`, `TERMS/cte_garbage_coll.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `GCAdmin` stores borrowed clause/formula set addresses in generic pointer trees and does not own, type-check, or lifetime-check those registrations. Rust should preserve the observable registration/deregistration behavior for compatibility, but future proof-state and helper APIs should use typed stable owner handles instead of raw-address identity.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
