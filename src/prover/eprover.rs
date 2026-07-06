@@ -17310,7 +17310,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
              fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
              fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
-             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n\
+             fof(lambda_ext_right_ne, axiom, f != (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left_ne, axiom, (^[X: $i]: g @ X) != f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17334,6 +17336,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("(f,a))."));
         assert!(printed.contains("tff(lambda_ext_right, axiom"));
         assert!(printed.contains("tff(lambda_ext_left, axiom"));
+        assert!(printed.contains("tff(lambda_ext_right_ne, axiom, ?["));
+        assert!(printed.contains("tff(lambda_ext_left_ne, axiom, ?["));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -18743,7 +18747,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
              fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
              fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
-             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n\
+             fof(lambda_ext_right_ne, axiom, f != (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left_ne, axiom, (^[X: $i]: g @ X) != f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -26888,7 +26894,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
              fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n\
              fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
-             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n",
+             fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n\
+             fof(lambda_ext_right_ne, axiom, f != (^[X: $i]: g @ X)).\n\
+             fof(lambda_ext_left_ne, axiom, (^[X: $i]: g @ X) != f).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -26912,6 +26920,8 @@ input_clause(c2,axiom,[++q(X)]).
                 "fof(lambda_eq_right, axiom",
                 "fof(lambda_ext_right, axiom",
                 "fof(lambda_ext_left, axiom",
+                "fof(lambda_ext_right_ne, axiom",
+                "fof(lambda_ext_left_ne, axiom",
             ],
         );
         std::fs::remove_file(&path).unwrap();
@@ -27952,6 +27962,36 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_thf_lambda_disequality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-lambda-disequality");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(lambda_ext_ne, axiom, (^[X: person]: p @ X) != (^[X: person]: q @ X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed, "\n% Parsing successful!\n% SZS status Unknown\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_thf_lambda_equality_extensional_axiom() {
         let _guard = global_state_lock();
         let path = temp_path("thf-lambda-equality-extensional-proof");
@@ -28074,6 +28114,36 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_refutes_fof_lambda_disequality_against_pointwise_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("fof-lambda-disequality-pointwise-equality-refutation");
+        std::fs::write(
+            &path,
+            "tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
+             fof(lambda_ne, axiom, f != (^[X: $i]: g @ X)).\n\
+             fof(ext_eq, axiom, ![Y]: f @ Y = g @ Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
