@@ -852,6 +852,7 @@ impl PdTree {
         let token = state.term_code[query_index];
         if !matches!(token, PrefixToken::FreeVar { .. }) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
+                self.record_nodes_visited(1);
                 self.collect_matching_occurrences(
                     next_index,
                     query_index + 1,
@@ -908,6 +909,7 @@ impl PdTree {
             );
             if let Some(bound) = bindings.get(&variable_key).copied() {
                 if query_subtrees_match(state, bound, current) {
+                    self.record_nodes_visited(1);
                     self.collect_matching_occurrences(
                         next_index,
                         next_query_index,
@@ -919,6 +921,7 @@ impl PdTree {
                 }
             } else {
                 bindings.insert(variable_key, current);
+                self.record_nodes_visited(1);
                 self.collect_matching_occurrences(
                     next_index,
                     next_query_index,
@@ -1407,6 +1410,27 @@ mod tests {
             tree.search_matching_occurrences(),
             Some(vec![specific, general])
         );
+    }
+
+    #[test]
+    fn matching_occurrences_records_successful_child_visits() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_visit_f(pdt_visit_a)");
+        let variable = typed_var(&bank, -26);
+        let specific = PdtIndexedOccurrence::new(90, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(91, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        let visited_before = tree.visited_count();
+        assert_eq!(
+            tree.search_matching_occurrences(),
+            Some(vec![general, specific])
+        );
+        assert_eq!(tree.visited_count() - visited_before, 3);
     }
 
     #[test]
