@@ -152,6 +152,52 @@ pub struct ProofStateProcessDistinctResult {
     pub formula_derivation_ops: Vec<i64>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum DerivedView<'a> {
+    Clause(&'a Clause),
+    Formula(&'a WrappedFormula),
+}
+
+pub enum DerivedViewMut<'a> {
+    Clause(&'a mut Clause),
+    Formula(&'a mut WrappedFormula),
+}
+
+#[must_use]
+pub fn derived_in_proof(derived: DerivedView<'_>) -> bool {
+    match derived {
+        DerivedView::Clause(clause) => clause.is_empty() || clause.query_prop(CP_IS_PROOF_CLAUSE),
+        DerivedView::Formula(formula) => formula.query_prop(CP_IS_PROOF_CLAUSE),
+    }
+}
+
+pub fn derived_set_in_proof(derived: DerivedViewMut<'_>, in_proof: bool) {
+    match derived {
+        DerivedViewMut::Clause(clause) => {
+            if in_proof {
+                clause.set_prop(CP_IS_PROOF_CLAUSE);
+            } else {
+                clause.del_prop(CP_IS_PROOF_CLAUSE);
+            }
+        }
+        DerivedViewMut::Formula(formula) => {
+            if in_proof {
+                formula.set_prop(CP_IS_PROOF_CLAUSE);
+            } else {
+                formula.del_prop(CP_IS_PROOF_CLAUSE);
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn derived_is_eval_gc(derived: DerivedView<'_>) -> bool {
+    match derived {
+        DerivedView::Clause(clause) => clause_is_eval_gc(clause),
+        DerivedView::Formula(_) => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProofObjectAnalysis {
     pub clause_step_count: u64,
@@ -2039,10 +2085,10 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_rewrite_steps, generated_clause_statistics_count,
-        generated_literal_statistics_count, proof_state_alloc, ProofObjectAnalysis,
-        ProofObjectGraphEdge, ProofState, ProofStateGcAnalysis, ProofStateStatistics,
-        WatchlistSource,
+        cached_rewrite_steps, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
+        generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
+        DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge, ProofState,
+        ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2162,6 +2208,37 @@ mod tests {
             assert_eq!(clause.weight(), clause.standard_weight());
             assert!(clause.is_subsume_ordered(state.terms()));
         }
+    }
+
+    #[test]
+    fn derived_view_helpers_follow_c_proof_and_eval_gc_rules() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        let empty = Clause::empty();
+        assert!(derived_in_proof(DerivedView::Clause(&empty)));
+        assert!(!derived_is_eval_gc(DerivedView::Clause(&empty)));
+
+        let mut clause = simple_clause(&mut state, "derived_clause", 10);
+        assert!(!derived_in_proof(DerivedView::Clause(&clause)));
+        derived_set_in_proof(DerivedViewMut::Clause(&mut clause), true);
+        assert!(clause.query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(derived_in_proof(DerivedView::Clause(&clause)));
+        derived_set_in_proof(DerivedViewMut::Clause(&mut clause), false);
+        assert!(!clause.query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(!derived_in_proof(DerivedView::Clause(&clause)));
+
+        let eval_gc = eval_gc_clause(&mut state, "derived_eval_gc", 11, false);
+        assert!(derived_is_eval_gc(DerivedView::Clause(&eval_gc)));
+
+        let mut formula = wrapped_formula(&mut state, "derived_formula");
+        assert!(!derived_in_proof(DerivedView::Formula(&formula)));
+        assert!(!derived_is_eval_gc(DerivedView::Formula(&formula)));
+        derived_set_in_proof(DerivedViewMut::Formula(&mut formula), true);
+        assert!(formula.query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(derived_in_proof(DerivedView::Formula(&formula)));
+        derived_set_in_proof(DerivedViewMut::Formula(&mut formula), false);
+        assert!(!formula.query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(!derived_in_proof(DerivedView::Formula(&formula)));
     }
 
     fn test_ocb(state: &ProofState) -> OrderControlBlock {
