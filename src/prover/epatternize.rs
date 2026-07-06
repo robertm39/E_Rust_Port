@@ -1,7 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{
-    problem_type, reset_problem_type, set_problem_type, ProblemType,
-};
+use crate::basics::simple_stuff::{problem_type, reset_problem_type};
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausesets::ClauseSet;
@@ -592,7 +590,6 @@ where
 {
     let _problem_type_guard = ProblemTypeRunGuard::new();
     init_io(PROGRAM_NAME);
-    set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout);
     exit_io();
@@ -1196,6 +1193,30 @@ mod tests {
         clausify_formula_axioms(&config, &mut state).expect("formula-owner CNF succeeds");
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
+    }
+
+    #[test]
+    fn patternizes_thf_formula_input_under_higher_order_problem_type() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"thf(person_type, type, person: $tType).\n\
+            thf(a_type, type, a: person).\n\
+            thf(p_type, type, p: person > $o).\n\
+            thf(fact, axiom, p @ a).\n";
+
+        let status = run(
+            ["epatternize", "--tstp-in"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("THF input reaches the formula-owner CNF path");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("$or1("));
     }
 
     #[test]
