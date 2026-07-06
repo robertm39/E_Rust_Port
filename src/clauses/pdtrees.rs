@@ -86,6 +86,7 @@ impl Default for PdtTraversalOrder {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PdtSearchState {
     pub term_code: Vec<PrefixToken>,
+    pub term_spans: Vec<usize>,
     pub term_weight: i64,
     pub term_date: SysDate,
     pub traversal_order: PdtTraversalOrder,
@@ -102,6 +103,12 @@ pub enum PrefixToken {
 pub struct PrefixMatch {
     pub matched: usize,
     pub remains: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PrefixQueryCell {
+    token: PrefixToken,
+    span: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -259,6 +266,15 @@ impl PdTree {
     }
 
     #[must_use]
+    pub fn search_root_may_have_matchable_path(&self) -> bool {
+        let state = self.search_state.borrow();
+        let Some(state) = state.as_ref() else {
+            return true;
+        };
+        self.code_may_have_matchable_path(&state.term_code, &state.term_spans)
+    }
+
+    #[must_use]
     pub fn search_traversal_order(&self) -> PdtTraversalOrder {
         self.search_traversal_order.get()
     }
@@ -296,9 +312,11 @@ impl PdTree {
 
     pub fn record_search_init(&self, term: &Term, age_constraint: SysDate, prefer_general: bool) {
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
+        let query = term_lr_traverse_query(term);
         self.search_traversal_order.set(traversal_order);
         *self.search_state.borrow_mut() = Some(PdtSearchState {
-            term_code: term_lr_traverse_code(term),
+            term_code: query.iter().map(|cell| cell.token).collect(),
+            term_spans: query.iter().map(|cell| cell.span).collect(),
             term_weight: term_standard_weight(term),
             term_date: age_constraint,
             traversal_order,
@@ -612,6 +630,49 @@ impl PdTree {
         }
         self.nodes[node_index].ref_count
     }
+
+    fn code_may_have_matchable_path(&self, code: &[PrefixToken], spans: &[usize]) -> bool {
+        if code.len() != spans.len() {
+            return true;
+        }
+        self.node_may_have_matchable_path(0, 0, code, spans)
+    }
+
+    fn node_may_have_matchable_path(
+        &self,
+        node_index: usize,
+        query_index: usize,
+        code: &[PrefixToken],
+        spans: &[usize],
+    ) -> bool {
+        if query_index == code.len() {
+            return self.nodes[node_index].terminal_count != 0;
+        }
+
+        let token = code[query_index];
+        if !matches!(token, PrefixToken::FreeVar(_))
+            && self.nodes[node_index]
+                .children
+                .get(&token)
+                .is_some_and(|next_index| {
+                    self.node_may_have_matchable_path(*next_index, query_index + 1, code, spans)
+                })
+        {
+            return true;
+        }
+
+        let next_query_index = query_index.saturating_add(spans[query_index]);
+        if next_query_index > code.len() {
+            return true;
+        }
+        self.nodes[node_index]
+            .children
+            .iter()
+            .filter(|(edge, _)| matches!(edge, PrefixToken::FreeVar(_)))
+            .any(|(_, next_index)| {
+                self.node_may_have_matchable_path(*next_index, next_query_index, code, spans)
+            })
+    }
 }
 
 #[cfg(feature = "pdt-count-nodes")]
@@ -675,6 +736,34 @@ pub fn term_lr_traverse_code(term: &Term) -> Vec<PrefixToken> {
     code
 }
 
+fn term_lr_traverse_query(term: &Term) -> Vec<PrefixQueryCell> {
+    let mut query = Vec::new();
+    push_prefix_query_cell(&mut query, term);
+    query
+}
+
+fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: &Term) -> usize {
+    let start = query.len();
+    query.push(PrefixQueryCell {
+        token: prefix_token(term),
+        span: 0,
+    });
+
+    if !term.is_top_level_free_var() {
+        let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+        for index in first_arg..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            push_prefix_query_cell(query, &arg);
+        }
+    }
+
+    let span = query.len() - start;
+    query[start].span = span;
+    span
+}
+
 #[must_use]
 pub fn prefix_compute_term_code(term: &Term) -> Vec<PrefixToken> {
     term_lr_traverse_code(term)
@@ -723,9 +812,9 @@ mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts, PdTree,
-        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
-        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
+        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
+        term_lr_traverse_query, PdTree, PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM,
+        PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -741,6 +830,11 @@ mod tests {
     fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn typed_var(bank: &TermBank, f_code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(f_code, &type_)
     }
 
     #[test]
@@ -853,6 +947,7 @@ mod tests {
         assert_eq!(tree.search_term_date(), SysDate::creation_time());
         let state = tree.search_state().expect("search init stores state");
         assert_eq!(state.term_code, prefix_compute_term_code(&first));
+        assert_eq!(state.term_spans, vec![2, 1]);
         assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
         tree.record_search_exit();
@@ -874,7 +969,68 @@ mod tests {
             .search_state()
             .expect("search init stores replacement state");
         assert_eq!(state.term_code, prefix_compute_term_code(&second));
+        assert_eq!(state.term_spans, vec![3, 1, 1]);
         assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
+    }
+
+    #[test]
+    fn query_spans_count_whole_lr_subtrees() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let term = parse_in_bank(&mut bank, "span_f(span_g(span_a),span_b)");
+        let query = term_lr_traverse_query(&term);
+
+        assert_eq!(
+            query.iter().map(|cell| cell.token).collect::<Vec<_>>(),
+            prefix_compute_term_code(&term)
+        );
+        assert_eq!(
+            query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
+            vec![4, 2, 1, 1]
+        );
+    }
+
+    #[test]
+    fn matchable_path_variable_edge_consumes_whole_query_subtree() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_path_f(pdt_path_g(pdt_path_b),pdt_path_a)");
+        let f_code = bank.signature().find_f_code("pdt_path_f");
+        let a_code = bank.signature().find_f_code("pdt_path_a");
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_code(&[
+            PrefixToken::Fun(f_code),
+            PrefixToken::FreeVar(17),
+            PrefixToken::Fun(a_code),
+        ]));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        assert!(tree.search_root_may_have_matchable_path());
+    }
+
+    #[test]
+    fn matchable_path_rejects_missing_symbol_branch() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let stored = parse_in_bank(&mut bank, "pdt_path_stored_f(pdt_path_stored_a)");
+        let query = parse_in_bank(&mut bank, "pdt_path_query_g(pdt_path_stored_a)");
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term(&stored));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        assert!(!tree.search_root_may_have_matchable_path());
+    }
+
+    #[test]
+    fn matchable_path_does_not_treat_query_variable_as_symbol_match() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let stored = parse_in_bank(&mut bank, "pdt_path_const_a");
+        let query = typed_var(&bank, -10);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term(&stored));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        assert!(!tree.search_root_may_have_matchable_path());
     }
 
     #[test]

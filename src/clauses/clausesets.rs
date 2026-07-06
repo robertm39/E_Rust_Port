@@ -221,7 +221,7 @@ impl ClauseSet {
         if !self.demod_index_covers_demodulators() {
             return true;
         }
-        index.search_root_satisfies_constraints()
+        index.search_root_satisfies_constraints() && index.search_root_may_have_matchable_path()
     }
 
     pub fn record_demod_index_search_attempt(&self) {
@@ -2223,6 +2223,29 @@ mod tests {
 
         set.record_demod_index_search_init(&f_a, SysDate::from_raw(7), false);
         assert!(!set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+    }
+
+    #[test]
+    fn demod_index_search_may_have_match_uses_trie_path_prune() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "path_constraint_a");
+        let b = typed_const(&mut bank, "path_constraint_b");
+        let f_a = typed_unary(&mut bank, "path_constraint_f", &a);
+        let g_a = typed_unary(&mut bank, "path_constraint_g", &a);
+        let mut literal = literal(&mut bank, &f_a, &b, true);
+        literal.set_prop(EP_IS_ORIENTED);
+        let clause = clause_from(vec![literal]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        set.record_demod_index_search_init(&g_a, PDTREE_IGNORE_NF_DATE, false);
+        assert!(!set.demod_index_search_may_have_match());
+        set.record_demod_index_search_exit();
+
+        set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
+        assert!(set.demod_index_search_may_have_match());
         set.record_demod_index_search_exit();
     }
 
