@@ -77,12 +77,12 @@ Source files reviewed: `CONTROL/cco_clausesplitting.h`, `CONTROL/cco_clausesplit
 ### Rust Port Status Notes
 
 - Rust now ports `ControlledClauseSplit` for represented first-order clauses: the split-class mask checks for Horn, non-Horn, negative, positive, and mixed clauses are preserved, and matching clauses call the `ClauseSplit` port before requeueing results through `tmp_store`.
-- Fresh definitions and non-fresh clause-level definition reuse are both supported. Formula archives and split-definition proof-output side effects remain pending with the broader formula/proof-documentation owners.
+- Fresh definitions and non-fresh clause-level definition reuse are both supported. Arity-zero split-definition formula archives are represented for proof-state splitting, and the proof-control split branches now emit opt-in `DocIntroSplitDef`, `DocIntroSplitDefRest`, and `DocClauseApplyDefs` output before requeueing split children.
 
 ### Change Later
 
 - `SplitAll` is still the C value `7`, so the wrapper's Horn/non-Horn checks make it effectively broad even though the mask does not include the later positive/mixed bits. Rust preserves this rather than normalizing the mask.
-- The C wrapper receives a full `DefStore_p`; Rust currently threads the reusable clause store plus predicate association through proof state. Reintroduce a fuller owner at this boundary when formula archives and proof-output metadata are ported.
+- The C wrapper receives a full `DefStore_p`; Rust currently threads the reusable clause store, represented arity-zero formula archive parents, and predicate association through proof state. Reintroduce a fuller owner at this boundary if later set-level callers need parameterized split-variable formula archives or helper-local proof-output ownership.
 
 ### Porting Focus
 
