@@ -34,6 +34,8 @@ pub mod neweval;
 pub mod overlap_index;
 pub mod paramodulation;
 pub mod pdtrees;
+// Allowed external DLL/shared-library boundary: picosat keeps runtime loading
+// and PicoSAT ABI calls behind a safe solver wrapper.
 #[allow(unsafe_code)]
 pub mod picosat;
 pub mod pred_elim;

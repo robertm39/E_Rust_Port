@@ -3,6 +3,9 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
+// Runtime PicoSAT loading is the allowed external DLL/shared-library boundary.
+// The public wrapper owns solver/library handles and keeps raw ABI calls local.
+
 const PICOSAT_SATISFIABLE: c_int = 10;
 const PICOSAT_UNSATISFIABLE: c_int = 20;
 

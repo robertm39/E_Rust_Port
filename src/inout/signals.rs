@@ -399,6 +399,8 @@ const fn cpu_soft_timeout_rlimit_sequence(
     }
 }
 
+// Allowed external shared-library boundary: POSIX signal registration uses
+// libc's process-global ABI and exposes only boolean install/reset helpers.
 #[cfg(all(target_os = "linux", not(test)))]
 #[allow(unsafe_code)]
 mod linux_signal {

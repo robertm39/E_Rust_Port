@@ -396,6 +396,8 @@ where
     }
 }
 
+// Allowed external shared-library boundary: server-socket setup mirrors the C
+// POSIX socket ABI while returning an owned safe TcpListener.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod platform_server_socket {
@@ -523,6 +525,8 @@ mod platform_server_socket {
     }
 }
 
+// Allowed external DLL boundary: Winsock server-socket setup stays inside this
+// module and returns an owned safe TcpListener.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod platform_server_socket {

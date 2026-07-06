@@ -222,6 +222,8 @@ pub fn print_dashed_statuses(
     output.write_all(dashed_statuses(stat1, stat2, fallback).as_bytes())
 }
 
+// Allowed external DLL boundary: Windows MSVC output compatibility needs
+// Kernel32/UCRT handle-to-fd calls hidden behind CompatFd ownership.
 #[cfg(all(windows, target_env = "msvc"))]
 #[allow(unsafe_code)]
 mod windows_compat_fd {

@@ -523,6 +523,8 @@ fn windows_peak_working_set_pages() -> Option<u64> {
     windows_kernel32::peak_working_set_pages(windows_system_page_size()?)
 }
 
+// Allowed external DLL boundary: Kernel32/PSAPI resource calls are isolated here
+// and converted to Rust result values before leaving the module.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_kernel32 {
@@ -889,6 +891,8 @@ mod windows_kernel32 {
     }
 }
 
+// Allowed external shared-library boundary: libc rlimit calls and strerror stay
+// inside this module and return typed Rust outcomes/messages.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod linux_rlimit {
@@ -988,6 +992,8 @@ mod linux_rlimit {
     }
 }
 
+// Allowed external shared-library boundary: libc process-resource queries stay
+// isolated here and return plain Rust measurements.
 #[cfg(any(test, target_os = "linux"))]
 #[allow(unsafe_code)]
 mod linux_resource {
