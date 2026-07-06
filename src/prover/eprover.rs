@@ -13478,6 +13478,11 @@ fn parse_simple_thf_term_formula(
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = bank.parse_tformula_tstp(scanner)?;
     let formula = if formula.has_lambda_subterm() {
+        simple_fof_recover_tstp_arrow_equalities(&formula, bank)?
+    } else {
+        formula
+    };
+    let formula = if formula.has_lambda_subterm() {
         named_to_db(bank, &formula)?
     } else {
         formula
@@ -13744,6 +13749,11 @@ fn parse_simple_fof_tstp_application_formula(
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = bank.parse_tformula_tstp(scanner)?;
     let formula = if formula.has_lambda_subterm() {
+        simple_fof_recover_tstp_arrow_equalities(&formula, bank)?
+    } else {
+        formula
+    };
+    let formula = if formula.has_lambda_subterm() {
         named_to_db(bank, &formula)?
     } else {
         formula
@@ -13845,6 +13855,51 @@ fn simple_fof_recover_tstp_arrow_equality_operand(
     let recovered = Term::const_cell_alloc(f_code);
     recovered.set_type(Some(recovered_type));
     bank.term_top_insert(recovered)
+}
+
+fn simple_fof_recover_tstp_arrow_equalities(
+    formula: &Term,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    bank.map_term(formula, &mut |bank, term| {
+        simple_fof_recover_tstp_arrow_equality(term, bank)
+    })
+}
+
+fn simple_fof_recover_tstp_arrow_equality(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    if !term.has_eq_neq() {
+        return Ok(None);
+    }
+
+    let is_equality = matches!(
+        term.f_code(),
+        code if code == bank.signature().eqn_code() || code == bank.signature().neqn_code()
+    );
+    if !is_equality || term.arity() != 2 {
+        return Ok(Some(term.clone()));
+    }
+
+    let left = term
+        .argument(0)
+        .expect("term-encoded equality left argument is uninitialized");
+    let right = term
+        .argument(1)
+        .expect("term-encoded equality right argument is uninitialized");
+    let recovered_left =
+        simple_fof_recover_tstp_arrow_equality_operand(left.clone(), &right, bank)?;
+    let recovered_right =
+        simple_fof_recover_tstp_arrow_equality_operand(right.clone(), &recovered_left, bank)?;
+    if recovered_left == left && recovered_right == right {
+        return Ok(Some(term.clone()));
+    }
+
+    let recovered = Term::top_copy_without_args(term);
+    recovered.set_argument(0, recovered_left);
+    recovered.set_argument(1, recovered_right);
+    bank.term_top_insert(recovered).map(Some)
 }
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
@@ -18716,7 +18771,8 @@ input_clause(c2,axiom,[++q(X)]).
                      tff(f_type, type, f: $i > $i).\n\
                      tff(g_type, type, g: $i > $i).\n\
                      {formula_kind}(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n\
-                     {formula_kind}(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n"
+                     {formula_kind}(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n\
+                     {formula_kind}(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).\n"
                 ),
             )
             .unwrap();
@@ -28020,6 +28076,39 @@ input_clause(c2,axiom,[++q(X)]).
              tff(f_type, type, f: $i > $i).\n\
              tff(g_type, type, g: $i > $i).\n\
              fof(lambda_ext, axiom, f = (^[X: $i]: g @ X)).\n\
+             fof(f_fact, axiom, f @ a = b).\n\
+             fof(goal, conjecture, g @ a = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_fof_left_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("fof-left-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
+             fof(lambda_ext, axiom, (^[X: $i]: g @ X) = f).\n\
              fof(f_fact, axiom, f @ a = b).\n\
              fof(goal, conjecture, g @ a = b).\n",
         )
