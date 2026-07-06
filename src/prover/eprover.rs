@@ -7712,7 +7712,7 @@ fn write_tstp_clause_quote_doc_with_parent(
         &quoted,
         config.pcl_output.full_terms,
         false,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
+        proof_output_problem_type(problem_type()),
         config.encoding.print_types,
     )?;
     writeln!(&mut rendered, ", c_0_{old_id},['{comment}']).").map_err(proof_doc_write_error)?;
@@ -7760,7 +7760,7 @@ fn write_proof_success_list_output(
             parent_ident,
         )?;
     } else {
-        write_proof_object_list_graph(output, config, state.terms(), &graph)?;
+        write_proof_object_list_graph(output, config, state.terms(), &graph, problem_type())?;
     }
     write_comment_line(output, "SZS output end CNFRefutation")?;
     Ok(())
@@ -7771,18 +7771,33 @@ fn write_proof_object_list_graph(
     config: &EProverConfig,
     bank: &TermBank,
     graph: &ProofObjectGraph<'_>,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let mut formula_bank = bank.clone();
+    let proof_problem_type = proof_output_problem_type(proof_problem_type);
     for item in proof_object_list_display_items(graph) {
         match item {
             ProofObjectListDisplayItem::Clause {
                 clause: proof_clause,
                 is_root,
             } => {
-                write_saturation_proof_object_clause(output, config, bank, &proof_clause, is_root)?;
+                write_saturation_proof_object_clause(
+                    output,
+                    config,
+                    bank,
+                    &proof_clause,
+                    is_root,
+                    proof_problem_type,
+                )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
-                write_saturation_proof_object_formula(output, config, &mut formula_bank, &formula)?;
+                write_saturation_proof_object_formula(
+                    output,
+                    config,
+                    &mut formula_bank,
+                    &formula,
+                    proof_problem_type,
+                )?;
             }
         }
     }
@@ -8316,7 +8331,7 @@ fn write_stopped_proof_output(
 
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
     let graph = state.proof_object_graph_for_roots(stopped_proof_object_roots(config, state));
-    write_proof_object_list_graph(output, config, state.terms(), &graph)?;
+    write_proof_object_list_graph(output, config, state.terms(), &graph, problem_type())?;
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output end {status}")?;
     Ok(())
 }
@@ -8327,8 +8342,10 @@ fn write_saturation_proof_object_clause(
     bank: &TermBank,
     clause: &Clause,
     is_root: bool,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
+    let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
         DocOutputFormat::Pcl => {
             write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
@@ -8358,7 +8375,7 @@ fn write_saturation_proof_object_clause(
                 clause,
                 config.pcl_output.full_terms,
                 false,
-                ProblemType::FirstOrder,
+                proof_problem_type,
                 config.encoding.print_types,
             )?;
             if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
@@ -8393,12 +8410,13 @@ fn write_saturation_proof_object_formula(
     config: &EProverConfig,
     bank: &mut TermBank,
     formula: &WrappedFormula,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
+    let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
         DocOutputFormat::Pcl => {
-            let body =
-                formula.proof_doc_formula_body_string(bank, true, ProblemType::FirstOrder)?;
+            let body = formula.proof_doc_formula_body_string(bank, true, proof_problem_type)?;
             pcl_formula_print_start(
                 &mut rendered,
                 formula.ident(),
@@ -8420,7 +8438,7 @@ fn write_saturation_proof_object_formula(
         DocOutputFormat::Tstp => {
             rendered.push_str(&formula.tstp_string_flex(
                 bank,
-                ProblemType::FirstOrder,
+                proof_problem_type,
                 FormulaTstpPrintOptions {
                     full_terms: true,
                     completeness: FormulaTstpCompleteness::Open,
@@ -8479,7 +8497,14 @@ fn write_proof_object_dot(
         }
         match item {
             ProofObjectListDisplayItem::Clause { clause, .. } => {
-                write_proof_object_dot_clause(output, config, bank, &clause, clause.ident())?;
+                write_proof_object_dot_clause(
+                    output,
+                    config,
+                    bank,
+                    &clause,
+                    clause.ident(),
+                    proof_problem_type,
+                )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
                 write_proof_object_dot_formula(
@@ -8515,8 +8540,10 @@ fn write_proof_object_dot_clause(
     bank: &TermBank,
     clause: &Clause,
     node_id: i64,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
+        let proof_problem_type = proof_output_problem_type(proof_problem_type);
         let mut rendered = String::new();
         clause_write_tstp_with_type_suffixes(
             &mut rendered,
@@ -8524,7 +8551,7 @@ fn write_proof_object_dot_clause(
             clause,
             true,
             false,
-            ProblemType::FirstOrder,
+            proof_problem_type,
             config.encoding.print_types,
         )?;
         if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
@@ -8555,6 +8582,13 @@ fn write_proof_object_dot_clause(
     Ok(())
 }
 
+const fn proof_output_problem_type(proof_problem_type: ProblemType) -> ProblemType {
+    match proof_problem_type {
+        ProblemType::NotInitialized => ProblemType::FirstOrder,
+        problem_type => problem_type,
+    }
+}
+
 fn write_proof_object_dot_formula(
     output: &mut impl Write,
     config: &EProverConfig,
@@ -8564,10 +8598,7 @@ fn write_proof_object_dot_formula(
     proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
-        let proof_problem_type = match proof_problem_type {
-            ProblemType::NotInitialized => ProblemType::FirstOrder,
-            problem_type => problem_type,
-        };
+        let proof_problem_type = proof_output_problem_type(proof_problem_type);
         let mut rendered = formula.tstp_string(bank, true, false, proof_problem_type, true)?;
         if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(formula.derivation(), &[])
         {
@@ -24979,6 +25010,45 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn proof_graph_dot_writer_uses_higher_order_clause_labels() {
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: Vec::new(),
+            edges: Vec::new(),
+            mixed_edges: Vec::new(),
+            root_indices: vec![0],
+            formula_root_indices: Vec::new(),
+        };
+        let config = EProverConfig {
+            proof_output: 3,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_dot(
+            &mut output,
+            &config,
+            &bank,
+            &graph,
+            ProblemType::HigherOrder,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains(
+                "  1 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"thf(c_0_1"
+            ),
+            "{printed}"
+        );
+        assert!(printed.contains("plain, ($false))."), "{printed}");
+        assert!(!printed.contains("label=\"cnf(c_0_1"), "{printed}");
+    }
+
+    #[test]
     fn run_record_gcs_updates_success_statistics() {
         let _guard = global_state_lock();
         let path = temp_path("proof-object-record-gcs");
@@ -25431,7 +25501,14 @@ input_clause(c2,axiom,[++q(X)]).
             ..EProverConfig::default()
         };
         let mut output = Vec::new();
-        write_proof_object_list_graph(&mut output, &tstp_config, &bank, &graph).unwrap();
+        write_proof_object_list_graph(
+            &mut output,
+            &tstp_config,
+            &bank,
+            &graph,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         let formula_position = printed
             .find("fof(c_0_1, conjecture, list_output_formula")
@@ -25449,7 +25526,14 @@ input_clause(c2,axiom,[++q(X)]).
             ..EProverConfig::default()
         };
         let mut output = Vec::new();
-        write_proof_object_list_graph(&mut output, &pcl_config, &bank, &graph).unwrap();
+        write_proof_object_list_graph(
+            &mut output,
+            &pcl_config,
+            &bank,
+            &graph,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         let formula_position = printed
             .find("list_output_formula")
@@ -25458,6 +25542,58 @@ input_clause(c2,axiom,[++q(X)]).
             .find("     2 : :[] : QUOTE(1) : 'proof'")
             .unwrap_or_else(|| panic!("missing remapped clause PCL node in:\n{printed}"));
         assert!(formula_position < clause_position, "{printed}");
+    }
+
+    #[test]
+    fn proof_object_list_graph_uses_higher_order_tstp_wrappers() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formula =
+            WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "list_output_thf_formula"));
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut clause = Clause::empty();
+        clause.set_ident(77);
+        clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(formula_ref), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: vec![&formula],
+            edges: Vec::new(),
+            mixed_edges: vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Clause(0),
+            }],
+            root_indices: vec![0],
+            formula_root_indices: Vec::new(),
+        };
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_list_graph(
+            &mut output,
+            &config,
+            &bank,
+            &graph,
+            ProblemType::HigherOrder,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains("thf(c_0_1, conjecture, list_output_thf_formula"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "thf(c_0_2, plain, ($false), inference(QUOTE,[status(unknown)],[c_0_1]), ['proof'])."
+            ),
+            "{printed}"
+        );
+        assert!(!printed.contains("fof(c_0_1"), "{printed}");
+        assert!(!printed.contains("cnf(c_0_2"), "{printed}");
     }
 
     #[test]
@@ -25473,24 +25609,56 @@ input_clause(c2,axiom,[++q(X)]).
             ..EProverConfig::default()
         };
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, true).unwrap();
+        write_saturation_proof_object_clause(
+            &mut output,
+            &config,
+            &bank,
+            &clause,
+            true,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains("initial(\"file.p\", named) : 'proof'\n"));
 
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, false).unwrap();
+        write_saturation_proof_object_clause(
+            &mut output,
+            &config,
+            &bank,
+            &clause,
+            false,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains("initial(\"file.p\", named)\n"));
         assert!(!printed.contains("'proof'"));
 
         config.doc_output_format = DocOutputFormat::Tstp;
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, true).unwrap();
+        write_saturation_proof_object_clause(
+            &mut output,
+            &config,
+            &bank,
+            &clause,
+            true,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains(", file('file.p', named), ['proof']).\n"));
 
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, false).unwrap();
+        write_saturation_proof_object_clause(
+            &mut output,
+            &config,
+            &bank,
+            &clause,
+            false,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains(", file('file.p', named)).\n"));
         assert!(!printed.contains("'proof'"));
