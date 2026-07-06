@@ -53,6 +53,7 @@ use crate::clauses::derivation::{
     op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::{eqn_fof_parse, prepare_predicate_literal, Eqn, EqnPrintOptions};
+use crate::clauses::eqn_props::PatEqnDirection;
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
@@ -13734,8 +13735,7 @@ fn parse_simple_fof_non_boolean_fool_literal(
     let positive = scanner.test_tok(TokenType::EQUAL_SIGN);
     scanner.accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)?;
     let right = parse_simple_fof_tstp_equality_right_term(scanner, bank)?;
-    let literal = Eqn::alloc(left, right, bank, positive)?;
-    Ok(simple_fof_literal_formulas(vec![literal]))
+    simple_fof_tstp_equality_to_formulas(left, right, bank, positive, scanner)
 }
 
 fn parse_simple_fof_tstp_application_formula(
@@ -13777,13 +13777,74 @@ fn parse_simple_fof_tstp_equality_right_term(
         } else {
             term
         };
-        if term.has_lambda_subterm() || term.has_db_subterm() {
-            return Err(simple_fof_unsupported_error(scanner));
-        }
         return Ok(term);
     }
 
     bank.parse_term_with_distinct_checks(scanner)
+}
+
+fn simple_fof_tstp_equality_to_formulas(
+    mut left: Term,
+    mut right: Term,
+    bank: &mut TermBank,
+    positive: bool,
+    scanner: &Scanner,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    left = simple_fof_recover_tstp_arrow_equality_operand(left, &right, bank)?;
+    right = simple_fof_recover_tstp_arrow_equality_operand(right, &left, bank)?;
+    let literal = Eqn::alloc(left, right, bank, positive)?;
+    if !(literal.left().has_lambda_subterm()
+        || literal.left().has_db_subterm()
+        || literal.right().has_lambda_subterm()
+        || literal.right().has_db_subterm())
+    {
+        return Ok(simple_fof_literal_formulas(vec![literal]));
+    }
+
+    let formula = literal.tb_term_encode(bank, PatEqnDirection::Normal)?;
+    let formula = lambda_to_forall(bank, &formula)?;
+    if formula.has_lambda_subterm() || formula.has_db_subterm() {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    simple_fof_bool_term_to_formulas(
+        &formula,
+        SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+        bank,
+    )
+}
+
+fn simple_fof_recover_tstp_arrow_equality_operand(
+    term: Term,
+    other: &Term,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    let Some(other_type) = other.type_() else {
+        return Ok(term);
+    };
+    if !other_type.is_arrow() || term.type_().as_ref() == Some(&other_type) {
+        return Ok(term);
+    }
+    if term.is_any_var() || term.arity() != 0 {
+        return Ok(term);
+    }
+
+    let Some(name) = bank.signature().find_name(term.f_code()).map(str::to_owned) else {
+        return Ok(term);
+    };
+    let f_code = bank.signature().find_f_code(&name);
+    if f_code == 0 || f_code == term.f_code() {
+        return Ok(term);
+    }
+    let Some(recovered_type) = bank.signature().get_type(f_code).cloned() else {
+        return Ok(term);
+    };
+    if recovered_type != other_type {
+        return Ok(term);
+    }
+
+    let recovered = Term::const_cell_alloc(f_code);
+    recovered.set_type(Some(recovered_type));
+    bank.term_top_insert(recovered)
 }
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
@@ -13879,8 +13940,7 @@ fn parse_simple_fof_atomic_formula_or_literal(
         bank.true_term().clone()
     };
 
-    let literal = Eqn::alloc(left, right, bank, positive)?;
-    Ok(simple_fof_literal_formulas(vec![literal]))
+    simple_fof_tstp_equality_to_formulas(left, right, bank, positive, scanner)
 }
 
 fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left: &Term) -> bool {
@@ -18653,7 +18713,10 @@ input_clause(c2,axiom,[++q(X)]).
                 format!(
                     "tff(p_type, type, p: $i > $o).\n\
                      tff(q_type, type, q: $i > $o).\n\
-                     {formula_kind}(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n"
+                     tff(f_type, type, f: $i > $i).\n\
+                     tff(g_type, type, g: $i > $i).\n\
+                     {formula_kind}(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n\
+                     {formula_kind}(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).\n"
                 ),
             )
             .unwrap();
@@ -27926,6 +27989,39 @@ input_clause(c2,axiom,[++q(X)]).
              fof(lambda_ext, axiom, (^[X: $i]: p @ X) = (^[X: $i]: q @ X)).\n\
              fof(p_fact, axiom, p @ a).\n\
              fof(goal, conjecture, q @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_fof_right_lambda_equality_extensional_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("fof-right-lambda-equality-extensional-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
+             tff(g_type, type, g: $i > $i).\n\
+             fof(lambda_ext, axiom, f = (^[X: $i]: g @ X)).\n\
+             fof(f_fact, axiom, f @ a = b).\n\
+             fof(goal, conjecture, g @ a = b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
