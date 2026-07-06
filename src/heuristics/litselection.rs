@@ -5407,6 +5407,7 @@ mod tests {
     fn literal_selection_name_table_preserves_c_order_and_append_shape() {
         let names = super::literal_selection_names();
 
+        assert_eq!(names.len(), 144);
         assert_eq!(names.first().copied(), Some(NO_SELECTION));
         assert_eq!(names.get(1).copied(), Some(NO_GENERATION));
         assert_eq!(names.get(101).copied(), Some(super::SELECT_COMPLEX_AHP));
@@ -5433,6 +5434,23 @@ mod tests {
         assert!(rendered
             .view()
             .ends_with(super::SELECT_MAX_L_COMPLEX_PREFER_APP_VAR));
+    }
+
+    #[test]
+    fn all_advertised_literal_selection_names_dispatch_with_mutable_bank() {
+        for name in super::literal_selection_names() {
+            let mut bank = test_bank();
+            let mut clause = literal_selection_dispatch_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_mut_bank(
+                name,
+                Some(&mut ocb),
+                Some(&mut bank),
+                &mut clause,
+            )
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        }
     }
 
     fn const_term(code: i64) -> Term {
@@ -6340,6 +6358,30 @@ mod tests {
             predicate_literal(bank, &fallback, false),
         ]));
         mark_maximal_literals(&mut clause, &[0]);
+        clause
+    }
+
+    fn literal_selection_dispatch_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "lit_sel_dispatch_pos");
+        let shared = predicate_const_atom(bank, "lit_sel_dispatch_shared");
+        let a = shared_const(bank, "lit_sel_dispatch_a");
+        let b = shared_const(bank, "lit_sel_dispatch_b");
+        let f_a = shared_unary(bank, "lit_sel_dispatch_f", &a);
+        let x = typed_var(bank, -900);
+        let y = typed_var(bank, -902);
+        let type_pred = weighted_predicate_const_atom(bank, "lit_sel_dispatch_type", 3);
+        let ordinary = weighted_predicate_unary_atom(bank, "lit_sel_dispatch_ordinary", &b, 5);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &shared, true),
+            predicate_literal(bank, &shared, false),
+            literal(bank, &x, &y, false),
+            literal(bank, &f_a, &a, false),
+            predicate_literal(bank, &type_pred, false),
+            predicate_literal(bank, &ordinary, false),
+        ]));
+        mark_maximal_literals(&mut clause, &[2, 3, 4, 5, 6]);
         clause
     }
 
