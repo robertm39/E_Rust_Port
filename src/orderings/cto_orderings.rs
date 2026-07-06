@@ -10,8 +10,8 @@ use crate::orderings::cto_kbolin::{
     kbo6_compare, kbo6_compare_with_bank, kbo6_greater, kbo6_greater_with_bank,
 };
 use crate::orderings::cto_lpo::{
-    lpo4_compare, lpo4_compare_copy, lpo4_greater, lpo4_greater_copy, lpo_compare,
-    lpo_compare_copy, lpo_greater, lpo_greater_copy,
+    lpo4_compare, lpo4_compare_copy, lpo4_compare_with_bank, lpo4_greater, lpo4_greater_copy,
+    lpo4_greater_with_bank, lpo_compare, lpo_compare_copy, lpo_greater, lpo_greater_copy,
 };
 use crate::orderings::ocb::{OrderControlBlock, W_DEFAULT_WEIGHT};
 use crate::terms::signature::Signature;
@@ -70,6 +70,7 @@ pub fn to_greater_with_bank(
 ) -> Result<bool, Diagnostic> {
     match ocb.ordering_type {
         TermOrdering::Kbo6 => kbo6_greater_with_bank(ocb, bank, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4 => lpo4_greater_with_bank(ocb, bank, s, t, deref_s, deref_t),
         _ => Ok(to_greater(ocb, bank.signature(), s, t, deref_s, deref_t)),
     }
 }
@@ -127,6 +128,7 @@ pub fn to_compare_with_bank(
 ) -> Result<CompareResult, Diagnostic> {
     match ocb.ordering_type {
         TermOrdering::Kbo6 => kbo6_compare_with_bank(ocb, bank, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4 => lpo4_compare_with_bank(ocb, bank, s, t, deref_s, deref_t),
         _ => Ok(to_compare(ocb, bank.signature(), s, t, deref_s, deref_t)),
     }
 }
@@ -297,7 +299,7 @@ fn weight_overflow_error(scanner: &Scanner) -> Diagnostic {
 mod tests {
     use super::{
         compare_symbol_parse, precedence_parse, symbol_comparison_chain_parse, to_compare,
-        to_greater, weights_parse,
+        to_compare_with_bank, to_greater, to_greater_with_bank, weights_parse,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
@@ -307,6 +309,9 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
+    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::subst::Substitution;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -346,6 +351,38 @@ mod tests {
             term.set_argument(index, arg.clone());
         }
         term
+    }
+
+    fn test_bank() -> TermBank {
+        TermBank::new(signature()).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature().find_f_code(name);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_unary_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let symbol_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, symbol_type)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
     }
 
     #[test]
@@ -585,6 +622,54 @@ mod tests {
             ),
             CompareResult::Equal
         );
+    }
+
+    #[test]
+    fn to_compare_with_bank_dispatches_lpo4_applied_variable_instantiation() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let head_binding = typed_unary_const(&mut bank, "lpo4_dispatch_applied_binding");
+        let head_type = head_binding.type_().expect("binding must have a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let a = typed_const(&mut bank, "a");
+        let applied = app(SIG_PHONY_APP_CODE, &[head.clone(), a.clone()]);
+        applied.set_type(Some(type_));
+        let mut subst = Substitution::new();
+        subst.add_binding(&head, &head_binding);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Lpo4,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(a.f_code(), 10);
+
+        assert_eq!(
+            to_compare_with_bank(
+                &mut ocb,
+                &mut bank,
+                &applied,
+                &a,
+                DerefType::Once,
+                DerefType::Never
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            CompareResult::Greater
+        );
+        assert!(to_greater_with_bank(
+            &mut ocb,
+            &mut bank,
+            &applied,
+            &a,
+            DerefType::Once,
+            DerefType::Never
+        )
+        .unwrap_or_else(|err| panic!("{err}")));
+
+        subst.backtrack();
     }
 
     #[test]

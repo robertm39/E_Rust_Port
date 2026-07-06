@@ -1,10 +1,13 @@
 //! Standard first-order lexicographic path ordering from `cto_lpo`.
 
+use crate::basics::error::Diagnostic;
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::lambda::{beta_normalize_db, lambda_eta_reduce_db, whnf_deref, whnf_step};
 use crate::terms::signature::Signature;
 use crate::terms::simpletypes::types_cmp;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
     term_copy_keep_vars, term_is_subterm, term_struct_equal_deref, term_struct_equal_no_deref,
 };
@@ -306,6 +309,66 @@ pub fn lpo4_compare_with_limit(
         CompareResult::Lesser
     } else {
         CompareResult::Uncomparable
+    }
+}
+
+/// Return whether `s` is strictly greater than `t` in LPO4 using the
+/// owner-bank higher-order normalization path.
+///
+/// # Errors
+///
+/// Returns a diagnostic if instantiated insertion, weak-head normalization, or
+/// beta/eta normalization fails.
+///
+/// # Panics
+///
+/// Panics under the same structural invariants as [`lpo4_greater`].
+pub fn lpo4_greater_with_bank(
+    ocb: &OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<bool, Diagnostic> {
+    let (s, deref_s) = adjust_lpo4_ho_deref(bank, s, deref_s)?;
+    let (t, deref_t) = adjust_lpo4_ho_deref(bank, t, deref_t)?;
+    Lpo4BankContext::new(ocb, bank, lpo_recursion_depth_limit())
+        .greater_inner(&s, &t, deref_s, deref_t, 0)
+}
+
+/// Compare `s` and `t` in LPO4 using the owner-bank higher-order
+/// normalization path.
+///
+/// # Errors
+///
+/// Returns a diagnostic if instantiated insertion, weak-head normalization, or
+/// beta/eta normalization fails.
+///
+/// # Panics
+///
+/// Panics under the same structural invariants as [`lpo4_compare`].
+pub fn lpo4_compare_with_bank(
+    ocb: &OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<CompareResult, Diagnostic> {
+    let (s, deref_s) = adjust_lpo4_ho_deref(bank, s, deref_s)?;
+    let (t, deref_t) = adjust_lpo4_ho_deref(bank, t, deref_t)?;
+    if term_struct_equal_deref(&s, &t, deref_s, deref_t) {
+        return Ok(CompareResult::Equal);
+    }
+
+    let mut context = Lpo4BankContext::new(ocb, bank, lpo_recursion_depth_limit());
+    if context.greater_inner(&s, &t, deref_s, deref_t, 0)? {
+        Ok(CompareResult::Greater)
+    } else if context.greater_inner(&t, &s, deref_t, deref_s, 0)? {
+        Ok(CompareResult::Lesser)
+    } else {
+        Ok(CompareResult::Uncomparable)
     }
 }
 
@@ -694,6 +757,214 @@ impl<'a> Lpo4Context<'a> {
     }
 }
 
+struct Lpo4BankContext<'a> {
+    ocb: &'a OrderControlBlock,
+    bank: &'a mut TermBank,
+    limit: i64,
+}
+
+impl<'a> Lpo4BankContext<'a> {
+    fn new(ocb: &'a OrderControlBlock, bank: &'a mut TermBank, limit: i64) -> Self {
+        Self { ocb, bank, limit }
+    }
+
+    fn alpha(
+        &mut self,
+        s: &Term,
+        pos: usize,
+        t: &Term,
+        deref_s: DerefType,
+        deref_t: DerefType,
+        depth: i64,
+    ) -> Result<bool, Diagnostic> {
+        let offset = lpo4_argument_offset(s);
+        for index in pos + offset..s.arity() {
+            let arg = initialized_arg(s, index);
+            if term_struct_equal_deref(&arg, t, deref_s, deref_t)
+                || self.greater_inner(&arg, t, deref_s, deref_t, depth)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn majo(
+        &mut self,
+        s: &Term,
+        t: &Term,
+        pos: usize,
+        deref_s: DerefType,
+        deref_t: DerefType,
+        depth: i64,
+    ) -> Result<bool, Diagnostic> {
+        let start = pos + lpo4_argument_offset(t);
+        for index in start..t.arity() {
+            if !self.greater_inner(s, &initialized_arg(t, index), deref_s, deref_t, depth)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn lex_ma(
+        &mut self,
+        s: &Term,
+        t: &Term,
+        mut pos: usize,
+        deref_s: DerefType,
+        deref_t: DerefType,
+        depth: i64,
+    ) -> Result<bool, Diagnostic> {
+        assert_eq!(s.f_code(), t.f_code(), "LPO4 lex_ma requires equal heads");
+        let s_offset = lpo4_argument_offset(s);
+        let t_offset = lpo4_argument_offset(t);
+        while pos + s_offset < s.arity() {
+            if pos + t_offset >= t.arity() {
+                return Ok(true);
+            }
+            let s_arg = initialized_arg(s, pos + s_offset);
+            let t_arg = initialized_arg(t, pos + t_offset);
+            if term_struct_equal_deref(&s_arg, &t_arg, deref_s, deref_t) {
+                pos += 1;
+                continue;
+            }
+            return if self.greater_inner(&s_arg, &t_arg, deref_s, deref_t, depth)? {
+                self.majo(s, t, pos + 1, deref_s, deref_t, depth)
+            } else {
+                self.alpha(s, pos + 1, t, deref_s, deref_t, depth)
+            };
+        }
+        Ok(false)
+    }
+
+    fn greater_inner(
+        &mut self,
+        s: &Term,
+        t: &Term,
+        deref_s: DerefType,
+        deref_t: DerefType,
+        depth: i64,
+    ) -> Result<bool, Diagnostic> {
+        if depth > self.limit {
+            return Ok(false);
+        }
+
+        let s = self.normalize_term(s, deref_s)?;
+        let mut t = self.normalize_term(t, deref_t)?;
+        let child_depth = depth + 1;
+
+        if s.is_top_level_free_var() {
+            Ok(false)
+        } else if t.is_top_level_free_var() {
+            if t.is_applied_free_var() && deref_t == DerefType::Always {
+                t = self.bank.insert_instantiated_deref(&t, deref_t)?;
+            }
+            self.ho_subterm(&s, &t, deref_s)
+        } else {
+            match self.head_compare(&s, &t) {
+                CompareResult::Greater => self.majo(&s, &t, 0, deref_s, deref_t, child_depth),
+                CompareResult::Equal => self.lex_ma(&s, &t, 0, deref_s, deref_t, child_depth),
+                CompareResult::Lesser | CompareResult::Uncomparable => {
+                    self.alpha(&s, 0, &t, deref_s, deref_t, child_depth)
+                }
+                result => panic!("unexpected function-symbol comparison in LPO4: {result:?}"),
+            }
+        }
+    }
+
+    fn normalize_term(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
+        let normalized = match deref {
+            DerefType::Never => term.clone(),
+            DerefType::Always => whnf_deref(self.bank, term)?,
+            DerefType::Once => {
+                let mut current_deref = deref;
+                let derefed = term_deref(term, &mut current_deref);
+                whnf_step(self.bank, &derefed)?
+            }
+        };
+        lambda_eta_reduce_db(self.bank, &normalized)
+    }
+
+    fn ho_subterm(
+        &mut self,
+        super_term: &Term,
+        test: &Term,
+        mut super_deref: DerefType,
+    ) -> Result<bool, Diagnostic> {
+        let derefed = term_deref(super_term, &mut super_deref);
+        let beta = beta_normalize_db(self.bank, &derefed)?;
+        let mut normalized = lambda_eta_reduce_db(self.bank, &beta)?;
+
+        if normalized.is_applied_free_var() {
+            assert!(
+                super_deref == DerefType::Never || super_deref == DerefType::Always,
+                "applied-variable LPO4 subterm checks expect no one-step dereference"
+            );
+            if super_deref == DerefType::Always {
+                let inserted = self.bank.insert(&normalized, super_deref)?;
+                let beta = beta_normalize_db(self.bank, &inserted)?;
+                normalized = lambda_eta_reduce_db(self.bank, &beta)?;
+            }
+            return Ok(normalized == *test);
+        }
+
+        if normalized == *test {
+            return Ok(true);
+        }
+
+        for index in usize::from(normalized.is_lambda())..normalized.arity() {
+            if self.ho_subterm(&initialized_arg(&normalized, index), test, super_deref)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn head_compare(&self, s: &Term, t: &Term) -> CompareResult {
+        let signature = self.bank.signature();
+        let s_class = lpo4_head_class(signature, s);
+        let t_class = lpo4_head_class(signature, t);
+        if s_class != t_class {
+            return if s_class > t_class {
+                CompareResult::Greater
+            } else {
+                CompareResult::Lesser
+            };
+        }
+
+        let s_head = lpo4_head(s);
+        let t_head = lpo4_head(t);
+        if s_head.is_db_var() {
+            return match s_head.f_code().cmp(&t_head.f_code()) {
+                std::cmp::Ordering::Greater => CompareResult::Greater,
+                std::cmp::Ordering::Less => CompareResult::Lesser,
+                std::cmp::Ordering::Equal => CompareResult::Equal,
+            };
+        }
+
+        if s.is_lambda() {
+            let s_binder = initialized_arg(s, 0);
+            let t_binder = initialized_arg(t, 0);
+            if s_binder == t_binder {
+                CompareResult::Equal
+            } else {
+                let s_type = s_binder.type_().expect("lambda binder must have a type");
+                let t_type = t_binder.type_().expect("lambda binder must have a type");
+                if types_cmp(&s_type, &t_type) > 0 {
+                    CompareResult::Greater
+                } else {
+                    CompareResult::Lesser
+                }
+            }
+        } else {
+            assert!(s.f_code() > 0, "LPO4 symbol head requires positive f-code");
+            assert!(t.f_code() > 0, "LPO4 symbol head requires positive f-code");
+            self.ocb.fun_compare(signature, s.f_code(), t.f_code())
+        }
+    }
+}
+
 struct Lpo4CopyContext<'a> {
     ocb: &'a OrderControlBlock,
     signature: &'a Signature,
@@ -799,6 +1070,18 @@ fn lpo4_subterm(super_term: &Term, test: &Term, mut deref: DerefType) -> bool {
         .any(|index| lpo4_subterm(&initialized_arg(&super_term, index), test, deref))
 }
 
+fn adjust_lpo4_ho_deref(
+    bank: &mut TermBank,
+    term: &Term,
+    deref: DerefType,
+) -> Result<(Term, DerefType), Diagnostic> {
+    if deref == DerefType::Once && term.has_app_var() {
+        Ok((bank.insert_instantiated(term)?, DerefType::Never))
+    } else {
+        Ok((term.clone(), deref))
+    }
+}
+
 fn assert_lpo4_deref_once_ready(term: &Term, deref: DerefType) {
     assert!(
         deref != DerefType::Once || !term.has_app_var(),
@@ -826,9 +1109,9 @@ fn initialized_arg(term: &Term, index: usize) -> Term {
 #[cfg(test)]
 mod tests {
     use super::{
-        lpo4_compare, lpo4_compare_copy, lpo4_greater, lpo4_greater_copy, lpo_compare,
-        lpo_compare_copy, lpo_compare_with_limit, lpo_greater, lpo_greater_copy,
-        lpo_recursion_depth_limit, set_lpo_recursion_depth_limit,
+        lpo4_compare, lpo4_compare_copy, lpo4_compare_with_bank, lpo4_greater, lpo4_greater_copy,
+        lpo4_greater_with_bank, lpo_compare, lpo_compare_copy, lpo_compare_with_limit, lpo_greater,
+        lpo_greater_copy, lpo_recursion_depth_limit, set_lpo_recursion_depth_limit,
         DEFAULT_LPO_RECURSION_DEPTH_LIMIT,
     };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
@@ -837,8 +1120,11 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::dbvars::mk_db;
     use crate::terms::functypes::FunCode;
+    use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::subst::Substitution;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -875,6 +1161,38 @@ mod tests {
 
     fn lpo4_ocb(signature: &Signature) -> OrderControlBlock {
         OrderControlBlock::alloc(TermOrdering::Lpo4, true, signature, HoOrderKind::LfhoOrder)
+    }
+
+    fn test_bank() -> TermBank {
+        TermBank::new(signature()).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = symbol(bank.signature_mut(), name, 0);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_unary_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let symbol_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]));
+        let f_code = symbol(bank.signature_mut(), name, 0);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, symbol_type)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        bank.create_const_term(f_code)
+            .unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn app(symbol: FunCode, args: &[Term]) -> Term {
@@ -1179,6 +1497,78 @@ mod tests {
             ),
             CompareResult::Greater
         );
+    }
+
+    #[test]
+    fn lpo4_with_bank_deref_always_weak_head_normalizes_before_comparison() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let a = typed_const(&mut bank, "lpo4_bank_beta_a");
+        let b = typed_const(&mut bank, "lpo4_bank_beta_b");
+        let lambda = close_with_db_var(&mut bank, &type_, &a).unwrap_or_else(|err| panic!("{err}"));
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&b))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = lpo4_ocb(bank.signature());
+        ocb.set_fun_prec_weight(b.f_code(), 30);
+        ocb.set_fun_prec_weight(a.f_code(), 10);
+
+        assert_eq!(
+            lpo4_compare_with_bank(
+                &ocb,
+                &mut bank,
+                &applied,
+                &b,
+                DerefType::Always,
+                DerefType::Never
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            CompareResult::Lesser
+        );
+        assert!(!lpo4_greater_with_bank(
+            &ocb,
+            &mut bank,
+            &applied,
+            &b,
+            DerefType::Always,
+            DerefType::Never
+        )
+        .unwrap_or_else(|err| panic!("{err}")));
+    }
+
+    #[test]
+    fn lpo4_with_bank_deref_once_instantiates_bound_applied_free_var() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let head_binding = typed_unary_const(&mut bank, "lpo4_bank_applied_binding");
+        let head_type = head_binding.type_().expect("binding must have a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let a = typed_const(&mut bank, "lpo4_bank_applied_arg");
+        let applied = phony_app(&head, std::slice::from_ref(&a));
+        applied.set_type(Some(type_));
+        let mut subst = Substitution::new();
+        subst.add_binding(&head, &head_binding);
+        let mut ocb = lpo4_ocb(bank.signature());
+        ocb.set_fun_prec_weight(head_binding.f_code(), 20);
+        ocb.set_fun_prec_weight(a.f_code(), 10);
+
+        assert_eq!(
+            lpo4_compare_with_bank(
+                &ocb,
+                &mut bank,
+                &applied,
+                &a,
+                DerefType::Once,
+                DerefType::Never
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            CompareResult::Greater
+        );
+
+        subst.backtrack();
     }
 
     #[test]
