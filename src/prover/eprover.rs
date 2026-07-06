@@ -7874,16 +7874,13 @@ fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObj
         processed[child] = true;
         ordered_deriv.push(child);
 
-        for parent in &parents_by_child[child] {
-            ref_counts[*parent] = ref_counts[*parent].saturating_sub(1);
-            if ref_counts[*parent] == 0 {
-                if proof_object_list_node_has_derivation(graph, *parent) {
-                    work_queue.push_back(*parent);
-                } else {
-                    ax_stack.push(*parent);
-                }
-            }
-        }
+        proof_object_list_process_c_parent_stacks(
+            graph,
+            &parents_by_child[child],
+            &mut ref_counts,
+            &mut work_queue,
+            &mut ax_stack,
+        );
     }
 
     ordered_deriv.extend(ax_stack);
@@ -7943,6 +7940,48 @@ fn proof_object_list_node_from_ordinal(
         ProofObjectGraphNode::Clause(ordinal)
     } else {
         ProofObjectGraphNode::Formula(ordinal - graph.clauses.len())
+    }
+}
+
+fn proof_object_list_process_c_parent_stacks(
+    graph: &ProofObjectGraph<'_>,
+    parents: &[usize],
+    ref_counts: &mut [usize],
+    work_queue: &mut VecDeque<usize>,
+    ax_stack: &mut Vec<usize>,
+) {
+    for parent in parents.iter().rev().copied().filter(|parent| {
+        matches!(
+            proof_object_list_node_from_ordinal(graph, *parent),
+            ProofObjectGraphNode::Clause(_)
+        )
+    }) {
+        proof_object_list_process_released_parent(graph, parent, ref_counts, work_queue, ax_stack);
+    }
+    for parent in parents.iter().rev().copied().filter(|parent| {
+        matches!(
+            proof_object_list_node_from_ordinal(graph, *parent),
+            ProofObjectGraphNode::Formula(_)
+        )
+    }) {
+        proof_object_list_process_released_parent(graph, parent, ref_counts, work_queue, ax_stack);
+    }
+}
+
+fn proof_object_list_process_released_parent(
+    graph: &ProofObjectGraph<'_>,
+    parent: usize,
+    ref_counts: &mut [usize],
+    work_queue: &mut VecDeque<usize>,
+    ax_stack: &mut Vec<usize>,
+) {
+    ref_counts[parent] = ref_counts[parent].saturating_sub(1);
+    if ref_counts[parent] == 0 {
+        if proof_object_list_node_has_derivation(graph, parent) {
+            work_queue.push_back(parent);
+        } else {
+            ax_stack.push(parent);
+        }
     }
 }
 
@@ -24290,7 +24329,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(
-            printed.contains("inference(rw,[status(thm)],[c_0_6, c_0_7])"),
+            printed.contains("inference(rw,[status(thm)],[c_0_7, c_0_6])"),
             "{printed}"
         );
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
@@ -24768,8 +24807,8 @@ input_clause(c2,axiom,[++q(X)]).
         clause_push_derivation(
             &mut child,
             DC_PARAMOD,
-            Some(&second_parent),
             Some(&first_parent),
+            Some(&second_parent),
         );
         let graph = ProofObjectGraph {
             clauses: vec![&first_parent, &second_parent, &child],
@@ -24777,11 +24816,11 @@ input_clause(c2,axiom,[++q(X)]).
             edges: Vec::new(),
             mixed_edges: vec![
                 ProofObjectGraphMixedEdge {
-                    parent: ProofObjectGraphNode::Clause(1),
+                    parent: ProofObjectGraphNode::Clause(0),
                     child: ProofObjectGraphNode::Clause(2),
                 },
                 ProofObjectGraphMixedEdge {
-                    parent: ProofObjectGraphNode::Clause(0),
+                    parent: ProofObjectGraphNode::Clause(1),
                     child: ProofObjectGraphNode::Clause(2),
                 },
             ],
