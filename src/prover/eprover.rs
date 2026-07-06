@@ -8771,121 +8771,8 @@ fn proof_success_status(
 }
 
 fn proof_tree_has_conjecture(state: &ProofState, root: &Clause) -> bool {
-    if root.is_conjecture() {
-        return true;
-    }
-
-    let mut pending = direct_clause_parent_refs(root);
-    let mut seen = vec![(root.ident(), root.query_csscpa_source())];
-    while let Some(parent_ref) = pending.pop() {
-        let key = clause_derivation_ref_key(parent_ref);
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.push(key);
-
-        let Some(parent) = proof_state_find_clause_by_ref(state, parent_ref) else {
-            continue;
-        };
-        if parent.is_conjecture() {
-            return true;
-        }
-        pending.extend(direct_clause_parent_refs(parent));
-    }
-    false
-}
-
-fn direct_clause_parent_refs(clause: &Clause) -> Vec<ClauseDerivationRef> {
-    let Some(derivation) = clause.derivation() else {
-        return Vec::new();
-    };
-
-    let entries = derivation.as_slice();
-    let mut parents = Vec::new();
-    let mut index = 0;
-    while index < entries.len() {
-        let DerivationEntry::Operation(op) = entries[index] else {
-            index += 1;
-            continue;
-        };
-        index += 1;
-
-        collect_direct_clause_parent_arg(
-            entries,
-            &mut index,
-            op_has_cnf_arg1(op),
-            op_has_arg1(op),
-            &mut parents,
-        );
-        collect_direct_clause_parent_arg(
-            entries,
-            &mut index,
-            op_has_cnf_arg2(op),
-            op_has_arg2(op),
-            &mut parents,
-        );
-    }
-    parents
-}
-
-fn collect_direct_clause_parent_arg(
-    entries: &[DerivationEntry],
-    index: &mut usize,
-    is_clause_parent: bool,
-    has_arg: bool,
-    parents: &mut Vec<ClauseDerivationRef>,
-) {
-    if is_clause_parent {
-        if let Some(entry) = entries.get(*index) {
-            match entry {
-                DerivationEntry::ClauseParent(parent) => parents.push(*parent),
-                DerivationEntry::Demodulator(demodulator) => {
-                    parents.extend(demodulator_clause_refs(*demodulator));
-                }
-                DerivationEntry::FormulaParent(_)
-                | DerivationEntry::Operation(_)
-                | DerivationEntry::NumericArg(_) => {}
-            }
-        }
-        *index += 1;
-    } else if has_arg {
-        *index += 1;
-    }
-}
-
-fn proof_state_find_clause_by_ref(
-    state: &ProofState,
-    parent_ref: ClauseDerivationRef,
-) -> Option<&Clause> {
-    [
-        state.axioms(),
-        state.ax_archive(),
-        state.processed_pos_rules(),
-        state.processed_pos_eqns(),
-        state.processed_neg_units(),
-        state.processed_non_units(),
-        state.unprocessed(),
-        state.tmp_store(),
-        state.eval_store(),
-        state.archive(),
-    ]
-    .into_iter()
-    .find_map(|set| clause_set_find_clause_by_ref(set, parent_ref))
-}
-
-fn clause_set_find_clause_by_ref(
-    set: &ClauseSet,
-    parent_ref: ClauseDerivationRef,
-) -> Option<&Clause> {
-    let parent_key = clause_derivation_ref_key(parent_ref);
-    set.iter().find(|clause| {
-        clause.ident() == parent_key.0
-            && (parent_key.1 == 0 || clause.query_csscpa_source() == parent_key.1)
-    })
-}
-
-const fn clause_derivation_ref_key(parent_ref: ClauseDerivationRef) -> (i64, u64) {
-    (parent_ref.ident(), parent_ref.source())
+    let analysis = state.proof_object_analysis_for_roots([root]);
+    analysis.clause_conjecture_count > 0 || analysis.formula_conjecture_count > 0
 }
 
 fn write_saturated_final_result(
@@ -13998,7 +13885,7 @@ mod tests {
         parse_input_files_into_formula_owners, parse_schedule_worker_args,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
         proof_object_list_display_clauses, proof_object_list_display_items,
-        proof_search_global_indices, resource_limit_warning_from_outcome,
+        proof_search_global_indices, proof_success_status, resource_limit_warning_from_outcome,
         resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
         runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
         simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
@@ -14008,11 +13895,11 @@ mod tests {
         ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
         InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, PdtConstraintRunGuard,
         PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
-        ProofStatisticsInput, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
-        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -14026,8 +13913,9 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        clause_push_derivation, clause_push_formula_derivation, ClauseDerivationRef,
-        DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES, DC_FOF_QUOTE, DC_PARAMOD,
+        clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
+        ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES,
+        DC_FOF_QUOTE, DC_PARAMOD,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -14294,6 +14182,69 @@ mod tests {
             "{}% Scanning for AC axioms\n",
             default_preprocessing_debug_line()
         )
+    }
+
+    fn returned_outcome(clause: Clause) -> SaturateOutcome {
+        SaturateOutcome::Returned {
+            clause: Box::new(clause),
+            reason: SaturateReturnReason::GeneratedClause,
+            processed_steps: 0,
+        }
+    }
+
+    fn formula_conjecture_seen_config() -> EProverConfig {
+        let mut config = EProverConfig::default();
+        config.flags.set(EProverFlag::FormulaConjectureSeen);
+        config
+    }
+
+    #[test]
+    fn proof_success_status_follows_formula_conjecture_parents() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_bool_formula(
+            state.terms_mut(),
+            "status_formula_conjecture",
+            CP_TYPE_CONJECTURE,
+        );
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_formula_derivation(&mut root, DC_FOF_QUOTE, Some(formula_ref), None);
+        state.f_axioms_mut().insert(formula);
+
+        assert_eq!(
+            proof_success_status(
+                &formula_conjecture_seen_config(),
+                &returned_outcome(root),
+                &state,
+            ),
+            "Theorem"
+        );
+    }
+
+    #[test]
+    fn proof_success_status_follows_signature_ac_conjecture_parents() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut ac_parent =
+            parse_lop_test_clause(state.terms_mut(), "status_ac_left=status_ac_right.", 20_100);
+        ac_parent.set_tptp_type(CP_TYPE_CONJECTURE);
+        let ac_parent_ref = ClauseDerivationRef::from(&ac_parent);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_ac_res_derivation(&mut root, 1);
+
+        state
+            .terms_mut()
+            .signature_mut()
+            .push_ac_axiom(ac_parent_ref);
+        state.axioms_mut().insert(ac_parent);
+
+        assert_eq!(
+            proof_success_status(
+                &formula_conjecture_seen_config(),
+                &returned_outcome(root),
+                &state,
+            ),
+            "Theorem"
+        );
     }
 
     #[test]
