@@ -396,6 +396,7 @@ pub struct ProofObjectGraph<'a> {
     pub edges: Vec<ProofObjectGraphEdge>,
     pub mixed_edges: Vec<ProofObjectGraphMixedEdge>,
     pub root_indices: Vec<usize>,
+    pub formula_root_indices: Vec<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -436,6 +437,7 @@ pub struct ProofState {
     f_archive: FormulaSet,
     choice_opcodes: BTreeMap<FunCode, Clause>,
     extract_roots: Vec<Clause>,
+    extract_formula_roots: Vec<WrappedFormula>,
     watchlist: Option<ClauseSet>,
     watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
@@ -521,6 +523,7 @@ impl ProofState {
             f_archive: FormulaSet::new(),
             choice_opcodes: BTreeMap::new(),
             extract_roots: Vec::new(),
+            extract_formula_roots: Vec::new(),
             watchlist: Some(ClauseSet::new()),
             watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
@@ -917,6 +920,15 @@ impl ProofState {
         self.extract_roots.push(clause);
     }
 
+    #[must_use]
+    pub fn extract_formula_roots(&self) -> &[WrappedFormula] {
+        &self.extract_formula_roots
+    }
+
+    pub fn push_extract_formula_root(&mut self, formula: WrappedFormula) {
+        self.extract_formula_roots.push(formula);
+    }
+
     pub fn terms_watchlist_archive_mut(
         &mut self,
     ) -> (&mut TermBank, Option<&mut ClauseSet>, &mut ClauseSet) {
@@ -1276,18 +1288,41 @@ impl ProofState {
     where
         I: IntoIterator<Item = &'a Clause>,
     {
+        self.proof_object_analysis_for_mixed_roots(roots, std::iter::empty::<&'a WrappedFormula>())
+    }
+
+    #[must_use]
+    pub fn proof_object_analysis_for_mixed_roots<'a, C, F>(
+        &self,
+        clause_roots: C,
+        formula_roots: F,
+    ) -> ProofObjectAnalysis
+    where
+        C: IntoIterator<Item = &'a Clause>,
+        F: IntoIterator<Item = &'a WrappedFormula>,
+    {
         let mut analysis = ProofObjectAnalysis::default();
         let mut visited = Vec::new();
         let mut pending_edges = Vec::new();
         let mut formula_visited = Vec::new();
         let ac_axioms = self.terms().signature().ac_axioms();
 
-        for root in roots {
+        for root in clause_roots {
             let root = self.proof_object_first_clause(root);
             Self::analyse_proof_object_clause(
                 root,
                 &mut analysis,
                 &mut visited,
+                &mut pending_edges,
+                ac_axioms,
+            );
+        }
+        for root in formula_roots {
+            let root = self.proof_object_first_formula(root);
+            Self::analyse_proof_object_formula(
+                root,
+                &mut analysis,
+                &mut formula_visited,
                 &mut pending_edges,
                 ac_axioms,
             );
@@ -1329,13 +1364,26 @@ impl ProofState {
     where
         I: IntoIterator<Item = &'a Clause>,
     {
+        self.proof_object_graph_for_mixed_roots(roots, std::iter::empty::<&'a WrappedFormula>())
+    }
+
+    #[must_use]
+    pub fn proof_object_graph_for_mixed_roots<'a, C, F>(
+        &'a self,
+        clause_roots: C,
+        formula_roots: F,
+    ) -> ProofObjectGraph<'a>
+    where
+        C: IntoIterator<Item = &'a Clause>,
+        F: IntoIterator<Item = &'a WrappedFormula>,
+    {
         let mut graph = ProofObjectGraph::default();
         let mut clause_visited = Vec::new();
         let mut formula_visited = Vec::new();
         let mut pending_edges = Vec::new();
         let ac_axioms = self.terms().signature().ac_axioms();
 
-        for root in roots {
+        for root in clause_roots {
             let root = self.proof_object_first_clause(root);
             let root_index = Self::collect_proof_object_graph_clause(
                 root,
@@ -1346,6 +1394,19 @@ impl ProofState {
             );
             if !graph.root_indices.contains(&root_index) {
                 graph.root_indices.push(root_index);
+            }
+        }
+        for root in formula_roots {
+            let root = self.proof_object_first_formula(root);
+            let root_index = Self::collect_proof_object_graph_formula(
+                root,
+                &mut graph,
+                &mut formula_visited,
+                &mut pending_edges,
+                ac_axioms,
+            );
+            if !graph.formula_root_indices.contains(&root_index) {
+                graph.formula_root_indices.push(root_index);
             }
         }
 
@@ -2898,6 +2959,19 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_records_formula_extraction_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_formula(&mut state, "formula_extraction_root");
+        let formula_ident = formula.ident();
+
+        assert!(state.extract_formula_roots().is_empty());
+        state.push_extract_formula_root(formula);
+
+        assert_eq!(state.extract_formula_roots().len(), 1);
+        assert_eq!(state.extract_formula_roots()[0].ident(), formula_ident);
+    }
+
+    #[test]
     fn proof_state_parent_liveness_treats_matching_dead_archive_as_dead() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut live = simple_clause(&mut state, "parent_live_copy", 20_002);
@@ -3187,6 +3261,27 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_proof_object_analysis_accepts_formula_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut formula = wrapped_formula(&mut state, "proof_analysis_formula_root");
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+
+        assert_eq!(
+            state.proof_object_analysis_for_mixed_roots([], [&formula]),
+            ProofObjectAnalysis {
+                clause_step_count: 0,
+                formula_step_count: 1,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 1,
+                initial_clause_count: 0,
+                initial_formula_count: 1,
+                generating_inference_count: 0,
+                simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
     fn proof_state_proof_object_graph_collects_reachable_clause_edges() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut source = simple_clause(&mut state, "proof_graph_source", 20_009);
@@ -3433,6 +3528,27 @@ mod tests {
                 child: ProofObjectGraphNode::Clause(0),
             }]
         );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_records_formula_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula = wrapped_formula(&mut state, "proof_graph_formula_root");
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+
+        let graph = state.proof_object_graph_for_mixed_roots([], [&formula]);
+
+        assert_eq!(graph.root_indices, Vec::<usize>::new());
+        assert_eq!(graph.formula_root_indices, vec![0]);
+        assert_eq!(
+            graph
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![formula_ref.ident()]
+        );
+        assert_eq!(graph.mixed_edges, Vec::new());
     }
 
     #[test]

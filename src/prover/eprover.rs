@@ -7680,7 +7680,7 @@ fn write_proof_success_object_output(
         1 => write_proof_success_list_output(output, config, state, clause, next_doc_ident),
         level if level >= 2 => {
             let roots = proof_success_object_roots(config, state, clause);
-            let graph = state.proof_object_graph_for_roots(roots);
+            let graph = state.proof_object_graph_for_mixed_roots(roots.clauses, roots.formulas);
             write_proof_object_dot(output, config, state.terms(), &graph)
         }
         _ => Ok(()),
@@ -7695,9 +7695,9 @@ fn write_proof_success_list_output(
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
     write_comment_line(output, "SZS output start CNFRefutation")?;
-    let graph =
-        state.proof_object_graph_for_roots(proof_success_object_roots(config, state, clause));
-    if graph.clauses.is_empty() {
+    let roots = proof_success_object_roots(config, state, clause);
+    let graph = state.proof_object_graph_for_mixed_roots(roots.clauses, roots.formulas);
+    if graph.clauses.is_empty() && graph.formulas.is_empty() {
         let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
         let parent_ident = proof_object_success_parent_ident(config, clause);
         write_proof_success_list_fallback(
@@ -7860,6 +7860,15 @@ fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObj
     for root_index in &graph.root_indices {
         if let Some(root) =
             proof_object_list_node_ordinal(graph, ProofObjectGraphNode::Clause(*root_index))
+        {
+            if ref_counts[root] == 0 {
+                work_queue.push_back(root);
+            }
+        }
+    }
+    for root_index in &graph.formula_root_indices {
+        if let Some(root) =
+            proof_object_list_node_ordinal(graph, ProofObjectGraphNode::Formula(*root_index))
         {
             if ref_counts[root] == 0 {
                 work_queue.push_back(root);
@@ -8577,7 +8586,7 @@ fn write_supported_proof_object_statistics(
     let analysis = match outcome {
         SaturateOutcome::Returned { clause, .. } => {
             let roots = proof_success_object_roots(config, state, clause.as_ref());
-            state.proof_object_analysis_for_roots(roots)
+            state.proof_object_analysis_for_mixed_roots(roots.clauses, roots.formulas)
         }
         SaturateOutcome::Stopped { .. }
             if stopped_proof_object_status(config, state, outcome, inference_system_complete)
@@ -8591,19 +8600,27 @@ fn write_supported_proof_object_statistics(
     write_proof_object_analysis(output, analysis)
 }
 
+#[derive(Debug, Default)]
+struct ProofObjectRoots<'a> {
+    clauses: Vec<&'a Clause>,
+    formulas: Vec<&'a WrappedFormula>,
+}
+
 fn proof_success_object_roots<'a>(
     config: &EProverConfig,
     state: &'a ProofState,
     clause: &'a Clause,
-) -> Vec<&'a Clause> {
-    let mut roots = if state.extract_roots().is_empty() {
-        vec![clause]
+) -> ProofObjectRoots<'a> {
+    let mut roots = ProofObjectRoots::default();
+    if state.extract_roots().is_empty() && state.extract_formula_roots().is_empty() {
+        roots.clauses.push(clause);
     } else {
-        state.extract_roots().iter().collect()
-    };
+        roots.clauses.extend(state.extract_roots());
+        roots.formulas.extend(state.extract_formula_roots());
+    }
     if config.flags.contains(EProverFlag::FullDerivation) {
-        roots.extend(proof_object_saturation_roots(state));
-        roots.extend(state.unprocessed().iter());
+        roots.clauses.extend(proof_object_saturation_roots(state));
+        roots.clauses.extend(state.unprocessed().iter());
     }
     roots
 }
@@ -13905,7 +13922,7 @@ mod tests {
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
         temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_resource_setup_messages,
+        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
         ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
@@ -24221,11 +24238,13 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(
             roots
+                .clauses
                 .iter()
                 .map(|clause| clause.ident())
                 .collect::<Vec<_>>(),
             vec![24_001]
         );
+        assert!(roots.formulas.is_empty());
     }
 
     #[test]
@@ -24243,11 +24262,61 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(
             roots
+                .clauses
                 .iter()
                 .map(|clause| clause.ident())
                 .collect::<Vec<_>>(),
             vec![24_003, 24_004]
         );
+        assert!(roots.formulas.is_empty());
+    }
+
+    #[test]
+    fn proof_success_object_roots_include_recorded_formula_extract_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let returned = parse_lop_test_clause(state.terms_mut(), "p(a).", 24_005);
+        let formula =
+            WrappedFormula::wt_formula_alloc(bool_const(state.terms_mut(), "proof_formula_root"));
+        let formula_ident = formula.ident();
+        state.push_extract_formula_root(formula);
+        let config = EProverConfig::default();
+
+        let roots = proof_success_object_roots(&config, &state, &returned);
+
+        assert!(roots.clauses.is_empty());
+        assert_eq!(
+            roots
+                .formulas
+                .iter()
+                .map(|formula| formula.ident())
+                .collect::<Vec<_>>(),
+            vec![formula_ident]
+        );
+    }
+
+    #[test]
+    fn proof_success_list_output_prints_formula_only_extract_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let returned = parse_lop_test_clause(state.terms_mut(), "p(a).", 24_006);
+        let formula = WrappedFormula::wt_formula_alloc(bool_const(
+            state.terms_mut(),
+            "proof_formula_only_root",
+        ));
+        state.push_extract_formula_root(formula);
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_success_list_output(&mut output, &config, &state, &returned, 100).unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% SZS output start CNFRefutation\n"));
+        assert!(printed.contains("proof_formula_only_root"), "{printed}");
+        assert!(!printed.contains("p(a)"), "{printed}");
+        assert!(printed.contains("% SZS output end CNFRefutation\n"));
     }
 
     #[test]
@@ -24449,6 +24518,7 @@ input_clause(c2,axiom,[++q(X)]).
                 child: ProofObjectGraphNode::Clause(0),
             }],
             root_indices: vec![0],
+            formula_root_indices: Vec::new(),
         };
         let config = EProverConfig {
             proof_output: 3,
@@ -24786,6 +24856,7 @@ input_clause(c2,axiom,[++q(X)]).
             }],
             mixed_edges: Vec::new(),
             root_indices: vec![1],
+            formula_root_indices: Vec::new(),
         };
 
         let displayed = proof_object_list_display_clauses(&graph);
@@ -24831,6 +24902,7 @@ input_clause(c2,axiom,[++q(X)]).
                 },
             ],
             root_indices: vec![2],
+            formula_root_indices: Vec::new(),
         };
 
         let displayed = proof_object_list_display_clauses(&graph);
@@ -24875,6 +24947,7 @@ input_clause(c2,axiom,[++q(X)]).
                 child: ProofObjectGraphNode::Clause(0),
             }],
             root_indices: vec![0],
+            formula_root_indices: Vec::new(),
         };
 
         let displayed = proof_object_list_display_items(&graph);
@@ -24918,6 +24991,7 @@ input_clause(c2,axiom,[++q(X)]).
                 child: ProofObjectGraphNode::Clause(0),
             }],
             root_indices: vec![0],
+            formula_root_indices: Vec::new(),
         };
 
         let tstp_config = EProverConfig {
