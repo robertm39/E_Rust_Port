@@ -4,8 +4,11 @@ use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LI
 use crate::clauses::clausefunc::clause_remove_literal_index;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
-use crate::clauses::pdtrees::PDTREE_IGNORE_NF_DATE;
+use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::pdtrees::{PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
 use crate::clauses::subsumption::eqn_topsubsumes_termpair;
+use crate::terms::match_mgu::subst_match_complete;
+use crate::terms::subst::Substitution;
 use crate::terms::termtypes::Term;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,20 +228,58 @@ fn find_top_simplifying_unit_with_sign<'set>(
 ) -> Option<SimplifyingUnit<'set>> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
+        let candidate_sides = units.demod_index_search_candidate_sides();
+        let candidate_sides = candidate_sides.as_deref();
         units.iter().find_map(|clause| {
             let literal = unit_literal(clause)?;
             if sign.is_some_and(|required| literal.is_positive() != required) {
                 return None;
             }
-            eqn_topsubsumes_termpair(literal, left, right).then_some(SimplifyingUnit {
-                clause,
-                literal_index: 0,
-            })
+            unit_literal_matches_top_pair(candidate_sides, clause, literal, left, right).then_some(
+                SimplifyingUnit {
+                    clause,
+                    literal_index: 0,
+                },
+            )
         })
     } else {
         None
     };
     units.record_demod_index_search_exit();
+    result
+}
+
+fn unit_literal_matches_top_pair(
+    candidate_sides: Option<&[PdtIndexedOccurrence]>,
+    clause: &Clause,
+    literal: &Eqn,
+    left: &Term,
+    right: &Term,
+) -> bool {
+    let Some(candidate_sides) = candidate_sides else {
+        return eqn_topsubsumes_termpair(literal, left, right);
+    };
+
+    (candidate_sides.contains(&PdtIndexedOccurrence::new(
+        clause.ident(),
+        EqnSide::LeftSide,
+    )) && unit_literal_side_matches_top_pair(literal.left(), literal.right(), left, right))
+        || (candidate_sides.contains(&PdtIndexedOccurrence::new(
+            clause.ident(),
+            EqnSide::RightSide,
+        )) && unit_literal_side_matches_top_pair(literal.right(), literal.left(), left, right))
+}
+
+fn unit_literal_side_matches_top_pair(
+    indexed_side: &Term,
+    other_side: &Term,
+    left: &Term,
+    right: &Term,
+) -> bool {
+    let mut subst = Substitution::new();
+    let result = subst_match_complete(indexed_side, left, &mut subst)
+        && subst_match_complete(other_side, right, &mut subst);
+    subst.backtrack();
     result
 }
 
@@ -250,12 +291,15 @@ fn find_top_simplifying_unit_index(
 ) -> Option<usize> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
+        let candidate_sides = units.demod_index_search_candidate_sides();
+        let candidate_sides = candidate_sides.as_deref();
         units.iter().enumerate().find_map(|(index, clause)| {
             let literal = unit_literal(clause)?;
             if sign.is_some_and(|required| literal.is_positive() != required) {
                 return None;
             }
-            eqn_topsubsumes_termpair(literal, left, right).then_some(index)
+            unit_literal_matches_top_pair(candidate_sides, clause, literal, left, right)
+                .then_some(index)
         })
     } else {
         None
@@ -333,6 +377,7 @@ mod tests {
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::pdtrees::{
         prefix_compute_term_code, PdtTraversalOrder, PDTREE_IGNORE_NF_DATE,
@@ -462,6 +507,26 @@ mod tests {
             Some(PdtTraversalOrder::variables_first())
         );
         assert!(!set.demod_index_search_active());
+    }
+
+    #[test]
+    fn indexed_top_lookup_uses_pdt_candidate_side_direction() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "unit_side_a");
+        let b = typed_const(&mut bank, "unit_side_b");
+        let mut unit_lit = literal(&mut bank, &a, &b, true);
+        unit_lit.set_prop(EP_IS_ORIENTED);
+        let mut unit = clause_from(vec![unit_lit]);
+        unit.set_weight(unit.standard_weight());
+        let mut indexed = ClauseSet::new_demod_indexed();
+
+        indexed.indexed_insert_clause_owned(unit.clone(), &bank);
+
+        assert!(find_top_simplifying_unit(&indexed, &a, &b).is_some());
+        assert!(find_top_simplifying_unit(&indexed, &b, &a).is_none());
+
+        let plain = ClauseSet::from_clauses([unit]);
+        assert!(find_top_simplifying_unit(&plain, &b, &a).is_some());
     }
 
     #[test]
