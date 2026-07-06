@@ -5954,6 +5954,7 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     indices: Option<&GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    state.terms().vars().set_v_counts_to_used();
     let _ = compute_ho_inferences(state, control, clause, problem_type, indices)?;
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
     let enable_neg_unit_paramod = control.heuristic_parms().enable_neg_unit_paramod;
@@ -8485,7 +8486,7 @@ mod tests {
     use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
-    use std::path::Path;
+    use std::{collections::BTreeMap, path::Path};
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -13621,7 +13622,7 @@ mod tests {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let clause = {
+        let (existing_witness_var_code, clause) = {
             let terms = state.terms_mut();
             let arg_type = terms.signature().type_bank().default_type();
             let bool_type = terms.signature().type_bank().bool_type();
@@ -13632,8 +13633,9 @@ mod tests {
             let choice_type = terms
                 .signature_mut()
                 .type_bank_mut()
-                .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type]));
+                .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type.clone()]));
             let choice_variable = terms.vars().var_assert_alloc(-44, &choice_type);
+            let existing_witness_var = terms.vars().var_assert_alloc(-46, &arg_type);
             let predicate = unary_predicate_const(terms, "pc_generate_choice_var_pred");
             let choice_application =
                 apply_terms(terms, &choice_variable, std::slice::from_ref(&predicate)).unwrap();
@@ -13648,7 +13650,7 @@ mod tests {
             clause.set_proof_depth(0);
             clause.set_proof_size(3);
             clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
-            clause
+            (existing_witness_var.f_code(), clause)
         };
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().inst_choice_max_depth = 0;
@@ -13677,6 +13679,14 @@ mod tests {
         assert!(state.archive().find_by_id(choice_parent).is_some());
         let choice_axiom = state.choice_opcodes().values().next().unwrap();
         assert!(derivation_contains_operation(choice_axiom, DC_CHOICE_AX));
+        let mut choice_axiom_vars = BTreeMap::new();
+        let _ = choice_axiom.collect_variables(&mut choice_axiom_vars);
+        assert!(
+            choice_axiom_vars
+                .values()
+                .all(|var| var.f_code() != existing_witness_var_code),
+            "fresh choice axiom variables must not reuse existing input variables"
+        );
         assert_eq!(state.tmp_store().members(), 2);
         for generated_clause in state.tmp_store().iter() {
             assert_eq!(generated_clause.proof_depth(), 1);
