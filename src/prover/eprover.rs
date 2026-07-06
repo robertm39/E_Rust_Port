@@ -7732,7 +7732,7 @@ fn write_proof_success_object_output(
         level if level >= 2 => {
             let roots = proof_success_object_roots(config, state, clause);
             let graph = state.proof_object_graph_for_mixed_roots(roots.clauses, roots.formulas);
-            write_proof_object_dot(output, config, state.terms(), &graph)
+            write_proof_object_dot(output, config, state.terms(), &graph, problem_type())
         }
         _ => Ok(()),
     }
@@ -8311,7 +8311,7 @@ fn write_stopped_proof_output(
     }
     if config.proof_output >= 2 {
         let graph = state.proof_object_graph_for_roots(stopped_proof_object_roots(config, state));
-        return write_proof_object_dot(output, config, state.terms(), &graph);
+        return write_proof_object_dot(output, config, state.terms(), &graph, problem_type());
     }
 
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
@@ -8463,6 +8463,7 @@ fn write_proof_object_dot(
     config: &EProverConfig,
     bank: &TermBank,
     graph: &ProofObjectGraph<'_>,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     output.write_all(
         b"digraph proof{\n  rankdir=TB\n  graph [splines=true overlap=false];\n  subgraph ax{\n  rank=\"same\";\n",
@@ -8487,6 +8488,7 @@ fn write_proof_object_dot(
                     &mut formula_bank,
                     &formula,
                     formula.ident(),
+                    proof_problem_type,
                 )?;
             }
         }
@@ -8559,9 +8561,14 @@ fn write_proof_object_dot_formula(
     bank: &mut TermBank,
     formula: &WrappedFormula,
     node_id: i64,
+    proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
-        let mut rendered = formula.tstp_string(bank, true, false, ProblemType::FirstOrder, true)?;
+        let proof_problem_type = match proof_problem_type {
+            ProblemType::NotInitialized => ProblemType::FirstOrder,
+            problem_type => problem_type,
+        };
+        let mut rendered = formula.tstp_string(bank, true, false, proof_problem_type, true)?;
         if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(formula.derivation(), &[])
         {
             rendered.push_str(",\n");
@@ -24910,7 +24917,8 @@ input_clause(c2,axiom,[++q(X)]).
         };
         let mut output = Vec::new();
 
-        write_proof_object_dot(&mut output, &config, &bank, &graph).unwrap();
+        write_proof_object_dot(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
 
         let printed = String::from_utf8(output).unwrap();
         assert!(
@@ -24929,6 +24937,45 @@ input_clause(c2,axiom,[++q(X)]).
             printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
             "{printed}"
         );
+    }
+
+    #[test]
+    fn proof_graph_dot_writer_uses_higher_order_formula_labels() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formula = WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "dot_formula"));
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let graph = ProofObjectGraph {
+            clauses: Vec::new(),
+            formulas: vec![&formula],
+            edges: Vec::new(),
+            mixed_edges: Vec::new(),
+            root_indices: Vec::new(),
+            formula_root_indices: vec![0],
+        };
+        let config = EProverConfig {
+            proof_output: 3,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_dot(
+            &mut output,
+            &config,
+            &bank,
+            &graph,
+            ProblemType::HigherOrder,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains(
+                "  1 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"thf(c_0_1"
+            ),
+            "{printed}"
+        );
+        assert!(printed.contains("conjecture"), "{printed}");
+        assert!(printed.contains("dot_formula"), "{printed}");
     }
 
     #[test]
