@@ -9679,6 +9679,49 @@ fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
     }
 }
 
+struct ScopedProblemType {
+    previous: ProblemType,
+    active: bool,
+}
+
+impl ScopedProblemType {
+    fn enter(scoped: ProblemType) -> Result<Self, Diagnostic> {
+        let previous = problem_type();
+        if previous == scoped {
+            return Ok(Self {
+                previous,
+                active: false,
+            });
+        }
+
+        reset_problem_type();
+        set_problem_type(scoped)?;
+        Ok(Self {
+            previous,
+            active: true,
+        })
+    }
+}
+
+impl Drop for ScopedProblemType {
+    fn drop(&mut self) {
+        if self.active {
+            reset_problem_type();
+            if self.previous != ProblemType::NotInitialized {
+                let _ = set_problem_type(self.previous);
+            }
+        }
+    }
+}
+
+fn with_scoped_problem_type<T>(
+    scoped: ProblemType,
+    parse: impl FnOnce() -> Result<T, Diagnostic>,
+) -> Result<T, Diagnostic> {
+    let _guard = ScopedProblemType::enter(scoped)?;
+    parse()
+}
+
 fn mark_typed_symbols_for_tstp_formula_kind(bank: &mut TermBank, formula_kind: &str) {
     if matches!(formula_kind, "tff" | "tcf" | "thf") {
         bank.signature_mut().set_typed_symbols(true);
@@ -9827,8 +9870,10 @@ fn parse_simple_tstp_app_encode_formula(
     if scanner.test_id("type") {
         scanner.accept_id("type")?;
         scanner.accept_tok(TokenType::COMMA)?;
-        bank.signature_mut()
-            .parse_tff_type_declaration(scanner, formula_problem_type)?;
+        with_scoped_problem_type(formula_problem_type, || {
+            bank.signature_mut()
+                .parse_tff_type_declaration(scanner, formula_problem_type)
+        })?;
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -10073,8 +10118,10 @@ fn parse_simple_tstp_type_declaration_clause(
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     scanner.accept_id("type")?;
     scanner.accept_tok(TokenType::COMMA)?;
-    bank.signature_mut()
-        .parse_tff_type_declaration(scanner, problem_type)?;
+    with_scoped_problem_type(problem_type, || {
+        bank.signature_mut()
+            .parse_tff_type_declaration(scanner, problem_type)
+    })?;
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -12885,16 +12932,18 @@ fn parse_simple_tstp_body_formulas(
     formula_kind: &str,
     problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    if formula_kind != "tcf" {
-        return parse_simple_fof_formulas(scanner, bank, problem_type);
-    }
+    with_scoped_problem_type(problem_type, || {
+        if formula_kind != "tcf" {
+            return parse_simple_fof_formulas(scanner, bank, problem_type);
+        }
 
-    let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
-    simple_fof_bool_term_to_formulas(
-        &formula,
-        SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
-        bank,
-    )
+        let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
+        simple_fof_bool_term_to_formulas(
+            &formula,
+            SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+            bank,
+        )
+    })
 }
 
 fn parse_simple_fof_connective_formulas(
@@ -27056,6 +27105,38 @@ input_clause(c2,axiom,[++q(X)]).
              thf(col_type, type, col: (prod > bool) > set).\n\
              thf(lam_type, type, lam: set > prod > bool).\n\
              thf(goal, axiom, ![A: set]: ((col @ (lam @ A)) = A)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_accepts_thf_bare_arrow_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-bare-arrow-term-equality");
+        std::fs::write(
+            &path,
+            "thf(i_type, type, i: $tType).\n\
+             thf(f_type, type, f: i > i).\n\
+             thf(g_type, type, g: i > i).\n\
+             thf(def, definition, f = g).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
