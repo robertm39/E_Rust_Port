@@ -1615,6 +1615,63 @@ mod tests {
     }
 
     #[test]
+    fn constrained_grounding_restricts_executable_instances() {
+        let _guard = global_state_lock();
+        let input = b"p(a).\np(b).\n~q(a).\nq(X).\n";
+        let mut constrained_stdout = Vec::new();
+        let mut constrained_stderr = Vec::new();
+        let mut constrained_stdin: &[u8] = input;
+
+        let constrained_status = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "--silent",
+                "--constraints",
+                "--no-unit-resolution",
+                "--no-unit-subsumption",
+            ],
+            &mut constrained_stdin,
+            &mut constrained_stdout,
+            &mut constrained_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(constrained_status, 0);
+        assert!(constrained_stderr.is_empty());
+        let constrained = String::from_utf8(constrained_stdout).unwrap();
+        assert!(constrained.contains("q(a) <- ."));
+        assert!(constrained.contains(" <- q(a)."));
+        assert!(!constrained.contains("q(b) <- ."));
+        assert!(constrained.contains(&format!(
+            "{DEFAULT_COMCHAR_RAW} Full and complete proof state written!"
+        )));
+
+        let mut unconstrained_stdout = Vec::new();
+        let mut unconstrained_stderr = Vec::new();
+        let mut unconstrained_stdin: &[u8] = input;
+
+        let unconstrained_status = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "--silent",
+                "--no-unit-resolution",
+                "--no-unit-subsumption",
+            ],
+            &mut unconstrained_stdin,
+            &mut unconstrained_stdout,
+            &mut unconstrained_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(unconstrained_status, 0);
+        assert!(unconstrained_stderr.is_empty());
+        let unconstrained = String::from_utf8(unconstrained_stdout).unwrap();
+        assert!(unconstrained.contains("q(b) <- ."));
+    }
+
+    #[test]
     fn suppress_result_still_prints_success_and_statistics() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
