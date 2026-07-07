@@ -10399,7 +10399,7 @@ fn parse_represented_tstp_app_encode_formula_body(
     formula_position: &str,
     name: &str,
 ) -> Result<ParsedAppEncodeFormula, Diagnostic> {
-    let formula = parse_tstp_app_encode_owner_formula(scanner, bank, formula_kind, problem_type)?;
+    let formula = parse_tstp_represented_owner_formula(scanner, bank, formula_kind, problem_type)?;
     let formula_is_distinct = formula.f_code() == bank.signature().distinct_code();
     if !formula_is_distinct && !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
@@ -10450,7 +10450,7 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     }
 }
 
-fn parse_tstp_app_encode_owner_formula(
+fn parse_tstp_represented_owner_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     formula_kind: &str,
@@ -11045,7 +11045,11 @@ fn should_parse_tstp_formula_as_represented_owner(
         return false;
     }
 
-    if scanner.test_id("$distinct") {
+    if scanner.test_id("$distinct")
+        || tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank)
+        || tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank)
+        || tstp_app_encode_body_is_parenthesized_top_level_distinct(scanner, bank)
+    {
         return raw_formula_type != CP_TYPE_WATCH_CLAUSE;
     }
 
@@ -11123,13 +11127,7 @@ fn parse_represented_tstp_formula_clause_body(
     source_info: SimpleFofSourceInfo<'_>,
     formula_position: &str,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
-    let formula = if scanner.test_id("$distinct") {
-        bank.parse_tstp_distinct(scanner)?
-    } else if formula_kind == "tcf" {
-        tcf_tstp_parse(scanner, bank, problem_type)?
-    } else {
-        bank.parse_tformula_tstp(scanner)?
-    };
+    let formula = parse_tstp_represented_owner_formula(scanner, bank, formula_kind, problem_type)?;
     let formula_is_distinct = formula.f_code() == bank.signature().distinct_code();
     if !formula_is_distinct && !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
@@ -15420,6 +15418,7 @@ mod tests {
         for (formula_kind, problem_type) in [
             ("fof", ProblemType::FirstOrder),
             ("tff", ProblemType::FirstOrder),
+            ("tcf", ProblemType::FirstOrder),
             ("thf", ProblemType::HigherOrder),
         ] {
             for (name, body) in [
@@ -15461,32 +15460,40 @@ mod tests {
         reset_problem_type();
         let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
 
-        let mut direct_distinct = Scanner::from_user_string("$distinct(a,b,c))", false).unwrap();
-        direct_distinct.set_format(IoFormat::Tstp);
-        assert!(
-            super::should_parse_tstp_formula_as_represented_owner(
-                "tcf",
-                &direct_distinct,
-                &bank,
-                CP_TYPE_AXIOM,
-                ProblemType::FirstOrder,
-                super::InputFormulaOwnerHandling::FormulaSetPrint,
-            ),
-            "tcf should route direct non-watchlist $distinct owners"
-        );
-        let mut watch_distinct = Scanner::from_user_string("$distinct(a,b,c))", false).unwrap();
-        watch_distinct.set_format(IoFormat::Tstp);
-        assert!(
-            !super::should_parse_tstp_formula_as_represented_owner(
-                "tcf",
-                &watch_distinct,
-                &bank,
-                super::CP_TYPE_WATCH_CLAUSE,
-                ProblemType::FirstOrder,
-                super::InputFormulaOwnerHandling::FormulaSetPrint,
-            ),
-            "tcf should keep watchlist $distinct on the clause bridge"
-        );
+        for distinct_body in [
+            "$distinct(a,b,c))",
+            "($distinct(a,b,c)))",
+            "~$distinct(a,b,c))",
+            "(~($distinct(a,b,c))))",
+        ] {
+            let mut scanner = Scanner::from_user_string(distinct_body, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                super::should_parse_tstp_formula_as_represented_owner(
+                    "tcf",
+                    &scanner,
+                    &bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "tcf should route non-watchlist $distinct owner body {distinct_body}"
+            );
+
+            let mut watch = Scanner::from_user_string(distinct_body, false).unwrap();
+            watch.set_format(IoFormat::Tstp);
+            assert!(
+                !super::should_parse_tstp_formula_as_represented_owner(
+                    "tcf",
+                    &watch,
+                    &bank,
+                    super::CP_TYPE_WATCH_CLAUSE,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "tcf should keep watchlist $distinct body {distinct_body} on the clause bridge"
+            );
+        }
 
         for supported in ["p(a) | q(a))", "![X]:(p(X)|q(X)))"] {
             let mut scanner = Scanner::from_user_string(supported, false).unwrap();
@@ -15506,9 +15513,6 @@ mod tests {
 
         for bridge_only in [
             "p(a) | $distinct(a,b,c))",
-            "($distinct(a,b,c)))",
-            "~$distinct(a,b,c))",
-            "(~($distinct(a,b,c))))",
             "![X]:(p(X)&q(X)))",
             "p(a) | q(a))",
         ] {
@@ -29021,7 +29025,14 @@ input_clause(c2,axiom,[++q(X)]).
     fn run_print_formulas_expands_tcf_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tcf-distinct");
-        std::fs::write(&path, "tcf(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        std::fs::write(
+            &path,
+            "tcf(direct, axiom, $distinct(a,b,c)).\n\
+             tcf(wrapped, axiom, ($distinct(d,e))).\n\
+             tcf(negated, axiom, ~$distinct(f,g)).\n\
+             tcf(negated_wrapped, axiom, (~($distinct(h,i)))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -29039,7 +29050,13 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(stdout, stderr, &["i_0_", "plain", "a!=b", "a!=c", "b!=c"]);
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "i_0_", "plain", "a!=b", "a!=c", "b!=c", "d!=e", "~", "f!=g", "h!=i",
+            ],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
