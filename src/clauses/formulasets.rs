@@ -7353,6 +7353,49 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_cnf2_handles_lifted_term_let_equality_with_fool_unroll() {
+        let mut bank = test_bank();
+        let local_symbol = typed_const(&mut bank, "set_cnf_lift_fool_let_local_symbol");
+        let definition_value = typed_const(&mut bank, "set_cnf_lift_fool_let_definition_value");
+        let target = typed_const(&mut bank, "set_cnf_lift_fool_let_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition =
+            bool_binary_with_code(&mut bank, eqn_code, &local_symbol, &definition_value);
+        let let_term = let_term(&mut bank, &[definition], &local_symbol);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &let_term, &target);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, true, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_lets_lifted, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_INTRO_DEF));
+        assert!(result.formula_derivation_ops.contains(&DC_APPLY_DEF));
+        assert_eq!(result.original_formulas_archived, 2);
+        assert!(archive.iter().all(|formula| {
+            formula.formula().f_code() != SIG_LET_CODE
+                && formula
+                    .formula()
+                    .argument(0)
+                    .is_none_or(|argument| argument.f_code() != SIG_LET_CODE)
+        }));
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
     fn formula_set_unfold_def_symbols_rewrites_and_archives_definitions() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -71);

@@ -1394,6 +1394,48 @@ mod tests {
     }
 
     #[test]
+    fn fool_rule_formula_term_let_equality_uses_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        let config = EnormalizerConfig {
+            parse_format: IoFormat::Tstp,
+            rule_files: vec!["-".to_owned()],
+            ..EnormalizerConfig::default()
+        };
+        let mut bank = new_term_bank().expect("term bank");
+        let mut formulas = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let mut ignored_watchlist = ClauseSet::new();
+        let mut stdin: &[u8] = b"tff(a_type, type, a: $i).\n\
+            tff(b_type, type, b: $i).\n\
+            fof(fool_eq, axiom, ($let(f:$i, f := a, f) = b)).\n";
+
+        let parsed_problem_type = parse_rule_file(
+            &config,
+            "-",
+            &mut stdin,
+            &mut bank,
+            &mut formulas,
+            &mut ignored_watchlist,
+        )
+        .expect("FOOL equality rule parsing succeeds");
+
+        assert_eq!(parsed_problem_type, ProblemType::HigherOrder);
+        let formula = formulas
+            .iter()
+            .find(|formula| formula.get_id(true) == "fool_eq")
+            .expect("FOOL equality formula owner exists");
+        assert!(!formula.is_clause());
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
+
+        clausify_rule_formulas(&mut bank, &mut formulas, &mut clauses, parsed_problem_type)
+            .expect("FOOL equality formula-owner CNF succeeds");
+        assert!(clauses.members() > 0);
+        assert_eq!(formulas.cardinality(), 0);
+    }
+
+    #[test]
     fn version_is_long_only_like_c_tool() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();

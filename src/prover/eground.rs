@@ -1420,6 +1420,46 @@ mod tests {
     }
 
     #[test]
+    fn tstp_fool_term_let_equality_uses_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let mut bank = eground_term_bank().expect("test term bank allocation succeeds");
+        let mut formulas = FormulaSet::new();
+        let config = EgroundConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec!["-".to_owned()],
+            ..EgroundConfig::default()
+        };
+        let mut stdin: &[u8] = b"tff(a_type, type, a: $i).\n\
+            tff(b_type, type, b: $i).\n\
+            fof(fool_eq, axiom, ($let(f:$i, f := a, f) = b)).\n";
+
+        let parsed_input =
+            parse_input_files_to_formula_set(&config, &mut stdin, &mut bank, &mut formulas)
+                .expect("FOOL equality formula-owner parsing succeeds");
+
+        assert_eq!(parsed_input.problem_type, ProblemType::HigherOrder);
+        let formula = formulas
+            .iter()
+            .find(|formula| formula.get_id(true) == "fool_eq")
+            .expect("FOOL equality formula owner exists");
+        assert!(!formula.is_clause());
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
+
+        let mut clauses = ClauseSet::new();
+        clausify_input_formulas(
+            &config,
+            &mut bank,
+            &mut formulas,
+            &mut clauses,
+            parsed_input.problem_type,
+        )
+        .expect("FOOL equality formula-owner CNF succeeds");
+        assert_eq!(formulas.cardinality(), 0);
+        assert!(clauses.members() > 0);
+    }
+
+    #[test]
     fn run_tstp_thf_input_uses_higher_order_parser_context() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
