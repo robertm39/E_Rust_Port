@@ -5108,6 +5108,8 @@ fn run_app_encode<W: Write + ?Sized>(
         .into());
     }
 
+    state.process_distinct()?;
+
     write_app_encode_include_echoes(output, &include_echoes)?;
     write_preprocessing_config_debug_line(output, config)?;
     write_app_encoded_formula_set(
@@ -10394,7 +10396,8 @@ fn parse_represented_tstp_app_encode_formula_body(
     formula_position: &str,
 ) -> Result<ParsedAppEncodeFormula, Diagnostic> {
     let formula = parse_tstp_app_encode_owner_formula(scanner, bank, formula_kind, problem_type)?;
-    if !formula.type_().as_ref().is_some_and(Type::is_bool) {
+    let formula_is_distinct = formula.f_code() == bank.signature().distinct_code();
+    if !formula_is_distinct && !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
     if tformula_has_free_vars(bank, &formula).is_some() {
@@ -10421,8 +10424,9 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     formula_kind: &str,
     scanner: &Scanner,
 ) -> bool {
-    matches!(formula_kind, "tff" | "tcf" | "thf")
-        && !tstp_app_encode_body_contains_distinct(scanner)
+    scanner.test_id("$distinct")
+        || matches!(formula_kind, "tff" | "tcf" | "thf")
+            && !tstp_app_encode_body_contains_distinct(scanner)
 }
 
 fn parse_tstp_app_encode_owner_formula(
@@ -10431,7 +10435,9 @@ fn parse_tstp_app_encode_owner_formula(
     formula_kind: &str,
     problem_type: ProblemType,
 ) -> Result<Term, Diagnostic> {
-    if formula_kind == "tcf" {
+    if scanner.test_id("$distinct") {
+        bank.parse_tstp_distinct(scanner)
+    } else if formula_kind == "tcf" {
         tcf_tstp_parse(scanner, bank, problem_type)
     } else {
         bank.parse_tformula_tstp(scanner)
@@ -17450,6 +17456,7 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
+            "fof(distinct_direct, axiom, $distinct(a,b,c)).",
         ] {
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             let mut scanner = Scanner::from_user_string(input, false).unwrap();
@@ -17467,11 +17474,10 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn app_encode_tstp_fof_and_distinct_entries_stay_on_bridge() {
+    fn app_encode_tstp_fof_and_non_direct_distinct_entries_stay_on_bridge() {
         let _guard = global_state_lock();
         for input in [
             "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
-            "fof(distinct_direct, axiom, $distinct(a,b,c)).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {
@@ -17556,6 +17562,33 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(rule, axiom, !["));
         assert!(printed.contains("]:("));
         assert!(printed.contains("|app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_expands_direct_distinct_via_proof_state_owner() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-direct-distinct-owner");
+        std::fs::write(&path, "fof(distinct, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("a!=b"));
+        assert!(printed.contains("a!=c"));
+        assert!(printed.contains("b!=c"));
+        assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
