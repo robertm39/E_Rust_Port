@@ -267,7 +267,7 @@ const PICOSAT_LIBRARY_NAMES: &[&str] = &["libpicosat.so", "libpicosat.dylib"];
 const PICOSAT_LIBRARY_NAMES: &[&str] = &["libpicosat.so", "picosat.dll"];
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE: &str =
-    "THF formula requires the full higher-order formula pipeline; this port currently supports only simple first-order-shaped and application-based THF fragments";
+    "THF formula requires the full higher-order formula pipeline; this port currently supports first-order-shaped, application-based, and quantified predicate-application THF fragments";
 const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
     "Formula has free variables (check parentheses and quantifier precedence)";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
@@ -28555,6 +28555,43 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_print_formulas_parses_quantified_thf_application_fragments() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-thf-quantified-application-fragments");
+        std::fs::write(
+            &path,
+            "thf(a_type, type, a: $i).\n\
+             thf(p_type, type, p: $i > $o).\n\
+             thf(forall_pred, axiom, ![P: $i > $o]: P @ a).\n\
+             thf(imp_pred, axiom, ![P: $i > $o]: (P @ a => p @ a)).\n\
+             thf(lambda_arg_quant, axiom, ![Q: ($i > $o) > $o]: Q @ (^[X: $i]: p @ X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "thf(forall_pred, axiom",
+                "thf(imp_pred, axiom",
+                "thf(lambda_arg_quant, axiom",
+            ],
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_supported_fof_positive_existential_atom() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-positive-existential");
@@ -30169,6 +30206,43 @@ input_clause(c2,axiom,[++q(X)]).
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
              thf(goal, axiom, ![F: person > person, X: person]: p @ (F @ X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_accepts_quantified_thf_application_fragments() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-quantified-application-fragments");
+        std::fs::write(
+            &path,
+            "thf(a_type, type, a: $i).\n\
+             thf(p_type, type, p: $i > $o).\n\
+             thf(forall_pred, axiom, ![P: $i > $o]: P @ a).\n\
+             thf(exists_pred, axiom, ?[P: $i > $o]: P @ a).\n\
+             thf(imp_pred, axiom, ![P: $i > $o]: (P @ a => p @ a)).\n\
+             thf(conj_pred, axiom, ![P: $i > $o]: (P @ a & p @ a)).\n\
+             thf(neg_pred, axiom, ![P: $i > $o]: ~(P @ a)).\n\
+             thf(eq_pred, axiom, ![P: $i > $o]: (P @ a = p @ a)).\n\
+             thf(lambda_arg_quant, axiom, ![Q: ($i > $o) > $o]: Q @ (^[X: $i]: p @ X)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
