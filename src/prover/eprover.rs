@@ -10491,6 +10491,11 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
 fn tstp_app_encode_fof_starts_typed_bool_equality(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
     let mut typed_probe = bank.clone();
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
     let Ok(left) = typed_probe.parse_term_with_distinct_checks(&mut lookahead) else {
         return false;
     };
@@ -17498,6 +17503,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_ite, axiom, $ite(p(a),q(a),r(a))).",
             "fof(fool_let, axiom, $let(f:$o, f := p(a), f)).",
             "fof(fool_existential, axiom, ?[X]:$ite(p(X),q(X),r(X))).",
+            "fof(fool_eq_wrapped, axiom, ($ite(p(a),q(a),r(a)) = s(a))).",
+            "fof(fool_ne_wrapped, axiom, ($let(f:$o, f := p(a), f) != s(a))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17522,7 +17529,7 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         for input in [
             "fof(eq_right, axiom, p(a) = (q(a)|r(a))).",
-            "fof(fool_eq_wrapped, axiom, ($ite(p(a),q(a),r(a)) = s(a))).",
+            "fof(fool_term_eq_wrapped, axiom, ($let(f:$i, f := a, f) = b)).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {
