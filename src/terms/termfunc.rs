@@ -1538,12 +1538,19 @@ pub fn term_is_untyped(term: &Term) -> bool {
 
 /// App-encodes a typed term into binary typed-application symbols.
 ///
+/// Lambda cells are term-valued binders rather than application spines, so they
+/// stay atomic for this transformation.
+///
 /// # Panics
 ///
 /// Panics if `orig` or an applied argument is missing its inferred type, if a
 /// traversed argument slot is uninitialized, or if the inherited prefix
 /// invariants from `term_create_prefix` are violated.
 pub fn term_app_encode(orig: &Term, sig: &mut Signature) -> Result<Term, Diagnostic> {
+    if orig.is_lambda() {
+        return Ok(term_copy_keep_vars(orig, DerefType::Never));
+    }
+
     if orig.arity() == 0 {
         return Ok(term_copy_keep_vars(orig, DerefType::Never));
     }
@@ -2917,6 +2924,28 @@ mod tests {
         assert_ne!(encoded_const, a);
         assert_eq!(encoded_const.f_code(), a_code);
         assert_eq!(encoded_const.type_(), Some(i_type));
+    }
+
+    #[test]
+    fn term_app_encode_keeps_lambda_values_atomic() {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let i_type = sig.type_bank().i_type();
+        let arrow = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let binder = typed_var(-2, &i_type);
+        let lambda = Term::top_alloc(SIG_NAMED_LAMBDA_CODE, 2);
+        lambda.set_argument(0, binder.clone());
+        lambda.set_argument(1, binder);
+        lambda.set_type(Some(arrow));
+
+        let encoded = term_app_encode(&lambda, &mut sig).unwrap();
+
+        assert_eq!(encoded.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(encoded.arity(), 2);
+        assert_eq!(encoded.argument(0), lambda.argument(0));
+        assert_eq!(encoded.argument(1), lambda.argument(1));
     }
 
     #[test]

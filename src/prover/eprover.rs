@@ -9729,6 +9729,31 @@ struct SimpleAppEncodedFormula {
 }
 
 #[derive(Clone, Debug)]
+enum ParsedAppEncodeFormula {
+    Simple(SimpleAppEncodedFormula),
+    Represented {
+        formula: WrappedFormula,
+        problem_type: ProblemType,
+    },
+}
+
+impl ParsedAppEncodeFormula {
+    const fn problem_type(&self) -> ProblemType {
+        match self {
+            Self::Simple(formula) => formula.problem_type,
+            Self::Represented { problem_type, .. } => *problem_type,
+        }
+    }
+
+    fn query_tptp_type(&self) -> FormulaProperties {
+        match self {
+            Self::Simple(formula) => formula.type_.query_tptp_type(),
+            Self::Represented { formula, .. } => formula.query_tptp_type(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct ParsedAppEncodeEntries {
     saw_input_owner: bool,
     saw_formula_owner: bool,
@@ -9743,14 +9768,22 @@ impl ParsedAppEncodeEntries {
 
     fn add_formula_owner(
         &mut self,
-        formula: &SimpleAppEncodedFormula,
+        formula: ParsedAppEncodeFormula,
         bank: &mut TermBank,
         formulas: &mut FormulaSet,
     ) -> Result<(), Diagnostic> {
         self.saw_input_owner = true;
         self.saw_formula_owner = true;
-        self.problem_type = combine_problem_types(self.problem_type, formula.problem_type);
-        let wrapped = simple_app_encoded_formula_owner(formula, bank)?;
+        self.problem_type = combine_problem_types(self.problem_type, formula.problem_type());
+        let wrapped = match formula {
+            ParsedAppEncodeFormula::Simple(formula) => {
+                simple_app_encoded_formula_owner(&formula, bank)?
+            }
+            ParsedAppEncodeFormula::Represented {
+                formula,
+                problem_type: _,
+            } => formula,
+        };
         formulas.insert(wrapped);
         Ok(())
     }
@@ -9821,7 +9854,7 @@ fn parse_tptp_app_encode_entry_list(
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
             let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
-            result.add_formula_owner(&formula, bank, formulas)?;
+            result.add_formula_owner(ParsedAppEncodeFormula::Simple(formula), bank, formulas)?;
         } else if scanner.test_id("include") {
             result
                 .include_echoes
@@ -9858,15 +9891,15 @@ fn parse_tstp_app_encode_entry_list(
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
             let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
-            result.add_formula_owner(&formula, bank, formulas)?;
+            result.add_formula_owner(ParsedAppEncodeFormula::Simple(formula), bank, formulas)?;
         } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
-                if formula.type_.query_tptp_type() != CP_TYPE_WATCH_CLAUSE {
-                    result.add_formula_owner(&formula, bank, formulas)?;
+                if formula.query_tptp_type() != CP_TYPE_WATCH_CLAUSE {
+                    result.add_formula_owner(formula, bank, formulas)?;
                 }
             }
         } else if scanner.test_id("include") {
@@ -10277,7 +10310,7 @@ impl FormulaPreprocessing {
 fn parse_simple_tstp_app_encode_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<Option<SimpleAppEncodedFormula>, Diagnostic> {
+) -> Result<Option<ParsedAppEncodeFormula>, Diagnostic> {
     bank.vars().clear_ext_names();
 
     let formula_kind = scanner.current_token().literal();
@@ -10297,12 +10330,14 @@ fn parse_simple_tstp_app_encode_formula(
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
-        return Ok(Some(SimpleAppEncodedFormula {
-            name,
-            type_: CP_TYPE_AXIOM | CP_INPUT_FORMULA,
-            problem_type: formula_problem_type,
-            formulas: simple_fof_truth_formula(true),
-        }));
+        return Ok(Some(ParsedAppEncodeFormula::Simple(
+            SimpleAppEncodedFormula {
+                name,
+                type_: CP_TYPE_AXIOM | CP_INPUT_FORMULA,
+                problem_type: formula_problem_type,
+                formulas: simple_fof_truth_formula(true),
+            },
+        )));
     }
 
     scanner.check_id(simple_tstp_formula_roles(&formula_kind))?;
@@ -10312,6 +10347,17 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_type = clause_type_from_identifier(&role, formula_problem_type);
     let formula_position = token_pos_rep(scanner.current_token());
+    if formula_kind == "thf" {
+        return parse_represented_tstp_app_encode_formula_body(
+            scanner,
+            bank,
+            name,
+            formula_type,
+            formula_problem_type,
+            &formula_position,
+        )
+        .map(Some);
+    }
     let formulas =
         parse_simple_tstp_body_formulas(scanner, bank, &formula_kind, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
@@ -10327,12 +10373,46 @@ fn parse_simple_tstp_app_encode_formula(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    Ok(Some(SimpleAppEncodedFormula {
-        name,
-        type_: formula_type | CP_INPUT_FORMULA,
-        problem_type: formula_problem_type,
-        formulas,
-    }))
+    Ok(Some(ParsedAppEncodeFormula::Simple(
+        SimpleAppEncodedFormula {
+            name,
+            type_: formula_type | CP_INPUT_FORMULA,
+            problem_type: formula_problem_type,
+            formulas,
+        },
+    )))
+}
+
+fn parse_represented_tstp_app_encode_formula_body(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    name: String,
+    formula_type: FormulaProperties,
+    problem_type: ProblemType,
+    formula_position: &str,
+) -> Result<ParsedAppEncodeFormula, Diagnostic> {
+    let formula = bank.parse_tformula_tstp(scanner)?;
+    if !formula.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(thf_formula_requires_full_pipeline_error(scanner));
+    }
+    if tformula_has_free_vars(bank, &formula).is_some() {
+        return Err(tstp_formula_free_variables_error(formula_position));
+    }
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    Ok(ParsedAppEncodeFormula::Represented {
+        formula: represented_formula_owner(
+            formula,
+            formula_type | CP_INPUT_FORMULA,
+            &name,
+            None,
+            -1,
+            -1,
+        ),
+        problem_type,
+    })
 }
 
 fn parse_simple_tptp_app_encode_formula(
@@ -17430,6 +17510,37 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("%-- person > $o > $o."));
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_thf_lambda_as_arrow_typed_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-thf-lambda-arrow-argument");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: (person > person) > $o).\n\
+             thf(lambda_arg, axiom, p @ (^[X: person]: X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(lambda_arg, axiom, app_"));
+        assert!(printed.contains("(p,$named_lam("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
