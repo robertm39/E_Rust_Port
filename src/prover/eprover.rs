@@ -11076,17 +11076,17 @@ fn tstp_plain_body_is_represented_formula_owner_supported(
     bank: &TermBank,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> bool {
-    if tstp_body_contains_token(scanner, TokenType::LAMBDA_QUANTOR) {
-        return false;
-    }
-
     if matches!(
         formula_owner_handling,
         InputFormulaOwnerHandling::FormulaSetCnf
-    ) && tstp_body_contains_token(scanner, TokenType::ITE_TOKEN | TokenType::LET_TOKEN)
-    {
-        // C's FormulaSetCNF2 only runs ITE/LET lifting in the higher-order branch.
-        return false;
+    ) {
+        if tstp_body_contains_token(scanner, TokenType::LAMBDA_QUANTOR) {
+            return false;
+        }
+        if tstp_body_contains_token(scanner, TokenType::ITE_TOKEN | TokenType::LET_TOKEN) {
+            // C's FormulaSetCNF2 only runs ITE/LET lifting in the higher-order branch.
+            return false;
+        }
     }
     tstp_body_is_represented_formula_owner_supported(scanner, bank)
 }
@@ -15503,7 +15503,7 @@ mod tests {
                 Scanner::from_user_string("(^[X: $i]: p @ X) @ a)", false).unwrap();
             lambda_body.set_format(IoFormat::Tstp);
             assert!(
-                !super::should_parse_tstp_formula_as_represented_owner(
+                super::should_parse_tstp_formula_as_represented_owner(
                     formula_kind,
                     &lambda_body,
                     &lambda_bank,
@@ -15511,10 +15511,11 @@ mod tests {
                     ProblemType::FirstOrder,
                     super::InputFormulaOwnerHandling::FormulaSetPrint,
                 ),
-                "{formula_kind} should keep lambda bodies on the bridge"
+                "{formula_kind} should route print/syntax lambda bodies through represented owners"
             );
 
             for cnf_fool in [
+                "(^[X: $i]: p @ X) @ a)",
                 "$ite(q, p(a), p(b)))",
                 "(p(a) | $ite(q, p(a), p(b))))",
                 "p($ite(q, a, b)))",
@@ -15533,7 +15534,7 @@ mod tests {
                         ProblemType::FirstOrder,
                         super::InputFormulaOwnerHandling::FormulaSetCnf,
                     ),
-                    "{formula_kind} should keep proof/CNF FOOL body {cnf_fool} on the bridge"
+                    "{formula_kind} should keep proof/CNF lambda/FOOL body {cnf_fool} on the bridge"
                 );
             }
         }
@@ -29846,7 +29847,7 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_print_formulas_lowers_tstp_lambda_application_formula() {
+    fn run_print_formulas_preserves_tstp_lambda_application_formula_owners() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tstp-lambda-application");
         std::fs::write(
@@ -29881,13 +29882,13 @@ input_clause(c2,axiom,[++q(X)]).
             stdout,
             stderr,
             &[
-                "fof(lambda_app, axiom",
-                "fof(lambda_eq_left, axiom",
-                "fof(lambda_eq_right, axiom",
-                "fof(lambda_ext_right, axiom",
-                "fof(lambda_ext_left, axiom",
-                "fof(lambda_ext_right_ne, axiom",
-                "fof(lambda_ext_left_ne, axiom",
+                "tff(lambda_app, axiom, $@_var($named_lam",
+                "tff(lambda_eq_left, axiom, $@_var($named_lam",
+                "tff(lambda_eq_right, axiom, b=$@_var($named_lam",
+                "tff(lambda_ext_right, axiom, f=$named_lam",
+                "tff(lambda_ext_left, axiom, $named_lam",
+                "tff(lambda_ext_right_ne, axiom, f!=$named_lam",
+                "tff(lambda_ext_left_ne, axiom, $named_lam",
             ],
         );
         std::fs::remove_file(&path).unwrap();
