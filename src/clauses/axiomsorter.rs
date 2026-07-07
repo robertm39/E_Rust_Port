@@ -1,5 +1,6 @@
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::clauses::clause::Clause;
+use crate::clauses::formulasets::WrappedFormula;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 
@@ -14,7 +15,7 @@ pub enum AxiomType {
 #[derive(Clone, Debug, PartialEq)]
 enum WAxiomPayload {
     Clause(Box<Clause>),
-    FormulaFCodes(Vec<FunCode>),
+    Formula(Box<WrappedFormula>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,11 +36,11 @@ impl WAxiom {
     }
 
     #[must_use]
-    pub fn alloc_formula_fcodes(f_codes: Vec<FunCode>) -> Self {
+    pub fn alloc_formula(formula: &WrappedFormula) -> Self {
         Self {
             axiom_type: AxiomType::FormulaAxiom,
             weight: 0.0,
-            payload: WAxiomPayload::FormulaFCodes(f_codes),
+            payload: WAxiomPayload::Formula(Box::new(formula.clone())),
         }
     }
 
@@ -65,7 +66,11 @@ impl WAxiom {
                 clause.return_fcodes(&mut f_codes);
                 f_codes
             }
-            WAxiomPayload::FormulaFCodes(f_codes) => f_codes.clone(),
+            WAxiomPayload::Formula(formula) => {
+                let mut f_codes = Vec::new();
+                formula.return_f_codes(&mut f_codes);
+                f_codes
+            }
         }
     }
 
@@ -135,6 +140,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::WrappedFormula;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -154,6 +160,29 @@ mod tests {
             .declare_final_type(f_code, type_)
             .unwrap();
         bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_bool_const(bank: &mut TermBank, name: &str, special: bool) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, special);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn bool_binary_with_code(
+        bank: &mut TermBank,
+        f_code: FunCode,
+        left: &Term,
+        right: &Term,
+    ) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn unit_clause(bank: &mut TermBank, left: &Term, right: &Term, ident: i64) -> Clause {
@@ -188,7 +217,8 @@ mod tests {
         let right = typed_const(&mut bank, "b", false);
         let clause = unit_clause(&mut bank, &left, &right, 10);
         let axiom = WAxiom::alloc_clause(&clause);
-        let formula = WAxiom::alloc_formula_fcodes(vec![left.f_code()]);
+        let wrapped = WrappedFormula::wt_formula_alloc(left.clone());
+        let formula = WAxiom::alloc_formula(&wrapped);
 
         assert_eq!(axiom.axiom_type(), AxiomType::ClauseAxiom);
         assert_weight_eq(axiom.weight(), 0.0);
@@ -221,8 +251,9 @@ mod tests {
     #[test]
     fn relevance_eval_preserves_old_weight_when_no_symbol_contributes() {
         let mut bank = test_bank();
-        let special = typed_const(&mut bank, "ignored", true);
-        let mut axiom = WAxiom::alloc_formula_fcodes(vec![special.f_code()]);
+        let special = typed_bool_const(&mut bank, "ignored", true);
+        let wrapped = WrappedFormula::wt_formula_alloc(special.clone());
+        let mut axiom = WAxiom::alloc_formula(&wrapped);
         axiom.set_weight(7.5);
         let mut rel_vec = PDIntArray::new_int(2, GROW_EXPONENTIAL);
         store_rel(&mut rel_vec, special.f_code(), 100);
@@ -230,6 +261,41 @@ mod tests {
         axiom.add_rel_eval(bank.signature(), &mut rel_vec);
 
         assert_weight_eq(axiom.weight(), 7.5);
+    }
+
+    #[test]
+    fn formula_axiom_collects_fcodes_from_wrapped_formula_payload() {
+        let mut bank = test_bank();
+        let left = typed_bool_const(&mut bank, "formula_left", false);
+        let right = typed_bool_const(&mut bank, "formula_right", false);
+        let and_code = bank.signature().and_code();
+        let formula_term = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let wrapped = WrappedFormula::wt_formula_alloc(formula_term);
+        let axiom = WAxiom::alloc_formula(&wrapped);
+
+        assert_eq!(
+            axiom.fcodes(),
+            vec![and_code, left.f_code(), right.f_code()]
+        );
+    }
+
+    #[test]
+    fn formula_relevance_eval_uses_payload_symbols_and_skips_specials() {
+        let mut bank = test_bank();
+        let left = typed_bool_const(&mut bank, "rel_formula_left", false);
+        let right = typed_bool_const(&mut bank, "rel_formula_right", false);
+        let and_code = bank.signature().and_code();
+        let formula_term = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let wrapped = WrappedFormula::wt_formula_alloc(formula_term);
+        let mut axiom = WAxiom::alloc_formula(&wrapped);
+        let mut rel_vec = PDIntArray::new_int(2, GROW_EXPONENTIAL);
+        store_rel(&mut rel_vec, left.f_code(), 6);
+        store_rel(&mut rel_vec, right.f_code(), 10);
+        store_rel(&mut rel_vec, and_code, 100);
+
+        axiom.add_rel_eval(bank.signature(), &mut rel_vec);
+
+        assert_weight_eq(axiom.weight(), 8.0);
     }
 
     #[test]
@@ -244,7 +310,8 @@ mod tests {
 
         assert_eq!(w_axiom_cmp(&light, &heavy), -1);
         light.set_weight(1.0);
-        let mut formula = WAxiom::alloc_formula_fcodes(vec![left_term.f_code()]);
+        let wrapped = WrappedFormula::wt_formula_alloc(left_term.clone());
+        let mut formula = WAxiom::alloc_formula(&wrapped);
         formula.set_weight(1.0);
         assert_eq!(w_axiom_cmp(&light, &formula), -1);
 
