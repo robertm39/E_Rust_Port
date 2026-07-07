@@ -10502,8 +10502,29 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
     let Some(left_type) = left.type_() else {
         return false;
     };
-    (left_type.is_bool() || matches!(left.f_code(), SIG_ITE_CODE | SIG_LET_CODE))
-        && lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+    if !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+        return false;
+    }
+    if left_type.is_bool() || matches!(left.f_code(), SIG_ITE_CODE | SIG_LET_CODE) {
+        return true;
+    }
+    tstp_app_encode_fof_equality_rhs_starts_fool_term(&lookahead)
+}
+
+fn tstp_app_encode_fof_equality_rhs_starts_fool_term(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    if lookahead
+        .accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+        .is_err()
+    {
+        return false;
+    }
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
+    lookahead.test_tok(TokenType::ITE_TOKEN | TokenType::LET_TOKEN)
 }
 
 fn parse_tptp_app_encode_formula(
@@ -17556,25 +17577,31 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
         let mut declarations =
-            Scanner::from_user_string("a: $i. p: $i > $o. q: $i > $o.", false).unwrap();
-        for _ in 0..3 {
+            Scanner::from_user_string("a: $i. b: $i. c: $i. p: $i > $o. q: $i > $o.", false)
+                .unwrap();
+        for _ in 0..5 {
             bank.signature_mut()
                 .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
                 .unwrap();
             declarations.accept_tok(TokenType::FULLSTOP).unwrap();
         }
-        let input = "fof(eq_atom, axiom, p(a) = q(a)).";
-        let mut scanner = Scanner::from_user_string(input, false).unwrap();
-        scanner.set_format(IoFormat::Tstp);
+        for input in [
+            "fof(eq_atom, axiom, p(a) = q(a)).",
+            "fof(ite_right, axiom, c = $ite(p(a),a,b)).",
+            "fof(let_right, axiom, c != ($let(f:$i, f := a, f))).",
+        ] {
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
 
-        let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
-            .unwrap()
-            .unwrap();
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
 
-        assert!(
-            matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
-            "{input} should use the represented typed FOF equality owner"
-        );
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+                "{input} should use the represented typed FOF equality owner"
+            );
+        }
     }
 
     #[test]
@@ -18685,7 +18712,9 @@ input_clause(c2,axiom,[++q(X)]).
              tff(c_type, type, c: $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
-             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n",
+             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n\
+             fof(ite_i_eq_right, axiom, c = $ite(p(a), a, b)).\n\
+             fof(let_i_eq_right, axiom, c = ($let(f:$i, f := a, f))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18705,6 +18734,9 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(ite_i_eq, axiom, $ite(app_"));
         assert!(printed.contains(",a,b)=c)."));
         assert!(printed.contains("tff(let_i_eq, axiom, $let(f:$i,f:=a,f)=b)."));
+        assert!(printed.contains("tff(ite_i_eq_right, axiom, c=$ite(app_"));
+        assert!(printed.contains(",a,b))."));
+        assert!(printed.contains("tff(let_i_eq_right, axiom, c=$let(f:$i,f:=a,f))."));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
