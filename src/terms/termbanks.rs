@@ -3093,7 +3093,10 @@ impl TermBank {
                 self.tformula_fcode_alloc(op, left, Some(right))
             } else {
                 let right = self.parse_tformula_equality_right_term_arg(scanner)?;
-                self.encode_equality_term(left, right, positive)
+                let recovered_left = self.recover_tformula_arrow_equality_operand(left, &right)?;
+                let recovered_right =
+                    self.recover_tformula_arrow_equality_operand(right, &recovered_left)?;
+                self.encode_equality_term(recovered_left, recovered_right, positive)
             }
         } else {
             if scanner.test_tok(TokenType::APPLICATION) {
@@ -3108,6 +3111,40 @@ impl TermBank {
             self.prepare_predicate_formula_atom(&left)?;
             Ok(left)
         }
+    }
+
+    fn recover_tformula_arrow_equality_operand(
+        &mut self,
+        term: Term,
+        other: &Term,
+    ) -> Result<Term, Diagnostic> {
+        let Some(other_type) = other.type_() else {
+            return Ok(term);
+        };
+        if !other_type.is_arrow() || term.type_().as_ref() == Some(&other_type) {
+            return Ok(term);
+        }
+        if term.is_any_var() || term.arity() != 0 {
+            return Ok(term);
+        }
+
+        let Some(name) = self.sig.find_name(term.f_code()).map(str::to_owned) else {
+            return Ok(term);
+        };
+        let f_code = self.sig.find_f_code(&name);
+        if f_code == 0 || f_code == term.f_code() {
+            return Ok(term);
+        }
+        let Some(recovered_type) = self.sig.get_type(f_code).cloned() else {
+            return Ok(term);
+        };
+        if recovered_type != other_type {
+            return Ok(term);
+        }
+
+        let recovered = Term::const_cell_alloc(f_code);
+        recovered.set_type(Some(recovered_type));
+        self.term_top_insert(recovered)
     }
 
     fn prepare_tformula_application_head(&mut self, head: Term) -> Term {
@@ -5742,6 +5779,45 @@ mod tests {
         let right = formula.argument(1).unwrap();
         assert_eq!(right.arity(), 1);
         assert_eq!(bank.signature().find_name(right.f_code()), Some("f"));
+    }
+
+    #[test]
+    fn tstp_formula_equality_recovers_bare_arrow_symbol_left_of_lambda() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string("f: $i > $i. g: $i > $i.", false).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        for (input, positive) in [
+            ("f = (^[X: $i]: g @ X)", true),
+            ("f != (^[X: $i]: g @ X)", false),
+        ] {
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+
+            let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+            assert_eq!(
+                formula.f_code(),
+                if positive {
+                    bank.signature().eqn_code()
+                } else {
+                    bank.signature().neqn_code()
+                }
+            );
+            let left = formula.argument(0).unwrap();
+            assert_eq!(bank.signature().find_name(left.f_code()), Some("f"));
+            assert!(left.type_().is_some_and(|type_| type_.is_arrow()));
+            let right = formula.argument(1).unwrap();
+            assert_eq!(right.f_code(), SIG_NAMED_LAMBDA_CODE);
+            assert_eq!(right.type_(), left.type_());
+        }
     }
 
     #[test]
