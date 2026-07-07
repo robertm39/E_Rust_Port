@@ -10524,6 +10524,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
                 TokenType::OPEN_BRACKET
                     | TokenType::UNIV_QUANTOR
                     | TokenType::EXIST_QUANTOR
+                    | TokenType::TILDE_SIGN
                     | TokenType::ITE_TOKEN
                     | TokenType::LET_TOKEN,
             );
@@ -17857,6 +17858,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_quantified_body_equality, axiom, ?[X]:p(X) != q(a)).",
             "fof(eq_negated_left_equality, axiom, ~p(a) = q(a)).",
             "fof(ne_negated_left_equality, axiom, ~p(a) != q(a)).",
+            "fof(assoc_negated_left_eq, axiom, s(a) | ~p(a) = q(a)).",
+            "fof(assoc_negated_left_ne, axiom, s(a) & ~p(a) != q(a)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
             "fof(distinct_double_wrapped, axiom, (($distinct(a,b,c)))).",
             "tff(distinct_wrapped, axiom, ($distinct(a,b,c))).",
@@ -17893,24 +17896,19 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn app_encode_tstp_fof_bridge_shim_entries_stay_on_bridge() {
         let _guard = global_state_lock();
-        for input in [
-            "fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).",
-            "fof(assoc_negated_left_eq, axiom, s(a) | ~p(a) = q(a)).",
-            "fof(assoc_negated_left_ne, axiom, s(a) & ~p(a) != q(a)).",
-        ] {
-            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
-            let mut scanner = Scanner::from_user_string(input, false).unwrap();
-            scanner.set_format(IoFormat::Tstp);
+        let input = "fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).";
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut scanner = Scanner::from_user_string(input, false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
 
-            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
-                .unwrap()
-                .unwrap();
+        let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+            .unwrap()
+            .unwrap();
 
-            assert!(
-                matches!(parsed, ParsedAppEncodeFormula::Simple(_)),
-                "{input} should keep using the temporary app-encode bridge"
-            );
-        }
+        assert!(
+            matches!(parsed, ParsedAppEncodeFormula::Simple(_)),
+            "{input} should keep using the temporary app-encode bridge"
+        );
     }
 
     #[test]
@@ -18143,7 +18141,9 @@ input_clause(c2,axiom,[++q(X)]).
         std::fs::write(
             &path,
             "fof(eq_neg_left, axiom, ~p(a) = q(a)).\n\
-             fof(ne_neg_left, axiom, ~p(a) != q(a)).\n",
+             fof(ne_neg_left, axiom, ~p(a) != q(a)).\n\
+             fof(assoc_eq_neg_left, axiom, s(a) | ~p(a) = q(a)).\n\
+             fof(assoc_ne_neg_left, axiom, s(a) & ~p(a) != q(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18164,6 +18164,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("=app_"));
         assert!(printed.contains("tff(ne_neg_left, axiom, ~(app_"));
         assert!(printed.contains("!=app_"));
+        assert!(printed.contains("tff(assoc_eq_neg_left, axiom, (app_"));
+        assert!(printed.contains("|~("));
+        assert!(printed.contains("tff(assoc_ne_neg_left, axiom, (app_"));
+        assert!(printed.contains("&~("));
         assert!(!printed.contains("<=>"));
         assert!(!printed.contains("<~>"));
         assert!(stderr.is_empty());
