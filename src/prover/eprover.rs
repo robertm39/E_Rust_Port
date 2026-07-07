@@ -10943,6 +10943,7 @@ fn parse_simple_tstp_formula_clause(
             bank,
             &formula_kind,
             formula_preprocessing,
+            formula_owner_handling,
             name,
             formula_problem_type,
             role_types,
@@ -11079,14 +11080,10 @@ fn tstp_plain_body_is_represented_formula_owner_supported(
     if matches!(
         formula_owner_handling,
         InputFormulaOwnerHandling::FormulaSetCnf
-    ) {
-        if tstp_body_contains_token(scanner, TokenType::LAMBDA_QUANTOR) {
-            return false;
-        }
-        if tstp_body_contains_token(scanner, TokenType::ITE_TOKEN | TokenType::LET_TOKEN) {
-            // C's FormulaSetCNF2 only runs ITE/LET lifting in the higher-order branch.
-            return false;
-        }
+    ) && tstp_body_contains_token(scanner, TokenType::ITE_TOKEN | TokenType::LET_TOKEN)
+    {
+        // C's FormulaSetCNF2 only runs ITE/LET lifting in the higher-order branch.
+        return false;
     }
     tstp_body_is_represented_formula_owner_supported(scanner, bank)
 }
@@ -11141,6 +11138,7 @@ fn parse_represented_tstp_formula_clause_body(
     bank: &mut TermBank,
     formula_kind: &str,
     formula_preprocessing: FormulaPreprocessing,
+    formula_owner_handling: InputFormulaOwnerHandling,
     name: String,
     problem_type: ProblemType,
     role_types: SimpleFofRoleTypes,
@@ -11200,6 +11198,11 @@ fn parse_represented_tstp_formula_clause_body(
             formula_preprocessing.conjectures_are_questions,
         )?;
     }
+    let parsed_problem_type = simple_fof_formula_owner_problem_type(
+        problem_type,
+        Some(&owner_formula),
+        formula_owner_handling,
+    );
 
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
@@ -11212,7 +11215,7 @@ fn parse_represented_tstp_formula_clause_body(
         clauses: Vec::new(),
         formula_conjecture_seen: role_types.formula_conjecture_seen,
         raw_formula_features,
-        problem_type,
+        problem_type: parsed_problem_type,
     })
 }
 
@@ -11597,7 +11600,12 @@ fn simple_fof_formula_owner_problem_type(
         return base;
     }
     if let Some(formula) = owner_formula {
-        if !formula.is_clause() && simple_fof_term_contains_fool(&[formula.formula()]) {
+        let term = formula.formula();
+        if !formula.is_clause()
+            && (simple_fof_term_contains_fool(&[term])
+                || term.has_lambda_subterm()
+                || term.has_db_subterm())
+        {
             return ProblemType::HigherOrder;
         }
     }
@@ -15514,8 +15522,22 @@ mod tests {
                 "{formula_kind} should route print/syntax lambda bodies through represented owners"
             );
 
+            let mut cnf_lambda_body =
+                Scanner::from_user_string("(^[X: $i]: p @ X) @ a)", false).unwrap();
+            cnf_lambda_body.set_format(IoFormat::Tstp);
+            assert!(
+                super::should_parse_tstp_formula_as_represented_owner(
+                    formula_kind,
+                    &cnf_lambda_body,
+                    &lambda_bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetCnf,
+                ),
+                "{formula_kind} should route proof/CNF lambda bodies through represented owners"
+            );
+
             for cnf_fool in [
-                "(^[X: $i]: p @ X) @ a)",
                 "$ite(q, p(a), p(b)))",
                 "(p(a) | $ite(q, p(a), p(b))))",
                 "p($ite(q, a, b)))",
@@ -15534,9 +15556,48 @@ mod tests {
                         ProblemType::FirstOrder,
                         super::InputFormulaOwnerHandling::FormulaSetCnf,
                     ),
-                    "{formula_kind} should keep proof/CNF lambda/FOOL body {cnf_fool} on the bridge"
+                    "{formula_kind} should keep proof/CNF FOOL body {cnf_fool} on the bridge"
                 );
             }
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn tstp_fof_tff_lambda_bodies_parse_as_represented_formula_owners_for_cnf() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff"] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            for declaration in [
+                "tff(a_type, type, a: $i).",
+                "tff(p_type, type, p: $i > $o).",
+            ] {
+                parse_tstp_formula_clause_into_bank(declaration, &mut bank);
+            }
+
+            let mut scanner = Scanner::from_user_string(
+                &format!("{formula_kind}(lambda_app, axiom, (^[X: $i]: p @ X) @ a)."),
+                false,
+            )
+            .unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = super::parse_simple_tstp_formula_clause(
+                &mut scanner,
+                &mut bank,
+                FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                super::InputFormulaOwnerHandling::FormulaSetCnf,
+            )
+            .unwrap();
+
+            let formula = parsed.owner_formula.unwrap_or_else(|| {
+                panic!("{formula_kind} lambda proof/CNF input should keep a formula owner")
+            });
+            assert!(formula.query_prop(CP_INPUT_FORMULA));
+            assert!(formula.formula().has_lambda_subterm());
+            assert!(parsed.clauses.is_empty());
+            assert_eq!(parsed.problem_type, ProblemType::HigherOrder);
         }
         reset_problem_type();
     }
