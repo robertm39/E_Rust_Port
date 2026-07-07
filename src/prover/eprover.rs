@@ -9446,12 +9446,12 @@ impl InputFormulaOwnerHandling {
         matches!(self, Self::FormulaSetCnf)
     }
 
-    const fn keep_represented_owner(self, base_problem_type: ProblemType) -> bool {
+    const fn keep_represented_owner(self, _base_problem_type: ProblemType) -> bool {
         match self {
             #[cfg(test)]
             Self::ClauseBridge => false,
             Self::FormulaSetPrint => true,
-            Self::FormulaSetCnf => !matches!(base_problem_type, ProblemType::HigherOrder),
+            Self::FormulaSetCnf => true,
         }
     }
 }
@@ -24095,6 +24095,45 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains(&format!("initial(\"{path_arg}\", formula_doc)")));
         assert_eq!(printed.matches("split_conjunct(1)").count(), 2);
+        assert!(!printed.contains(&format!("file('{path_arg}', formula_doc)")));
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_routes_thf_formula_owners_through_cnf_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-thf-formula-owner-cnf-docs");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(formula_doc, axiom, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--cnf",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", formula_doc)")));
+        assert_eq!(printed.matches("split_conjunct(1)").count(), 1);
         assert!(!printed.contains(&format!("file('{path_arg}', formula_doc)")));
         assert!(printed.contains("% CNFization successful!\n"));
         assert!(stderr.is_empty());
