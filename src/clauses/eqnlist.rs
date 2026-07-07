@@ -354,6 +354,119 @@ impl EqnList {
         Ok(maximal.len())
     }
 
+    /// Return whether the literal at `eqn_index` is maximal with respect to
+    /// currently marked maximal literals in this list.
+    ///
+    /// This mirrors C `EqnListEqnIsMaximal`, including its reliance on
+    /// existing `EPIsMaximal` flags rather than recomputing maximality.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Eqn::literal_compare`].
+    #[must_use]
+    pub fn eqn_is_maximal_index(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        eqn_index: usize,
+    ) -> Option<bool> {
+        let eqn = self.literals.get(eqn_index)?;
+        Some(self.literals.iter().enumerate().all(|(index, literal)| {
+            index == eqn_index
+                || !literal.is_maximal()
+                || literal.literal_compare(ocb, bank, eqn) != CompareResult::Greater
+        }))
+    }
+
+    /// Bank-backed variant of [`Self::eqn_is_maximal_index`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Eqn::literal_compare_with_bank`].
+    pub fn eqn_is_maximal_index_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        eqn_index: usize,
+    ) -> Result<Option<bool>, Diagnostic> {
+        let Some(eqn) = self.literals.get(eqn_index) else {
+            return Ok(None);
+        };
+        for (index, literal) in self.literals.iter().enumerate() {
+            if index != eqn_index
+                && literal.is_maximal()
+                && literal.literal_compare_with_bank(ocb, bank, eqn)? == CompareResult::Greater
+            {
+                return Ok(Some(false));
+            }
+        }
+        Ok(Some(true))
+    }
+
+    /// Return whether the literal at `eqn_index` is strictly maximal with
+    /// respect to currently marked maximal literals in this list.
+    ///
+    /// This mirrors C `EqnListEqnIsStrictlyMaximal`: another marked maximal
+    /// literal that is equal to or greater than the candidate makes the
+    /// candidate non-strict.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Eqn::literal_compare`].
+    #[must_use]
+    pub fn eqn_is_strictly_maximal_index(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        eqn_index: usize,
+    ) -> Option<bool> {
+        let eqn = self.literals.get(eqn_index)?;
+        Some(self.literals.iter().enumerate().all(|(index, literal)| {
+            index == eqn_index
+                || !literal.is_maximal()
+                || !matches!(
+                    literal.literal_compare(ocb, bank, eqn),
+                    CompareResult::Equal | CompareResult::Greater
+                )
+        }))
+    }
+
+    /// Bank-backed variant of [`Self::eqn_is_strictly_maximal_index`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Eqn::literal_compare_with_bank`].
+    pub fn eqn_is_strictly_maximal_index_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        eqn_index: usize,
+    ) -> Result<Option<bool>, Diagnostic> {
+        let Some(eqn) = self.literals.get(eqn_index) else {
+            return Ok(None);
+        };
+        for (index, literal) in self.literals.iter().enumerate() {
+            if index != eqn_index
+                && literal.is_maximal()
+                && matches!(
+                    literal.literal_compare_with_bank(ocb, bank, eqn)?,
+                    CompareResult::Equal | CompareResult::Greater
+                )
+            {
+                return Ok(Some(false));
+            }
+        }
+        Ok(Some(true))
+    }
+
     #[must_use]
     pub fn to_stack(&self) -> PStack<Eqn> {
         let mut stack = PStack::new();
@@ -1151,6 +1264,58 @@ mod tests {
         assert!(!list.as_slice()[1].is_strictly_maximal());
         assert!(!list.as_slice()[2].query_prop(EP_IS_STRICTLY_MAXIMAL));
         assert_eq!(list.query_prop_number(EP_IS_MAXIMAL), 2);
+
+        assert_eq!(list.eqn_is_maximal_index(&mut ocb, &bank, 0), Some(true));
+        assert_eq!(list.eqn_is_maximal_index(&mut ocb, &bank, 1), Some(true));
+        assert_eq!(list.eqn_is_maximal_index(&mut ocb, &bank, 2), Some(false));
+        assert_eq!(list.eqn_is_maximal_index(&mut ocb, &bank, 3), None);
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index(&mut ocb, &bank, 0),
+            Some(false)
+        );
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index(&mut ocb, &bank, 1),
+            Some(false)
+        );
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index(&mut ocb, &bank, 2),
+            Some(false)
+        );
+
+        assert_eq!(
+            list.eqn_is_maximal_index_with_bank(&mut ocb, &mut bank, 2)
+                .unwrap(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn direct_strict_maximal_query_uses_existing_maximal_flags_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let dominant = eqn(&mut bank, &f_a, &a, true);
+        let dominated = eqn(&mut bank, &a, &a, true);
+        let mut list = EqnList::from_vec(vec![dominant, dominated]);
+        let mut ocb = kbo_ocb(&bank);
+
+        assert_eq!(list.mark_maximal_literals(&mut ocb, &bank), 1);
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index(&mut ocb, &bank, 0),
+            Some(true)
+        );
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index(&mut ocb, &bank, 1),
+            Some(false)
+        );
+
+        list.as_mut_slice()[0].del_prop(EP_IS_MAXIMAL);
+        assert_eq!(list.eqn_is_maximal_index(&mut ocb, &bank, 1), Some(true));
+        assert_eq!(
+            list.eqn_is_strictly_maximal_index_with_bank(&mut ocb, &mut bank, 1)
+                .unwrap(),
+            Some(true)
+        );
     }
 
     #[test]

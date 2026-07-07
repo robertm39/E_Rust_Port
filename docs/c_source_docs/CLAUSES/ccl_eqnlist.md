@@ -233,7 +233,7 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 
 ### Rust Port Status Notes
 
-- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, stack-shaped conversion, property mutation/querying, term-existence checks, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering over the currently ported term/equation parser surface.
+- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, stack-shaped conversion, property mutation/querying, term-existence checks, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking plus C's direct maximal/strict-maximal query predicates over already marked literals, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering over the currently ported term/equation parser surface.
 
 ### Change Later
 
