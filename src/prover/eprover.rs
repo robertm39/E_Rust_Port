@@ -10472,7 +10472,6 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner) -> bool {
             || lookahead.test_tok(
                 TokenType::EQUAL_SIGN
                     | TokenType::NEG_EQUAL_SIGN
-                    | TokenType::APPLICATION
                     | TokenType::ITE_TOKEN
                     | TokenType::LET_TOKEN
                     | TokenType::LAMBDA_QUANTOR,
@@ -17485,6 +17484,7 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         for input in [
             "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
+            "fof(application_marker, axiom, ~ @ p(a)).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17510,7 +17510,6 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "fof(eq_right, axiom, p(a) = (q(a)|r(a))).",
             "fof(fool_body, axiom, $ite(p(a),q(a),r(a))).",
-            "fof(application_marker, axiom, ~ @ p(a)).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {
