@@ -33352,6 +33352,40 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proves_existential_fof_fool_bodies() {
+        let _guard = global_state_lock();
+        let path = temp_path("existential-fof-fool-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(cond, axiom, p(a)).\n\
+             fof(fact, axiom, q(a)).\n\
+             fof(ite_goal, conjecture, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             fof(let_goal, conjecture, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_direct_fof_term_ite_argument() {
         let _guard = global_state_lock();
         let path = temp_path("direct-fof-term-ite-argument-proof");
