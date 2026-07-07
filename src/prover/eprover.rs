@@ -26646,6 +26646,48 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_statistics_count_formula_gsine_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-gsine-statistics");
+        std::fs::write(
+            &path,
+            "fof(goal, conjecture, g=g).\n\
+             fof(link, axiom, g=h).\n\
+             fof(far, axiom, h=k).\n\
+             fof(irr, axiom, u=u).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--tstp-out",
+                "--no-generation",
+                "--print-statistics",
+                "--sine=GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)\n"));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(printed.contains("% Parsed axioms                        : 4\n"));
+        assert!(printed.contains("% Removed by relevancy pruning/SinE    : 1\n"));
+        assert!(printed.contains("% Initial clauses                      : 3\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_statistics_count_clause_gsine_pruning() {
         let _guard = global_state_lock();
         let path = temp_path("proof-gsine-statistics");
