@@ -86,8 +86,8 @@ Source files reviewed: `CLAUSES/ccl_gd_transformation.h`, `CLAUSES/ccl_gd_transf
 ### Rust Port Status Notes
 
 - `src/clauses/gd_transformation.rs` ports the clause-level goal-definition transform over the represented Rust `ClauseSet`, including conjecture-clause filtering, selected positive/negative literal collection, non-constant ground-term definition, recursive subterm definition mode, definition normal forms through already introduced definitions, fresh typed `edef` constant creation, positive unit equality clauses, and `DCIntroDef` derivation entries.
-- Supported executable prune/proof-search paths now apply `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning and BCE, and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count can observe them.
-- Full formula-owner preprocessing and exact integration with later predicate elimination remain pending; the current call site matches the C ordering relative to BCE and the currently unported predicate-elimination pass by running after BCE.
+- Supported executable prune/proof-search paths now apply `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning and BCE, and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. Represented FOF formula-origin conjectures reach the same path after formula-owner CNF emits conjecture clauses. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count can observe them.
+- Broader formula-owner preprocessing, exact C pointer-order term traversal, and stable proof-state handles remain pending integration points.
 
 ### Change Later
 

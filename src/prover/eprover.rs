@@ -22140,6 +22140,51 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_prune_only_applies_bce_to_fof_formula_origin_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-fof-bce");
+        std::fs::write(
+            &path,
+            "fof(left, axiom, (p(a)|q(a))).\n\
+             fof(right, axiom, (~p(a)|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--bce=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("file('{path_arg}', left)")));
+        assert!(printed.contains(&format!("file('{path_arg}', right)")));
+        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        let final_docs = printed
+            .split("% BCE eliminated: 2.\n")
+            .nth(1)
+            .expect("BCE summary should precede final prune output");
+        assert!(!final_docs.contains(&format!("file('{path_arg}', left)")));
+        assert!(!final_docs.contains(&format!("file('{path_arg}', right)")));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_applies_pred_elim_to_first_order_shaped_thf() {
         let _guard = global_state_lock();
         let path = temp_path("prune-thf-pred-elim");
@@ -22650,6 +22695,49 @@ input_clause(c2,axiom,[++q(X)]).
             "cnf(c_0_1, negated_conjecture, (f(a)=a), file('{path_arg}', goal)).\n"
         )));
         assert!(printed.contains("cnf(c_0_2, plain, (f(a)=edef"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_applies_goal_defs_to_fof_formula_origin_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-fof-goal-defs");
+        std::fs::write(&path, "fof(goal, conjecture, f(a)=a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--goal-defs=All",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!(
+            "fof(c_0_1, conjecture, f(a)=a, file('{path_arg}', goal)).\n"
+        )));
+        assert!(printed.contains("inference(assume_negation, [status(cth)]"));
+        assert!(printed.contains("cnf(c_0_5, negated_conjecture, (f(a)!=a)"));
+        let goal_index = printed
+            .find(&format!("file('{path_arg}', goal)"))
+            .expect("formula-origin goal source should be documented");
+        let definition_index = printed
+            .find("plain, (f(a)=edef")
+            .expect("goal definition should be inserted before final prune output");
+        assert!(goal_index < definition_index);
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
