@@ -14062,9 +14062,22 @@ fn simple_fof_recover_tstp_arrow_equality(
 }
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
-    simple_fof_starts_tstp_application_formula_at(scanner, 0)
-        || (scanner.test_tok(TokenType::OPEN_BRACKET)
-            && simple_fof_starts_tstp_application_formula_at(scanner, 1))
+    simple_fof_starts_tstp_application_formula_after_wrappers(scanner, 0)
+}
+
+fn simple_fof_starts_tstp_application_formula_after_wrappers(
+    scanner: &Scanner,
+    mut look: usize,
+) -> bool {
+    loop {
+        if simple_fof_starts_tstp_application_formula_at(scanner, look) {
+            return true;
+        }
+        if !scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET) {
+            return false;
+        }
+        look += 1;
+    }
 }
 
 fn simple_fof_starts_tstp_application_formula_at(scanner: &Scanner, look: usize) -> bool {
@@ -14072,6 +14085,7 @@ fn simple_fof_starts_tstp_application_formula_at(scanner: &Scanner, look: usize)
         || simple_fof_starts_tstp_parenthesized_lambda_application_at(scanner, look)
         || simple_fof_starts_tstp_parenthesized_application_formula_at(scanner, look)
         || simple_fof_starts_tstp_parenthesized_application_head_at(scanner, look)
+        || simple_fof_starts_tstp_wrapped_application_head_at(scanner, look)
         || (scanner_test_tok_at(scanner, look, TokenType::NAME | TokenType::SEM_IDENT)
             && scanner_test_tok_at(scanner, look + 1, TokenType::APPLICATION))
 }
@@ -14101,6 +14115,33 @@ fn simple_fof_starts_tstp_parenthesized_application_head_at(
         && scanner_test_tok_at(scanner, look + 1, TokenType::NAME | TokenType::SEM_IDENT)
         && scanner_test_tok_at(scanner, look + 2, TokenType::CLOSE_BRACKET)
         && scanner_test_tok_at(scanner, look + 3, TokenType::APPLICATION)
+}
+
+fn simple_fof_starts_tstp_wrapped_application_head_at(scanner: &Scanner, look: usize) -> bool {
+    let mut head_look = look;
+    let mut wrappers = 0;
+    while scanner_test_tok_at(scanner, head_look, TokenType::OPEN_BRACKET) {
+        head_look += 1;
+        wrappers += 1;
+    }
+    if wrappers < 2
+        || !scanner_test_tok_at(
+            scanner,
+            head_look,
+            TokenType::NAME | TokenType::SEM_IDENT | TokenType::FOF_BIN_OP | TokenType::TILDE_SIGN,
+        )
+    {
+        return false;
+    }
+
+    let mut close_look = head_look + 1;
+    for _ in 0..wrappers {
+        if !scanner_test_tok_at(scanner, close_look, TokenType::CLOSE_BRACKET) {
+            return false;
+        }
+        close_look += 1;
+    }
+    scanner_test_tok_at(scanner, close_look, TokenType::APPLICATION)
 }
 
 fn simple_fof_starts_tstp_logical_head_application_at(scanner: &Scanner, look: usize) -> bool {
@@ -14192,9 +14233,7 @@ fn simple_fof_tstp_known_term_equality_left(bank: &TermBank, left: &Term) -> boo
 }
 
 fn simple_fof_equality_right_starts_tstp_application_formula(scanner: &Scanner) -> bool {
-    simple_fof_starts_tstp_application_formula_at(scanner, 1)
-        || (scanner_test_tok_at(scanner, 1, TokenType::OPEN_BRACKET)
-            && simple_fof_starts_tstp_application_formula_at(scanner, 2))
+    simple_fof_starts_tstp_application_formula_after_wrappers(scanner, 1)
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -17418,6 +17457,7 @@ input_clause(c2,axiom,[++q(X)]).
              fof(neg_app, axiom, ~ p @ a).\n\
              fof(and_app, axiom, p @ a & q @ a).\n\
              fof(paren_app, axiom, (p) @ a).\n\
+             fof(deep_wrapped_app, axiom, (((p @ a)))).\n\
              fof(paren_neg_app, axiom, ~ (p) @ a).\n",
         )
         .unwrap();
@@ -17440,6 +17480,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(and_app, axiom, (app_"));
         assert!(printed.contains("&app_"));
         assert!(printed.contains("tff(paren_app, axiom, app_"));
+        assert!(printed.contains("tff(deep_wrapped_app, axiom, app_"));
         assert!(printed.contains("tff(paren_neg_app, axiom, ~(app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -17461,6 +17502,9 @@ input_clause(c2,axiom,[++q(X)]).
              thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
              thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
              thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(deep_wrapped_curried_eq, axiom, (((h @ a) @ b)) = c).\n\
+             thf(deep_wrapped_curried_eq_right, axiom, c = (((h @ a) @ b))).\n\
+             thf(deep_parenthesized_head_eq_right, axiom, c = ((g)) @ a).\n\
              thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
@@ -17484,6 +17528,9 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(curried_eq_right_plain, axiom, c=app_"));
         assert!(printed.contains("tff(wrapped_curried_eq, axiom, app_"));
         assert!(printed.contains("tff(wrapped_curried_eq_right, axiom, c=app_"));
+        assert!(printed.contains("tff(deep_wrapped_curried_eq, axiom, app_"));
+        assert!(printed.contains("tff(deep_wrapped_curried_eq_right, axiom, c=app_"));
+        assert!(printed.contains("tff(deep_parenthesized_head_eq_right, axiom, c=app_"));
         assert!(printed.contains("tff(parenthesized_head_eq_right, axiom, c=app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -18864,6 +18911,7 @@ input_clause(c2,axiom,[++q(X)]).
              fof(and_app, axiom, p @ a & q @ a).\n\
              fof(ex_app, axiom, ?[X]:p @ X).\n\
              fof(paren_app, axiom, (p) @ a).\n\
+             fof(deep_wrapped_app, axiom, (((p @ a)))).\n\
              fof(paren_ex_app, axiom, ?[X]:(p) @ X).\n",
         )
         .unwrap();
@@ -18903,6 +18951,9 @@ input_clause(c2,axiom,[++q(X)]).
              thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
              thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
              thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(deep_wrapped_curried_eq, axiom, (((h @ a) @ b)) = c).\n\
+             thf(deep_wrapped_curried_eq_right, axiom, c = (((h @ a) @ b))).\n\
+             thf(deep_parenthesized_head_eq_right, axiom, c = ((g)) @ a).\n\
              thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
@@ -27329,6 +27380,7 @@ input_clause(c2,axiom,[++q(X)]).
              fof(and_app, axiom, p @ a & q @ a).\n\
              fof(ex_app, axiom, ?[X]:p @ X).\n\
              fof(paren_app, axiom, (p) @ a).\n\
+             fof(deep_wrapped_app, axiom, (((p @ a)))).\n\
              fof(paren_neg_app, axiom, ~ (p) @ a).\n\
              fof(paren_ex_app, axiom, ?[X]:(p) @ X).\n",
         )
@@ -27351,6 +27403,7 @@ input_clause(c2,axiom,[++q(X)]).
             &[
                 "fof(app, axiom",
                 "fof(neg_app, axiom",
+                "fof(deep_wrapped_app, axiom",
                 "fof(paren_ex_app, axiom",
             ],
         );
@@ -27373,6 +27426,9 @@ input_clause(c2,axiom,[++q(X)]).
              thf(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
              thf(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
              thf(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             thf(deep_wrapped_curried_eq, axiom, (((h @ a) @ b)) = c).\n\
+             thf(deep_wrapped_curried_eq_right, axiom, c = (((h @ a) @ b))).\n\
+             thf(deep_parenthesized_head_eq_right, axiom, c = ((g)) @ a).\n\
              thf(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
@@ -27394,6 +27450,9 @@ input_clause(c2,axiom,[++q(X)]).
             &[
                 "thf(curried_eq, axiom",
                 "thf(curried_eq_right, axiom",
+                "thf(deep_wrapped_curried_eq, axiom",
+                "thf(deep_wrapped_curried_eq_right, axiom",
+                "thf(deep_parenthesized_head_eq_right, axiom",
                 "thf(parenthesized_head_eq_right, axiom",
             ],
         );
