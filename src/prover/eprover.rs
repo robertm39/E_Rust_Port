@@ -42,8 +42,8 @@ use crate::clauses::clause_props::{
     CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_fcode_alloc,
-    tformula_has_free_vars, tformula_lit_alloc, tformula_prop_constant_alloc,
+    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_expand_distinct,
+    tformula_fcode_alloc, tformula_has_free_vars, tformula_lit_alloc, tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -10428,6 +10428,9 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     if scanner.test_id("$distinct") {
         return true;
     }
+    if tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank) {
+        return true;
+    }
 
     match formula_kind {
         "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner, bank),
@@ -10448,6 +10451,8 @@ fn parse_tstp_app_encode_owner_formula(
 ) -> Result<Term, Diagnostic> {
     if scanner.test_id("$distinct") {
         bank.parse_tstp_distinct(scanner)
+    } else if let Some(distinct) = parse_negated_tstp_distinct_formula(scanner, bank)? {
+        Ok(distinct)
     } else if let Some(distinct) = parse_parenthesized_tstp_distinct_formula(scanner, bank)? {
         Ok(distinct)
     } else if formula_kind == "tcf" {
@@ -10474,6 +10479,9 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
     if tstp_app_encode_body_is_parenthesized_top_level_distinct(scanner, bank) {
+        return false;
+    }
+    if tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank) {
         return false;
     }
     if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
@@ -10531,6 +10539,59 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         previous_was_colon = current_is_colon;
         previous_was_close_square = current_is_close_square;
     }
+}
+
+fn tstp_app_encode_body_is_negated_top_level_distinct(scanner: &Scanner, bank: &TermBank) -> bool {
+    if !scanner.test_tok(TokenType::TILDE_SIGN) {
+        return false;
+    }
+
+    let mut lookahead = scanner.clone();
+    let mut probe = bank.clone();
+    parse_negated_tstp_distinct_formula(&mut lookahead, &mut probe)
+        .is_ok_and(|formula| formula.is_some())
+        && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
+}
+
+fn parse_negated_tstp_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    if !scanner.test_tok(TokenType::TILDE_SIGN) {
+        return Ok(None);
+    }
+
+    let mut lookahead = scanner.clone();
+    lookahead.accept_tok(TokenType::TILDE_SIGN)?;
+    if lookahead.test_tok(TokenType::APPLICATION) {
+        lookahead.accept_tok(TokenType::APPLICATION)?;
+    }
+    let mut probe = bank.clone();
+    let is_distinct = if lookahead.test_id("$distinct") {
+        true
+    } else {
+        parse_parenthesized_tstp_distinct_formula(&mut lookahead, &mut probe)?.is_some()
+    };
+    if !is_distinct {
+        return Ok(None);
+    }
+
+    scanner.accept_tok(TokenType::TILDE_SIGN)?;
+    if scanner.test_tok(TokenType::APPLICATION) {
+        scanner.accept_tok(TokenType::APPLICATION)?;
+    }
+    let distinct = if scanner.test_id("$distinct") {
+        bank.parse_tstp_distinct(scanner)?
+    } else {
+        parse_parenthesized_tstp_distinct_formula(scanner, bank)?.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "expected parenthesized $distinct after negation",
+            )
+        })?
+    };
+    let expanded = tformula_expand_distinct(bank, &distinct)?;
+    tformula_fcode_alloc(bank, bank.signature().not_code(), expanded, None).map(Some)
 }
 
 fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
@@ -17744,6 +17805,8 @@ input_clause(c2,axiom,[++q(X)]).
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
+            "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "fof(distinct_negated_parenthesized, axiom, ~($distinct(a,b,c))).",
         ] {
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             let mut scanner = Scanner::from_user_string(input, false).unwrap();
@@ -17764,7 +17827,7 @@ input_clause(c2,axiom,[++q(X)]).
     fn app_encode_tstp_fof_bridge_shim_entries_stay_on_bridge() {
         let _guard = global_state_lock();
         for input in [
-            "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).",
             "fof(assoc_negated_left_eq, axiom, s(a) | ~p(a) = q(a)).",
             "fof(assoc_negated_left_ne, axiom, s(a) & ~p(a) != q(a)).",
         ] {
@@ -17926,7 +17989,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(distinct, axiom, $distinct(a,b,c)).\n\
              fof(wrapped, axiom, ($distinct(d,e,f))).\n\
              fof(double_wrapped, axiom, (($distinct(g,h,i)))).\n\
-             tff(tff_wrapped, axiom, ($distinct(j,k,l))).\n",
+             tff(tff_wrapped, axiom, ($distinct(j,k,l))).\n\
+             fof(negated, axiom, ~$distinct(m,n,o)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17955,6 +18019,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("j!=k"));
         assert!(printed.contains("j!=l"));
         assert!(printed.contains("k!=l"));
+        assert!(printed.contains("tff(negated, axiom, ~("));
+        assert!(printed.contains("m!=n"));
+        assert!(printed.contains("m!=o"));
+        assert!(printed.contains("n!=o"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
