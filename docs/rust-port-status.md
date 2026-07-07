@@ -607,11 +607,11 @@ C source references:
 
 Implemented:
 
-- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, top-position marking of parsed terms, signature printing including C's `sig_print_operator` stdout side-channel for per-symbol newlines and missing-type markers under file output, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `term2dag` binary integration, including C-shaped help text with the original spacer-preserving banner, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, top-position marking of parsed terms, signature printing including C's `sig_print_operator` stdout side-channel for per-symbol newlines and missing-type markers under file output, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
-- Direct byte-for-byte comparison against a built C `term2dag` executable remains pending for the full help stream, exact internal property values across larger typed/higher-order term corpora, and platform-specific system-error suffixes.
+- Direct byte-for-byte comparison against a built C `term2dag` executable remains pending for option-table wrapping in the full help stream, exact internal property values across larger typed/higher-order term corpora, and platform-specific system-error suffixes.
 
 Change-later notes:
 

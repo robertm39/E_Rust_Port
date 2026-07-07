@@ -18,6 +18,10 @@ pub const PROGRAM_NAME: &str = "term2dag";
 const VERSION: &str = "0.1 - Sat Nov 29 16:39:20 MET 1997";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
+const HELP_SPACE_46: &str = "                                              ";
+const HELP_SPACE_28: &str = "                            ";
+const HELP_SPACE_13: &str = "             ";
+const HELP_SPACE_54: &str = "                                                      ";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -204,14 +208,11 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
 #[must_use]
 pub fn print_help() -> String {
     let mut result = format!(
-        "\n\
-\n\
-term2dag {VERSION}\n\
-\n\
-Usage: term2dag [options] [files]\n\
-\n\
-Read a set of terms and print a DAG representing it.\n\
-\n"
+        "\n\n{HELP_SPACE_46}term2dag {VERSION}\n\
+         {HELP_SPACE_28}\n\
+         {HELP_SPACE_46}Usage: term2dag [options] [files]\n\
+         {HELP_SPACE_13}\n\
+         {HELP_SPACE_54}Read a set of terms and print a DAG representing it.\n\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
     result
@@ -344,8 +345,15 @@ mod tests {
 
         assert_eq!(status, 0);
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.contains("term2dag 0.1 - Sat Nov 29 16:39:20 MET 1997"));
-        assert!(help.contains("Usage: term2dag [options] [files]"));
+        assert!(help.starts_with(
+            "\n\n                                              term2dag 0.1 - Sat Nov 29 16:39:20 MET 1997\n"
+        ));
+        assert!(help.contains(
+            "\n                                              Usage: term2dag [options] [files]\n"
+        ));
+        assert!(help.contains(
+            "\n                                                      Read a set of terms and print a DAG representing it.\n"
+        ));
         assert!(help.contains("--print-reference-number[=<arg>]"));
         assert!(stderr.is_empty());
     }
@@ -625,7 +633,11 @@ mod tests {
     fn help_text_preserves_c_banner() {
         let rendered = print_help();
 
-        assert!(rendered.starts_with("\n\nterm2dag 0.1 - Sat Nov 29 16:39:20 MET 1997\n"));
-        assert!(rendered.contains("Read a set of terms and print a DAG representing it."));
+        assert!(rendered.starts_with(
+            "\n\n                                              term2dag 0.1 - Sat Nov 29 16:39:20 MET 1997\n"
+        ));
+        assert!(rendered.contains(
+            "\n                                                      Read a set of terms and print a DAG representing it.\n"
+        ));
     }
 }
