@@ -10495,7 +10495,6 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
             && scanner_test_tok(
                 lookahead.look_token(1),
                 TokenType::OPEN_BRACKET
-                    | TokenType::TILDE_SIGN
                     | TokenType::UNIV_QUANTOR
                     | TokenType::EXIST_QUANTOR
                     | TokenType::ITE_TOKEN
@@ -17710,6 +17709,8 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
+            "fof(assoc_negated_left_eq, axiom, s(a) | ~p(a) = q(a)).",
+            "fof(assoc_negated_left_ne, axiom, s(a) & ~p(a) != q(a)).",
         ] {
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             let mut scanner = Scanner::from_user_string(input, false).unwrap();
