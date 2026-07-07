@@ -1563,8 +1563,8 @@ pub fn term_app_encode(orig: &Term, sig: &mut Signature) -> Result<Term, Diagnos
         .expect("app-encoding requires initialized args");
 
     assert!(
-        orig_prefix.is_free_var() || orig_prefix.type_().is_none(),
-        "non-variable prefixes are inferred during app-encoding"
+        orig_prefix.is_free_var() || orig_prefix.is_lambda() || orig_prefix.type_().is_none(),
+        "non-variable non-lambda prefixes are inferred during app-encoding"
     );
     type_infer_sort_with_options(
         sig,
@@ -2946,6 +2946,40 @@ mod tests {
         assert_eq!(encoded.arity(), 2);
         assert_eq!(encoded.argument(0), lambda.argument(0));
         assert_eq!(encoded.argument(1), lambda.argument(1));
+    }
+
+    #[test]
+    fn term_app_encode_accepts_applied_lambda_prefix() {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let i_type = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let predicate_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), bool_type]));
+        let p_code = sig.insert_id("p", 1, false);
+        sig.declare_final_type(p_code, predicate_type.clone())
+            .unwrap();
+        let a_code = sig.insert_id("a", 0, false);
+        sig.declare_final_type(a_code, i_type.clone()).unwrap();
+        let binder = typed_var(-2, &i_type);
+        let body = Term::top_alloc(p_code, 1);
+        body.set_argument(0, binder.clone());
+        type_infer_sort(&mut sig, &body).unwrap();
+        let lambda = Term::top_alloc(SIG_NAMED_LAMBDA_CODE, 2);
+        lambda.set_argument(0, binder);
+        lambda.set_argument(1, body);
+        lambda.set_type(Some(predicate_type));
+        let a = Term::const_cell_alloc(a_code);
+        a.set_type(Some(i_type));
+        let applied = term_apply_arg(sig.type_bank_mut(), &lambda, &a);
+
+        let encoded = term_app_encode(&applied, &mut sig).unwrap();
+
+        assert!(sig.query_prop(encoded.f_code(), FP_TYPED_APPLICATION));
+        assert_eq!(encoded.arity(), 2);
+        assert_eq!(encoded.argument(0).unwrap().f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(encoded.argument(1).unwrap().f_code(), a_code);
     }
 
     #[test]

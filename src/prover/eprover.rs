@@ -17546,6 +17546,47 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_accepts_thf_applied_lambda_prefix() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-thf-applied-lambda-prefix");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(lambda_app, axiom, (^[X: person]: p @ X) @ a).\n\
+             thf(lambda_eq_left, axiom, ((^[X: person]: f @ X) @ a) = b).\n\
+             thf(lambda_eq_right, axiom, b = ((^[X: person]: f @ X) @ a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(lambda_app, axiom, app_"));
+        assert!(printed.contains("($named_lam("));
+        assert!(printed.contains(",a))."));
+        assert!(printed.contains("tff(lambda_eq_left, axiom, app_"));
+        assert!(printed.contains(",a)=b)."));
+        assert!(printed.contains("tff(lambda_eq_right, axiom, b=app_"));
+        assert!(printed.contains(",a))."));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_accepts_tstp_application_negation_marker() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-tstp-application-negation");
