@@ -10468,6 +10468,7 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
+    let mut equality_operand_start = scanner.clone();
     let mut previous_was_colon = false;
     loop {
         if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
@@ -10476,14 +10477,22 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
             && !(previous_was_colon && lookahead.test_tok(TokenType::EQUAL_SIGN))
         {
-            return !tstp_app_encode_fof_starts_owner_supported_equality(scanner, bank);
+            return !tstp_app_encode_fof_starts_owner_supported_equality(
+                &equality_operand_start,
+                bank,
+            );
         }
         if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
             return false;
         }
+        let starts_next_operand = lookahead.test_tok(TokenType::FOF_BIN_OP)
+            && !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN);
         previous_was_colon = lookahead.test_tok(TokenType::COLON);
         if lookahead.next_token().is_err() {
             return false;
+        }
+        if starts_next_operand {
+            equality_operand_start = lookahead.clone();
         }
     }
 }
@@ -17535,6 +17544,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_term_eq_wrapped, axiom, ($let(f:$i, f := a, f) = b)).",
             "fof(eq_formula_right, axiom, p(a) = (q(a)|r(a))).",
             "fof(ne_formula_right, axiom, p(a) != ![X]:q(X)).",
+            "fof(eq_formula_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).",
+            "fof(ne_formula_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17882,7 +17893,9 @@ input_clause(c2,axiom,[++q(X)]).
         std::fs::write(
             &path,
             "fof(eq_right, axiom, p(a) = (q(a)|r(a))).\n\
-             fof(ne_right, axiom, p(a) != ![X]:q(X)).\n",
+             fof(ne_right, axiom, p(a) != ![X]:q(X)).\n\
+             fof(eq_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).\n\
+             fof(ne_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17903,6 +17916,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("<=>"));
         assert!(printed.contains("tff(ne_right, axiom, (app_"));
         assert!(printed.contains("<~>"));
+        assert!(printed.contains("tff(eq_right_disjunct, axiom, (app_"));
+        assert!(printed.contains("|(app_"));
+        assert!(printed.contains("tff(ne_right_conjunct, axiom, (app_"));
+        assert!(printed.contains("&(app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
