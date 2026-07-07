@@ -11,6 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DOC_ROOT = REPO_ROOT / "docs" / "c_source_docs"
 
 LEGACY_TEXT = (
+    "C Behaviors To Revisit After Compatibility",
+    "Cleanup Candidates",
+    "Compatibility Candidates",
     "Change-Later",
     "Change-later",
     "Change Later Candidates",
