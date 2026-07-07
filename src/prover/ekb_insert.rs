@@ -592,6 +592,49 @@ mod tests {
     }
 
     #[test]
+    fn malformed_stdin_leaves_c_copy_before_parse_orphan() {
+        let _guard = global_state_lock();
+        let kb_path = temp_path("malformed-copy-kb");
+        create_empty_kb(&kb_path);
+        let kb_arg = kb_path.to_str().expect("path is utf8");
+        let kb_option = format!("--knowledge-base={kb_arg}");
+        let malformed_source = "this is not a valid learned example\n";
+
+        let mut stdin = Cursor::new(malformed_source.as_bytes().to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [PROGRAM_NAME, &kb_option],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(
+            std::fs::read_to_string(kb_path.join("FILES").join("__problem__1"))
+                .expect("stored malformed file is readable"),
+            malformed_source
+        );
+        assert_eq!(
+            std::fs::read_to_string(kb_path.join("problems")).expect("problems is readable"),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(kb_path.join("clausepatterns"))
+                .expect("clausepatterns is readable"),
+            ""
+        );
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8(stderr)
+            .expect("stderr is utf8")
+            .is_empty());
+
+        remove_dir_if_present(&kb_path);
+    }
+
+    #[test]
     fn verbose_run_reports_c_progress_messages() {
         let _guard = global_state_lock();
         let kb_path = temp_path("verbose-kb");
