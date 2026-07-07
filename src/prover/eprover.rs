@@ -22275,6 +22275,52 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_prune_only_unfolds_formula_origin_eq_definition_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-formula-eqdef-unfold");
+        std::fs::write(
+            &path,
+            "fof(def, axiom, ![X]:(f(X)=X)).\n\
+             fof(use, axiom, p(f(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("p(a)"));
+        assert!(printed.contains("p(f(a))"));
+        assert!(printed.contains(&format!("file('{path_arg}', def)")));
+        assert!(printed.contains("inference(split_conjunct, [status(thm)]"));
+        assert!(printed.contains("inference(rw, [status(thm)]"));
+        let unfolding_index = printed
+            .find("['Unfolding']")
+            .expect("formula-origin definition should unfold the use clause");
+        let post_unfolding = &printed[unfolding_index..];
+        assert!(post_unfolding.contains("p(a)"));
+        assert!(!post_unfolding.contains("p(f(a))"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_no_eq_unfolding_preserves_eq_definitions() {
         let _guard = global_state_lock();
         let path = temp_path("prune-no-eqdef-unfold");
