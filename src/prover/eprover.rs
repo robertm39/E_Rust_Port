@@ -9853,8 +9853,8 @@ fn parse_tptp_app_encode_entry_list(
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
-            let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
-            result.add_formula_owner(ParsedAppEncodeFormula::Simple(formula), bank, formulas)?;
+            let formula = parse_tptp_app_encode_formula(scanner, bank)?;
+            result.add_formula_owner(formula, bank, formulas)?;
         } else if scanner.test_id("include") {
             result
                 .include_echoes
@@ -9890,8 +9890,8 @@ fn parse_tstp_app_encode_entry_list(
             )?;
             result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
-            let formula = parse_simple_tptp_app_encode_formula(scanner, bank)?;
-            result.add_formula_owner(ParsedAppEncodeFormula::Simple(formula), bank, formulas)?;
+            let formula = parse_tptp_app_encode_formula(scanner, bank)?;
+            result.add_formula_owner(formula, bank, formulas)?;
         } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
@@ -10415,10 +10415,10 @@ fn parse_represented_tstp_app_encode_formula_body(
     })
 }
 
-fn parse_simple_tptp_app_encode_formula(
+fn parse_tptp_app_encode_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<SimpleAppEncodedFormula, Diagnostic> {
+) -> Result<ParsedAppEncodeFormula, Diagnostic> {
     bank.vars().clear_ext_names();
 
     scanner.accept_id("input_formula")?;
@@ -10433,18 +10433,20 @@ fn parse_simple_tptp_app_encode_formula(
     scanner.accept_tok(TokenType::COMMA)?;
 
     let formula_type = old_tptp_input_formula_clause_type(&role);
-    let formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
-    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
-        return Err(simple_fof_unsupported_error(scanner));
-    }
+    let formula = bank.parse_tformula_tptp(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    Ok(SimpleAppEncodedFormula {
-        name,
-        type_: formula_type | CP_INPUT_FORMULA,
+    Ok(ParsedAppEncodeFormula::Represented {
+        formula: represented_formula_owner(
+            formula,
+            formula_type | CP_INPUT_FORMULA,
+            &name,
+            None,
+            -1,
+            -1,
+        ),
         problem_type: ProblemType::FirstOrder,
-        formulas,
     })
 }
 
@@ -18191,6 +18193,50 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("input_clause"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_preserves_old_tptp_formula_equality_spelling() {
+        let _guard = global_state_lock();
+        for (name, format_flag) in [
+            ("app-encode-old-tptp-formula-equality", "--tptp-in"),
+            ("app-encode-tstp-legacy-formula-equality", "--tstp-in"),
+        ] {
+            let path = temp_path(name);
+            std::fs::write(
+                &path,
+                "input_formula(old_eq, axiom, p(a) = q(a)).\n\
+                 input_formula(old_ne, axiom, p(a) != q(a)).\n",
+            )
+            .unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                ["eprover", "--app-encode", format_flag, path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            let printed = String::from_utf8(stdout).unwrap();
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            let eq_line = printed
+                .lines()
+                .find(|line| line.starts_with("tff(old_eq, "))
+                .unwrap();
+            let ne_line = printed
+                .lines()
+                .find(|line| line.starts_with("tff(old_ne, "))
+                .unwrap();
+            assert!(eq_line.contains("=app_"));
+            assert!(!eq_line.contains("<=>"));
+            assert!(ne_line.contains("!=app_"));
+            assert!(!ne_line.contains("<~>"));
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 
     #[test]
