@@ -26637,6 +26637,43 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_applies_bce_to_fof_formula_origin_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-bce");
+        std::fs::write(
+            &path,
+            "fof(left, axiom, (p(a)|q(a))).\n\
+             fof(right, axiom, (~p(a)|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--bce=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 0\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_applies_selected_pred_elim_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-pred-elim");
@@ -26700,6 +26737,39 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Initial clauses                      : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_goal_defs_to_fof_formula_origin_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-goal-defs");
+        std::fs::write(&path, "fof(goal, conjecture, f(a)=a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--goal-defs=All",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(printed.contains("% Initial clauses                      : 1\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
+        assert!(printed.contains("%f(a)=edef"));
+        assert!(printed.contains("%?- edef"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status CounterSatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
