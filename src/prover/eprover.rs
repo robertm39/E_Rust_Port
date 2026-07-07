@@ -11074,25 +11074,50 @@ fn tstp_plain_body_is_represented_formula_owner_supported(
     bank: &TermBank,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> bool {
-    !tstp_body_contains_plain_bridge_only_formula_owner_token(
-        scanner,
-        matches!(
-            formula_owner_handling,
-            InputFormulaOwnerHandling::FormulaSetCnf
-        ),
-    ) && tstp_body_is_represented_formula_owner_supported(scanner, bank)
+    if tstp_body_contains_plain_bridge_only_formula_owner_token(scanner) {
+        return false;
+    }
+
+    if matches!(
+        formula_owner_handling,
+        InputFormulaOwnerHandling::FormulaSetCnf
+    ) && tstp_body_contains_ite_token(scanner)
+    {
+        // C's FormulaSetCNF2 only runs TFormulaSetLiftItes in the higher-order branch.
+        return false;
+    }
+    tstp_body_is_represented_formula_owner_supported(scanner, bank)
 }
 
-fn tstp_body_contains_plain_bridge_only_formula_owner_token(
-    scanner: &Scanner,
-    bridge_ite: bool,
-) -> bool {
+fn tstp_body_contains_plain_bridge_only_formula_owner_token(scanner: &Scanner) -> bool {
     let mut lookahead = scanner.clone();
     let mut paren_depth = 0usize;
     loop {
-        if lookahead.test_tok(TokenType::LET_TOKEN | TokenType::LAMBDA_QUANTOR)
-            || (bridge_ite && lookahead.test_tok(TokenType::ITE_TOKEN))
-        {
+        if lookahead.test_tok(TokenType::LET_TOKEN | TokenType::LAMBDA_QUANTOR) {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.test_tok(TokenType::OPEN_BRACKET) {
+            paren_depth = paren_depth.saturating_add(1);
+        } else if lookahead.test_tok(TokenType::CLOSE_BRACKET) {
+            if paren_depth == 0 {
+                return false;
+            }
+            paren_depth -= 1;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+}
+
+fn tstp_body_contains_ite_token(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut paren_depth = 0usize;
+    loop {
+        if lookahead.test_tok(TokenType::ITE_TOKEN) {
             return true;
         }
         if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
@@ -15454,19 +15479,25 @@ mod tests {
                 );
             }
 
-            let mut term_ite = Scanner::from_user_string("p($ite(q, a, b)))", false).unwrap();
-            term_ite.set_format(IoFormat::Tstp);
-            assert!(
-                !super::should_parse_tstp_formula_as_represented_owner(
-                    formula_kind,
-                    &term_ite,
-                    &lambda_bank,
-                    CP_TYPE_AXIOM,
-                    ProblemType::FirstOrder,
-                    super::InputFormulaOwnerHandling::FormulaSetCnf,
-                ),
-                "{formula_kind} should keep proof/CNF term-position $ite bodies on the bridge"
-            );
+            for cnf_ite in [
+                "$ite(q, p(a), p(b)))",
+                "(p(a) | $ite(q, p(a), p(b))))",
+                "p($ite(q, a, b)))",
+            ] {
+                let mut scanner = Scanner::from_user_string(cnf_ite, false).unwrap();
+                scanner.set_format(IoFormat::Tstp);
+                assert!(
+                    !super::should_parse_tstp_formula_as_represented_owner(
+                        formula_kind,
+                        &scanner,
+                        &lambda_bank,
+                        CP_TYPE_AXIOM,
+                        ProblemType::FirstOrder,
+                        super::InputFormulaOwnerHandling::FormulaSetCnf,
+                    ),
+                    "{formula_kind} should keep proof/CNF $ite body {cnf_ite} on the bridge"
+                );
+            }
         }
         reset_problem_type();
     }
@@ -32421,6 +32452,35 @@ input_clause(c2,axiom,[++q(X)]).
             String::from_utf8(stdout).unwrap(),
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_direct_fof_formula_ite() {
+        let _guard = global_state_lock();
+        let path = temp_path("direct-fof-formula-ite-proof");
+        std::fs::write(
+            &path,
+            "fof(cond, axiom, p(a)).\n\
+             fof(fact, axiom, q(a)).\n\
+             fof(goal, conjecture, $ite(p(a), q(a), r(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
