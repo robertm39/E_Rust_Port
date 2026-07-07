@@ -10424,9 +10424,15 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     formula_kind: &str,
     scanner: &Scanner,
 ) -> bool {
-    scanner.test_id("$distinct")
-        || matches!(formula_kind, "tff" | "tcf" | "thf")
-            && !tstp_app_encode_body_contains_distinct(scanner)
+    if scanner.test_id("$distinct") {
+        return true;
+    }
+
+    match formula_kind {
+        "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner),
+        "tff" | "tcf" | "thf" => !tstp_app_encode_body_contains_distinct(scanner),
+        _ => false,
+    }
 }
 
 fn parse_tstp_app_encode_owner_formula(
@@ -10448,6 +10454,30 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
     let mut lookahead = scanner.clone();
     loop {
         if lookahead.test_id("$distinct") {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+}
+
+fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    loop {
+        if lookahead.test_id("$distinct")
+            || lookahead.test_tok(
+                TokenType::EQUAL_SIGN
+                    | TokenType::NEG_EQUAL_SIGN
+                    | TokenType::APPLICATION
+                    | TokenType::ITE_TOKEN
+                    | TokenType::LET_TOKEN
+                    | TokenType::LAMBDA_QUANTOR,
+            )
+        {
             return true;
         }
         if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
@@ -17454,6 +17484,7 @@ input_clause(c2,axiom,[++q(X)]).
     fn app_encode_tstp_entries_route_non_distinct_formulas_to_represented_owners() {
         let _guard = global_state_lock();
         for input in [
+            "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17474,10 +17505,12 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn app_encode_tstp_fof_and_non_direct_distinct_entries_stay_on_bridge() {
+    fn app_encode_tstp_fof_bridge_shim_entries_stay_on_bridge() {
         let _guard = global_state_lock();
         for input in [
-            "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
+            "fof(eq_right, axiom, p(a) = (q(a)|r(a))).",
+            "fof(fool_body, axiom, $ite(p(a),q(a),r(a))).",
+            "fof(application_marker, axiom, ~ @ p(a)).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {
