@@ -10493,7 +10493,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return false;
     }
-    if tstp_app_encode_fof_body_is_represented_owner_supported(scanner, bank) {
+    if tstp_body_is_represented_formula_owner_supported(scanner, bank) {
         return false;
     }
 
@@ -10548,10 +10548,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     }
 }
 
-fn tstp_app_encode_fof_body_is_represented_owner_supported(
-    scanner: &Scanner,
-    bank: &TermBank,
-) -> bool {
+fn tstp_body_is_represented_formula_owner_supported(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
     let mut probe = bank.clone();
     probe
@@ -10928,8 +10925,13 @@ fn parse_simple_tstp_formula_clause(
 
     let role_types = simple_fof_role_types(&role, formula_problem_type, formula_preprocessing);
     let formula_position = token_pos_rep(scanner.current_token());
-    if should_parse_tstp_formula_as_represented_owner(&formula_kind, formula_owner_handling)
-        && !scanner.test_id("$distinct")
+    if !scanner.test_id("$distinct")
+        && should_parse_tstp_formula_as_represented_owner(
+            &formula_kind,
+            scanner,
+            bank,
+            formula_owner_handling,
+        )
     {
         return parse_represented_tstp_formula_clause_body(
             scanner,
@@ -11025,13 +11027,56 @@ fn parse_simple_tstp_formula_clause(
 
 fn should_parse_tstp_formula_as_represented_owner(
     formula_kind: &str,
+    scanner: &Scanner,
+    bank: &TermBank,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> bool {
-    formula_kind == "thf"
-        && matches!(
-            formula_owner_handling,
-            InputFormulaOwnerHandling::FormulaSetCnf | InputFormulaOwnerHandling::FormulaSetPrint
-        )
+    if !matches!(
+        formula_owner_handling,
+        InputFormulaOwnerHandling::FormulaSetCnf | InputFormulaOwnerHandling::FormulaSetPrint
+    ) {
+        return false;
+    }
+
+    match formula_kind {
+        "fof" | "tff" => tstp_plain_body_is_represented_formula_owner_supported(scanner, bank),
+        "thf" => true,
+        _ => false,
+    }
+}
+
+fn tstp_plain_body_is_represented_formula_owner_supported(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    !tstp_body_contains_fof_bridge_only_formula_owner_token(scanner)
+        && tstp_body_is_represented_formula_owner_supported(scanner, bank)
+}
+
+fn tstp_body_contains_fof_bridge_only_formula_owner_token(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut paren_depth = 0usize;
+    loop {
+        if lookahead
+            .test_tok(TokenType::ITE_TOKEN | TokenType::LET_TOKEN | TokenType::LAMBDA_QUANTOR)
+        {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.test_tok(TokenType::OPEN_BRACKET) {
+            paren_depth = paren_depth.saturating_add(1);
+        } else if lookahead.test_tok(TokenType::CLOSE_BRACKET) {
+            if paren_depth == 0 {
+                return false;
+            }
+            paren_depth -= 1;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
 }
 
 #[expect(
@@ -15236,6 +15281,59 @@ mod tests {
         parse_tstp_formula_clause_into_bank("fof(untyped, axiom, p(a)).", &mut bank);
 
         assert!(!bank.signature().typed_symbols());
+    }
+
+    #[test]
+    fn tstp_fof_tff_formula_owner_route_uses_represented_parser_probe() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff"] {
+            reset_problem_type();
+            let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut supported =
+                Scanner::from_user_string("p(a) => (q(a) => r(a)))", false).unwrap();
+            supported.set_format(IoFormat::Tstp);
+            assert!(
+                super::should_parse_tstp_formula_as_represented_owner(
+                    formula_kind,
+                    &supported,
+                    &bank,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "{formula_kind} should route represented parser-supported bodies"
+            );
+
+            let mut trailing = Scanner::from_user_string("p(a) => q(a) => r(a))", false).unwrap();
+            trailing.set_format(IoFormat::Tstp);
+            assert!(
+                !super::should_parse_tstp_formula_as_represented_owner(
+                    formula_kind,
+                    &trailing,
+                    &bank,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "{formula_kind} should not route bodies with trailing non-associative operators"
+            );
+
+            for bridge_only in [
+                "$let(f: $o, f := p(a), f))",
+                "(p(a) | $ite(p(a), q(a), r(a))))",
+                "(p(a) | $let(f: $o, f := q(a), f)))",
+                "(^[X: $i]: p @ X) @ a)",
+            ] {
+                let mut scanner = Scanner::from_user_string(bridge_only, false).unwrap();
+                scanner.set_format(IoFormat::Tstp);
+                assert!(
+                    !super::should_parse_tstp_formula_as_represented_owner(
+                        formula_kind,
+                        &scanner,
+                        &bank,
+                        super::InputFormulaOwnerHandling::FormulaSetPrint,
+                    ),
+                    "{formula_kind} should keep {bridge_only} on the bridge"
+                );
+            }
+        }
+        reset_problem_type();
     }
 
     fn choice_const(bank: &mut TermBank, name: &str) -> Term {
