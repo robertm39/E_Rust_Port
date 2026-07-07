@@ -1311,6 +1311,29 @@ mod tests {
     }
 
     #[test]
+    fn branch_limit_zero_result_skips_clause_output() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"cnf(skip, axiom, (a=b | c=d)).\ncnf(keep, axiom, p(a)).\n";
+
+        let status = run(
+            ["epatternize", "--tstp-in"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("branch-limit input parses");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let printed = String::from_utf8(stdout).unwrap();
+        let lines = printed.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("$or1("));
+    }
+
+    #[test]
     fn patternizes_tstp_file_to_output_file() {
         let _guard = global_state_lock();
         let input_path = temp_path("epatternize-input");
