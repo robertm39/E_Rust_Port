@@ -15356,6 +15356,26 @@ mod tests {
                 "{formula_kind} should route direct $distinct owners"
             );
 
+            for distinct_body in [
+                "($distinct(a,b,c)))",
+                "~$distinct(a,b,c))",
+                "(~($distinct(a,b,c))))",
+            ] {
+                let mut scanner = Scanner::from_user_string(distinct_body, false).unwrap();
+                scanner.set_format(IoFormat::Tstp);
+                assert!(
+                    super::should_parse_tstp_formula_as_represented_owner(
+                        formula_kind,
+                        &scanner,
+                        &bank,
+                        CP_TYPE_AXIOM,
+                        ProblemType::FirstOrder,
+                        super::InputFormulaOwnerHandling::FormulaSetPrint,
+                    ),
+                    "{formula_kind} should route represented $distinct body {distinct_body}"
+                );
+            }
+
             let mut trailing = Scanner::from_user_string("p(a) => q(a) => r(a))", false).unwrap();
             trailing.set_format(IoFormat::Tstp);
             assert!(
@@ -15389,6 +15409,47 @@ mod tests {
                     ),
                     "{formula_kind} should keep {bridge_only} on the bridge"
                 );
+            }
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn tstp_distinct_wrappers_parse_as_represented_formula_owners() {
+        let _guard = global_state_lock();
+        for (formula_kind, problem_type) in [
+            ("fof", ProblemType::FirstOrder),
+            ("tff", ProblemType::FirstOrder),
+            ("thf", ProblemType::HigherOrder),
+        ] {
+            for (name, body) in [
+                ("distinct_wrapped", "($distinct(a,b,c))"),
+                ("distinct_negated", "~$distinct(a,b,c)"),
+                ("distinct_negated_wrapped", "(~($distinct(a,b,c)))"),
+            ] {
+                reset_problem_type();
+                let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+                let mut scanner = Scanner::from_user_string(
+                    &format!("{formula_kind}({name}, axiom, {body})."),
+                    false,
+                )
+                .unwrap();
+                scanner.set_format(IoFormat::Tstp);
+
+                let parsed = super::parse_simple_tstp_formula_clause(
+                    &mut scanner,
+                    &mut bank,
+                    FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                )
+                .unwrap();
+
+                let formula = parsed
+                    .owner_formula
+                    .unwrap_or_else(|| panic!("{formula_kind} {body} should keep a formula owner"));
+                assert!(formula.query_prop(CP_INPUT_FORMULA));
+                assert!(parsed.clauses.is_empty());
+                assert_eq!(parsed.problem_type, problem_type);
             }
         }
         reset_problem_type();
@@ -15445,6 +15506,9 @@ mod tests {
 
         for bridge_only in [
             "p(a) | $distinct(a,b,c))",
+            "($distinct(a,b,c)))",
+            "~$distinct(a,b,c))",
+            "(~($distinct(a,b,c))))",
             "![X]:(p(X)&q(X)))",
             "p(a) | q(a))",
         ] {
