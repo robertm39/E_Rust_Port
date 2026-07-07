@@ -3051,6 +3051,11 @@ impl TermBank {
         allow_plain_term_atoms: bool,
         allow_atomic_formula_operand_equality: bool,
     ) -> Result<Term, Diagnostic> {
+        if scanner.test_id("$distinct") {
+            let distinct = self.parse_tstp_distinct(scanner)?;
+            return self.expand_tstp_distinct_formula(&distinct);
+        }
+
         let mut left = self.parse_term_real(scanner, true)?;
         let mut positive = true;
         let equality_starts_formula_operand = self
@@ -3111,6 +3116,29 @@ impl TermBank {
             self.prepare_predicate_formula_atom(&left)?;
             Ok(left)
         }
+    }
+
+    fn expand_tstp_distinct_formula(&mut self, distinct: &Term) -> Result<Term, Diagnostic> {
+        let mut disequalities = Vec::new();
+        for left_index in 0..distinct.arity() {
+            let left = distinct.argument(left_index).ok_or_else(|| {
+                Diagnostic::new(ErrorCode::SYNTAX_ERROR, "malformed $distinct formula")
+            })?;
+            for right_index in (left_index + 1)..distinct.arity() {
+                let right = distinct.argument(right_index).ok_or_else(|| {
+                    Diagnostic::new(ErrorCode::SYNTAX_ERROR, "malformed $distinct formula")
+                })?;
+                disequalities.push(self.encode_equality_term(left.clone(), right, false)?);
+            }
+        }
+
+        let Some(mut result) = disequalities.pop() else {
+            return Ok(self.true_term.clone());
+        };
+        while let Some(disequality) = disequalities.pop() {
+            result = self.tformula_fcode_alloc(self.sig.and_code(), disequality, Some(result))?;
+        }
+        Ok(result)
     }
 
     fn recover_tformula_arrow_equality_operand(
@@ -4633,6 +4661,64 @@ mod tests {
         assert!(error
             .message()
             .contains("All $distinct arguments have to be constants of the same type"));
+    }
+
+    #[test]
+    fn tformula_tstp_parse_expands_embedded_distinct_like_c_helper() {
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. b: $i. c: $i. p: $i > $o.", false).unwrap();
+        for _ in 0..4 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner = Scanner::from_user_string("p(a) | $distinct(a,b,c)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().or_code());
+        let left = formula.argument(0).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        let right = formula.argument(1).unwrap();
+        assert_eq!(right.f_code(), bank.signature().and_code());
+        let first_pair = right.argument(0).unwrap();
+        assert_eq!(first_pair.f_code(), bank.signature().neqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(first_pair.argument(0).unwrap().f_code()),
+            Some("a")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(first_pair.argument(1).unwrap().f_code()),
+            Some("b")
+        );
+        let tail = right.argument(1).unwrap();
+        assert_eq!(tail.f_code(), bank.signature().and_code());
+        let second_pair = tail.argument(0).unwrap();
+        assert_eq!(
+            bank.signature()
+                .find_name(second_pair.argument(0).unwrap().f_code()),
+            Some("a")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(second_pair.argument(1).unwrap().f_code()),
+            Some("c")
+        );
+        let third_pair = tail.argument(1).unwrap();
+        assert_eq!(
+            bank.signature()
+                .find_name(third_pair.argument(0).unwrap().f_code()),
+            Some("b")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(third_pair.argument(1).unwrap().f_code()),
+            Some("c")
+        );
     }
 
     fn cons_cell(head: Term, tail: Term) -> Term {

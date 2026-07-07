@@ -10494,9 +10494,6 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return false;
     }
-    if tstp_app_encode_body_contains_distinct(scanner) {
-        return true;
-    }
 
     let mut lookahead = scanner.clone();
     let mut equality_operand_start = scanner.clone();
@@ -17894,21 +17891,25 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn app_encode_tstp_fof_bridge_shim_entries_stay_on_bridge() {
+    fn app_encode_tstp_fof_embedded_distinct_routes_to_represented_owner() {
         let _guard = global_state_lock();
-        let input = "fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).";
-        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
-        let mut scanner = Scanner::from_user_string(input, false).unwrap();
-        scanner.set_format(IoFormat::Tstp);
+        for input in [
+            "fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).",
+            "fof(distinct_negated_embedded, axiom, p(a) & ~$distinct(a,b,c)).",
+        ] {
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
 
-        let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
-            .unwrap()
-            .unwrap();
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
 
-        assert!(
-            matches!(parsed, ParsedAppEncodeFormula::Simple(_)),
-            "{input} should keep using the temporary app-encode bridge"
-        );
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+                "{input} should use the represented TSTP formula owner"
+            );
+        }
     }
 
     #[test]
@@ -18165,6 +18166,40 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("u!=v"));
         assert!(printed.contains("u!=w"));
         assert!(printed.contains("v!=w"));
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_expands_embedded_fof_distinct_via_formula_owner() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-embedded-fof-distinct-owner");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(distinct_embedded, axiom, (app_"));
+        assert!(printed.contains("|(a!=b&(a!=c&b!=c)))"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
