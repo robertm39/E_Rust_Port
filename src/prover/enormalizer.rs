@@ -39,7 +39,7 @@ use crate::prover::eprover::{
 use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{RewriteLevel, Term};
+use crate::terms::termtypes::{DerefType, RewriteLevel, Term};
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use std::fs::File;
@@ -529,46 +529,34 @@ fn execute_config(
         parsed_rule_problem_type,
     )?;
 
-    let demodulators = build_rw_system(&mut clauses, &bank, config, stderr)?;
+    let demodulators = build_rw_system(
+        &mut clauses,
+        &bank,
+        config,
+        stderr,
+        parsed_rule_problem_type,
+    )?;
     let mut ocb = OrderControlBlock::alloc(
         TermOrdering::Empty,
         false,
         bank.signature(),
         HoOrderKind::LambdaOrder,
     );
+    let mut runtime = RewriteRuntime {
+        bank: &mut bank,
+        ocb: &mut ocb,
+        demodulators: &demodulators,
+        problem_type: parsed_rule_problem_type,
+    };
 
     if let Some(name) = config.term_file.as_deref() {
-        process_terms(
-            name,
-            config,
-            stdin,
-            &mut output,
-            &mut bank,
-            &mut ocb,
-            &demodulators,
-        )?;
+        process_terms(name, config, stdin, &mut output, &mut runtime)?;
     }
     if let Some(name) = config.clause_file.as_deref() {
-        process_clauses(
-            name,
-            config,
-            stdin,
-            &mut output,
-            &mut bank,
-            &mut ocb,
-            &demodulators,
-        )?;
+        process_clauses(name, config, stdin, &mut output, &mut runtime)?;
     }
     if let Some(name) = config.formula_file.as_deref() {
-        process_formulas(
-            name,
-            config,
-            stdin,
-            &mut output,
-            &mut bank,
-            &mut ocb,
-            &demodulators,
-        )?;
+        process_formulas(name, config, stdin, &mut output, &mut runtime)?;
     }
     if config.print_rusage {
         write_all(
@@ -637,6 +625,7 @@ fn build_rw_system(
     bank: &TermBank,
     config: &EnormalizerConfig,
     stderr: &mut impl Write,
+    problem_type: ProblemType,
 ) -> Result<ClauseSet, Diagnostic> {
     let mut demodulators = ClauseSet::new();
     while let Some(mut clause) = clauses.extract_first() {
@@ -649,7 +638,7 @@ fn build_rw_system(
             }
             demodulators.insert(clause);
         } else {
-            let rendered = render_clause(bank, &clause, config)?;
+            let rendered = render_clause(bank, &clause, problem_type, config)?;
             writeln_diag(
                 stderr,
                 &format!("{PROGRAM_NAME}: Clause is not a rewrite rule: {rendered} -- ignoring"),
@@ -657,6 +646,13 @@ fn build_rw_system(
         }
     }
     Ok(demodulators)
+}
+
+struct RewriteRuntime<'a> {
+    bank: &'a mut TermBank,
+    ocb: &'a mut OrderControlBlock,
+    demodulators: &'a ClauseSet,
+    problem_type: ProblemType,
 }
 
 fn increment_demodulator_date(mut date: SysDate) -> Result<SysDate, Diagnostic> {
@@ -678,20 +674,24 @@ fn process_terms(
     config: &EnormalizerConfig,
     stdin: &mut impl Read,
     output: &mut impl Write,
-    bank: &mut TermBank,
-    ocb: &mut OrderControlBlock,
-    demodulators: &ClauseSet,
+    runtime: &mut RewriteRuntime<'_>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = formatted_scanner_for_input(name, stdin, config.parse_format)?;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        let original = bank.parse_term_simple(&mut scanner)?;
-        let normalized = normalize_term(bank, ocb, &original, demodulators)?;
+        let original = parse_target_term(
+            runtime.bank,
+            &mut scanner,
+            config.parse_format,
+            runtime.problem_type,
+        )?;
+        let normalized =
+            normalize_term(runtime.bank, runtime.ocb, &original, runtime.demodulators)?;
         writeln_diag(
             output,
             &format!(
                 "{} ==> {}",
-                bank.term_string(&original, true),
-                bank.term_string(&normalized, true)
+                render_term(runtime.bank, &original, runtime.problem_type),
+                render_term(runtime.bank, &normalized, runtime.problem_type)
             ),
         )?;
     }
@@ -703,27 +703,38 @@ fn process_clauses(
     config: &EnormalizerConfig,
     stdin: &mut impl Read,
     output: &mut impl Write,
-    bank: &mut TermBank,
-    ocb: &mut OrderControlBlock,
-    demodulators: &ClauseSet,
+    runtime: &mut RewriteRuntime<'_>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = formatted_scanner_for_input(name, stdin, config.parse_format)?;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        let mut clause = clause_parse(&mut scanner, bank, ProblemType::FirstOrder)?;
-        let original = render_clause(bank, &clause, config)?;
+        let mut clause = clause_parse(&mut scanner, runtime.bank, runtime.problem_type)?;
+        let original = render_clause(runtime.bank, &clause, runtime.problem_type, config)?;
         clause_compute_li_normalform_plain(
-            bank,
-            ocb,
+            runtime.bank,
+            runtime.ocb,
             &mut clause,
-            &[demodulators],
+            &[runtime.demodulators],
             RewriteLevel::RuleRewrite,
             false,
             false,
         )?;
-        let normalized = render_clause(bank, &clause, config)?;
+        let normalized = render_clause(runtime.bank, &clause, runtime.problem_type, config)?;
         writeln_diag(output, &format!("{original} ==> {normalized}"))?;
     }
     Ok(())
+}
+
+fn parse_target_term(
+    bank: &mut TermBank,
+    scanner: &mut Scanner,
+    format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    if format == IoFormat::Tstp && problem_type == ProblemType::HigherOrder {
+        bank.parse_tstp_application_term(scanner)
+    } else {
+        bank.parse_term_simple(scanner)
+    }
 }
 
 fn process_formulas(
@@ -731,17 +742,21 @@ fn process_formulas(
     config: &EnormalizerConfig,
     stdin: &mut impl Read,
     output: &mut impl Write,
-    bank: &mut TermBank,
-    ocb: &mut OrderControlBlock,
-    demodulators: &ClauseSet,
+    runtime: &mut RewriteRuntime<'_>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = formatted_scanner_for_input(name, stdin, config.parse_format)?;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        let mut target = parse_wrapped_formula(&mut scanner, bank)?;
-        let original = render_formula(bank, &target.formula, target.problem_type, config)?;
-        let normalized = normalize_term(bank, ocb, target.formula.formula(), demodulators)?;
+        let mut target = parse_wrapped_formula(&mut scanner, runtime.bank)?;
+        let original = render_formula(runtime.bank, &target.formula, target.problem_type, config)?;
+        let normalized = normalize_term(
+            runtime.bank,
+            runtime.ocb,
+            target.formula.formula(),
+            runtime.demodulators,
+        )?;
         target.formula.set_formula(normalized);
-        let normalized = render_formula(bank, &target.formula, target.problem_type, config)?;
+        let normalized =
+            render_formula(runtime.bank, &target.formula, target.problem_type, config)?;
         writeln_diag(output, &format!("{original} ==> {normalized}"))?;
     }
     Ok(())
@@ -921,9 +936,16 @@ fn render_formula(
     )
 }
 
+fn render_term(bank: &TermBank, term: &Term, problem_type: ProblemType) -> String {
+    let mut output = String::new();
+    let _ = bank.write_term_deref_for_problem(&mut output, term, problem_type, DerefType::Never);
+    output
+}
+
 fn render_clause(
     bank: &TermBank,
     clause: &Clause,
+    problem_type: ProblemType,
     config: &EnormalizerConfig,
 ) -> Result<String, Diagnostic> {
     match config.output_format {
@@ -932,7 +954,7 @@ fn render_clause(
             clause,
             config.eqn_options,
         )),
-        IoFormat::Tstp => clause_tstp_string(bank, clause, true, true, ProblemType::FirstOrder),
+        IoFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
         IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
             bank,
             clause,
@@ -1455,6 +1477,47 @@ mod tests {
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
         assert_eq!(String::from_utf8(stdout).expect("utf8"), "f(b) ==> a\n");
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(term_path);
+    }
+
+    #[test]
+    fn thf_rule_normalizes_higher_order_tstp_term_targets() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("thf_term_rules");
+        let term_path = temp_path("thf_term_targets");
+        fs::write(
+            &rule_path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(rule, axiom, (f @ a) = a).\n",
+        )
+        .expect("rules written");
+        fs::write(&term_path, "f @ a\n").expect("terms written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let terms_arg = format!("--terms={}", term_path.to_str().expect("utf8 path"));
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                terms_arg.as_str(),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(String::from_utf8(stdout).expect("utf8"), "f @ a ==> a\n");
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(term_path);

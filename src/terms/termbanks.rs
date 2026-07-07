@@ -1819,6 +1819,18 @@ impl TermBank {
         self.parse_tformula_tstp_subset(scanner)
     }
 
+    /// Parses a TSTP term and any higher-order application tail.
+    ///
+    /// This exposes the term-valued half of the existing `TFormulaTSTPParse`
+    /// application parser for executable entry points that call C `TBTermParse`
+    /// after a THF rule/formula has selected higher-order problem mode.
+    pub fn parse_tstp_application_term(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        self.parse_tformula_application_term_arg(scanner, true)
+    }
+
     /// Parses an old-TPTP term-encoded formula.
     ///
     /// This matches C `TFormulaTPTPParse`: every binary operator has the same
