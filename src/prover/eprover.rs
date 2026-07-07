@@ -15736,6 +15736,70 @@ mod tests {
     }
 
     #[test]
+    fn tstp_fof_tff_non_boolean_fool_equalities_parse_as_represented_formula_owners() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff"] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            for declaration in [
+                "tff(a_type, type, a: $i).",
+                "tff(b_type, type, b: $i).",
+                "tff(c_type, type, c: $i).",
+                "tff(p_type, type, p: $i > $o).",
+            ] {
+                parse_tstp_formula_clause_into_bank(declaration, &mut bank);
+            }
+
+            for formula_owner_handling in [
+                super::InputFormulaOwnerHandling::FormulaSetPrint,
+                super::InputFormulaOwnerHandling::FormulaSetCnf,
+            ] {
+                for (name, body) in [
+                    ("ite_term_left", "($ite(p(a), a, b) = c)"),
+                    ("ite_term_right", "c = $ite(p(a), a, b)"),
+                    ("let_term_disjunct", "p(a) | ($let(f: $i, f := a, f) = b)"),
+                    ("let_term_negated", "~($let(f: $i, f := a, f) = b)"),
+                    ("let_term_quantified", "?[X]:($let(f: $i, f := a, f) = X)"),
+                    (
+                        "let_term_quantified_unparenthesized",
+                        "?[X]:$let(f: $i, f := a, f) = X",
+                    ),
+                ] {
+                    let mut scanner = Scanner::from_user_string(
+                        &format!("{formula_kind}({name}, axiom, {body})."),
+                        false,
+                    )
+                    .unwrap();
+                    scanner.set_format(IoFormat::Tstp);
+
+                    let parsed = super::parse_simple_tstp_formula_clause(
+                        &mut scanner,
+                        &mut bank,
+                        FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                        formula_owner_handling,
+                    )
+                    .unwrap();
+
+                    let formula = parsed.owner_formula.unwrap_or_else(|| {
+                        panic!("{formula_kind} {body} should keep a formula owner")
+                    });
+                    assert!(formula.query_prop(CP_INPUT_FORMULA));
+                    assert!(parsed.clauses.is_empty());
+                    let expected_problem_type = if formula_owner_handling
+                        == super::InputFormulaOwnerHandling::FormulaSetCnf
+                    {
+                        ProblemType::HigherOrder
+                    } else {
+                        ProblemType::FirstOrder
+                    };
+                    assert_eq!(parsed.problem_type, expected_problem_type);
+                }
+            }
+        }
+        reset_problem_type();
+    }
+
+    #[test]
     fn tstp_tcf_formula_owner_route_uses_represented_clause_parser_probe() {
         let _guard = global_state_lock();
         reset_problem_type();
