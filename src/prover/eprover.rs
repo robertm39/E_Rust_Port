@@ -10487,7 +10487,16 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
             return false;
         }
         let starts_next_operand = lookahead.test_tok(TokenType::FOF_BIN_OP)
-            && !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN);
+            && !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+            && scanner_test_tok(
+                lookahead.look_token(1),
+                TokenType::OPEN_BRACKET
+                    | TokenType::TILDE_SIGN
+                    | TokenType::UNIV_QUANTOR
+                    | TokenType::EXIST_QUANTOR
+                    | TokenType::ITE_TOKEN
+                    | TokenType::LET_TOKEN,
+            );
         let starts_negated_wrapped_operand = lookahead.test_tok(TokenType::TILDE_SIGN)
             && scanner_test_tok(
                 lookahead.look_token(1),
@@ -10513,6 +10522,10 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
 }
 
 fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: &TermBank) -> bool {
+    if tstp_app_encode_fof_starts_parenthesized_formula_equality(scanner, bank) {
+        return true;
+    }
+
     let mut lookahead = scanner.clone();
     let mut typed_probe = bank.clone();
     while lookahead.test_tok(TokenType::OPEN_BRACKET) {
@@ -10536,6 +10549,40 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
         return true;
     }
     tstp_app_encode_fof_equality_rhs_starts_fool_term(&lookahead)
+}
+
+fn tstp_app_encode_fof_starts_parenthesized_formula_equality(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    let mut leading_opens = 0;
+    while scanner_test_tok_at(scanner, leading_opens, TokenType::OPEN_BRACKET) {
+        leading_opens += 1;
+    }
+    for skipped_opens in 1..=leading_opens {
+        let mut lookahead = scanner.clone();
+        let mut formula_probe = bank.clone();
+        for _ in 0..skipped_opens {
+            if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+                return false;
+            }
+        }
+        let Ok(left) = formula_probe.parse_tformula_tstp(&mut lookahead) else {
+            continue;
+        };
+        if !left.type_().as_ref().is_some_and(Type::is_bool) {
+            continue;
+        }
+        while lookahead.test_tok(TokenType::CLOSE_BRACKET) {
+            if lookahead.accept_tok(TokenType::CLOSE_BRACKET).is_err() {
+                return false;
+            }
+        }
+        if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+            return true;
+        }
+    }
+    false
 }
 
 fn tstp_app_encode_fof_equality_rhs_starts_fool_term(scanner: &Scanner) -> bool {
@@ -17565,6 +17612,11 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_formula_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).",
             "fof(eq_formula_right_negated, axiom, ~(p(a) = (q(a)|r(a)))).",
             "fof(ne_formula_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).",
+            "fof(eq_formula_left_compound, axiom, ((q(a)|r(a)) = p(a))).",
+            "fof(ne_formula_left_compound, axiom, ((q(a)&r(a)) != p(a))).",
+            "fof(eq_formula_left_compound_disjunct, axiom, s(a) | ((q(a)|r(a)) = p(a))).",
+            "fof(eq_formula_left_compound_negated, axiom, ~((q(a)|r(a)) = p(a))).",
+            "fof(fool_formula_left_compound, axiom, (($ite(p(a),q(a),r(a))) = s(a))).",
             "fof(fool_term_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).",
             "fof(fool_term_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).",
             "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
@@ -17919,7 +17971,11 @@ input_clause(c2,axiom,[++q(X)]).
              fof(eq_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).\n\
              fof(ne_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).\n\
              fof(eq_right_negated, axiom, ~(p(a) = (q(a)|r(a)))).\n\
-             fof(ne_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).\n",
+             fof(ne_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).\n\
+             fof(eq_left_compound, axiom, ((q(a)|r(a)) = p(a))).\n\
+             fof(ne_left_compound, axiom, ((q(a)&r(a)) != p(a))).\n\
+             fof(eq_left_compound_disjunct, axiom, s(a) | ((q(a)|r(a)) = p(a))).\n\
+             fof(eq_left_compound_negated, axiom, ~((q(a)|r(a)) = p(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17947,6 +18003,15 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(eq_right_negated, axiom, ~((app_"));
         assert!(printed.contains("tff(ne_right_quantified, axiom, ?[X"));
         assert!(printed.contains("<~>"));
+        assert!(printed.contains("tff(eq_left_compound, axiom, ((app_"));
+        assert!(printed.contains("|app_"));
+        assert!(printed.contains("<=>app_"));
+        assert!(printed.contains("tff(ne_left_compound, axiom, ((app_"));
+        assert!(printed.contains("&app_"));
+        assert!(printed.contains("<~>app_"));
+        assert!(printed.contains("tff(eq_left_compound_disjunct, axiom, (app_"));
+        assert!(printed.contains("|((app_"));
+        assert!(printed.contains("tff(eq_left_compound_negated, axiom, ~(((app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
