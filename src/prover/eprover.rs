@@ -10347,10 +10347,11 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_type = clause_type_from_identifier(&role, formula_problem_type);
     let formula_position = token_pos_rep(scanner.current_token());
-    if formula_kind == "thf" {
+    if should_parse_tstp_app_encode_formula_as_represented_owner(&formula_kind, scanner) {
         return parse_represented_tstp_app_encode_formula_body(
             scanner,
             bank,
+            &formula_kind,
             name,
             formula_type,
             formula_problem_type,
@@ -10386,12 +10387,13 @@ fn parse_simple_tstp_app_encode_formula(
 fn parse_represented_tstp_app_encode_formula_body(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    formula_kind: &str,
     name: String,
     formula_type: FormulaProperties,
     problem_type: ProblemType,
     formula_position: &str,
 ) -> Result<ParsedAppEncodeFormula, Diagnostic> {
-    let formula = bank.parse_tformula_tstp(scanner)?;
+    let formula = parse_tstp_app_encode_owner_formula(scanner, bank, formula_kind, problem_type)?;
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
@@ -10413,6 +10415,42 @@ fn parse_represented_tstp_app_encode_formula_body(
         ),
         problem_type,
     })
+}
+
+fn should_parse_tstp_app_encode_formula_as_represented_owner(
+    formula_kind: &str,
+    scanner: &Scanner,
+) -> bool {
+    matches!(formula_kind, "tff" | "tcf" | "thf")
+        && !tstp_app_encode_body_contains_distinct(scanner)
+}
+
+fn parse_tstp_app_encode_owner_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    formula_kind: &str,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    if formula_kind == "tcf" {
+        tcf_tstp_parse(scanner, bank, problem_type)
+    } else {
+        bank.parse_tformula_tstp(scanner)
+    }
+}
+
+fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    loop {
+        if lookahead.test_id("$distinct") {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
 }
 
 fn parse_tptp_app_encode_formula(
@@ -14536,25 +14574,25 @@ mod tests {
         fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
         order_parms_from_config, parse_app_encode_file,
         parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
-        parse_schedule_worker_args, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, proof_object_list_display_clauses,
-        proof_object_list_display_items, proof_search_global_indices, proof_success_object_roots,
-        proof_success_status, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
-        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
-        ParamodulationType, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
-        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
-        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
-        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        parse_schedule_worker_args, parse_simple_tstp_app_encode_formula,
+        preprocessing_config_debug_line, process_options, proof_control_from_config,
+        proof_object_list_display_clauses, proof_object_list_display_items,
+        proof_search_global_indices, proof_success_object_roots, proof_success_status,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
+        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
+        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
+        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, ParsedAppEncodeFormula,
+        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
+        ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
+        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
+        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -17407,6 +17445,52 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn app_encode_tstp_entries_route_non_distinct_formulas_to_represented_owners() {
+        let _guard = global_state_lock();
+        for input in [
+            "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
+            "tcf(tcf_owner, axiom, p(a)|q(a)).",
+        ] {
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
+
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+                "{input} should use the represented TSTP formula owner"
+            );
+        }
+    }
+
+    #[test]
+    fn app_encode_tstp_fof_and_distinct_entries_stay_on_bridge() {
+        let _guard = global_state_lock();
+        for input in [
+            "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
+            "fof(distinct_direct, axiom, $distinct(a,b,c)).",
+            "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
+        ] {
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
+
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Simple(_)),
+                "{input} should keep using the temporary app-encode bridge"
+            );
+        }
+    }
+
+    #[test]
     fn run_app_encode_prints_supported_tff_formula_and_exits() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-tff");
@@ -17439,6 +17523,39 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("app_"));
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_tcf_formula_owner_output() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tcf-owner");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(q_type, type, q: person > $o).\n\
+             tcf(rule, axiom, ![X: person]:(p(X)|q(X))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(rule, axiom, !["));
+        assert!(printed.contains("]:("));
+        assert!(printed.contains("|app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
