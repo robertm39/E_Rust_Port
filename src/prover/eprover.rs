@@ -10431,6 +10431,11 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     if tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank) {
         return true;
     }
+    if matches!(formula_kind, "fof" | "tff")
+        && tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank)
+    {
+        return true;
+    }
 
     match formula_kind {
         "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner, bank),
@@ -10451,6 +10456,9 @@ fn parse_tstp_app_encode_owner_formula(
     if scanner.test_id("$distinct") {
         bank.parse_tstp_distinct(scanner)
     } else if let Some(distinct) = parse_negated_tstp_distinct_formula(scanner, bank)? {
+        Ok(distinct)
+    } else if let Some(distinct) = parse_parenthesized_negated_tstp_distinct_formula(scanner, bank)?
+    {
         Ok(distinct)
     } else if let Some(distinct) = parse_parenthesized_tstp_distinct_formula(scanner, bank)? {
         Ok(distinct)
@@ -10481,6 +10489,9 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         return false;
     }
     if tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank) {
+        return false;
+    }
+    if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return false;
     }
     if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
@@ -10591,6 +10602,54 @@ fn parse_negated_tstp_distinct_formula(
     };
     let expanded = tformula_expand_distinct(bank, &distinct)?;
     tformula_fcode_alloc(bank, bank.signature().not_code(), expanded, None).map(Some)
+}
+
+fn tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    if !scanner.test_tok(TokenType::OPEN_BRACKET) {
+        return false;
+    }
+
+    let mut lookahead = scanner.clone();
+    let mut probe = bank.clone();
+    parse_parenthesized_negated_tstp_distinct_formula(&mut lookahead, &mut probe)
+        .is_ok_and(|formula| formula.is_some())
+        && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
+}
+
+fn parse_parenthesized_negated_tstp_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let mut lookahead = scanner.clone();
+    let mut wrappers = 0;
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
+        wrappers += 1;
+    }
+    if wrappers == 0 {
+        return Ok(None);
+    }
+    let mut probe = bank.clone();
+    if parse_negated_tstp_distinct_formula(&mut lookahead, &mut probe)?.is_none() {
+        return Ok(None);
+    }
+
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+    let distinct = parse_negated_tstp_distinct_formula(scanner, bank)?.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "expected parenthesized negated $distinct formula",
+        )
+    })?;
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok(Some(distinct))
 }
 
 fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
@@ -17808,7 +17867,10 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_negated_parenthesized, axiom, ~($distinct(a,b,c))).",
+            "fof(distinct_negated_wrapped, axiom, (~$distinct(a,b,c))).",
+            "fof(distinct_negated_double_wrapped, axiom, ((~($distinct(a,b,c))))).",
             "tff(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "tff(distinct_negated_wrapped, axiom, (~$distinct(a,b,c))).",
             "tcf(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "thf(distinct_negated, axiom, ~$distinct(a,b,c)).",
         ] {
@@ -17996,7 +18058,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(double_wrapped, axiom, (($distinct(g,h,i)))).\n\
              tff(tff_wrapped, axiom, ($distinct(j,k,l))).\n\
              tcf(tcf_wrapped, axiom, ($distinct(m,n,o))).\n\
-             fof(negated, axiom, ~$distinct(x,y,z)).\n",
+             fof(negated, axiom, ~$distinct(x,y,z)).\n\
+             fof(negated_wrapped, axiom, (~$distinct(s,t,u))).\n\
+             tff(tff_negated_wrapped, axiom, (~($distinct(p,q,r)))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18032,6 +18096,14 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("x!=y"));
         assert!(printed.contains("x!=z"));
         assert!(printed.contains("y!=z"));
+        assert!(printed.contains("tff(negated_wrapped, axiom, ~("));
+        assert!(printed.contains("s!=t"));
+        assert!(printed.contains("s!=u"));
+        assert!(printed.contains("t!=u"));
+        assert!(printed.contains("tff(tff_negated_wrapped, axiom, ~("));
+        assert!(printed.contains("p!=q"));
+        assert!(printed.contains("p!=r"));
+        assert!(printed.contains("q!=r"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
