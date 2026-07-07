@@ -106,6 +106,10 @@ Source files reviewed: `ORDERINGS/cto_orderings.h`, `ORDERINGS/cto_orderings.c`.
 - `TOSymbolComparisonChainParse` returns the last value returned by `OCBPrecedenceAddTuple`, so a successful newly inserted chain can return `1` rather than the actual matrix state-stack pointer. This follows the C `OCBPrecedenceAddTuple` return surface.
 - `TOSymbolWeightParse` accepts only positive integer weights, multiplies by `W_DEFAULT_WEIGHT`, and stores the result directly in the OCB weight vector. C copies the scanner's unsigned numeric value into `long`; Rust rejects values that do not fit signed `long` instead of importing implementation-defined unsigned-to-signed conversion.
 
+### Change Later
+
+- `RPO` is listed in the ordering enum/name table and can appear in strategy-parameter parsing, but `TOGreater`/`TOCompare` assert when dispatch reaches it. Rust preserves the visible executable rejection and downstream panic for compatibility; after drop-in parity is secured, either remove `RPO` from user-visible strategy surfaces or implement it as a deliberate new ordering with reference tests.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
