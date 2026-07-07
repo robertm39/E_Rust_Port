@@ -1819,6 +1819,18 @@ impl TermBank {
         self.parse_tformula_tstp_subset(scanner)
     }
 
+    /// Parses one TSTP literal formula, including any higher-order
+    /// application tail, without consuming sibling binary connectives.
+    ///
+    /// This exposes C's `literal_tform_tstp_parse` shape for callers that
+    /// have already consumed a prefix connective such as `~`.
+    pub fn parse_tformula_tstp_literal(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        self.parse_literal_tformula_tstp_with_applications(scanner)
+    }
+
     /// Parses a TSTP term and any higher-order application tail.
     ///
     /// This exposes the term-valued half of the existing `TFormulaTSTPParse`
@@ -5534,6 +5546,41 @@ mod tests {
         );
         let child = formula.argument(0).unwrap();
         assert_eq!(child.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn tstp_literal_formula_application_stops_before_binary_sibling() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. p: person > $o. q: person > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("p @ a & q @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp_literal(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let predicate = formula.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(predicate.f_code()), Some("p"));
+        assert!(scanner.test_tok(TokenType::FOF_AND));
     }
 
     #[test]

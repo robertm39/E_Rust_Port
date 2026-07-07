@@ -13520,7 +13520,11 @@ fn parse_simple_fof_primary_formula(
             if scanner.test_tok(TokenType::APPLICATION) {
                 scanner.accept_tok(TokenType::APPLICATION)?;
             }
-            let formulas = parse_simple_fof_primary_formula(scanner, bank, problem_type)?;
+            let formulas = if scanner.format() == IoFormat::Tstp {
+                parse_simple_fof_tstp_literal_formula(scanner, bank)?
+            } else {
+                parse_simple_fof_primary_formula(scanner, bank, problem_type)?
+            };
             Ok(vec![SimpleFofFormula::Negation(formulas)])
         } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
             Ok(formulas)
@@ -13820,6 +13824,22 @@ fn parse_simple_fof_tstp_application_formula(
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = bank.parse_tformula_tstp(scanner)?;
+    simple_fof_tstp_parsed_formula_to_formulas(formula, scanner, bank)
+}
+
+fn parse_simple_fof_tstp_literal_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let formula = bank.parse_tformula_tstp_literal(scanner)?;
+    simple_fof_tstp_parsed_formula_to_formulas(formula, scanner, bank)
+}
+
+fn simple_fof_tstp_parsed_formula_to_formulas(
+    formula: Term,
+    scanner: &Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = if formula.has_lambda_subterm() {
         simple_fof_recover_tstp_arrow_equalities(&formula, bank)?
     } else {
@@ -29359,6 +29379,38 @@ input_clause(c2,axiom,[++q(X)]).
              thf(p_type, type, p: person > $o).\n\
              thf(rule, axiom, ![X: person]: ~ p @ X).\n\
              thf(goal, conjecture, ~ p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_fof_tstp_negated_application_conjunction_scope() {
+        let _guard = global_state_lock();
+        let path = temp_path("fof-tstp-negated-application-conjunction-proof");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(q_type, type, q: person > $o).\n\
+             fof(rule, axiom, ~ p @ a & q @ a).\n\
+             fof(goal, conjecture, q @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
