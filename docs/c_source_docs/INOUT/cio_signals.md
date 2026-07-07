@@ -89,9 +89,16 @@ Source files reviewed: `INOUT/cio_signals.h`, `INOUT/cio_signals.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
 - `ESignalHandler(SIGXCPU)` uses the first CPU-limit signal as a graceful soft timeout by setting `TimeIsUp`, resetting `RLIMIT_CPU` to the captured system hard limit, and rearming the hard limit, but a hard timeout writes diagnostics and exits directly from the signal path. Rust now installs a Linux `SIGXCPU` trampoline in normal builds, captures the system hard CPU limit during setup, mirrors the soft-timeout reset/rearm sequence, keeps test builds non-mutating, exposes a non-signal finalizer for the hard-timeout `ResourceOut` banner/SZS output, stderr diagnostic, CPU-limit exit status, and unexpected-signal warning text, maps cooperative hard-deadline expiry onto that hard-timeout result path for executable proof search, records the active executable output file descriptor for signal-time `GlobalOutFD` writes, and the normal Linux hard-timeout trampoline writes the C banner/SZS and fatal stderr text through descriptors before exiting with `CPU_LIMIT_ERROR`. Native Windows still uses the cooperative process-CPU deadline instead of a Job Object process-time quota that would terminate the process before C-shaped output can be emitted.
 - `ESignalHandler(SIGTERM|SIGINT)` performs temp-file cleanup once, resets the active handler to `SIG_DFL`, and re-raises the same signal so ordinary process termination continues. Rust now preserves the testable cleanup outcome separately, and the normal Linux signal trampoline performs the default-handler restoration and re-raise after that outcome is produced.
 - `ESigTermSchedHandler(SIGTERM)` increments `SigTermCaught` and immediately restores the default `SIGTERM` handler so a later termination signal is no longer swallowed by the scheduler handler. Rust now exposes that scheduler-handler outcome, including the post-increment count and default-reset attempt, while confining the real `signal(SIGTERM, SIG_DFL)` call to normal Linux builds.
+
+### Rust Port Status Notes
+
+- `src/inout/signals.rs` ports the public signal globals, setup/handler/scheduler-handler outcomes, CPU-limit configuration and deadline checks, soft-timeout latch and rearm behavior, hard-timeout finalizer, unexpected-signal warning text, termination cleanup outcome, Linux normal-build signal trampolines, and test-only non-mutating paths. The executable proof-search path uses the cooperative hard-deadline finalizer where native signal delivery is not available or would bypass C-shaped output.
 
 ### Porting Focus
 

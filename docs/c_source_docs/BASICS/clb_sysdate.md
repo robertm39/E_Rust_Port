@@ -85,7 +85,16 @@ Source files reviewed: `BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `SysDateInc(sd)` increments the pointed-to date first and then asserts the result is nonzero, so incrementing `SysDateInvalidTime()` mutates it to the creation-time sentinel before failing. Rust now exposes that as an explicit asserting helper while keeping the reporting helper for callers that need diagnostics.
+
+### Compatibility Notes
+
+- `SysDate` is a signed C `long` used as a monotone event date, with `0` as creation time and `-1` as invalid time.
+- `SysDateInc(sd)` increments the pointed-to date first and then asserts the result is nonzero, so incrementing `SysDateInvalidTime()` mutates it to the creation-time sentinel before failing.
+- `SysDatePrint` uses `%5lu`, so a negative date is rendered through unsigned-C-long formatting rather than signed decimal formatting.
+
+### Rust Port Status Notes
+
+- `src/basics/sysdate.rs` ports the sentinel constructors, comparisons, maximum operation, raw conversion boundary, C-shaped increment assertion helper, reportable increment helper, unsigned-C-long print shape, and tests for sentinel, assertion, overflow, and print behavior.
 
 ### Porting Focus
 
