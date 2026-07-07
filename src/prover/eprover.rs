@@ -10930,12 +10930,15 @@ fn parse_simple_tstp_formula_clause(
             &formula_kind,
             scanner,
             bank,
+            role_types.raw_formula_type,
+            formula_problem_type,
             formula_owner_handling,
         )
     {
         return parse_represented_tstp_formula_clause_body(
             scanner,
             bank,
+            &formula_kind,
             formula_preprocessing,
             name,
             formula_problem_type,
@@ -11029,6 +11032,8 @@ fn should_parse_tstp_formula_as_represented_owner(
     formula_kind: &str,
     scanner: &Scanner,
     bank: &TermBank,
+    raw_formula_type: FormulaProperties,
+    problem_type: ProblemType,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> bool {
     if !matches!(
@@ -11040,6 +11045,11 @@ fn should_parse_tstp_formula_as_represented_owner(
 
     match formula_kind {
         "fof" | "tff" => tstp_plain_body_is_represented_formula_owner_supported(scanner, bank),
+        "tcf" => {
+            raw_formula_type != CP_TYPE_WATCH_CLAUSE
+                && !tstp_app_encode_body_contains_distinct(scanner)
+                && tstp_tcf_body_is_represented_formula_owner_supported(scanner, bank, problem_type)
+        }
         "thf" => true,
         _ => false,
     }
@@ -11079,6 +11089,19 @@ fn tstp_body_contains_fof_bridge_only_formula_owner_token(scanner: &Scanner) -> 
     }
 }
 
+fn tstp_tcf_body_is_represented_formula_owner_supported(
+    scanner: &Scanner,
+    bank: &TermBank,
+    problem_type: ProblemType,
+) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut probe = bank.clone();
+    tcf_tstp_parse(&mut lookahead, &mut probe, problem_type).is_ok_and(|formula| {
+        formula.type_().as_ref().is_some_and(Type::is_bool)
+            && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Parser helper threads the same source, role, and preprocessing state as the simple bridge"
@@ -11086,6 +11109,7 @@ fn tstp_body_contains_fof_bridge_only_formula_owner_token(scanner: &Scanner) -> 
 fn parse_represented_tstp_formula_clause_body(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    formula_kind: &str,
     formula_preprocessing: FormulaPreprocessing,
     name: String,
     problem_type: ProblemType,
@@ -11093,7 +11117,11 @@ fn parse_represented_tstp_formula_clause_body(
     source_info: SimpleFofSourceInfo<'_>,
     formula_position: &str,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
-    let formula = bank.parse_tformula_tstp(scanner)?;
+    let formula = if formula_kind == "tcf" {
+        tcf_tstp_parse(scanner, bank, problem_type)?
+    } else {
+        bank.parse_tformula_tstp(scanner)?
+    };
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
@@ -15297,6 +15325,8 @@ mod tests {
                     formula_kind,
                     &supported,
                     &bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::FirstOrder,
                     super::InputFormulaOwnerHandling::FormulaSetPrint,
                 ),
                 "{formula_kind} should route represented parser-supported bodies"
@@ -15309,6 +15339,8 @@ mod tests {
                     formula_kind,
                     &trailing,
                     &bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::FirstOrder,
                     super::InputFormulaOwnerHandling::FormulaSetPrint,
                 ),
                 "{formula_kind} should not route bodies with trailing non-associative operators"
@@ -15327,12 +15359,64 @@ mod tests {
                         formula_kind,
                         &scanner,
                         &bank,
+                        CP_TYPE_AXIOM,
+                        ProblemType::FirstOrder,
                         super::InputFormulaOwnerHandling::FormulaSetPrint,
                     ),
                     "{formula_kind} should keep {bridge_only} on the bridge"
                 );
             }
         }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn tstp_tcf_formula_owner_route_uses_represented_clause_parser_probe() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+
+        for supported in ["p(a) | q(a))", "![X]:(p(X)|q(X)))"] {
+            let mut scanner = Scanner::from_user_string(supported, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                super::should_parse_tstp_formula_as_represented_owner(
+                    "tcf",
+                    &scanner,
+                    &bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "tcf should route represented parser-supported body {supported}"
+            );
+        }
+
+        for bridge_only in [
+            "p(a) | $distinct(a,b,c))",
+            "![X]:(p(X)&q(X)))",
+            "p(a) | q(a))",
+        ] {
+            let raw_formula_type = if bridge_only == "p(a) | q(a))" {
+                super::CP_TYPE_WATCH_CLAUSE
+            } else {
+                CP_TYPE_AXIOM
+            };
+            let mut scanner = Scanner::from_user_string(bridge_only, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                !super::should_parse_tstp_formula_as_represented_owner(
+                    "tcf",
+                    &scanner,
+                    &bank,
+                    raw_formula_type,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "tcf should keep {bridge_only} on the bridge"
+            );
+        }
+
         reset_problem_type();
     }
 
