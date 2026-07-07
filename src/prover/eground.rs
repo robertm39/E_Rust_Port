@@ -1508,6 +1508,50 @@ mod tests {
     }
 
     #[test]
+    fn dimacs_output_file_keeps_c_non_unit_stdout_split() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("eground-dimacs-split");
+        let _ = fs::remove_file(&output_path);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"fof(ax, axiom, (p(a) | q(a))).\n";
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--dimacs",
+                "-o",
+                output_path.to_str().unwrap(),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+
+        let stdout = String::from_utf8(stdout).unwrap();
+        assert!(stdout.starts_with("  "));
+        assert!(!stdout.contains('\n'));
+        assert_eq!(stdout.split_whitespace().count(), 2);
+        assert!(!stdout.split_whitespace().any(|token| token == "0"));
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        let mut lines = output.lines();
+        assert_eq!(lines.next(), Some(DEFAULT_COMCHAR_RAW));
+        assert!(lines.next().is_some_and(|line| line.starts_with("p cnf ")));
+        assert_eq!(lines.next(), Some(" 0"));
+        let completion = format!("{DEFAULT_COMCHAR_RAW} Full and complete proof state written!");
+        assert_eq!(lines.next(), Some(completion.as_str()));
+        assert_eq!(lines.next(), None);
+
+        fs::remove_file(output_path).unwrap();
+    }
+
+    #[test]
     fn give_up_estimate_limit_exits_with_c_failure_status() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
