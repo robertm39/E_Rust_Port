@@ -5343,6 +5343,40 @@ mod tests {
     }
 
     #[test]
+    fn tstp_formula_application_accepts_lambda_as_arrow_typed_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("person: $tType. p: (person > person) > $o.", false).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("p @ (^[X: person]: X)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(formula.argument(1), Some(bank.true_term().clone()));
+        let applied = formula.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(applied.f_code()), Some("p"));
+        assert_eq!(applied.arity(), 1);
+        let lambda = applied.argument(0).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        let lambda_type = lambda.type_().unwrap();
+        assert!(lambda_type.is_arrow());
+        assert_eq!(lambda_type.arity(), 2);
+        let binder = lambda.argument(0).unwrap();
+        assert_eq!(lambda.argument(1), Some(binder.clone()));
+        assert_eq!(lambda_type.args()[0], binder.type_().unwrap());
+        assert_eq!(lambda_type.args()[1], binder.type_().unwrap());
+    }
+
+    #[test]
     fn tstp_formula_application_can_be_equality_operand_under_first_order_global_state() {
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = formula_bank();

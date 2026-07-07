@@ -43,7 +43,7 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_fcode_alloc,
-    tformula_lit_alloc, tformula_prop_constant_alloc,
+    tformula_has_free_vars, tformula_lit_alloc, tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -10419,6 +10419,22 @@ fn parse_simple_tstp_formula_clause(
 
     let role_types = simple_fof_role_types(&role, formula_problem_type, formula_preprocessing);
     let formula_position = token_pos_rep(scanner.current_token());
+    if should_parse_tstp_formula_as_represented_owner(&formula_kind, formula_owner_handling) {
+        return parse_represented_tstp_formula_clause_body(
+            scanner,
+            bank,
+            formula_preprocessing,
+            name,
+            formula_problem_type,
+            role_types,
+            SimpleFofSourceInfo {
+                source: &start_source,
+                line: start_line,
+                column: start_column,
+            },
+            &formula_position,
+        );
+    }
     let mut formulas =
         parse_simple_tstp_body_formulas(scanner, bank, &formula_kind, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
@@ -10494,6 +10510,114 @@ fn parse_simple_tstp_formula_clause(
         raw_formula_features,
         problem_type: owner_routing.parsed_problem_type,
     })
+}
+
+fn should_parse_tstp_formula_as_represented_owner(
+    formula_kind: &str,
+    formula_owner_handling: InputFormulaOwnerHandling,
+) -> bool {
+    formula_kind == "thf"
+        && matches!(
+            formula_owner_handling,
+            InputFormulaOwnerHandling::FormulaSetCnf
+        )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Parser helper threads the same source, role, and preprocessing state as the simple bridge"
+)]
+fn parse_represented_tstp_formula_clause_body(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    formula_preprocessing: FormulaPreprocessing,
+    name: String,
+    problem_type: ProblemType,
+    role_types: SimpleFofRoleTypes,
+    source_info: SimpleFofSourceInfo<'_>,
+    formula_position: &str,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    let formula = bank.parse_tformula_tstp(scanner)?;
+    if !formula.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(thf_formula_requires_full_pipeline_error(scanner));
+    }
+    if tformula_has_free_vars(bank, &formula).is_some() {
+        return Err(tstp_formula_free_variables_error(formula_position));
+    }
+
+    let raw_formula_features =
+        represented_raw_formula_features(&formula, role_types.raw_formula_type, bank);
+    let mut owner_formula = represented_formula_owner(
+        formula,
+        role_types.raw_formula_type | CP_INPUT_FORMULA,
+        &name,
+        Some(source_info.source),
+        source_info.line,
+        source_info.column,
+    );
+    if role_types.annotate_question {
+        owner_formula.annotate_question(
+            bank,
+            formula_preprocessing.add_answer_literals,
+            formula_preprocessing.conjectures_are_questions,
+        )?;
+    }
+
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    Ok(ParsedSimpleFofClause {
+        name,
+        raw_formula_type: role_types.raw_formula_type,
+        owner_formula: Some(owner_formula),
+        clauses: Vec::new(),
+        formula_conjecture_seen: role_types.formula_conjecture_seen,
+        raw_formula_features,
+        problem_type,
+    })
+}
+
+fn represented_formula_owner(
+    formula: Term,
+    properties: FormulaProperties,
+    name: &str,
+    source: Option<&str>,
+    line: i64,
+    column: i64,
+) -> WrappedFormula {
+    let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+    wrapped.set_properties(properties | CP_INITIAL);
+    wrapped.set_info(Some(ClauseInfo::new(Some(name), source, line, column)));
+    wrapped
+}
+
+fn represented_raw_formula_features(
+    formula: &Term,
+    formula_type: FormulaProperties,
+    bank: &TermBank,
+) -> RawFormulaFeatures {
+    let wrapped = WrappedFormula::wt_formula_alloc(formula.clone());
+    let order = i32_from_usize_saturating(wrapped.conjecture_order(bank.signature())).max(1);
+    let (conjecture_count, hypothesis_count, conj_order) = if formula_type.is_conjecture() {
+        (1, 0, order)
+    } else if formula_type.is_hypothesis() {
+        (0, 1, order)
+    } else {
+        (0, 0, 0)
+    };
+
+    RawFormulaFeatures {
+        sentence_no: 1,
+        term_size: wrapped.standard_weight(),
+        conjecture_count,
+        hypothesis_count,
+        order,
+        conj_order,
+        num_lambdas: wrapped.count_non_top_level_lambdas(bank.signature()),
+        app_var_lits: wrapped.has_app_var_literal(bank),
+        ..RawFormulaFeatures::default()
+    }
 }
 
 fn simple_tstp_formula_roles(formula_kind: &str) -> &'static str {
@@ -28570,6 +28694,35 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_thf_lambda_as_arrow_typed_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-lambda-arrow-argument");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: (person > person) > $o).\n\
+             thf(lambda_arg, axiom, p @ (^[X: person]: X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed, "\n% Parsing successful!\n% SZS status Unknown\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_thf_lambda_equality() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-thf-lambda-equality");
@@ -28808,6 +28961,36 @@ input_clause(c2,axiom,[++q(X)]).
              thf(p_type, type, p: person > $o).\n\
              thf(lambda_fact, axiom, (^[X: person]: p @ X) @ a).\n\
              thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_thf_lambda_as_arrow_typed_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-lambda-arrow-argument-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: (person > person) > $o).\n\
+             thf(fact, axiom, p @ (^[X: person]: X)).\n\
+             thf(goal, conjecture, p @ (^[X: person]: X)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
