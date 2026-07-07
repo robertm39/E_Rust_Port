@@ -3131,6 +3131,35 @@ mod tests {
     }
 
     #[test]
+    fn load_problem_from_file_rejects_legacy_records_under_forced_tstp_like_c() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let source = test_path("batch-load-legacy-record.p");
+        fs::write(&source, "input_clause(old_clause, axiom, [++p(a)]).\n").unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let error = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains(
+            "LTB batch input currently supports cnf clauses, fof/tff/tcf/thf formula entries, and include directives"
+        ));
+    }
+
+    #[test]
     fn load_problem_from_file_accepts_supported_thf_entries() {
         let dir = test_temp_dir();
         fs::create_dir_all(&dir).unwrap();
