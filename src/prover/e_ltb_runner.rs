@@ -95,7 +95,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("verbose"),
         OptArgType::OptArg,
         Some("1"),
-        "Verbose comments on the progress of the program.",
+        "Verbose comments on the progress of the program. This differs from the output level (below) in that technical information is printed to stderr, while the output level determines which logical manipulations of the clauses are printed to stdout.",
     ),
     OptCell::new(
         OptionCode::OutputFile,
@@ -111,7 +111,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-dir"),
         OptArgType::ReqArg,
         None,
-        "Prefix generated per-problem output files with the named directory.",
+        "Directory for individual problem output files. Default is the current working directory.",
     ),
     OptCell::new(
         OptionCode::Variants27,
@@ -119,7 +119,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants27"),
         OptArgType::NoArg,
         None,
-        "Use the CASC-27 variant problem setup.",
+        "Handle different variants for each problem base name as required for CASC-27. This is very specific hack.",
     ),
     OptCell::new(
         OptionCode::Variants28,
@@ -127,7 +127,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants28"),
         OptArgType::NoArg,
         None,
-        "Use the CASC-28 variant problem setup.",
+        "Handle different variants for each problem base name as required for CASC-28 (without higher-order support). This is very specific hack.",
     ),
     OptCell::new(
         OptionCode::Variants28Ho,
@@ -135,7 +135,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants28-ho"),
         OptArgType::NoArg,
         None,
-        "Use the CASC-28 higher-order variant problem setup.",
+        "Handle different variants for each problem base name as required for CASC-28, including the TH0-variant. This is very specific hack. Note that this requires eprover-ho for the third variant.",
     ),
     OptCell::new(
         OptionCode::Variants28_25,
@@ -143,7 +143,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants28-25"),
         OptArgType::NoArg,
         None,
-        "Use the CASC-28 25-variant problem setup.",
+        "Handle different variants for each problem base name as required for CASC-28, but run E-2.5 (prerelease) as the base prover. This is a really very specific hack, to enable E 2.5 as the CASC-J10 LTB winner to compete in CASC-28. It requires manual installation of the eprover-2.5 binary in the StarExec package.",
     ),
     OptCell::new(
         OptionCode::VariantsJ11,
@@ -151,7 +151,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variantsj11"),
         OptArgType::NoArg,
         None,
-        "Use the CASC-J11 variant problem setup.",
+        "Handle different variants for each problem base name as required for CASC-J11. See above.",
     ),
     OptCell::new(
         OptionCode::Interactive,
@@ -159,7 +159,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("interactive"),
         OptArgType::NoArg,
         None,
-        "Enter interactive mode after each batch.",
+        "For each batch file, enter interactive mode after processing batch the batch problems. Interactive mode allows the processing of additional jobs with respect to the loaded axioms set. Jobs are entered via stdin and print to stdout.",
     ),
     OptCell::new(
         OptionCode::Silent,
@@ -167,7 +167,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("silent"),
         OptArgType::NoArg,
         None,
-        "Suppress nonessential output.",
+        "Equivalent to --output-level=0.",
     ),
     OptCell::new(
         OptionCode::OutputLevel,
@@ -175,7 +175,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Set the output level.",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output, level 1 will output each clause as it is processed, level 2 will output generating inferences, level 3 will give a full protocol including rewrite steps and level 4 will include some internal clause renamings. Levels >= 2 also imply PCL2 or TSTP formats (which can be post-processed with suitable tools).",
     ),
     OptCell::new(
         OptionCode::GlobalWtcLimit,
@@ -183,7 +183,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("wtc-limit"),
         OptArgType::ReqArg,
         None,
-        "Set a global wall-clock limit for specs that omit one.",
+        "Set the global wall-clock limit for each batch (if any).",
     ),
 ];
 
@@ -1548,6 +1548,20 @@ mod tests {
 
         assert!(help.contains("e_ltb_runner "));
         assert!(help.contains("Options:"));
+        assert!(
+            help.contains("Directory for individual problem output files. Default is the current")
+        );
+        assert!(help.contains("working directory."));
+        assert!(
+            help.contains("Handle different variants for each problem base name as required for")
+        );
+        assert!(help.contains("CASC-28, including the TH0-variant."));
+        assert!(
+            help.contains("For each batch file, enter interactive mode after processing batch the")
+        );
+        assert!(help.contains("batch problems. Interactive mode allows the processing"));
+        assert!(help.contains("Equivalent to --output-level=0."));
+        assert!(help.contains("Set the global wall-clock limit for each batch (if any)."));
         assert!(help.contains("Copyright 1998-2026 by Stephan Schulz"));
     }
 
