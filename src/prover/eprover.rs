@@ -22015,6 +22015,54 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_prune_only_applies_pred_elim_to_fof_formula_origin_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-fof-pred-elim");
+        std::fs::write(
+            &path,
+            "fof(pos, axiom, (p(a)|s(a))).\n\
+             fof(neg, axiom, ~p(a)).\n\
+             fof(s_offending, axiom, (s(b)|s(c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--pred-elim=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("file('{path_arg}', pos)")));
+        assert!(printed.contains(&format!("file('{path_arg}', neg)")));
+        assert!(printed.contains(&format!("file('{path_arg}', s_offending)")));
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        let final_docs = printed
+            .split("% PE eliminated: 1\n")
+            .nth(1)
+            .expect("predicate-elimination summary should precede final prune output");
+        assert!(final_docs.contains("(s(a))"));
+        assert!(final_docs.contains("(s(b)|s(c))"));
+        assert!(!final_docs.contains("p(a)"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_allows_pred_elim_gate_recognition_without_gate_validation() {
         let _guard = global_state_lock();
         let path = temp_path("prune-pred-elim-gates-without-validation");
@@ -26705,6 +26753,46 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
         assert!(printed.contains("% Parsed axioms                        : 3\n"));
         assert!(printed.contains("% Initial clauses                      : 3\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_pred_elim_to_fof_formula_origin_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-pred-elim");
+        std::fs::write(
+            &path,
+            "fof(pos, axiom, (p(a)|s(a))).\n\
+             fof(neg, axiom, ~p(a)).\n\
+             fof(s_offending, axiom, (s(b)|s(c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--pred-elim=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        assert!(printed.contains("% Parsed axioms                        : 3\n"));
+        assert!(printed.contains("% Initial clauses                      : 3\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
+        assert!(printed.contains("%s(a) <- ."));
+        assert!(printed.contains("%s(b); s(c) <- ."));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
