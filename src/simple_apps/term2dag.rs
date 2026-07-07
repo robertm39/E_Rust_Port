@@ -172,7 +172,7 @@ fn execute_term2dag(
     for file in &config.files {
         let mut scanner = scanner_for_input(file, stdin)?;
         while !scanner.test_tok(TokenType::NO_TOKEN) {
-            let term = bank.parse_term_simple(&mut scanner)?;
+            let term = bank.parse_term_with_distinct_checks(&mut scanner)?;
             term.set_prop(TP_TOP_POS);
         }
     }
@@ -369,6 +369,22 @@ mod tests {
         assert!(output.contains("*3 : a   =   a\t/*  Properties:"));
         assert!(output.contains("*4 : f(*3,*3)   =   f(a,a)\t/*  Properties:"));
         assert!(output.contains("*5 : g(*4)   =   g(f(a,a))\t/*  Properties:"));
+    }
+
+    #[test]
+    fn distinct_number_with_arguments_is_rejected_like_tb_term_parse() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"1(a)\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error =
+            run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr).expect_err("bad term fails");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]

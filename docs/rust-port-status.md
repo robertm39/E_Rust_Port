@@ -607,7 +607,7 @@ C source references:
 
 Implemented:
 
-- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank, top-position marking of parsed terms, signature printing including C's `sig_print_operator` stdout side-channel for per-symbol newlines and missing-type markers under file output, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, top-position marking of parsed terms, signature printing including C's `sig_print_operator` stdout side-channel for per-symbol newlines and missing-type markers under file output, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
@@ -616,6 +616,7 @@ Pending:
 Change-later notes:
 
 - C parses `-r`/`--print-reference-number` into the global `TBPrintInternalInfo`, then `main` immediately sets `TBPrintInternalInfo = true` before printing. Rust validates the option but preserves the observable forced-on comments; a cleaned CLI should either honor the option or remove it.
+- C routes this small DAG-dump utility through full `TBTermParse`, so the accepted language and diagnostics come from the strict term-bank parser rather than simple term printing syntax. Rust preserves that strictness; a cleaned CLI could expose parser mode deliberately.
 - C's `TBPrintBankInOrder` builds a temporary numeric tree by traversing all term-store hash buckets before printing in ascending `entry_no`. Rust sorts the collected bank terms directly, which preserves the observable order; revisit only if future profiling needs to model the temporary allocation shape.
 - C `sig_print_operator` writes per-symbol newlines and the missing-type marker to stdout even when the signature itself is being printed to an output file. Rust preserves this for `term2dag` through an explicit side-channel helper; keep that compatibility boundary narrow so ordinary in-memory signature debug output can remain single-stream.
 
