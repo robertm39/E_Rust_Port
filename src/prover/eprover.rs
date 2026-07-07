@@ -16242,6 +16242,26 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn bundled_picosat_library_finds_executable_local_lib_directory() {
+        let _lock = global_state_lock();
+        let root = temp_path("picosat-bundle-local-lib").with_extension("dir");
+        let _ = std::fs::remove_dir_all(&root);
+        let bin_dir = root.join("bin");
+        let lib_dir = bin_dir.join("lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let executable = bin_dir.join("eprover.exe");
+        let bundled = lib_dir.join(PICOSAT_LIBRARY_NAMES[0]);
+        std::fs::write(&bundled, b"fake picosat").unwrap();
+
+        assert_eq!(
+            bundled_picosat_library_for_executable(&executable),
+            Some(bundled)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn proof_control_from_config_reports_missing_runtime_picosat_library() {
         let config = EProverConfig {
             picosat_library: Some(PathBuf::from("missing-picosat-runtime-test.dll")),
