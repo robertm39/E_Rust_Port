@@ -15471,6 +15471,7 @@ mod tests {
                 "tff(b_type, type, b: $i).",
                 "tff(q_type, type, q: $o).",
                 "tff(p_type, type, p: $i > $o).",
+                "tff(r_type, type, r: $i > $o).",
             ] {
                 parse_tstp_formula_clause_into_bank(declaration, &mut lambda_bank);
             }
@@ -15478,6 +15479,10 @@ mod tests {
                 "$let(f: $o, f := p(a), f))",
                 "(p(a) | $let(f: $o, f := q, f)))",
                 "p($let(f: $i, f := a, f)))",
+                "?[X]:$ite(p(X), p(X), r(X)))",
+                "?[Y]:$let(f: $i, f := a, f) = Y)",
+                "p(a) = $ite(q, p(a), p(b)))",
+                "p(a) != $let(f: $o, f := q, f))",
             ] {
                 let mut scanner = Scanner::from_user_string(represented_let, false).unwrap();
                 scanner.set_format(IoFormat::Tstp);
@@ -30086,7 +30091,7 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_print_formulas_skolemizes_existential_fool_body() {
+    fn run_print_formulas_preserves_parser_supported_fool_bodies() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-existential-fool-body");
         std::fs::write(
@@ -30097,7 +30102,9 @@ input_clause(c2,axiom,[++q(X)]).
              tff(q_type, type, q: $i > $o).\n\
              tff(r_type, type, r: $i > $o).\n\
              fof(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
-             fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+             fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n\
+             fof(ite_rhs_eq, axiom, p(a) = $ite(p(a), q(a), r(a))).\n\
+             fof(let_rhs_ne, axiom, p(a) != $let(f:$o, f := q(a), f)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -30115,7 +30122,14 @@ input_clause(c2,axiom,[++q(X)]).
         assert_formula_owner_print(
             stdout,
             stderr,
-            &["fof(ex_ite, axiom", "fof(ex_let_eq, axiom", "$ite", "$let"],
+            &[
+                "fof(ex_ite, axiom",
+                "fof(ex_let_eq, axiom",
+                "fof(ite_rhs_eq, axiom",
+                "fof(let_rhs_ne, axiom",
+                "$ite",
+                "$let",
+            ],
         );
         std::fs::remove_file(&path).unwrap();
     }

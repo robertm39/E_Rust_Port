@@ -4445,6 +4445,7 @@ mod tests {
         let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
 
         assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
         assert_eq!(
             formula.argument(0).unwrap().f_code(),
             bank.signature().eqn_code()
@@ -4459,6 +4460,29 @@ mod tests {
         let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
 
         assert_eq!(formula.f_code(), bank.signature().xor_code());
+
+        let mut scanner =
+            Scanner::from_user_string("p(a) = $ite(q(a), p(a), q(a))", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        assert_eq!(
+            formula.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            formula.argument(1).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+
+        let mut scanner =
+            Scanner::from_user_string("p(a) != $let(f: $o, f := q(a), f)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().xor_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]
