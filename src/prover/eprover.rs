@@ -11173,6 +11173,30 @@ fn simple_fof_role_types(
     }
 }
 
+fn old_tptp_formula_role_types(
+    role: &str,
+    formula_preprocessing: FormulaPreprocessing,
+) -> SimpleFofRoleTypes {
+    let mut clause_type = old_tptp_input_formula_clause_type(role);
+    let raw_formula_type = clause_type;
+    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
+    if annotate_question {
+        clause_type = CP_TYPE_CONJECTURE;
+    }
+    let owner_formula_type = clause_type;
+    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
+    if formula_conjecture_seen {
+        clause_type = CP_TYPE_NEG_CONJECTURE;
+    }
+    SimpleFofRoleTypes {
+        clause_type,
+        raw_formula_type,
+        owner_formula_type,
+        formula_conjecture_seen,
+        annotate_question,
+    }
+}
+
 fn parse_simple_tstp_type_declaration_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -11258,20 +11282,26 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
 
-    let mut clause_type = old_tptp_input_formula_clause_type(&role);
-    let raw_formula_type = clause_type;
-    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
-    if annotate_question {
-        clause_type = CP_TYPE_CONJECTURE;
-    }
-    let owner_formula_type = clause_type;
-    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
-    if formula_conjecture_seen {
-        clause_type = CP_TYPE_NEG_CONJECTURE;
+    let role_types = old_tptp_formula_role_types(&role, formula_preprocessing);
+    if should_parse_tptp_formula_as_represented_owner(formula_owner_handling) {
+        return parse_represented_tptp_formula_clause_body(
+            scanner,
+            bank,
+            formula_preprocessing,
+            name,
+            role_types,
+            SimpleFofSourceInfo {
+                source: &start_source,
+                line: start_line,
+                column: start_column,
+            },
+            formula_owner_handling,
+        );
     }
     let mut formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
-    let raw_formula_features = simple_fof_raw_formula_features(&formulas, raw_formula_type, bank);
-    if annotate_question {
+    let raw_formula_features =
+        simple_fof_raw_formula_features(&formulas, role_types.raw_formula_type, bank);
+    if role_types.annotate_question {
         formulas = simple_fof_annotate_question_formulas(
             formulas,
             formula_preprocessing.add_answer_literals,
@@ -11280,7 +11310,7 @@ fn parse_simple_tptp_formula_clause(
     }
     let owner_formula = simple_fof_formula_owner(
         &formulas,
-        owner_formula_type | CP_INPUT_FORMULA,
+        role_types.owner_formula_type | CP_INPUT_FORMULA,
         &name,
         Some(&start_source),
         start_line,
@@ -11289,7 +11319,7 @@ fn parse_simple_tptp_formula_clause(
     )?;
     let owner_routing = simple_fof_owner_routing(
         ProblemType::FirstOrder,
-        raw_formula_type,
+        role_types.raw_formula_type,
         owner_formula.as_ref(),
         formula_owner_handling,
     );
@@ -11298,12 +11328,12 @@ fn parse_simple_tptp_formula_clause(
             formulas,
             bank,
             SimpleFofClauseLoweringContext {
-                clause_type,
+                clause_type: role_types.clause_type,
                 name: &name,
                 start_source: &start_source,
                 start_line,
                 start_column,
-                negate_as_conjecture: formula_conjecture_seen,
+                negate_as_conjecture: role_types.formula_conjecture_seen,
                 fool_unroll: formula_preprocessing.fool_unroll_enabled(),
             },
         )?
@@ -11328,12 +11358,67 @@ fn parse_simple_tptp_formula_clause(
     };
     Ok(ParsedSimpleFofClause {
         name,
-        raw_formula_type,
+        raw_formula_type: role_types.raw_formula_type,
         owner_formula,
         clauses,
-        formula_conjecture_seen,
+        formula_conjecture_seen: role_types.formula_conjecture_seen,
         raw_formula_features,
         problem_type: owner_routing.parsed_problem_type,
+    })
+}
+
+fn should_parse_tptp_formula_as_represented_owner(
+    formula_owner_handling: InputFormulaOwnerHandling,
+) -> bool {
+    matches!(
+        formula_owner_handling,
+        InputFormulaOwnerHandling::FormulaSetCnf | InputFormulaOwnerHandling::FormulaSetPrint
+    )
+}
+
+fn parse_represented_tptp_formula_clause_body(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    formula_preprocessing: FormulaPreprocessing,
+    name: String,
+    role_types: SimpleFofRoleTypes,
+    source_info: SimpleFofSourceInfo<'_>,
+    formula_owner_handling: InputFormulaOwnerHandling,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    let formula = bank.parse_tformula_tptp(scanner)?;
+    let raw_formula_features =
+        represented_raw_formula_features(&formula, role_types.raw_formula_type, bank);
+    let mut owner_formula = represented_formula_owner(
+        formula,
+        role_types.owner_formula_type | CP_INPUT_FORMULA,
+        &name,
+        Some(source_info.source),
+        source_info.line,
+        source_info.column,
+    );
+    if role_types.annotate_question {
+        owner_formula.annotate_question(
+            bank,
+            formula_preprocessing.add_answer_literals,
+            formula_preprocessing.conjectures_are_questions,
+        )?;
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let problem_type = simple_fof_formula_owner_problem_type(
+        ProblemType::FirstOrder,
+        Some(&owner_formula),
+        formula_owner_handling,
+    );
+    Ok(ParsedSimpleFofClause {
+        name,
+        raw_formula_type: role_types.raw_formula_type,
+        owner_formula: Some(owner_formula),
+        clauses: Vec::new(),
+        formula_conjecture_seen: role_types.formula_conjecture_seen,
+        raw_formula_features,
+        problem_type,
     })
 }
 
@@ -25880,6 +25965,38 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_cnf_only_preserves_old_tptp_formula_equality_as_literal() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-old-tptp-formula-equality");
+        std::fs::write(
+            &path,
+            "input_formula(eq, axiom, p(a)=q(a)).\n\
+             input_formula(ne, axiom, p(a)!=q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("q(a)=p(a) <- .\n"), "{printed}");
+        assert!(printed.contains(" <- q(a)=p(a).\n"), "{printed}");
+        assert!(!printed.contains("<=>"), "{printed}");
+        assert!(!printed.contains("<~>"), "{printed}");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_routes_formula_owners_through_cnf_docs() {
         let _guard = global_state_lock();
         let path = temp_path("proof-formula-owner-cnf-docs");
@@ -28872,6 +28989,42 @@ input_clause(c2,axiom,[++q(X)]).
             stderr,
             &["fof(lem, axiom", "fof(unk, axiom", "fof(que, question"],
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_preserves_old_tptp_formula_equality_as_literal() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-old-tptp-formula-equality");
+        std::fs::write(
+            &path,
+            "input_formula(eq, axiom, p(a)=q(a)).\n\
+             input_formula(ne, axiom, p(a)!=q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tptp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("fof(eq, axiom, p(a)=q(a))."), "{printed}");
+        assert!(printed.contains("fof(ne, axiom, p(a)!=q(a))."), "{printed}");
+        assert!(!printed.contains("<=>"), "{printed}");
+        assert!(!printed.contains("<~>"), "{printed}");
+        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
