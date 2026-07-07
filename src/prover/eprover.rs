@@ -10235,6 +10235,13 @@ struct ParsedSimpleFofClause {
     problem_type: ProblemType,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SimpleFofSourceInfo<'a> {
+    source: &'a str,
+    line: i64,
+    column: i64,
+}
+
 struct SimpleFofBoundVariable {
     name: String,
     variable: Option<Term>,
@@ -10391,6 +10398,12 @@ fn parse_simple_tstp_formula_clause(
             bank,
             name,
             formula_problem_type,
+            formula_owner_handling,
+            SimpleFofSourceInfo {
+                source: &start_source,
+                line: start_line,
+                column: start_column,
+            },
         );
     }
 
@@ -10530,6 +10543,8 @@ fn parse_simple_tstp_type_declaration_clause(
     bank: &mut TermBank,
     name: String,
     problem_type: ProblemType,
+    formula_owner_handling: InputFormulaOwnerHandling,
+    source_info: SimpleFofSourceInfo<'_>,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     scanner.accept_id("type")?;
     scanner.accept_tok(TokenType::COMMA)?;
@@ -10538,25 +10553,52 @@ fn parse_simple_tstp_type_declaration_clause(
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
-    Ok(parsed_simple_tstp_type_declaration_clause(
+    parsed_simple_tstp_type_declaration_clause(
+        bank,
         name,
         problem_type,
-    ))
+        formula_owner_handling,
+        source_info,
+    )
 }
 
 fn parsed_simple_tstp_type_declaration_clause(
+    bank: &mut TermBank,
     name: String,
     problem_type: ProblemType,
-) -> ParsedSimpleFofClause {
-    ParsedSimpleFofClause {
+    formula_owner_handling: InputFormulaOwnerHandling,
+    source_info: SimpleFofSourceInfo<'_>,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    let formulas = [SimpleFofFormula::Truth(true)];
+    let owner_formula = simple_fof_formula_owner(
+        &formulas,
+        CP_TYPE_AXIOM | CP_INPUT_FORMULA,
+        &name,
+        Some(source_info.source),
+        source_info.line,
+        source_info.column,
+        bank,
+    )?;
+    let owner_routing = simple_fof_owner_routing(
+        problem_type,
+        CP_TYPE_AXIOM,
+        owner_formula.as_ref(),
+        formula_owner_handling,
+    );
+    let owner_formula = if owner_routing.keep_represented_owner {
+        owner_formula
+    } else {
+        None
+    };
+    Ok(ParsedSimpleFofClause {
         name,
         raw_formula_type: CP_TYPE_AXIOM,
-        owner_formula: None,
+        owner_formula,
         clauses: Vec::new(),
         formula_conjecture_seen: false,
         raw_formula_features: RawFormulaFeatures::default(),
-        problem_type,
-    }
+        problem_type: owner_routing.parsed_problem_type,
+    })
 }
 
 fn parse_simple_tptp_formula_clause(
@@ -24222,8 +24264,12 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", person_type)")));
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", a_type)")));
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", p_type)")));
         assert!(printed.contains(&format!("initial(\"{path_arg}\", formula_doc)")));
-        assert_eq!(printed.matches("split_conjunct(1)").count(), 1);
+        assert_eq!(printed.matches("split_conjunct(").count(), 4);
+        assert_eq!(printed.matches("split_conjunct(4)").count(), 1);
         assert!(!printed.contains(&format!("file('{path_arg}', formula_doc)")));
         assert!(printed.contains("% CNFization successful!\n"));
         assert!(stderr.is_empty());
@@ -26643,6 +26689,9 @@ input_clause(c2,axiom,[++q(X)]).
             &[
                 "type, a: person",
                 "type, p: person > $o",
+                "fof(person_type, axiom, $true)",
+                "fof(a_type, axiom, $true)",
+                "fof(p_type, axiom, $true)",
                 "tff(test1, axiom, p(a))",
             ],
         );
