@@ -86,6 +86,20 @@ Source files reviewed: `HEURISTICS/che_lifo.h`, `HEURISTICS/che_lifo.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `LIFOEvalCompute` ignores the clause pointer and decrements the mutable double counter before returning it, so the first computed value is `-1.0`. Rust mirrors this with `LifoEvaluator` state and WFCB-backed evaluation.
+- The C comment for `LIFOEvalInit` says FIFO evaluation even though the function initializes LIFO state; Rust follows the implementation and treats the comment as stale.
+
+### Rust Port Status Notes
+
+- `src/heuristics/lifo.rs` ports LIFO evaluator allocation, stateful compute behavior, WFCB initialization, priority-function parsing inside brackets, and the no-op exit hook over owned Rust state.
+
+### Change Later
+
+- C heap-allocates a single `double` for the LIFO counter and frees it through a callback even though the state is just one scalar. Rust stores the scalar directly inside the typed evaluator; keep that safer ownership shape unless a future C-ABI compatibility layer needs callback-owned opaque data.
+- The `LIFOEvalInit` structured comment says FIFO evaluation in the LIFO module. Treat it as a stale comment and avoid copying it into user-facing docs.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -276,6 +276,7 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 - Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so helper parser banks cannot bypass fixed-code reservation accidentally.
 - If command-line parsing eventually allows list support to change after some signatures exist, compare C's global `SigSupportLists` timing against Rust's per-signature flag before exposing a higher-level API.
 - The C-compatible signature side-channel printer intentionally models a debug-output leak. Keep it isolated to executable compatibility paths; cleaned library diagnostics should continue writing complete records to the requested writer.
+- `SigInterpreteNumbers` expands to `sig->null_code`, but the checked `SigCell` has no `null_code` field, no C caller uses the macro, and `eprover/DOC/NEWS` records removal of the old `--interprete-numbers` dead code. Treat this as stale header surface rather than adding a Rust placeholder unless future reference builds restore the option.
 
 ### Porting Focus
 

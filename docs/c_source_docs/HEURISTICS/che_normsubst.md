@@ -81,6 +81,19 @@ Source files reviewed: `HEURISTICS/che_normsubst.h`, `HEURISTICS/che_normsubst.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `NormSubstAlloc` initializes the three numeric-tree roots (`used_ids`, `norm_funs`, `norm_vars`) to `NULL`. Rust mirrors this with `Option<NumTree<...>>` fields initialized to `None`.
+- `che_normsubst.h` declares `NormSubstFree`, but the checked `che_normsubst.c` defines only `NormSubstAlloc`. Rust provides a consuming drop helper for the intended ownership boundary without implying that the C source defines a separate free symbol.
+
+### Rust Port Status Notes
+
+- `src/heuristics/normsubst.rs` ports the allocation shape for `NormSubstCell`, including nullable numeric-tree roots and an ownership-consuming free helper.
+
+### Change Later
+
+- The header/source mismatch for `NormSubstFree` should be resolved only after checking any C-linkage compatibility requirements; otherwise the Rust helper can remain a typed ownership convenience rather than modeling an absent C definition.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
