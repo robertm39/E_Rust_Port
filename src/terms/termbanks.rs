@@ -3003,7 +3003,7 @@ impl TermBank {
                 } else {
                     self.sig.xor_code()
                 };
-                return self.tformula_fcode_alloc(op, left, Some(right));
+                self.tformula_fcode_alloc(op, left, Some(right))
             } else {
                 let right = self.parse_tformula_equality_right_term_arg(scanner)?;
                 self.encode_equality_term(left, right, positive)

@@ -10354,10 +10354,10 @@ fn parse_simple_tstp_app_encode_formula(
             scanner,
             bank,
             &formula_kind,
-            name,
             formula_type,
             formula_problem_type,
             &formula_position,
+            &name,
         )
         .map(Some);
     }
@@ -10390,10 +10390,10 @@ fn parse_represented_tstp_app_encode_formula_body(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     formula_kind: &str,
-    name: String,
     formula_type: FormulaProperties,
     problem_type: ProblemType,
     formula_position: &str,
+    name: &str,
 ) -> Result<ParsedAppEncodeFormula, Diagnostic> {
     let formula = parse_tstp_app_encode_owner_formula(scanner, bank, formula_kind, problem_type)?;
     let formula_is_distinct = formula.f_code() == bank.signature().distinct_code();
@@ -10411,7 +10411,7 @@ fn parse_represented_tstp_app_encode_formula_body(
         formula: represented_formula_owner(
             formula,
             formula_type | CP_INPUT_FORMULA,
-            &name,
+            name,
             None,
             -1,
             -1,
@@ -10468,19 +10468,20 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
+    let mut previous_was_colon = false;
     loop {
-        if lookahead.test_id("$distinct")
-            || lookahead
-                .test_tok(TokenType::ITE_TOKEN | TokenType::LET_TOKEN | TokenType::LAMBDA_QUANTOR)
-        {
+        if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
             return true;
         }
-        if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+        if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+            && !(previous_was_colon && lookahead.test_tok(TokenType::EQUAL_SIGN))
+        {
             return !tstp_app_encode_fof_starts_typed_bool_equality(scanner, bank);
         }
         if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
             return false;
         }
+        previous_was_colon = lookahead.test_tok(TokenType::COLON);
         if lookahead.next_token().is_err() {
             return false;
         }
@@ -17494,6 +17495,9 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "fof(fof_owner, axiom, p(a) | (q(a)|r(a))).",
             "fof(application_marker, axiom, ~ @ p(a)).",
+            "fof(fool_ite, axiom, $ite(p(a),q(a),r(a))).",
+            "fof(fool_let, axiom, $let(f:$o, f := p(a), f)).",
+            "fof(fool_existential, axiom, ?[X]:$ite(p(X),q(X),r(X))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17518,7 +17522,7 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         for input in [
             "fof(eq_right, axiom, p(a) = (q(a)|r(a))).",
-            "fof(fool_body, axiom, $ite(p(a),q(a),r(a))).",
+            "fof(fool_eq_wrapped, axiom, ($ite(p(a),q(a),r(a)) = s(a))).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {
