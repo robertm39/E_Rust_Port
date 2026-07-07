@@ -97,4 +97,9 @@ Source files reviewed: `CLAUSES/ccl_axiomsorter.h`, `CLAUSES/ccl_axiomsorter.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `WAxiomAlloc()` accepts an `AxiomType` and initializes the union payload, but never writes `ax->type` before `WAxiomAddRelEval()` and `WAxiomCmp()` switch or compare that field. Rust initializes the type so the helper is usable; after reference call-path coverage is broader, decide whether this C uninitialized-read surface needs any compatibility shim or should remain documented as a C bug.
+- `WAxiomCmp()` makes equal-weight/equal-type ordering total with raw pointer comparison. Rust uses stable object identity for the same tie break, but a cleaned relevance sorter should expose deterministic insertion/order metadata if user-visible axiom order ever needs to be independent of allocator addresses.
 <!-- END MANUAL REVIEW: c_source_docs -->

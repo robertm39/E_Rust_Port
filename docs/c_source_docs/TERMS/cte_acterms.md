@@ -104,4 +104,10 @@ Source files reviewed: `TERMS/cte_acterms.h`, `TERMS/cte_acterms.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `acterm_uniq_compare()` uses raw pointer order to keep structurally equal temporary AC subterms as distinct tree entries. Rust keeps duplicate normalized arguments without depending on allocator address order; if future diagnostics or heuristics expose duplicate ordering, add reference traces before replacing the C tie break with deterministic metadata.
+- `ACTermCompare()` returns `-1` whenever either top symbol is `SIG_DB_LAMBDA_CODE`, even if both sides are DB lambdas. Rust preserves the inherited comparison quirk; a cleaned higher-order AC comparison should define lambda ordering explicitly once lambda-normalization and AC callers are fully covered.
+- `TermACEqual()` first rejects terms with different standard weights or either phony-application marker before building AC-normal forms. Rust mirrors that fast path for parity; if phony applications become normal first-class terms in a later owner model, revisit whether AC equality should normalize them instead of rejecting them early.
 <!-- END MANUAL REVIEW: c_source_docs -->
