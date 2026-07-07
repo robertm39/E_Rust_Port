@@ -2292,9 +2292,9 @@ impl ProofState {
     ///
     /// This orients and marks maximal terms, drains the watchlist through a
     /// temporary set, and reinserts it through the owned FV index when one is
-    /// installed. The C helper also inserts the result into `state->wlindices`;
-    /// that global-index side effect remains pending until global indices are
-    /// represented in Rust.
+    /// installed. C also inserts the result into `state->wlindices`; Rust keeps
+    /// that caller-owned bridge in proof-control until long-lived global-index
+    /// ownership can move into `ProofState`.
     ///
     /// # Errors
     ///

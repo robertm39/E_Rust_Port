@@ -30438,6 +30438,58 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_parenthesized_negated_fof_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-parenthesized-negated-formula-equality");
+        std::fs::write(
+            &path,
+            "fof(eq, axiom, ((~p(a)) = (q(a)&r(a)))).\n\
+             fof(ne, axiom, ((~p(a)) != (q(a)|r(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_unparenthesized_negated_formula_equality_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-unparenthesized-negated-formula-equality");
+        std::fs::write(&path, "fof(eq, axiom, (~p(a) = (q(a)&r(a)))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_fof_disjunction_with_conjunctive_operand() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-disjunction-conjunction-mix");
