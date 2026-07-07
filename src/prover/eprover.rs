@@ -13844,6 +13844,10 @@ fn parse_simple_tstp_body_formulas(
         return parse_simple_fof_formulas(scanner, bank, problem_type);
     }
 
+    if scanner.test_id("$distinct") {
+        return parse_simple_fof_distinct_formula(scanner, bank);
+    }
+
     let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
     simple_fof_bool_term_to_formulas(
         &formula,
@@ -22004,6 +22008,35 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_closes_supported_tcf_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tcf-distinct");
+        std::fs::write(
+            &path,
+            "tcf(distinct, axiom, $distinct(a,b)).\n\
+             tcf(equal, axiom, a=b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_negated_fof_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("proof-negated-fof-distinct");
@@ -28043,6 +28076,36 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_formula_owner_print(stdout, stderr, &["fof(test1, axiom"]);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_expands_tcf_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tcf-distinct");
+        std::fs::write(&path, "tcf(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(test1, axiom", "a!=b", "a!=c", "b!=c"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
