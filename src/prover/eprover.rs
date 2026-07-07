@@ -10519,7 +10519,7 @@ fn should_parse_tstp_formula_as_represented_owner(
     formula_kind == "thf"
         && matches!(
             formula_owner_handling,
-            InputFormulaOwnerHandling::FormulaSetCnf
+            InputFormulaOwnerHandling::FormulaSetCnf | InputFormulaOwnerHandling::FormulaSetPrint
         )
 }
 
@@ -27628,6 +27628,33 @@ input_clause(c2,axiom,[++q(X)]).
                 "fof(lambda_ext_left_ne, axiom",
             ],
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_parses_thf_lambda_as_arrow_typed_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-thf-lambda-arrow-argument");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: (person > person) > $o).\n\
+             thf(lambda_arg, axiom, p @ (^[X: person]: X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(stdout, stderr, &["thf(lambda_arg, axiom, p($named_lam"]);
         std::fs::remove_file(&path).unwrap();
     }
 
