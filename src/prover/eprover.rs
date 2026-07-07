@@ -10494,7 +10494,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return false;
     }
-    if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
+    if tstp_app_encode_body_contains_distinct(scanner) {
         return true;
     }
 
@@ -10503,9 +10503,6 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     let mut previous_was_colon = false;
     let mut previous_was_close_square = false;
     loop {
-        if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
-            return true;
-        }
         if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
             && !(previous_was_colon && lookahead.test_tok(TokenType::EQUAL_SIGN))
         {
@@ -10549,6 +10546,21 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         }
         previous_was_colon = current_is_colon;
         previous_was_close_square = current_is_close_square;
+    }
+}
+
+fn tstp_app_encode_body_contains_lambda(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    loop {
+        if lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
     }
 }
 
@@ -10692,22 +10704,13 @@ fn parse_parenthesized_tstp_distinct_formula(
     Ok(Some(distinct))
 }
 
-fn tstp_app_encode_fof_body_contains_bridge_only_token(scanner: &Scanner) -> bool {
-    let mut lookahead = scanner.clone();
-    loop {
-        if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
-            return true;
-        }
-        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
-            return false;
-        }
-        if lookahead.next_token().is_err() {
-            return false;
-        }
-    }
-}
-
 fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: &TermBank) -> bool {
+    if tstp_app_encode_fof_starts_arrow_symbol_left_lambda_value_equality(scanner, bank) {
+        return false;
+    }
+    if tstp_app_encode_body_contains_lambda(scanner) {
+        return true;
+    }
     if tstp_app_encode_fof_starts_parenthesized_formula_equality(scanner, bank) {
         return true;
     }
@@ -10744,6 +10747,89 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
         return true;
     }
     tstp_app_encode_fof_equality_rhs_starts_fool_term(&lookahead)
+}
+
+fn tstp_app_encode_fof_starts_arrow_symbol_left_lambda_value_equality(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    let mut symbol_probe = scanner.clone();
+    while symbol_probe.test_tok(TokenType::OPEN_BRACKET) {
+        if symbol_probe.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
+    if symbol_probe.test_tok(TokenType::NAME | TokenType::SEM_IDENT) {
+        let left_name = symbol_probe.current_token().literal();
+        if symbol_probe
+            .accept_tok(TokenType::NAME | TokenType::SEM_IDENT)
+            .is_err()
+        {
+            return false;
+        }
+        while symbol_probe.test_tok(TokenType::CLOSE_BRACKET) {
+            if symbol_probe.accept_tok(TokenType::CLOSE_BRACKET).is_err() {
+                return false;
+            }
+        }
+        let left_code = bank.signature().find_f_code(&left_name);
+        if left_code != 0
+            && bank
+                .signature()
+                .get_type(left_code)
+                .is_some_and(Type::is_arrow)
+            && tstp_app_encode_fof_equality_rhs_starts_lambda_value(&mut symbol_probe)
+        {
+            return true;
+        }
+    }
+
+    let mut lookahead = scanner.clone();
+    let mut typed_probe = bank.clone();
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
+    let Ok(left) = typed_probe.parse_term_with_distinct_checks(&mut lookahead) else {
+        return false;
+    };
+    if !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+        return false;
+    }
+    if left.is_lambda() || left.arity() != 0 || !left.type_().as_ref().is_some_and(Type::is_arrow) {
+        return false;
+    }
+    if lookahead
+        .accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+        .is_err()
+    {
+        return false;
+    }
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
+    lookahead.test_tok(TokenType::LAMBDA_QUANTOR)
+}
+
+fn tstp_app_encode_fof_equality_rhs_starts_lambda_value(lookahead: &mut Scanner) -> bool {
+    if !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+        return false;
+    }
+    if lookahead
+        .accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
+        .is_err()
+    {
+        return false;
+    }
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
+            return false;
+        }
+    }
+    lookahead.test_tok(TokenType::LAMBDA_QUANTOR)
 }
 
 fn tstp_app_encode_fof_starts_parenthesized_formula_equality(
@@ -17912,6 +17998,70 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn app_encode_tstp_fof_lambda_bodies_route_to_represented_owner() {
+        let _guard = global_state_lock();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. b: $i. f: $i > $i. g: $i > $i. p: $i > $o.", false)
+                .unwrap();
+        for _ in 0..5 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        for input in [
+            "fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).",
+            "fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).",
+            "fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).",
+            "fof(lambda_ext_left, axiom, (^[X: $i]: g @ X) = f).",
+            "fof(lambda_ext_left_ne, axiom, (^[X: $i]: g @ X) != f).",
+        ] {
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
+
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+                "{input} should use the represented TSTP formula owner"
+            );
+        }
+    }
+
+    #[test]
+    fn app_encode_tstp_fof_arrow_symbol_left_lambda_entries_stay_on_bridge() {
+        let _guard = global_state_lock();
+        for input in [
+            "fof(lambda_ext_right, axiom, f = (^[X: $i]: g @ X)).",
+            "fof(lambda_ext_right_ne, axiom, f != (^[X: $i]: g @ X)).",
+        ] {
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut declarations =
+                Scanner::from_user_string("f: $i > $i. g: $i > $i.", false).unwrap();
+            for _ in 0..2 {
+                bank.signature_mut()
+                    .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                    .unwrap();
+                declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+            }
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
+
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Simple(_)),
+                "{input} should keep using the temporary app-encode bridge"
+            );
+        }
+    }
+
+    #[test]
     fn app_encode_tstp_typed_fof_equality_routes_to_represented_owner() {
         let _guard = global_state_lock();
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
@@ -18783,14 +18933,16 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(lambda_app, axiom, app_"));
+        assert!(printed.contains("$named_lam"));
         assert!(printed.contains("tff(lambda_eq_left, axiom, app_"));
-        assert!(printed.contains("(f,a)=b)."));
+        assert!(printed.contains(",a)=b)."));
         assert!(printed.contains("tff(lambda_eq_right, axiom, b=app_"));
-        assert!(printed.contains("(f,a))."));
+        assert!(printed.contains(",a))."));
         assert!(printed.contains("tff(lambda_ext_right, axiom"));
         assert!(printed.contains("tff(lambda_ext_left, axiom"));
         assert!(printed.contains("tff(lambda_ext_right_ne, axiom, ?["));
-        assert!(printed.contains("tff(lambda_ext_left_ne, axiom, ?["));
+        assert!(printed.contains("tff(lambda_ext_left_ne, axiom, $named_lam"));
+        assert!(printed.contains("!=f)."));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
