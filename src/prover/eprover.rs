@@ -10444,6 +10444,8 @@ fn parse_tstp_app_encode_owner_formula(
 ) -> Result<Term, Diagnostic> {
     if scanner.test_id("$distinct") {
         bank.parse_tstp_distinct(scanner)
+    } else if let Some(distinct) = parse_parenthesized_tstp_distinct_formula(scanner, bank)? {
+        Ok(distinct)
     } else if formula_kind == "tcf" {
         tcf_tstp_parse(scanner, bank, problem_type)
     } else {
@@ -10467,6 +10469,9 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 }
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
+    if tstp_app_encode_fof_body_is_parenthesized_top_level_distinct(scanner, bank) {
+        return false;
+    }
     if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
         return true;
     }
@@ -10522,6 +10527,45 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         previous_was_colon = current_is_colon;
         previous_was_close_square = current_is_close_square;
     }
+}
+
+fn tstp_app_encode_fof_body_is_parenthesized_top_level_distinct(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    if !scanner.test_tok(TokenType::OPEN_BRACKET) {
+        return false;
+    }
+
+    let mut lookahead = scanner.clone();
+    let mut probe = bank.clone();
+    parse_parenthesized_tstp_distinct_formula(&mut lookahead, &mut probe)
+        .is_ok_and(|formula| formula.is_some())
+        && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
+}
+
+fn parse_parenthesized_tstp_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let mut lookahead = scanner.clone();
+    let mut wrappers = 0;
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
+        wrappers += 1;
+    }
+    if wrappers == 0 || !lookahead.test_id("$distinct") {
+        return Ok(None);
+    }
+
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+    let distinct = bank.parse_tstp_distinct(scanner)?;
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok(Some(distinct))
 }
 
 fn tstp_app_encode_fof_body_contains_bridge_only_token(scanner: &Scanner) -> bool {
@@ -17690,6 +17734,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_quantified_body_equality, axiom, ?[X]:p(X) != q(a)).",
             "fof(eq_negated_left_equality, axiom, ~p(a) = q(a)).",
             "fof(ne_negated_left_equality, axiom, ~p(a) != q(a)).",
+            "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
+            "fof(distinct_double_wrapped, axiom, (($distinct(a,b,c)))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17714,7 +17760,6 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         for input in [
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
-            "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
             "fof(assoc_negated_left_eq, axiom, s(a) | ~p(a) = q(a)).",
             "fof(assoc_negated_left_ne, axiom, s(a) & ~p(a) != q(a)).",
         ] {
@@ -17868,10 +17913,16 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_app_encode_expands_direct_distinct_via_proof_state_owner() {
+    fn run_app_encode_expands_top_level_distinct_via_proof_state_owner() {
         let _guard = global_state_lock();
-        let path = temp_path("app-encode-direct-distinct-owner");
-        std::fs::write(&path, "fof(distinct, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path = temp_path("app-encode-top-level-distinct-owner");
+        std::fs::write(
+            &path,
+            "fof(distinct, axiom, $distinct(a,b,c)).\n\
+             fof(wrapped, axiom, ($distinct(d,e,f))).\n\
+             fof(double_wrapped, axiom, (($distinct(g,h,i)))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -17889,6 +17940,12 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("a!=b"));
         assert!(printed.contains("a!=c"));
         assert!(printed.contains("b!=c"));
+        assert!(printed.contains("d!=e"));
+        assert!(printed.contains("d!=f"));
+        assert!(printed.contains("e!=f"));
+        assert!(printed.contains("g!=h"));
+        assert!(printed.contains("g!=i"));
+        assert!(printed.contains("h!=i"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
