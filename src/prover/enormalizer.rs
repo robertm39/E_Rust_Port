@@ -1416,6 +1416,63 @@ mod tests {
     }
 
     #[test]
+    fn print_statistics_is_c_compatible_noop() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("stats_rules");
+        let term_path = temp_path("stats_terms");
+        fs::write(&rule_path, "f(X)=a.\n").expect("rules written");
+        fs::write(&term_path, "f(b)\n").expect("terms written");
+
+        let plain_stdin_data = empty_stdin();
+        let mut plain_stdin = plain_stdin_data.as_slice();
+        let mut plain_stdout = Vec::new();
+        let mut plain_stderr = Vec::new();
+        let plain_status = run(
+            [
+                PROGRAM_NAME,
+                "-t",
+                term_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut plain_stdin,
+            &mut plain_stdout,
+            &mut plain_stderr,
+        )
+        .expect("plain normalizer run");
+
+        let stats_stdin_data = empty_stdin();
+        let mut stats_stdin = stats_stdin_data.as_slice();
+        let mut stats_stdout = Vec::new();
+        let mut stats_stderr = Vec::new();
+        let stats_status = run(
+            [
+                PROGRAM_NAME,
+                "--print-statistics",
+                "-t",
+                term_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stats_stdin,
+            &mut stats_stdout,
+            &mut stats_stderr,
+        )
+        .expect("print-statistics normalizer run");
+
+        assert_eq!(plain_status, 0);
+        assert_eq!(stats_status, 0);
+        assert!(plain_stderr.is_empty());
+        assert!(stats_stderr.is_empty());
+        assert_eq!(plain_stdout, stats_stdout);
+        assert_eq!(
+            String::from_utf8(stats_stdout).expect("utf8"),
+            "f(b) ==> a\n"
+        );
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(term_path);
+    }
+
+    #[test]
     fn normalizes_clauses_with_lop_rule_file() {
         let _guard = global_state_lock();
         let rule_path = temp_path("clause_rules");
