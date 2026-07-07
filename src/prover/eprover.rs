@@ -13872,14 +13872,22 @@ fn parse_simple_fof_tstp_equality_right_term(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Term, Diagnostic> {
-    if scanner.format() == IoFormat::Tstp && simple_fof_starts_tstp_application_formula(scanner) {
-        let term = bank.parse_tformula_tstp(scanner)?;
-        let term = if term.has_lambda_subterm() {
-            named_to_db(bank, &term)?
-        } else {
-            term
-        };
-        return Ok(term);
+    if scanner.format() == IoFormat::Tstp {
+        if simple_fof_starts_tstp_application_formula(scanner) {
+            let term = bank.parse_tformula_tstp(scanner)?;
+            let term = if term.has_lambda_subterm() {
+                named_to_db(bank, &term)?
+            } else {
+                term
+            };
+            return Ok(term);
+        }
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let term = parse_simple_fof_tstp_equality_right_term(scanner, bank)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            return Ok(term);
+        }
     }
 
     bank.parse_term_with_distinct_checks(scanner)
@@ -14069,7 +14077,7 @@ fn parse_simple_fof_atomic_formula_or_literal(
     }
 
     let left = bank.parse_term_with_distinct_checks(scanner)?;
-    if simple_fof_tstp_equality_right_starts_formula_operand(scanner, &left) {
+    if simple_fof_tstp_equality_right_starts_formula_operand(scanner, bank, &left) {
         prepare_predicate_literal(bank, &left)?;
         let literal = Eqn::alloc(left, bank.true_term().clone(), bank, true)?;
         return Ok(simple_fof_literal_formulas(vec![literal]));
@@ -14090,12 +14098,19 @@ fn parse_simple_fof_atomic_formula_or_literal(
     simple_fof_tstp_equality_to_formulas(left, right, bank, positive, scanner)
 }
 
-fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left: &Term) -> bool {
+fn simple_fof_tstp_equality_right_starts_formula_operand(
+    scanner: &Scanner,
+    bank: &TermBank,
+    left: &Term,
+) -> bool {
     if !scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
         return false;
     }
     if left.type_().as_ref().is_some_and(Type::is_bool) {
         return true;
+    }
+    if simple_fof_tstp_known_term_equality_left(bank, left) {
+        return false;
     }
     if simple_fof_equality_right_starts_tstp_application_formula(scanner) {
         return false;
@@ -14109,6 +14124,12 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
             | TokenType::EXIST_QUANTOR
             | TokenType::TILDE_SIGN,
     ) || scanner_test_id(right, "$true|$false|$distinct")
+}
+
+fn simple_fof_tstp_known_term_equality_left(bank: &TermBank, left: &Term) -> bool {
+    !left.is_any_var()
+        && left.type_().as_ref().is_some_and(|type_| !type_.is_bool())
+        && bank.signature().is_function(left.f_code())
 }
 
 fn simple_fof_equality_right_starts_tstp_application_formula(scanner: &Scanner) -> bool {
@@ -28093,6 +28114,39 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_parenthesized_term_equality_rhs() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tstp-parenthesized-term-equality-rhs");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
+             fof(eq, axiom, f(a) = (b)).\n\
+             fof(ne, axiom, f(a) != (b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
