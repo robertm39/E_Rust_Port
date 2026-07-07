@@ -2436,10 +2436,6 @@ impl TermBank {
                 child,
                 None,
             )?
-        } else if scanner.test_tok(TokenType::ITE_TOKEN) {
-            self.parse_ite_tformula_tstp_subset(scanner)?
-        } else if scanner.test_tok(TokenType::LET_TOKEN) {
-            self.parse_let_tformula_tstp_subset(scanner)?
         } else {
             self.parse_tformula_atom(
                 scanner,

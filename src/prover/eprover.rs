@@ -10495,7 +10495,10 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
             );
         let starts_quantified_body_operand = previous_was_close_square
             && lookahead.test_tok(TokenType::COLON)
-            && scanner_test_tok(lookahead.look_token(1), TokenType::OPEN_BRACKET);
+            && scanner_test_tok(
+                lookahead.look_token(1),
+                TokenType::OPEN_BRACKET | TokenType::ITE_TOKEN | TokenType::LET_TOKEN,
+            );
         let current_is_colon = lookahead.test_tok(TokenType::COLON);
         let current_is_close_square = lookahead.test_tok(TokenType::CLOSE_SQUARE);
         if lookahead.next_token().is_err() {
@@ -17564,6 +17567,7 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_formula_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).",
             "fof(fool_term_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).",
             "fof(fool_term_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).",
+            "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17589,7 +17593,6 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
-            "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
         ] {
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             let mut scanner = Scanner::from_user_string(input, false).unwrap();
