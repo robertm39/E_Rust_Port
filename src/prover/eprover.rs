@@ -42,8 +42,9 @@ use crate::clauses::clause_props::{
     CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_expand_distinct,
-    tformula_fcode_alloc, tformula_has_free_vars, tformula_lit_alloc, tformula_prop_constant_alloc,
+    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_collect_clause,
+    tformula_expand_distinct, tformula_fcode_alloc, tformula_has_free_vars, tformula_lit_alloc,
+    tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -11060,9 +11061,10 @@ fn should_parse_tstp_formula_as_represented_owner(
             formula_owner_handling,
         ),
         "tcf" => {
-            raw_formula_type != CP_TYPE_WATCH_CLAUSE
-                && !tstp_app_encode_body_contains_distinct(scanner)
+            !tstp_app_encode_body_contains_distinct(scanner)
                 && tstp_tcf_body_is_represented_formula_owner_supported(scanner, bank, problem_type)
+                && (raw_formula_type != CP_TYPE_WATCH_CLAUSE
+                    || tcf_watchlist_body_can_be_collected_without_bridge(scanner))
         }
         "thf" => true,
         _ => false,
@@ -11113,6 +11115,10 @@ fn tstp_body_contains_token(scanner: &Scanner, token: TokenType) -> bool {
     }
 }
 
+fn tcf_watchlist_body_can_be_collected_without_bridge(scanner: &Scanner) -> bool {
+    !tstp_body_contains_token(scanner, TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR)
+}
+
 fn tstp_tcf_body_is_represented_formula_owner_supported(
     scanner: &Scanner,
     bank: &TermBank,
@@ -11146,8 +11152,35 @@ fn parse_represented_tstp_formula_clause_body(
     if !formula_is_distinct && !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
-    if tformula_has_free_vars(bank, &formula).is_some() {
+    if role_types.raw_formula_type != CP_TYPE_WATCH_CLAUSE
+        && tformula_has_free_vars(bank, &formula).is_some()
+    {
         return Err(tstp_formula_free_variables_error(formula_position));
+    }
+
+    if role_types.raw_formula_type == CP_TYPE_WATCH_CLAUSE {
+        let mut clause = tformula_collect_clause(bank, &formula, None)?;
+        clause.set_tptp_type(role_types.clause_type);
+        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+        clause.set_info(Some(ClauseInfo::new(
+            Some(&name),
+            Some(source_info.source),
+            source_info.line,
+            source_info.column,
+        )));
+        parse_simple_tstp_optional_source(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        scanner.accept_tok(TokenType::FULLSTOP)?;
+
+        return Ok(ParsedSimpleFofClause {
+            name,
+            raw_formula_type: role_types.raw_formula_type,
+            owner_formula: None,
+            clauses: vec![clause],
+            formula_conjecture_seen: role_types.formula_conjecture_seen,
+            raw_formula_features: RawFormulaFeatures::default(),
+            problem_type,
+        });
     }
 
     let raw_formula_features =
@@ -15671,16 +15704,27 @@ mod tests {
             );
         }
 
-        for bridge_only in [
-            "p(a) | $distinct(a,b,c))",
-            "![X]:(p(X)&q(X)))",
-            "p(a) | q(a))",
+        for supported_watchlist in ["p(a))", "p(a) | q(a))", "p(X) | q(X))"] {
+            let mut scanner = Scanner::from_user_string(supported_watchlist, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                super::should_parse_tstp_formula_as_represented_owner(
+                    "tcf",
+                    &scanner,
+                    &bank,
+                    super::CP_TYPE_WATCH_CLAUSE,
+                    ProblemType::FirstOrder,
+                    super::InputFormulaOwnerHandling::FormulaSetPrint,
+                ),
+                "tcf should route unquantified watchlist body {supported_watchlist}"
+            );
+        }
+
+        for (bridge_only, raw_formula_type) in [
+            ("p(a) | $distinct(a,b,c))", CP_TYPE_AXIOM),
+            ("![X]:(p(X)&q(X)))", CP_TYPE_AXIOM),
+            ("![X]:(p(X)|q(X)))", super::CP_TYPE_WATCH_CLAUSE),
         ] {
-            let raw_formula_type = if bridge_only == "p(a) | q(a))" {
-                super::CP_TYPE_WATCH_CLAUSE
-            } else {
-                CP_TYPE_AXIOM
-            };
             let mut scanner = Scanner::from_user_string(bridge_only, false).unwrap();
             scanner.set_format(IoFormat::Tstp);
             assert!(
@@ -15696,6 +15740,40 @@ mod tests {
             );
         }
 
+        reset_problem_type();
+    }
+
+    #[test]
+    fn tstp_tcf_unquantified_watchlist_body_parses_as_represented_clause_owner() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formulas = FormulaSet::new();
+        let mut watchlist = ClauseSet::new();
+        let mut scanner =
+            Scanner::from_user_string("tcf(watch, watchlist, p(X)|q(X)).", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let parsed = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut scanner,
+            IoFormat::Tstp,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut bank,
+            &mut formulas,
+            &mut watchlist,
+        )
+        .unwrap();
+
+        assert!(!parsed.input_owner_seen);
+        assert_eq!(formulas.cardinality(), 0);
+        assert_eq!(watchlist.members(), 1);
+        let clause = watchlist.iter().next().expect("watchlist clause");
+        assert_eq!(clause.query_tptp_type(), super::CP_TYPE_WATCH_CLAUSE);
+        assert!(clause.query_prop(CP_INITIAL));
+        assert!(clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(clause.info().and_then(ClauseInfo::name), Some("watch"));
+        assert_eq!(clause.literal_number(), 2);
         reset_problem_type();
     }
 
