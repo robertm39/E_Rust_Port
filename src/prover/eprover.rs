@@ -10550,6 +10550,9 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
     if tstp_app_encode_fof_starts_negated_formula(scanner, bank) {
         return true;
     }
+    if tstp_app_encode_fof_starts_application_formula(scanner, bank) {
+        return true;
+    }
 
     let mut lookahead = scanner.clone();
     let mut typed_probe = bank.clone();
@@ -10623,6 +10626,17 @@ fn tstp_app_encode_fof_starts_quantified_formula(scanner: &Scanner, bank: &TermB
 
 fn tstp_app_encode_fof_starts_negated_formula(scanner: &Scanner, bank: &TermBank) -> bool {
     if !scanner.test_tok(TokenType::TILDE_SIGN) {
+        return false;
+    }
+    let mut lookahead = scanner.clone();
+    let mut formula_probe = bank.clone();
+    formula_probe
+        .parse_tformula_tstp(&mut lookahead)
+        .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
+}
+
+fn tstp_app_encode_fof_starts_application_formula(scanner: &Scanner, bank: &TermBank) -> bool {
+    if !simple_fof_starts_tstp_application_formula(scanner) {
         return false;
     }
     let mut lookahead = scanner.clone();
@@ -17727,6 +17741,8 @@ input_clause(c2,axiom,[++q(X)]).
         }
         for input in [
             "fof(eq_atom, axiom, p(a) = q(a)).",
+            "fof(app_left_eq, axiom, p @ a = q @ a).",
+            "fof(app_left_ne, axiom, p @ a != q @ a).",
             "fof(ite_right, axiom, c = $ite(p(a),a,b)).",
             "fof(let_right, axiom, c != ($let(f:$i, f := a, f))).",
         ] {
@@ -17740,6 +17756,36 @@ input_clause(c2,axiom,[++q(X)]).
             assert!(
                 matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
                 "{input} should use the represented typed FOF equality owner"
+            );
+        }
+    }
+
+    #[test]
+    fn app_encode_tstp_term_returning_application_equality_routes_to_represented_owner() {
+        let _guard = global_state_lock();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. p: $i > $i. q: $i > $i.", false).unwrap();
+        for _ in 0..3 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        for input in [
+            "fof(app_left_term_eq, axiom, p @ a = q @ a).",
+            "fof(app_left_term_ne, axiom, p @ a != q @ a).",
+        ] {
+            let mut scanner = Scanner::from_user_string(input, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+
+            let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+                .unwrap()
+                .unwrap();
+
+            assert!(
+                matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+                "{input} should use the represented term-returning application equality owner"
             );
         }
     }
@@ -17906,6 +17952,78 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("<=>app_"));
         assert!(printed.contains("tff(ne_neg_left, axiom, ~((app_"));
         assert!(printed.contains("<~>app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_typed_fof_application_left_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-app-left-formula-eq");
+        std::fs::write(
+            &path,
+            "tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(a_type, type, a: $i).\n\
+             fof(eq_app_left, axiom, p @ a = q @ a).\n\
+             fof(ne_app_left, axiom, p @ a != q @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_app_left, axiom, (app_"));
+        assert!(printed.contains("<=>app_"));
+        assert!(printed.contains("tff(ne_app_left, axiom, (app_"));
+        assert!(printed.contains("<~>app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_fof_application_left_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-app-left-term-eq");
+        std::fs::write(
+            &path,
+            "tff(p_type, type, p: $i > $i).\n\
+             tff(q_type, type, q: $i > $i).\n\
+             tff(a_type, type, a: $i).\n\
+             fof(eq_app_left, axiom, p @ a = q @ a).\n\
+             fof(ne_app_left, axiom, p @ a != q @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_app_left, axiom, app_"));
+        assert!(printed.contains("=app_"));
+        assert!(printed.contains("tff(ne_app_left, axiom, app_"));
+        assert!(printed.contains("!=app_"));
+        assert!(!printed.contains("<=>"));
+        assert!(!printed.contains("<~>"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
