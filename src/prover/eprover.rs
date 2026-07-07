@@ -10493,6 +10493,9 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return false;
     }
+    if tstp_app_encode_fof_body_is_represented_owner_supported(scanner, bank) {
+        return false;
+    }
 
     let mut lookahead = scanner.clone();
     let mut equality_operand_start = scanner.clone();
@@ -10543,6 +10546,20 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         previous_was_colon = current_is_colon;
         previous_was_close_square = current_is_close_square;
     }
+}
+
+fn tstp_app_encode_fof_body_is_represented_owner_supported(
+    scanner: &Scanner,
+    bank: &TermBank,
+) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut probe = bank.clone();
+    probe
+        .parse_tformula_tstp(&mut lookahead)
+        .is_ok_and(|formula| {
+            formula.type_().as_ref().is_some_and(Type::is_bool)
+                && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
+        })
 }
 
 fn tstp_app_encode_body_contains_lambda(scanner: &Scanner) -> bool {
@@ -17850,6 +17867,9 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_term_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).",
             "fof(fool_term_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).",
             "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
+            "fof(simple_term_eq, axiom, a = b).",
+            "fof(simple_term_ne, axiom, f(a) != g(b)).",
+            "fof(simple_term_eq_disjunct, axiom, s(a) | (a = b)).",
             "fof(eq_quantified_body_equality, axiom, ![X]:p(X) = q(a)).",
             "fof(ne_quantified_body_equality, axiom, ?[X]:p(X) != q(a)).",
             "fof(eq_negated_left_equality, axiom, ~p(a) = q(a)).",
@@ -18464,6 +18484,42 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("=app_"));
         assert!(printed.contains("tff(ne_app_left, axiom, app_"));
         assert!(printed.contains("!=app_"));
+        assert!(!printed.contains("<=>"));
+        assert!(!printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_fof_simple_term_equality_without_bridge() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-simple-term-eq");
+        std::fs::write(
+            &path,
+            "fof(term_eq, axiom, a = b).\n\
+             fof(term_ne, axiom, f(a) != g(b)).\n\
+             fof(nested_term_eq, axiom, s(a) | (a = b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(term_eq, axiom, a=b)."));
+        assert!(printed.contains("tff(term_ne, axiom, app_"));
+        assert!(printed.contains("!=app_"));
+        assert!(printed.contains("tff(nested_term_eq, axiom, (app_"));
+        assert!(printed.contains("|a=b"));
         assert!(!printed.contains("<=>"));
         assert!(!printed.contains("<~>"));
         assert!(stderr.is_empty());
