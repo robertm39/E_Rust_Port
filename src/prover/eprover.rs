@@ -26959,6 +26959,35 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_presaturation_handles_fof_formula_origin_clause() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-presaturation");
+        std::fs::write(&path, "fof(unit, axiom, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--presat-simplify=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = without_selected_clause_progress(&String::from_utf8(stdout).unwrap());
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Presaturation interreduction done\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_prints_initialized_clause_state_without_saturation() {
         let _guard = global_state_lock();
         let path = temp_path("proof-cnf-only");
