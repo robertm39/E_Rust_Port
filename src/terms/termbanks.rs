@@ -2989,14 +2989,25 @@ impl TermBank {
                 positive = false;
             }
             scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
-            let right = if left.type_().as_ref().is_some_and(Type::is_bool) {
+            if left.type_().as_ref().is_some_and(Type::is_bool) {
                 let right = self.parse_tformula_tstp_subset(scanner)?;
+                if !right.type_().as_ref().is_some_and(Type::is_bool) {
+                    return Err(Diagnostic::new(
+                        ErrorCode::TYPE_ERROR,
+                        "Boolean formula equality requires Boolean right operand",
+                    ));
+                }
                 left = self.encode_equality_term(left, self.true_term.clone(), true)?;
-                right
+                let op = if positive {
+                    self.sig.equiv_code()
+                } else {
+                    self.sig.xor_code()
+                };
+                return self.tformula_fcode_alloc(op, left, Some(right));
             } else {
-                self.parse_tformula_equality_right_term_arg(scanner)?
-            };
-            self.encode_equality_term(left, right, positive)
+                let right = self.parse_tformula_equality_right_term_arg(scanner)?;
+                self.encode_equality_term(left, right, positive)
+            }
         } else {
             if scanner.test_tok(TokenType::APPLICATION) {
                 return Ok(self.prepare_tformula_application_head(left));
@@ -4171,6 +4182,39 @@ mod tests {
                 .find_name(right.argument(0).unwrap().f_code()),
             Some("tstp_formula_bool_right")
         );
+    }
+
+    #[test]
+    fn tformula_tstp_parse_lowers_typed_predicate_equality_to_equivalence() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. p: $i > $o. q: $i > $o.", false).unwrap();
+        for _ in 0..3 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner = Scanner::from_user_string("p(a) = q(a)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        assert_eq!(
+            formula.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            formula.argument(1).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+
+        let mut scanner = Scanner::from_user_string("p(a) != q(a)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().xor_code());
     }
 
     #[test]

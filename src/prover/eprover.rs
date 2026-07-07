@@ -10349,7 +10349,7 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_type = clause_type_from_identifier(&role, formula_problem_type);
     let formula_position = token_pos_rep(scanner.current_token());
-    if should_parse_tstp_app_encode_formula_as_represented_owner(&formula_kind, scanner) {
+    if should_parse_tstp_app_encode_formula_as_represented_owner(&formula_kind, scanner, bank) {
         return parse_represented_tstp_app_encode_formula_body(
             scanner,
             bank,
@@ -10423,13 +10423,14 @@ fn parse_represented_tstp_app_encode_formula_body(
 fn should_parse_tstp_app_encode_formula_as_represented_owner(
     formula_kind: &str,
     scanner: &Scanner,
+    bank: &TermBank,
 ) -> bool {
     if scanner.test_id("$distinct") {
         return true;
     }
 
     match formula_kind {
-        "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner),
+        "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner, bank),
         "tff" | "tcf" | "thf" => !tstp_app_encode_body_contains_distinct(scanner),
         _ => false,
     }
@@ -10465,19 +10466,17 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
     }
 }
 
-fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner) -> bool {
+fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
     loop {
         if lookahead.test_id("$distinct")
-            || lookahead.test_tok(
-                TokenType::EQUAL_SIGN
-                    | TokenType::NEG_EQUAL_SIGN
-                    | TokenType::ITE_TOKEN
-                    | TokenType::LET_TOKEN
-                    | TokenType::LAMBDA_QUANTOR,
-            )
+            || lookahead
+                .test_tok(TokenType::ITE_TOKEN | TokenType::LET_TOKEN | TokenType::LAMBDA_QUANTOR)
         {
             return true;
+        }
+        if lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
+            return !tstp_app_encode_fof_starts_typed_bool_equality(scanner, bank);
         }
         if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
             return false;
@@ -10486,6 +10485,16 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner) -> bool {
             return false;
         }
     }
+}
+
+fn tstp_app_encode_fof_starts_typed_bool_equality(scanner: &Scanner, bank: &TermBank) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut typed_probe = bank.clone();
+    let Ok(left) = typed_probe.parse_term_with_distinct_checks(&mut lookahead) else {
+        return false;
+    };
+    left.type_().as_ref().is_some_and(Type::is_bool)
+        && lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)
 }
 
 fn parse_tptp_app_encode_formula(
@@ -14661,7 +14670,7 @@ mod tests {
     use crate::heuristics::proofcontrol::ProofControl;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
-    use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::inout::signals::{
         configure_time_limits, hard_time_limit, schedule_time_limit, set_time_is_up,
         soft_time_limit, time_is_up, RLIM_INFINITY_COMPAT,
@@ -17526,6 +17535,32 @@ input_clause(c2,axiom,[++q(X)]).
                 "{input} should keep using the temporary app-encode bridge"
             );
         }
+    }
+
+    #[test]
+    fn app_encode_tstp_typed_fof_equality_routes_to_represented_owner() {
+        let _guard = global_state_lock();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. p: $i > $o. q: $i > $o.", false).unwrap();
+        for _ in 0..3 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let input = "fof(eq_atom, axiom, p(a) = q(a)).";
+        let mut scanner = Scanner::from_user_string(input, false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let parsed = parse_simple_tstp_app_encode_formula(&mut scanner, &mut bank)
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            matches!(parsed, ParsedAppEncodeFormula::Represented { .. }),
+            "{input} should use the represented typed FOF equality owner"
+        );
     }
 
     #[test]
