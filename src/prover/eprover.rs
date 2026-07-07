@@ -10467,6 +10467,10 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 }
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
+    if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
+        return true;
+    }
+
     let mut lookahead = scanner.clone();
     let mut equality_operand_start = scanner.clone();
     let mut previous_was_colon = false;
@@ -10521,8 +10525,26 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     }
 }
 
+fn tstp_app_encode_fof_body_contains_bridge_only_token(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    loop {
+        if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FULLSTOP | TokenType::NO_TOKEN) {
+            return false;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+}
+
 fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: &TermBank) -> bool {
     if tstp_app_encode_fof_starts_parenthesized_formula_equality(scanner, bank) {
+        return true;
+    }
+    if tstp_app_encode_fof_starts_quantified_formula(scanner, bank) {
         return true;
     }
 
@@ -10583,6 +10605,17 @@ fn tstp_app_encode_fof_starts_parenthesized_formula_equality(
         }
     }
     false
+}
+
+fn tstp_app_encode_fof_starts_quantified_formula(scanner: &Scanner, bank: &TermBank) -> bool {
+    if !scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+        return false;
+    }
+    let mut lookahead = scanner.clone();
+    let mut formula_probe = bank.clone();
+    formula_probe
+        .parse_tformula_tstp(&mut lookahead)
+        .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
 }
 
 fn tstp_app_encode_fof_equality_rhs_starts_fool_term(scanner: &Scanner) -> bool {
@@ -17620,6 +17653,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_term_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).",
             "fof(fool_term_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).",
             "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
+            "fof(eq_quantified_body_equality, axiom, ![X]:p(X) = q(a)).",
+            "fof(ne_quantified_body_equality, axiom, ?[X]:p(X) != q(a)).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17786,6 +17821,78 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("a!=c"));
         assert!(printed.contains("b!=c"));
         assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_fof_quantified_body_term_equality_without_bridge_panic() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-quant-body-term-eq");
+        std::fs::write(
+            &path,
+            "fof(eq_quant_body, axiom, ![X]:p(X) = q(a)).\n\
+             fof(ne_quant_body, axiom, ?[X]:p(X) != q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_quant_body, axiom, !["));
+        assert!(printed.contains("]:app_"));
+        assert!(printed.contains("=app_"));
+        assert!(printed.contains("tff(ne_quant_body, axiom, ?["));
+        assert!(printed.contains("!=app_"));
+        assert!(!printed.contains("<=>"));
+        assert!(!printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_typed_fof_quantified_body_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-quant-body-formula-eq");
+        std::fs::write(
+            &path,
+            "tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(a_type, type, a: $i).\n\
+             fof(eq_quant_body, axiom, ![X]:p(X) = q(a)).\n\
+             fof(ne_quant_body, axiom, ?[X]:p(X) != q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_quant_body, axiom, !["));
+        assert!(printed.contains("]:(app_"));
+        assert!(printed.contains("<=>app_"));
+        assert!(printed.contains("tff(ne_quant_body, axiom, ?["));
+        assert!(printed.contains("<~>app_"));
+        assert!(!printed.contains("tff(eq_quant_body, axiom, (!["));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
