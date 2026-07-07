@@ -39,7 +39,7 @@ Docs-only changes should run the Markdown link checker from `DOCS.md`.
 
 ## Unsafe Rust
 
-Unsafe Rust is prohibited except when it is necessary for interacting with external DLLs or shared libraries.
+Unsafe Rust is prohibited except when it is necessary for interacting with external DLLs or shared libraries. This exception includes native platform libraries reached through FFI, such as libc, Win32, Winsock, Kernel32, or UCRT, when no safe Rust API can preserve the required C-compatible behavior.
 
 Do not add unsafe Rust for ordinary porting work, including:
 
@@ -50,7 +50,7 @@ Do not add unsafe Rust for ordinary porting work, including:
 - Calls to unsafe APIs through wrapper code
 - Other unsafe Rust constructs
 
-Unsafe code for external DLL/shared-library interop must be narrowly scoped, document the safety invariants at the unsafe boundary, and be wrapped behind safe Rust APIs wherever practical.
+Unsafe code for external DLL/shared-library interop must be narrowly scoped, document the safety invariants at the unsafe boundary, and be wrapped behind safe Rust APIs wherever practical. Keep `#![deny(unsafe_code)]` at the crate level; modules that genuinely need an external-library boundary may locally allow unsafe code only with comments naming the boundary and per-call `SAFETY:` notes.
 
 If a non-external-library porting task appears to require unsafe Rust, document the blocker and look for a safe design first. Do not add unsafe code outside the external-DLL/shared-library exception without a project-level standards change.
 

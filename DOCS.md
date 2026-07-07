@@ -4,7 +4,7 @@ Agent-made documentation belongs in this file and in the documentation locations
 
 ## Rust Port Standards
 
-Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is prohibited except when narrowly required for interacting with external DLLs or shared libraries; any such boundary must document its safety invariants and expose safe Rust APIs where practical.
+Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is prohibited except when narrowly required for interacting with external DLLs or shared libraries; this includes runtime-loaded solver libraries and native OS/CRT APIs such as libc, Win32, Winsock, Kernel32, or UCRT when the platform ABI requires FFI. Any such boundary must document its safety invariants and expose safe Rust APIs where practical.
 
 Current Rust port implementation status is tracked in [`docs/rust-port-status.md`](docs/rust-port-status.md).
 
