@@ -26608,6 +26608,44 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_statistics_count_formula_threshold_sine_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-threshold-sine-statistics");
+        std::fs::write(
+            &path,
+            "fof(first, axiom, p(a)).\n\
+             fof(second, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--print-statistics",
+                "--sine=Threshold(1)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("% SinE strategy is Threshold(1)\n"));
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Removed by relevancy pruning/SinE    : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 0\n"));
+        assert!(printed.contains("\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_statistics_count_clause_gsine_pruning() {
         let _guard = global_state_lock();
         let path = temp_path("proof-gsine-statistics");
