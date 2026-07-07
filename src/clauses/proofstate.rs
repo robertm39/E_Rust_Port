@@ -864,9 +864,8 @@ impl ProofState {
     /// Matching formulas are discovered in current `f_axioms` order and then
     /// processed in stack-pop order, so later matching formulas are expanded
     /// first. The original wrappers move to `f_ax_archive`, and fresh expanded
-    /// disequality wrappers are appended to `f_axioms`. Formula derivation
-    /// stacks are still staged, so the returned metadata records the
-    /// `DCExpandDistinct` source/op pairs that the final owner should attach.
+    /// disequality wrappers with `DCExpandDistinct` derivations are appended to
+    /// `f_axioms`.
     ///
     /// # Errors
     ///
@@ -892,8 +891,9 @@ impl ProofState {
             let source = FormulaDerivationRef::new(distinct.ident());
             let diseq_form = tformula_expand_distinct(&mut self.terms, distinct.formula())?;
             self.f_ax_archive.insert(distinct);
-            self.f_axioms
-                .insert(WrappedFormula::wt_formula_alloc(diseq_form));
+            let mut expanded = WrappedFormula::wt_formula_alloc(diseq_form);
+            expanded.push_formula_derivation(DC_EXPAND_DISTINCT, Some(source), None);
+            self.f_axioms.insert(expanded);
             result.distinct_formulas_processed += 1;
             result.expanded_formula_sources.push(source);
             result.formula_derivation_ops.push(DC_EXPAND_DISTINCT);
@@ -2545,8 +2545,9 @@ mod tests {
     };
     use crate::clauses::derivation::{
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
-        ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
+        ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
+        DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE,
+        DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -3805,9 +3806,25 @@ mod tests {
         let active = state.f_axioms().iter().collect::<Vec<_>>();
         assert_eq!(active.len(), 3);
         assert_eq!(active[0].ident(), middle_ident);
+        assert_ne!(active[1].ident(), second_ident);
+        assert_eq!(
+            active[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_EXPAND_DISTINCT),
+                DerivationEntry::FormulaParent(FormulaDerivationRef::new(second_ident)),
+            ]
+        );
         assert_eq!(
             active[1].formula().f_code(),
             state.terms().signature().and_code()
+        );
+        assert_ne!(active[2].ident(), first_ident);
+        assert_eq!(
+            active[2].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_EXPAND_DISTINCT),
+                DerivationEntry::FormulaParent(FormulaDerivationRef::new(first_ident)),
+            ]
         );
         assert_eq!(
             active[2].formula().f_code(),
