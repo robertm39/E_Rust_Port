@@ -11116,7 +11116,7 @@ fn tstp_body_contains_token(scanner: &Scanner, token: TokenType) -> bool {
 }
 
 fn tcf_watchlist_body_can_be_collected_without_bridge(scanner: &Scanner) -> bool {
-    !tstp_body_contains_token(scanner, TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR)
+    !tstp_body_contains_token(scanner, TokenType::EXIST_QUANTOR)
 }
 
 fn tstp_tcf_body_is_represented_formula_owner_supported(
@@ -11159,7 +11159,7 @@ fn parse_represented_tstp_formula_clause_body(
     }
 
     if role_types.raw_formula_type == CP_TYPE_WATCH_CLAUSE {
-        let mut clause = tformula_collect_clause(bank, &formula, None)?;
+        let mut clause = collect_tcf_watchlist_clause(bank, &formula)?;
         clause.set_tptp_type(role_types.clause_type);
         clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
         clause.set_info(Some(ClauseInfo::new(
@@ -11214,6 +11214,17 @@ fn parse_represented_tstp_formula_clause_body(
         raw_formula_features,
         problem_type,
     })
+}
+
+fn collect_tcf_watchlist_clause(bank: &mut TermBank, formula: &Term) -> Result<Clause, Diagnostic> {
+    let qall_code = bank.signature().qall_code();
+    let mut body = formula.clone();
+    while body.f_code() == qall_code && body.arity() == 2 {
+        body = body
+            .argument(1)
+            .expect("TCF universal formula must have a body argument");
+    }
+    tformula_collect_clause(bank, &body, None)
 }
 
 fn represented_formula_owner(
@@ -15704,7 +15715,13 @@ mod tests {
             );
         }
 
-        for supported_watchlist in ["p(a))", "p(a) | q(a))", "p(X) | q(X))"] {
+        for supported_watchlist in [
+            "p(a))",
+            "p(a) | q(a))",
+            "p(X) | q(X))",
+            "![X]:(p(X)|q(X)))",
+            "![X]:p(X))",
+        ] {
             let mut scanner = Scanner::from_user_string(supported_watchlist, false).unwrap();
             scanner.set_format(IoFormat::Tstp);
             assert!(
@@ -15723,7 +15740,7 @@ mod tests {
         for (bridge_only, raw_formula_type) in [
             ("p(a) | $distinct(a,b,c))", CP_TYPE_AXIOM),
             ("![X]:(p(X)&q(X)))", CP_TYPE_AXIOM),
-            ("![X]:(p(X)|q(X)))", super::CP_TYPE_WATCH_CLAUSE),
+            ("?[X]:(p(X)|q(X)))", super::CP_TYPE_WATCH_CLAUSE),
         ] {
             let mut scanner = Scanner::from_user_string(bridge_only, false).unwrap();
             scanner.set_format(IoFormat::Tstp);
@@ -15744,36 +15761,41 @@ mod tests {
     }
 
     #[test]
-    fn tstp_tcf_unquantified_watchlist_body_parses_as_represented_clause_owner() {
+    fn tstp_tcf_watchlist_body_parses_as_represented_clause_owner() {
         let _guard = global_state_lock();
-        reset_problem_type();
-        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
-        let mut formulas = FormulaSet::new();
-        let mut watchlist = ClauseSet::new();
-        let mut scanner =
-            Scanner::from_user_string("tcf(watch, watchlist, p(X)|q(X)).", false).unwrap();
-        scanner.set_format(IoFormat::Tstp);
+        for (source, literal_count) in [
+            ("tcf(watch, watchlist, p(X)|q(X)).", 2),
+            ("tcf(watch, watchlist, ![X]:(p(X)|q(X))).", 2),
+            ("tcf(watch, watchlist, ![X]:p(X)).", 1),
+        ] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut formulas = FormulaSet::new();
+            let mut watchlist = ClauseSet::new();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
 
-        let parsed = super::parse_clause_scanner_into_formula_set_with_options(
-            &mut scanner,
-            IoFormat::Tstp,
-            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
-            ClauseParseOptions::default(),
-            &mut bank,
-            &mut formulas,
-            &mut watchlist,
-        )
-        .unwrap();
+            let parsed = super::parse_clause_scanner_into_formula_set_with_options(
+                &mut scanner,
+                IoFormat::Tstp,
+                FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                ClauseParseOptions::default(),
+                &mut bank,
+                &mut formulas,
+                &mut watchlist,
+            )
+            .unwrap();
 
-        assert!(!parsed.input_owner_seen);
-        assert_eq!(formulas.cardinality(), 0);
-        assert_eq!(watchlist.members(), 1);
-        let clause = watchlist.iter().next().expect("watchlist clause");
-        assert_eq!(clause.query_tptp_type(), super::CP_TYPE_WATCH_CLAUSE);
-        assert!(clause.query_prop(CP_INITIAL));
-        assert!(clause.query_prop(CP_INPUT_FORMULA));
-        assert_eq!(clause.info().and_then(ClauseInfo::name), Some("watch"));
-        assert_eq!(clause.literal_number(), 2);
+            assert!(!parsed.input_owner_seen);
+            assert_eq!(formulas.cardinality(), 0);
+            assert_eq!(watchlist.members(), 1);
+            let clause = watchlist.iter().next().expect("watchlist clause");
+            assert_eq!(clause.query_tptp_type(), super::CP_TYPE_WATCH_CLAUSE);
+            assert!(clause.query_prop(CP_INITIAL));
+            assert!(clause.query_prop(CP_INPUT_FORMULA));
+            assert_eq!(clause.info().and_then(ClauseInfo::name), Some("watch"));
+            assert_eq!(clause.literal_number(), literal_count);
+        }
         reset_problem_type();
     }
 
