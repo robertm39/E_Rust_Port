@@ -4679,6 +4679,13 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
         return bank.insert_no_props_cached(form, DerefType::Always);
     }
 
+    if !tformula_is_quantified(bank, form)
+        && !tformula_has_subform1(bank, form)
+        && !tformula_has_subform2(bank, form)
+    {
+        return bank.insert_no_props_cached(form, DerefType::Always);
+    }
+
     let mut arg1 = None;
     let mut arg2 = None;
     if tformula_is_quantified(bank, form) {

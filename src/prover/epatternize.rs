@@ -1200,6 +1200,40 @@ mod tests {
     }
 
     #[test]
+    fn tstp_fool_term_let_uses_formula_owner_cnf_path() {
+        let _guard = global_state_lock();
+        let config = EpatternizeConfig {
+            parse_format: IoFormat::Tstp,
+            files: vec!["-".to_owned()],
+            ..EpatternizeConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"tff(a_type, type, a: $i).\n\
+            tff(p_type, type, p: $i > $o).\n\
+            fof(fool_owner, axiom, p($let(f:$i, f := a, f))).\n";
+
+        let parsed_problem_type = parse_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("FOOL real-input parsing succeeds");
+        assert_eq!(parsed_problem_type, ProblemType::HigherOrder);
+
+        assert_eq!(state.axioms().members(), 0);
+        let formula = state
+            .f_axioms()
+            .iter()
+            .find(|formula| formula.get_id(true) == "fool_owner")
+            .expect("FOOL formula owner exists");
+        assert!(!formula.is_clause());
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(formula.query_tptp_type(), CP_TYPE_AXIOM);
+
+        clausify_formula_axioms(&config, &mut state, parsed_problem_type)
+            .expect("FOOL formula-owner CNF succeeds");
+        assert!(state.axioms().members() > 0);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+    }
+
+    #[test]
     fn patternizes_thf_formula_input_under_higher_order_problem_type() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();

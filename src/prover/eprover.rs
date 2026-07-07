@@ -9335,7 +9335,7 @@ fn parse_formula_file(
     } else {
         Scanner::from_file(Path::new(file), false)?
     };
-    parse_clause_scanner_into_formula_set_with_options(
+    parse_clause_scanner_into_formula_print_set_with_options(
         &mut scanner,
         parse_format,
         formula_preprocessing,
@@ -9401,6 +9401,27 @@ fn parse_clause_scanner_into_sets_with_options(
     )
 }
 
+fn parse_clause_scanner_into_formula_print_set_with_options(
+    scanner: &mut Scanner,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
+    let mut destination = InputOwnerDestination::FormulasForPrint(formulas);
+    parse_clause_scanner_into_destination_with_options(
+        scanner,
+        parse_format,
+        formula_preprocessing,
+        clause_parse_options,
+        bank,
+        &mut destination,
+        watchlist,
+    )
+}
+
 pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
     scanner: &mut Scanner,
     parse_format: IoFormat,
@@ -9410,7 +9431,7 @@ pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
-    let mut destination = InputOwnerDestination::Formulas(formulas);
+    let mut destination = InputOwnerDestination::FormulasForCnf(formulas);
     parse_clause_scanner_into_destination_with_options(
         scanner,
         parse_format,
@@ -9429,7 +9450,8 @@ enum InputOwnerDestination<'a> {
         clauses: &'a mut ClauseSet,
         formulas: &'a mut FormulaSet,
     },
-    Formulas(&'a mut FormulaSet),
+    FormulasForPrint(&'a mut FormulaSet),
+    FormulasForCnf(&'a mut FormulaSet),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9471,7 +9493,9 @@ impl InputOwnerDestination<'_> {
             Self::ClausesAndFormulas { clauses, formulas } => {
                 clauses.members().saturating_add(formulas.cardinality())
             }
-            Self::Formulas(formulas) => formulas.cardinality(),
+            Self::FormulasForPrint(formulas) | Self::FormulasForCnf(formulas) => {
+                formulas.cardinality()
+            }
         }
     }
 
@@ -9480,7 +9504,8 @@ impl InputOwnerDestination<'_> {
             #[cfg(test)]
             Self::Clauses(_) => InputFormulaOwnerHandling::ClauseBridge,
             Self::ClausesAndFormulas { .. } => InputFormulaOwnerHandling::FormulaSetCnf,
-            Self::Formulas(_) => InputFormulaOwnerHandling::FormulaSetPrint,
+            Self::FormulasForPrint(_) => InputFormulaOwnerHandling::FormulaSetPrint,
+            Self::FormulasForCnf(_) => InputFormulaOwnerHandling::FormulaSetCnf,
         }
     }
 
@@ -9498,7 +9523,7 @@ impl InputOwnerDestination<'_> {
             Self::ClausesAndFormulas { clauses, .. } => {
                 clauses.insert(clause);
             }
-            Self::Formulas(formulas) => {
+            Self::FormulasForPrint(formulas) | Self::FormulasForCnf(formulas) => {
                 let formula =
                     WrappedFormula::form_clause_alloc(bank, clause, ProblemType::FirstOrder)?;
                 formulas.insert(formula);
@@ -9528,7 +9553,7 @@ impl InputOwnerDestination<'_> {
                     }
                 }
             }
-            Self::Formulas(formulas) => {
+            Self::FormulasForPrint(formulas) | Self::FormulasForCnf(formulas) => {
                 if let Some(formula) = parsed.owner_formula {
                     formulas.insert(formula);
                 } else {
