@@ -18650,6 +18650,36 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_tptp_in_ignores_old_tptp_includes() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tptp-ignore-include");
+        std::fs::write(
+            &path,
+            "include('missing_old_tptp_app_encode.ax').\n\
+             input_formula(show_false, axiom, $false).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with("include('missing_old_tptp_app_encode.ax').\n"));
+        assert!(printed.contains(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_rejects_include_selectors_like_c() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-include-selector");
