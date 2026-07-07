@@ -1552,6 +1552,53 @@ mod tests {
     }
 
     #[test]
+    fn fix_minisat_recomputes_dimacs_header_after_empty_clause() {
+        let _guard = global_state_lock();
+        let input = b"q(a).\np(a).\n~p(a).\n";
+        let mut ordinary_stdout = Vec::new();
+        let mut ordinary_stderr = Vec::new();
+        let mut ordinary_stdin: &[u8] = input;
+
+        let ordinary_status = run(
+            [PROGRAM_NAME, "--lop-in", "--silent", "--dimacs"],
+            &mut ordinary_stdin,
+            &mut ordinary_stdout,
+            &mut ordinary_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(ordinary_status, 0);
+        assert!(ordinary_stderr.is_empty());
+        let ordinary = String::from_utf8(ordinary_stdout).unwrap();
+        assert!(ordinary.starts_with("p cnf 6 2\n"));
+        assert!(ordinary.contains(" -1 0\n  1 0\n"));
+
+        let mut fixed_stdout = Vec::new();
+        let mut fixed_stderr = Vec::new();
+        let mut fixed_stdin: &[u8] = input;
+
+        let fixed_status = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "--silent",
+                "--dimacs",
+                "--fix-minisat",
+            ],
+            &mut fixed_stdin,
+            &mut fixed_stdout,
+            &mut fixed_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(fixed_status, 0);
+        assert!(fixed_stderr.is_empty());
+        let fixed = String::from_utf8(fixed_stdout).unwrap();
+        assert!(fixed.starts_with("p cnf 1 2\n"));
+        assert!(fixed.contains(" -1 0\n  1 0\n"));
+    }
+
+    #[test]
     fn give_up_estimate_limit_exits_with_c_failure_status() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
