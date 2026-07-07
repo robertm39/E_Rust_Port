@@ -13517,14 +13517,7 @@ fn parse_simple_fof_primary_formula(
             Ok(formulas)
         } else if scanner.test_tok(TokenType::TILDE_SIGN) {
             scanner.accept_tok(TokenType::TILDE_SIGN)?;
-            if scanner.test_tok(TokenType::APPLICATION) {
-                scanner.accept_tok(TokenType::APPLICATION)?;
-            }
-            let formulas = if scanner.format() == IoFormat::Tstp {
-                parse_simple_fof_tstp_literal_formula(scanner, bank)?
-            } else {
-                parse_simple_fof_primary_formula(scanner, bank, problem_type)?
-            };
+            let formulas = parse_simple_fof_negated_operand(scanner, bank, problem_type)?;
             Ok(vec![SimpleFofFormula::Negation(formulas)])
         } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
             Ok(formulas)
@@ -13546,6 +13539,30 @@ fn parse_simple_fof_primary_formula(
     let formulas = simple_fof_wrap_universal_formulas(bank, universal_bound, formulas);
     pop_simple_fof_var_envs(bank, universal_scope_count);
     Ok(formulas)
+}
+
+fn parse_simple_fof_negated_operand(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if scanner.test_tok(TokenType::APPLICATION) {
+        scanner.accept_tok(TokenType::APPLICATION)?;
+    }
+    if scanner.format() == IoFormat::Tstp
+        && !(scanner.test_id("$true|$false|$distinct")
+            || scanner.test_tok(
+                TokenType::OPEN_BRACKET
+                    | TokenType::UNIV_QUANTOR
+                    | TokenType::EXIST_QUANTOR
+                    | TokenType::TILDE_SIGN
+                    | TokenType::ITE_TOKEN
+                    | TokenType::LET_TOKEN,
+            ))
+    {
+        return parse_simple_fof_tstp_literal_formula(scanner, bank);
+    }
+    parse_simple_fof_primary_formula(scanner, bank, problem_type)
 }
 
 fn parse_simple_thf_term_formula(
@@ -20807,6 +20824,30 @@ input_clause(c2,axiom,[++q(X)]).
             &path,
             "fof(distinct, axiom, $distinct(a,b)).\n\
              fof(equal, axiom, a=b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_negated_fof_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-negated-fof-distinct");
+        std::fs::write(
+            &path,
+            "fof(not_distinct, axiom, ~$distinct(a,b)).\n\
+             fof(not_equal, axiom, a!=b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -29689,6 +29730,36 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-distinct");
         std::fs::write(&path, "fof(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_negated_fof_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-negated-fof-distinct");
+        std::fs::write(
+            &path,
+            "fof(neg_direct, axiom, ~$distinct(a,b,c)).\n\
+             fof(neg_parenthesized, axiom, ~($distinct(d,e))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
