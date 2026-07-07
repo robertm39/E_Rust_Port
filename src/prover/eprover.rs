@@ -18583,6 +18583,41 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn app_encode_tstp_tcf_embedded_distinct_stays_on_clause_parser_path() {
+        let _guard = global_state_lock();
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut route_scanner =
+            Scanner::from_user_string("p(a) | $distinct(a,b,c))", false).unwrap();
+        route_scanner.set_format(IoFormat::Tstp);
+        assert!(
+            !super::should_parse_tstp_app_encode_formula_as_represented_owner(
+                "tcf",
+                &route_scanner,
+                &bank,
+            ),
+            "embedded TCF $distinct should stay off the represented app-encode owner route"
+        );
+
+        let mut parse_bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut scanner = Scanner::from_user_string(
+            "tcf(distinct_embedded, axiom, p(a) | $distinct(a,b,c)).",
+            false,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let error = parse_simple_tstp_app_encode_formula(&mut scanner, &mut parse_bank)
+            .expect_err("embedded TCF $distinct should follow the clause parser diagnostic");
+        assert!(
+            error
+                .message()
+                .contains("$distinct is only allowed as the sole predicate symbol"),
+            "unexpected diagnostic: {}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn app_encode_tstp_tff_thf_embedded_distinct_routes_to_represented_owner() {
         let _guard = global_state_lock();
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
