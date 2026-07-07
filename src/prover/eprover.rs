@@ -10470,6 +10470,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     let mut lookahead = scanner.clone();
     let mut equality_operand_start = scanner.clone();
     let mut previous_was_colon = false;
+    let mut previous_was_close_square = false;
     loop {
         if lookahead.test_id("$distinct") || lookahead.test_tok(TokenType::LAMBDA_QUANTOR) {
             return true;
@@ -10487,13 +10488,24 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         }
         let starts_next_operand = lookahead.test_tok(TokenType::FOF_BIN_OP)
             && !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN);
-        previous_was_colon = lookahead.test_tok(TokenType::COLON);
+        let starts_negated_wrapped_operand = lookahead.test_tok(TokenType::TILDE_SIGN)
+            && scanner_test_tok(
+                lookahead.look_token(1),
+                TokenType::OPEN_BRACKET | TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR,
+            );
+        let starts_quantified_body_operand = previous_was_close_square
+            && lookahead.test_tok(TokenType::COLON)
+            && scanner_test_tok(lookahead.look_token(1), TokenType::OPEN_BRACKET);
+        let current_is_colon = lookahead.test_tok(TokenType::COLON);
+        let current_is_close_square = lookahead.test_tok(TokenType::CLOSE_SQUARE);
         if lookahead.next_token().is_err() {
             return false;
         }
-        if starts_next_operand {
+        if starts_next_operand || starts_negated_wrapped_operand || starts_quantified_body_operand {
             equality_operand_start = lookahead.clone();
         }
+        previous_was_colon = current_is_colon;
+        previous_was_close_square = current_is_close_square;
     }
 }
 
@@ -17548,6 +17560,10 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_formula_right, axiom, p(a) != ![X]:q(X)).",
             "fof(eq_formula_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).",
             "fof(ne_formula_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).",
+            "fof(eq_formula_right_negated, axiom, ~(p(a) = (q(a)|r(a)))).",
+            "fof(ne_formula_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).",
+            "fof(fool_term_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).",
+            "fof(fool_term_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17573,6 +17589,7 @@ input_clause(c2,axiom,[++q(X)]).
         for input in [
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
+            "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
         ] {
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
             let mut scanner = Scanner::from_user_string(input, false).unwrap();
@@ -17897,7 +17914,9 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(eq_right, axiom, p(a) = (q(a)|r(a))).\n\
              fof(ne_right, axiom, p(a) != ![X]:q(X)).\n\
              fof(eq_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).\n\
-             fof(ne_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).\n",
+             fof(ne_right_conjunct, axiom, s(a) & (p(a) != ![X]:q(X))).\n\
+             fof(eq_right_negated, axiom, ~(p(a) = (q(a)|r(a)))).\n\
+             fof(ne_right_quantified, axiom, ?[X]:(p(X) != (q(X)|r(X)))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17922,6 +17941,9 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("|(app_"));
         assert!(printed.contains("tff(ne_right_conjunct, axiom, (app_"));
         assert!(printed.contains("&(app_"));
+        assert!(printed.contains("tff(eq_right_negated, axiom, ~((app_"));
+        assert!(printed.contains("tff(ne_right_quantified, axiom, ?[X"));
+        assert!(printed.contains("<~>"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -18739,7 +18761,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(ite_i_eq_right, axiom, c = $ite(p(a), a, b)).\n\
              fof(let_i_eq_right, axiom, c = ($let(f:$i, f := a, f))).\n\
              fof(let_i_eq_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) = b)).\n\
-             fof(ite_i_eq_conjunct, axiom, p(a) & (c = $ite(p(a), a, b))).\n",
+             fof(ite_i_eq_conjunct, axiom, p(a) & (c = $ite(p(a), a, b))).\n\
+             fof(let_i_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).\n\
+             fof(let_i_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18766,6 +18790,9 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("|$let(f:$i,f:=a,f)=b))."));
         assert!(printed.contains("tff(ite_i_eq_conjunct, axiom, (app_"));
         assert!(printed.contains("&c=$ite(app_"));
+        assert!(printed.contains("tff(let_i_eq_negated, axiom, ~($let(f:$i,f:=a,f)=b))."));
+        assert!(printed.contains("tff(let_i_eq_quantified, axiom, ?[X"));
+        assert!(printed.contains("]:$let(f:$i,f:=a,f)=X"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
