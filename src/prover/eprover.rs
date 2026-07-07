@@ -10499,12 +10499,15 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
     let Ok(left) = typed_probe.parse_term_with_distinct_checks(&mut lookahead) else {
         return false;
     };
-    let Some(left_type) = left.type_() else {
-        return false;
-    };
     if !lookahead.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
         return false;
     }
+    if typed_probe.tstp_equality_right_starts_formula_operand(&lookahead, &left) {
+        return true;
+    }
+    let Some(left_type) = left.type_() else {
+        return false;
+    };
     if left_type.is_bool() || matches!(left.f_code(), SIG_ITE_CODE | SIG_LET_CODE) {
         return true;
     }
@@ -17530,6 +17533,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_eq_wrapped, axiom, ($ite(p(a),q(a),r(a)) = s(a))).",
             "fof(fool_ne_wrapped, axiom, ($let(f:$o, f := p(a), f) != s(a))).",
             "fof(fool_term_eq_wrapped, axiom, ($let(f:$i, f := a, f) = b)).",
+            "fof(eq_formula_right, axiom, p(a) = (q(a)|r(a))).",
+            "fof(ne_formula_right, axiom, p(a) != ![X]:q(X)).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17553,7 +17558,6 @@ input_clause(c2,axiom,[++q(X)]).
     fn app_encode_tstp_fof_bridge_shim_entries_stay_on_bridge() {
         let _guard = global_state_lock();
         for input in [
-            "fof(eq_right, axiom, p(a) = (q(a)|r(a))).",
             "fof(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
         ] {

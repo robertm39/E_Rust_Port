@@ -2,7 +2,9 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::inout::scanner::{test_tok as scanner_test_tok, token_pos_rep, Scanner, TokenType};
+use crate::inout::scanner::{
+    test_id as scanner_test_id, test_tok as scanner_test_tok, token_pos_rep, Scanner, TokenType,
+};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::garbage_coll::{
@@ -1819,6 +1821,53 @@ impl TermBank {
         self.parse_tformula_tstp_subset(scanner)
     }
 
+    #[must_use]
+    pub(crate) fn tstp_equality_right_starts_formula_operand(
+        &self,
+        scanner: &Scanner,
+        left: &Term,
+    ) -> bool {
+        self.tstp_equality_right_starts_formula_operand_with_atomic_left(scanner, left, true)
+    }
+
+    fn tstp_equality_right_starts_formula_operand_with_atomic_left(
+        &self,
+        scanner: &Scanner,
+        left: &Term,
+        allow_atomic_formula_operand_equality: bool,
+    ) -> bool {
+        if !scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            return false;
+        }
+        if left.type_().as_ref().is_some_and(Type::is_bool) {
+            return true;
+        }
+        if !allow_atomic_formula_operand_equality {
+            return false;
+        }
+        if self.tstp_equality_known_term_left(left) {
+            return false;
+        }
+        if tstp_equality_right_starts_application_formula(scanner) {
+            return false;
+        }
+
+        let right = scanner.look_token(1);
+        scanner_test_tok(
+            right,
+            TokenType::OPEN_BRACKET
+                | TokenType::UNIV_QUANTOR
+                | TokenType::EXIST_QUANTOR
+                | TokenType::TILDE_SIGN,
+        ) || scanner_test_id(right, "$true|$false|$distinct")
+    }
+
+    fn tstp_equality_known_term_left(&self, left: &Term) -> bool {
+        !left.is_any_var()
+            && left.type_().as_ref().is_some_and(|type_| !type_.is_bool())
+            && self.sig.is_function(left.f_code())
+    }
+
     /// Parses one TSTP literal formula, including any higher-order
     /// application tail, without consuming sibling binary connectives.
     ///
@@ -1828,7 +1877,7 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        self.parse_literal_tformula_tstp_with_applications(scanner)
+        self.parse_literal_tformula_tstp_with_applications_with_options(scanner, false, false)
     }
 
     /// Parses a TSTP term and any higher-order application tail.
@@ -2250,7 +2299,7 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(scanner, false)
+        self.parse_literal_tformula_tstp_with_applications_with_options(scanner, false, true)
     }
 
     fn parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
@@ -2258,8 +2307,24 @@ impl TermBank {
         scanner: &mut Scanner,
         allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
-        let mut formula =
-            self.parse_literal_tformula_tstp_subset(scanner, allow_plain_term_atoms)?;
+        self.parse_literal_tformula_tstp_with_applications_with_options(
+            scanner,
+            allow_plain_term_atoms,
+            true,
+        )
+    }
+
+    fn parse_literal_tformula_tstp_with_applications_with_options(
+        &mut self,
+        scanner: &mut Scanner,
+        allow_plain_term_atoms: bool,
+        allow_atomic_formula_operand_equality: bool,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_literal_tformula_tstp_subset(
+            scanner,
+            allow_plain_term_atoms,
+            allow_atomic_formula_operand_equality,
+        )?;
         if scanner.test_tok(TokenType::APPLICATION) {
             formula = self.parse_applied_tformula_tstp_subset(scanner, &formula)?;
         }
@@ -2323,6 +2388,7 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
         allow_plain_term_atoms: bool,
+        allow_atomic_formula_operand_equality: bool,
     ) -> Result<Term, Diagnostic> {
         let formula = if scanner.test_tok(
             TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
@@ -2362,7 +2428,9 @@ impl TermBank {
             if scanner.test_tok(TokenType::APPLICATION) {
                 scanner.accept_tok(TokenType::APPLICATION)?;
             }
-            let child = self.parse_literal_tformula_tstp_with_applications(scanner)?;
+            let child = self.parse_literal_tformula_tstp_with_applications_with_options(
+                scanner, false, false,
+            )?;
             self.tformula_fcode_alloc(
                 Self::require_formula_op_code(self.sig.not_code())?,
                 child,
@@ -2373,7 +2441,11 @@ impl TermBank {
         } else if scanner.test_tok(TokenType::LET_TOKEN) {
             self.parse_let_tformula_tstp_subset(scanner)?
         } else {
-            self.parse_tformula_atom(scanner, allow_plain_term_atoms)?
+            self.parse_tformula_atom(
+                scanner,
+                allow_plain_term_atoms,
+                allow_atomic_formula_operand_equality,
+            )?
         };
         if scanner.test_tok(TokenType::APPLICATION) {
             Ok(formula)
@@ -2490,7 +2562,7 @@ impl TermBank {
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             Ok(arg)
         } else {
-            self.parse_literal_tformula_tstp_subset(scanner, false)
+            self.parse_literal_tformula_tstp_subset(scanner, false, true)
         }
     }
 
@@ -2981,15 +3053,34 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
         allow_plain_term_atoms: bool,
+        allow_atomic_formula_operand_equality: bool,
     ) -> Result<Term, Diagnostic> {
         let mut left = self.parse_term_real(scanner, true)?;
         let mut positive = true;
+        let equality_starts_formula_operand = self
+            .tstp_equality_right_starts_formula_operand_with_atomic_left(
+                scanner,
+                &left,
+                allow_atomic_formula_operand_equality,
+            );
+        let blocked_atomic_formula_operand_equality = !allow_atomic_formula_operand_equality
+            && !left.type_().as_ref().is_some_and(Type::is_bool)
+            && self.tstp_equality_right_starts_formula_operand(scanner, &left);
         if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            if blocked_atomic_formula_operand_equality {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Formula equality under negation requires parentheses",
+                ));
+            }
             if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
                 positive = false;
             }
             scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
-            if left.type_().as_ref().is_some_and(Type::is_bool) {
+            if equality_starts_formula_operand {
+                if !left.type_().as_ref().is_some_and(Type::is_bool) {
+                    self.prepare_predicate_formula_atom(&left)?;
+                }
                 let right = self.parse_tformula_tstp_subset(scanner)?;
                 if !right.type_().as_ref().is_some_and(Type::is_bool) {
                     return Err(Diagnostic::new(
@@ -3929,6 +4020,98 @@ fn term_is_ground_for_insert(term: &Term) -> bool {
     }
 }
 
+fn tstp_equality_right_starts_application_formula(scanner: &Scanner) -> bool {
+    tstp_formula_starts_application_after_wrappers(scanner, 1)
+}
+
+fn tstp_formula_starts_application_after_wrappers(scanner: &Scanner, mut look: usize) -> bool {
+    loop {
+        if tstp_formula_starts_application_at(scanner, look) {
+            return true;
+        }
+        if !scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET) {
+            return false;
+        }
+        look += 1;
+    }
+}
+
+fn tstp_formula_starts_application_at(scanner: &Scanner, look: usize) -> bool {
+    tstp_formula_starts_logical_head_application_at(scanner, look)
+        || tstp_formula_starts_parenthesized_lambda_application_at(scanner, look)
+        || tstp_formula_starts_parenthesized_application_formula_at(scanner, look)
+        || tstp_formula_starts_parenthesized_application_head_at(scanner, look)
+        || tstp_formula_starts_wrapped_application_head_at(scanner, look)
+        || (scanner_test_tok_at(scanner, look, TokenType::NAME | TokenType::SEM_IDENT)
+            && scanner_test_tok_at(scanner, look + 1, TokenType::APPLICATION))
+}
+
+fn tstp_formula_starts_parenthesized_lambda_application_at(scanner: &Scanner, look: usize) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::LAMBDA_QUANTOR)
+}
+
+fn tstp_formula_starts_parenthesized_application_formula_at(
+    scanner: &Scanner,
+    look: usize,
+) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::NAME | TokenType::SEM_IDENT)
+        && scanner_test_tok_at(scanner, look + 2, TokenType::APPLICATION)
+}
+
+fn tstp_formula_starts_parenthesized_application_head_at(scanner: &Scanner, look: usize) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::NAME | TokenType::SEM_IDENT)
+        && scanner_test_tok_at(scanner, look + 2, TokenType::CLOSE_BRACKET)
+        && scanner_test_tok_at(scanner, look + 3, TokenType::APPLICATION)
+}
+
+fn tstp_formula_starts_wrapped_application_head_at(scanner: &Scanner, look: usize) -> bool {
+    let mut head_look = look;
+    let mut wrappers = 0;
+    while scanner_test_tok_at(scanner, head_look, TokenType::OPEN_BRACKET) {
+        head_look += 1;
+        wrappers += 1;
+    }
+    if wrappers < 2
+        || !scanner_test_tok_at(
+            scanner,
+            head_look,
+            TokenType::NAME | TokenType::SEM_IDENT | TokenType::FOF_BIN_OP | TokenType::TILDE_SIGN,
+        )
+    {
+        return false;
+    }
+
+    let mut close_look = head_look + 1;
+    for _ in 0..wrappers {
+        if !scanner_test_tok_at(scanner, close_look, TokenType::CLOSE_BRACKET) {
+            return false;
+        }
+        close_look += 1;
+    }
+    scanner_test_tok_at(scanner, close_look, TokenType::APPLICATION)
+}
+
+fn tstp_formula_starts_logical_head_application_at(scanner: &Scanner, look: usize) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && (scanner_test_tok_at(scanner, look + 1, TokenType::FOF_BIN_OP)
+            || scanner_test_tok_at(scanner, look + 1, TokenType::TILDE_SIGN))
+        && scanner_test_tok_at(scanner, look + 2, TokenType::CLOSE_BRACKET)
+        && scanner_test_tok_at(scanner, look + 3, TokenType::APPLICATION)
+}
+
+fn scanner_test_tok_at(scanner: &Scanner, look: usize, toks: TokenType) -> bool {
+    let mut lookahead = scanner.clone();
+    for _ in 0..look {
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+    lookahead.test_tok(toks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -4215,6 +4398,73 @@ mod tests {
         let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
 
         assert_eq!(formula.f_code(), bank.signature().xor_code());
+    }
+
+    #[test]
+    fn tformula_tstp_parse_lowers_untyped_atomic_left_formula_operand_equality() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string("p(a) = (q(a)|r(a))", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        let left = formula.argument(0).unwrap();
+        let right = formula.argument(1).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(left.argument(1), Some(bank.true_term().clone()));
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("p")
+        );
+        assert_eq!(right.f_code(), bank.signature().or_code());
+
+        let mut scanner = Scanner::from_user_string("p(a) != ![X]:q(X)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().xor_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        assert_eq!(
+            formula.argument(1).unwrap().f_code(),
+            bank.signature().qall_code()
+        );
+    }
+
+    #[test]
+    fn tformula_tstp_parse_rejects_unparenthesized_negated_formula_operand_equality() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string("~p(a) = (q(a)&r(a))", false).unwrap();
+
+        assert!(bank.parse_tformula_tstp(&mut scanner).is_err());
+    }
+
+    #[test]
+    fn tformula_tstp_parse_keeps_known_term_equality_with_parenthesized_rhs() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("a: $i. b: $i. f: $i > $i.", false).unwrap();
+        for _ in 0..3 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner = Scanner::from_user_string("f(a) = (b)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(1).unwrap().f_code()),
+            Some("b")
+        );
     }
 
     #[test]
