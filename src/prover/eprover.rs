@@ -10431,7 +10431,11 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
 
     match formula_kind {
         "fof" => !tstp_app_encode_fof_body_needs_bridge(scanner, bank),
-        "tff" | "tcf" | "thf" => !tstp_app_encode_body_contains_distinct(scanner),
+        "tff" => {
+            tstp_app_encode_body_is_parenthesized_top_level_distinct(scanner, bank)
+                || !tstp_app_encode_body_contains_distinct(scanner)
+        }
+        "tcf" | "thf" => !tstp_app_encode_body_contains_distinct(scanner),
         _ => false,
     }
 }
@@ -10469,7 +10473,7 @@ fn tstp_app_encode_body_contains_distinct(scanner: &Scanner) -> bool {
 }
 
 fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> bool {
-    if tstp_app_encode_fof_body_is_parenthesized_top_level_distinct(scanner, bank) {
+    if tstp_app_encode_body_is_parenthesized_top_level_distinct(scanner, bank) {
         return false;
     }
     if tstp_app_encode_fof_body_contains_bridge_only_token(scanner) {
@@ -10529,7 +10533,7 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
     }
 }
 
-fn tstp_app_encode_fof_body_is_parenthesized_top_level_distinct(
+fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
     scanner: &Scanner,
     bank: &TermBank,
 ) -> bool {
@@ -17736,6 +17740,7 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(ne_negated_left_equality, axiom, ~p(a) != q(a)).",
             "fof(distinct_wrapped, axiom, ($distinct(a,b,c))).",
             "fof(distinct_double_wrapped, axiom, (($distinct(a,b,c)))).",
+            "tff(distinct_wrapped, axiom, ($distinct(a,b,c))).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17920,7 +17925,8 @@ input_clause(c2,axiom,[++q(X)]).
             &path,
             "fof(distinct, axiom, $distinct(a,b,c)).\n\
              fof(wrapped, axiom, ($distinct(d,e,f))).\n\
-             fof(double_wrapped, axiom, (($distinct(g,h,i)))).\n",
+             fof(double_wrapped, axiom, (($distinct(g,h,i)))).\n\
+             tff(tff_wrapped, axiom, ($distinct(j,k,l))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -17946,6 +17952,9 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("g!=h"));
         assert!(printed.contains("g!=i"));
         assert!(printed.contains("h!=i"));
+        assert!(printed.contains("j!=k"));
+        assert!(printed.contains("j!=l"));
+        assert!(printed.contains("k!=l"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
