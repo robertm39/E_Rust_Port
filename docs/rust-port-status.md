@@ -580,7 +580,7 @@ C source references:
 
 Implemented:
 
-- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 

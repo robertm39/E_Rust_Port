@@ -181,7 +181,7 @@ fn execute_termprops(
     for file in &config.files {
         let mut scanner = scanner_for_input(file, stdin)?;
         while !scanner.test_tok(TokenType::NO_TOKEN) {
-            let term = bank.parse_term_simple(&mut scanner)?;
+            let term = bank.parse_term_with_distinct_checks(&mut scanner)?;
             let size = term_weight_compute(&term, 1, 1);
             let depth = term_depth(&term);
             let symmetry = termprops_symmetry(&term);
@@ -419,6 +419,22 @@ mod tests {
         assert!(
             output.contains("% Terms: 3  ASize: 2.666667 MSize: 4, ADepth: 2.000000 MDepth: 3\n")
         );
+    }
+
+    #[test]
+    fn rejects_distinct_number_argument_list_like_tbtermparse() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"1(a)\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect_err("number argument list is rejected");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]

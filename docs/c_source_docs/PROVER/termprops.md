@@ -85,7 +85,7 @@ Source files reviewed: `PROVER/termprops.c`.
 
 ### Rust Port Notes
 
-- `src/prover/termprops.rs` and `src/bin/termprops.rs` port the standalone `termprops` executable over the existing Rust term bank, including `-h`/`--help`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, default stdin input through `-`, sequential file processing through one shared term bank, per-term simple printing, C `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity symmetry detection for binary terms, C-shaped file-open/final-flush diagnostics, and the final count/average/max summary line including the zero-count `nan` path.
+- `src/prover/termprops.rs` and `src/bin/termprops.rs` port the standalone `termprops` executable over the existing Rust term bank, including `-h`/`--help`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, default stdin input through `-`, sequential file processing through one shared term bank, checked `TBTermParse`-style term parsing, per-term simple printing, C `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity symmetry detection for binary terms, C-shaped file-open/final-flush diagnostics, and the final count/average/max summary line including the zero-count `nan` path.
 
 ### Change Later
 
