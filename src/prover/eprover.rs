@@ -10431,9 +10431,7 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     if tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank) {
         return true;
     }
-    if matches!(formula_kind, "fof" | "tff")
-        && tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank)
-    {
+    if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
         return true;
     }
 
@@ -17872,7 +17870,11 @@ input_clause(c2,axiom,[++q(X)]).
             "tff(distinct_negated, axiom, ~$distinct(a,b,c)).",
             "tff(distinct_negated_wrapped, axiom, (~$distinct(a,b,c))).",
             "tcf(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "tcf(distinct_negated_wrapped, axiom, (~$distinct(a,b,c))).",
+            "tcf(distinct_negated_parenthesized_wrapped, axiom, (~($distinct(a,b,c)))).",
             "thf(distinct_negated, axiom, ~$distinct(a,b,c)).",
+            "thf(distinct_negated_wrapped, axiom, (~$distinct(a,b,c))).",
+            "thf(distinct_negated_parenthesized_wrapped, axiom, (~($distinct(a,b,c)))).",
         ] {
             reset_problem_type();
             let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
@@ -18095,7 +18097,8 @@ input_clause(c2,axiom,[++q(X)]).
              tcf(tcf_wrapped, axiom, ($distinct(m,n,o))).\n\
              fof(negated, axiom, ~$distinct(x,y,z)).\n\
              fof(negated_wrapped, axiom, (~$distinct(s,t,u))).\n\
-             tff(tff_negated_wrapped, axiom, (~($distinct(p,q,r)))).\n",
+             tff(tff_negated_wrapped, axiom, (~($distinct(p,q,r)))).\n\
+             tcf(tcf_negated_wrapped, axiom, (~($distinct(v,w,aa)))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18139,6 +18142,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("p!=q"));
         assert!(printed.contains("p!=r"));
         assert!(printed.contains("q!=r"));
+        assert!(printed.contains("tff(tcf_negated_wrapped, axiom, ~("));
+        assert!(printed.contains("v!=w"));
+        assert!(printed.contains("v!=aa"));
+        assert!(printed.contains("w!=aa"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -18148,7 +18155,12 @@ input_clause(c2,axiom,[++q(X)]).
     fn run_app_encode_expands_thf_wrapped_distinct_via_proof_state_owner() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-thf-wrapped-distinct-owner");
-        std::fs::write(&path, "thf(thf_wrapped, axiom, ($distinct(u,v,w))).\n").unwrap();
+        std::fs::write(
+            &path,
+            "thf(thf_wrapped, axiom, ($distinct(u,v,w))).\n\
+             thf(thf_negated_wrapped, axiom, (~($distinct(x,y,z)))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -18166,6 +18178,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("u!=v"));
         assert!(printed.contains("u!=w"));
         assert!(printed.contains("v!=w"));
+        assert!(printed.contains("tff(thf_negated_wrapped, axiom, ~("));
+        assert!(printed.contains("x!=y"));
+        assert!(printed.contains("x!=z"));
+        assert!(printed.contains("y!=z"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
