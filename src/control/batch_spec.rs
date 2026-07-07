@@ -7,7 +7,10 @@ use crate::clauses::clause::{clause_parse, Clause};
 use crate::clauses::clause_props::{
     clause_type_from_identifier, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_WATCH_CLAUSE,
 };
-use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_collect_clause, tformula_has_free_vars};
+use crate::clauses::clausefunc::{
+    parse_tstp_top_level_distinct_formula, tcf_tstp_parse, tformula_collect_clause,
+    tformula_has_free_vars,
+};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
@@ -1993,8 +1996,9 @@ fn parse_batch_tstp_formula(
         scanner.accept_tok(TokenType::COMMA)?;
         let type_ = clause_type_from_identifier(&role, problem_type);
         let formula_position = token_pos_rep(scanner.current_token());
-        let formula = if scanner.test_id("$distinct") {
-            bank.parse_tstp_distinct(scanner)?
+        let formula = if let Some(distinct) = parse_tstp_top_level_distinct_formula(scanner, bank)?
+        {
+            distinct
         } else if is_tcf {
             tcf_tstp_parse(scanner, bank, problem_type)?
         } else {
@@ -3202,6 +3206,49 @@ mod tests {
             .clauses
             .iter()
             .all(|clause| clause.literal_number() == 2));
+    }
+
+    #[test]
+    fn load_problem_from_file_accepts_top_level_distinct_wrappers() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let source = test_path("batch-load-distinct-wrappers.p");
+        fs::write(
+            &source,
+            "fof(distinct_direct, axiom, $distinct(a,b)).\n\
+             fof(distinct_wrapped, axiom, (($distinct(a,b)))).\n\
+             fof(distinct_negated, axiom, (~($distinct(a,b)))).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(problem.problem_type, ProblemType::FirstOrder);
+        assert_eq!(problem.clauses.len(), 0);
+        assert_eq!(problem.formulas.cardinality(), 3);
+        let names = problem
+            .formulas
+            .iter()
+            .map(|formula| formula.info().and_then(ClauseInfo::name).unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["distinct_direct", "distinct_wrapped", "distinct_negated"]
+        );
     }
 
     #[test]

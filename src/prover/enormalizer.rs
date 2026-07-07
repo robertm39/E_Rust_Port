@@ -14,7 +14,9 @@ use crate::clauses::clause::{
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
 };
-use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_has_free_vars};
+use crate::clauses::clausefunc::{
+    parse_tstp_top_level_distinct_formula, tcf_tstp_parse, tformula_has_free_vars,
+};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::EqnPrintOptions;
@@ -875,8 +877,8 @@ fn parse_tstp_wrapped_formula(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
     let formula_position = token_pos_rep(scanner.current_token());
-    let formula = if scanner.test_id("$distinct") {
-        bank.parse_tstp_distinct(scanner)?
+    let formula = if let Some(distinct) = parse_tstp_top_level_distinct_formula(scanner, bank)? {
+        distinct
     } else if formula_kind == "tcf" {
         tcf_tstp_parse(scanner, bank, formula_problem_type)?
     } else {
@@ -2021,7 +2023,9 @@ mod tests {
         fs::write(&rule_path, "").expect("rules written");
         fs::write(
             &formula_path,
-            "fof(distinct_caps, axiom, $distinct(X,Y)).\n",
+            "fof(distinct_caps, axiom, $distinct(X,Y)).\n\
+             fof(distinct_wrapped, axiom, (($distinct(a,b)))).\n\
+             fof(distinct_negated, axiom, (~($distinct(a,b)))).\n",
         )
         .expect("formulas written");
 
@@ -2049,6 +2053,8 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("utf8");
         assert!(rendered.contains("fof(distinct_caps, axiom, $distinct("));
         assert!(rendered.contains(" ==> fof(distinct_caps, axiom, $distinct("));
+        assert!(rendered.contains("fof(distinct_wrapped, axiom, $distinct("));
+        assert!(rendered.contains("fof(distinct_negated, axiom, ~("));
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);

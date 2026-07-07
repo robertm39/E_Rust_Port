@@ -42,9 +42,10 @@ use crate::clauses::clause_props::{
     CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_collect_clause,
-    tformula_expand_distinct, tformula_fcode_alloc, tformula_has_free_vars, tformula_lit_alloc,
-    tformula_prop_constant_alloc,
+    clause_set_archive_copy, clause_set_recognize_choice, parse_tstp_negated_distinct_formula,
+    parse_tstp_parenthesized_distinct_formula, parse_tstp_parenthesized_negated_distinct_formula,
+    parse_tstp_top_level_distinct_formula, tcf_tstp_parse, tformula_collect_clause,
+    tformula_fcode_alloc, tformula_has_free_vars, tformula_lit_alloc, tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -10482,14 +10483,7 @@ fn parse_tstp_represented_owner_formula(
     formula_kind: &str,
     problem_type: ProblemType,
 ) -> Result<Term, Diagnostic> {
-    if scanner.test_id("$distinct") {
-        bank.parse_tstp_distinct(scanner)
-    } else if let Some(distinct) = parse_negated_tstp_distinct_formula(scanner, bank)? {
-        Ok(distinct)
-    } else if let Some(distinct) = parse_parenthesized_negated_tstp_distinct_formula(scanner, bank)?
-    {
-        Ok(distinct)
-    } else if let Some(distinct) = parse_parenthesized_tstp_distinct_formula(scanner, bank)? {
+    if let Some(distinct) = parse_tstp_top_level_distinct_formula(scanner, bank)? {
         Ok(distinct)
     } else if formula_kind == "tcf" {
         tcf_tstp_parse(scanner, bank, problem_type)
@@ -10611,50 +10605,9 @@ fn tstp_app_encode_body_is_negated_top_level_distinct(scanner: &Scanner, bank: &
 
     let mut lookahead = scanner.clone();
     let mut probe = bank.clone();
-    parse_negated_tstp_distinct_formula(&mut lookahead, &mut probe)
+    parse_tstp_negated_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
-}
-
-fn parse_negated_tstp_distinct_formula(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
-    if !scanner.test_tok(TokenType::TILDE_SIGN) {
-        return Ok(None);
-    }
-
-    let mut lookahead = scanner.clone();
-    lookahead.accept_tok(TokenType::TILDE_SIGN)?;
-    if lookahead.test_tok(TokenType::APPLICATION) {
-        lookahead.accept_tok(TokenType::APPLICATION)?;
-    }
-    let mut probe = bank.clone();
-    let is_distinct = if lookahead.test_id("$distinct") {
-        true
-    } else {
-        parse_parenthesized_tstp_distinct_formula(&mut lookahead, &mut probe)?.is_some()
-    };
-    if !is_distinct {
-        return Ok(None);
-    }
-
-    scanner.accept_tok(TokenType::TILDE_SIGN)?;
-    if scanner.test_tok(TokenType::APPLICATION) {
-        scanner.accept_tok(TokenType::APPLICATION)?;
-    }
-    let distinct = if scanner.test_id("$distinct") {
-        bank.parse_tstp_distinct(scanner)?
-    } else {
-        parse_parenthesized_tstp_distinct_formula(scanner, bank)?.ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "expected parenthesized $distinct after negation",
-            )
-        })?
-    };
-    let expanded = tformula_expand_distinct(bank, &distinct)?;
-    tformula_fcode_alloc(bank, bank.signature().not_code(), expanded, None).map(Some)
 }
 
 fn tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(
@@ -10667,42 +10620,9 @@ fn tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(
 
     let mut lookahead = scanner.clone();
     let mut probe = bank.clone();
-    parse_parenthesized_negated_tstp_distinct_formula(&mut lookahead, &mut probe)
+    parse_tstp_parenthesized_negated_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
-}
-
-fn parse_parenthesized_negated_tstp_distinct_formula(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
-    let mut lookahead = scanner.clone();
-    let mut wrappers = 0;
-    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
-        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
-        wrappers += 1;
-    }
-    if wrappers == 0 {
-        return Ok(None);
-    }
-    let mut probe = bank.clone();
-    if parse_negated_tstp_distinct_formula(&mut lookahead, &mut probe)?.is_none() {
-        return Ok(None);
-    }
-
-    for _ in 0..wrappers {
-        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    }
-    let distinct = parse_negated_tstp_distinct_formula(scanner, bank)?.ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            "expected parenthesized negated $distinct formula",
-        )
-    })?;
-    for _ in 0..wrappers {
-        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-    }
-    Ok(Some(distinct))
 }
 
 fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
@@ -10715,33 +10635,9 @@ fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
 
     let mut lookahead = scanner.clone();
     let mut probe = bank.clone();
-    parse_parenthesized_tstp_distinct_formula(&mut lookahead, &mut probe)
+    parse_tstp_parenthesized_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
-}
-
-fn parse_parenthesized_tstp_distinct_formula(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Option<Term>, Diagnostic> {
-    let mut lookahead = scanner.clone();
-    let mut wrappers = 0;
-    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
-        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
-        wrappers += 1;
-    }
-    if wrappers == 0 || !lookahead.test_id("$distinct") {
-        return Ok(None);
-    }
-
-    for _ in 0..wrappers {
-        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    }
-    let distinct = bank.parse_tstp_distinct(scanner)?;
-    for _ in 0..wrappers {
-        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-    }
-    Ok(Some(distinct))
 }
 
 fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: &TermBank) -> bool {

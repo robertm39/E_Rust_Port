@@ -2451,6 +2451,152 @@ pub fn tcf_tstp_parse(
     Ok(formula)
 }
 
+/// Parses a top-level TSTP `$distinct(...)` pseudo-formula spelling.
+///
+/// This preserves the C-shaped formula-owner surface used around
+/// `TSTPDistinctParse`: a bare or parenthesized `$distinct(...)` stays as the
+/// pseudo-formula term for later `$distinct` processing, while a top-level
+/// negated form is expanded to pairwise disequalities before wrapping it in
+/// formula negation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a recognized `$distinct` spelling is malformed.
+pub fn parse_tstp_top_level_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    if scanner.test_id("$distinct") {
+        return bank.parse_tstp_distinct(scanner).map(Some);
+    }
+    if let Some(distinct) = parse_tstp_negated_distinct_formula(scanner, bank)? {
+        return Ok(Some(distinct));
+    }
+    if let Some(distinct) = parse_tstp_parenthesized_negated_distinct_formula(scanner, bank)? {
+        return Ok(Some(distinct));
+    }
+    parse_tstp_parenthesized_distinct_formula(scanner, bank)
+}
+
+/// Parses `~$distinct(...)`, `~ @ $distinct(...)`, or negated parenthesized
+/// top-level `$distinct` forms.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a recognized negated `$distinct` spelling is
+/// malformed.
+pub fn parse_tstp_negated_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    if !scanner.test_tok(TokenType::TILDE_SIGN) {
+        return Ok(None);
+    }
+
+    let mut lookahead = scanner.clone();
+    lookahead.accept_tok(TokenType::TILDE_SIGN)?;
+    if lookahead.test_tok(TokenType::APPLICATION) {
+        lookahead.accept_tok(TokenType::APPLICATION)?;
+    }
+    let mut probe = bank.clone();
+    let is_distinct = if lookahead.test_id("$distinct") {
+        true
+    } else {
+        parse_tstp_parenthesized_distinct_formula(&mut lookahead, &mut probe)?.is_some()
+    };
+    if !is_distinct {
+        return Ok(None);
+    }
+
+    scanner.accept_tok(TokenType::TILDE_SIGN)?;
+    if scanner.test_tok(TokenType::APPLICATION) {
+        scanner.accept_tok(TokenType::APPLICATION)?;
+    }
+    let distinct = if scanner.test_id("$distinct") {
+        bank.parse_tstp_distinct(scanner)?
+    } else {
+        parse_tstp_parenthesized_distinct_formula(scanner, bank)?.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "expected parenthesized $distinct after negation",
+            )
+        })?
+    };
+    let expanded = tformula_expand_distinct(bank, &distinct)?;
+    tformula_fcode_alloc(bank, bank.signature().not_code(), expanded, None).map(Some)
+}
+
+/// Parses one or more parenthesized wrappers around a negated top-level
+/// `$distinct` formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a recognized parenthesized negated `$distinct`
+/// spelling is malformed.
+pub fn parse_tstp_parenthesized_negated_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let mut lookahead = scanner.clone();
+    let mut wrappers = 0;
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
+        wrappers += 1;
+    }
+    if wrappers == 0 {
+        return Ok(None);
+    }
+    let mut probe = bank.clone();
+    if parse_tstp_negated_distinct_formula(&mut lookahead, &mut probe)?.is_none() {
+        return Ok(None);
+    }
+
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+    let distinct = parse_tstp_negated_distinct_formula(scanner, bank)?.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "expected parenthesized negated $distinct formula",
+        )
+    })?;
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok(Some(distinct))
+}
+
+/// Parses one or more parenthesized wrappers around a top-level `$distinct`
+/// formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a recognized parenthesized `$distinct` spelling is
+/// malformed.
+pub fn parse_tstp_parenthesized_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let mut lookahead = scanner.clone();
+    let mut wrappers = 0;
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        lookahead.accept_tok(TokenType::OPEN_BRACKET)?;
+        wrappers += 1;
+    }
+    if wrappers == 0 || !lookahead.test_id("$distinct") {
+        return Ok(None);
+    }
+
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+    let distinct = bank.parse_tstp_distinct(scanner)?;
+    for _ in 0..wrappers {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok(Some(distinct))
+}
+
 fn tcf_quantified_tform_tstp_parse(
     scanner: &mut Scanner,
     bank: &mut TermBank,
