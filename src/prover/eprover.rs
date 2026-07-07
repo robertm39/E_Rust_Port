@@ -10747,7 +10747,9 @@ fn parse_simple_tstp_formula_clause(
 
     let role_types = simple_fof_role_types(&role, formula_problem_type, formula_preprocessing);
     let formula_position = token_pos_rep(scanner.current_token());
-    if should_parse_tstp_formula_as_represented_owner(&formula_kind, formula_owner_handling) {
+    if should_parse_tstp_formula_as_represented_owner(&formula_kind, formula_owner_handling)
+        && !scanner.test_id("$distinct")
+    {
         return parse_represented_tstp_formula_clause_body(
             scanner,
             bank,
@@ -22037,6 +22039,35 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_closes_supported_thf_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-thf-distinct");
+        std::fs::write(
+            &path,
+            "thf(distinct, axiom, $distinct(a,b)).\n\
+             thf(equal, axiom, a=b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_negated_fof_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("proof-negated-fof-distinct");
@@ -28105,6 +28136,36 @@ input_clause(c2,axiom,[++q(X)]).
             stdout,
             stderr,
             &["fof(test1, axiom", "a!=b", "a!=c", "b!=c"],
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_expands_thf_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-thf-distinct");
+        std::fs::write(&path, "thf(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["thf(test1, axiom", "a!=b", "a!=c", "b!=c"],
         );
         std::fs::remove_file(&path).unwrap();
     }
