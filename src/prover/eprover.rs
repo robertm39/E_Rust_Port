@@ -10547,6 +10547,9 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
     if tstp_app_encode_fof_starts_quantified_formula(scanner, bank) {
         return true;
     }
+    if tstp_app_encode_fof_starts_negated_formula(scanner, bank) {
+        return true;
+    }
 
     let mut lookahead = scanner.clone();
     let mut typed_probe = bank.clone();
@@ -10609,6 +10612,17 @@ fn tstp_app_encode_fof_starts_parenthesized_formula_equality(
 
 fn tstp_app_encode_fof_starts_quantified_formula(scanner: &Scanner, bank: &TermBank) -> bool {
     if !scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+        return false;
+    }
+    let mut lookahead = scanner.clone();
+    let mut formula_probe = bank.clone();
+    formula_probe
+        .parse_tformula_tstp(&mut lookahead)
+        .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
+}
+
+fn tstp_app_encode_fof_starts_negated_formula(scanner: &Scanner, bank: &TermBank) -> bool {
+    if !scanner.test_tok(TokenType::TILDE_SIGN) {
         return false;
     }
     let mut lookahead = scanner.clone();
@@ -17655,6 +17669,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_term_eq_unparenthesized_quantified, axiom, ?[X]:$let(f:$i, f := a, f) = X).",
             "fof(eq_quantified_body_equality, axiom, ![X]:p(X) = q(a)).",
             "fof(ne_quantified_body_equality, axiom, ?[X]:p(X) != q(a)).",
+            "fof(eq_negated_left_equality, axiom, ~p(a) = q(a)).",
+            "fof(ne_negated_left_equality, axiom, ~p(a) != q(a)).",
             "tff(tff_owner, axiom, p(a) | (q(a)|r(a))).",
             "tcf(tcf_owner, axiom, p(a)|q(a)).",
             "fof(distinct_direct, axiom, $distinct(a,b,c)).",
@@ -17821,6 +17837,75 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("a!=c"));
         assert!(printed.contains("b!=c"));
         assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_fof_negated_left_term_equality_without_bridge() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-neg-left-term-eq");
+        std::fs::write(
+            &path,
+            "fof(eq_neg_left, axiom, ~p(a) = q(a)).\n\
+             fof(ne_neg_left, axiom, ~p(a) != q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_neg_left, axiom, ~(app_"));
+        assert!(printed.contains("=app_"));
+        assert!(printed.contains("tff(ne_neg_left, axiom, ~(app_"));
+        assert!(printed.contains("!=app_"));
+        assert!(!printed.contains("<=>"));
+        assert!(!printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_typed_fof_negated_left_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-fof-neg-left-formula-eq");
+        std::fs::write(
+            &path,
+            "tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(a_type, type, a: $i).\n\
+             fof(eq_neg_left, axiom, ~p(a) = q(a)).\n\
+             fof(ne_neg_left, axiom, ~p(a) != q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_neg_left, axiom, ~((app_"));
+        assert!(printed.contains("<=>app_"));
+        assert!(printed.contains("tff(ne_neg_left, axiom, ~((app_"));
+        assert!(printed.contains("<~>app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
