@@ -449,7 +449,7 @@ mod platform_server_socket {
         zero: [u8; 8],
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> c_int;
         fn setsockopt(
             socket: c_int,
@@ -583,7 +583,7 @@ mod platform_server_socket {
     }
 
     #[link(name = "ws2_32")]
-    extern "system" {
+    unsafe extern "system" {
         fn WSAStartup(version_requested: u16, data: *mut c_void) -> c_int;
         fn socket(address_family: c_int, socket_type: c_int, protocol: c_int) -> Socket;
         fn setsockopt(

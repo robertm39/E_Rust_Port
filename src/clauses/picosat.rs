@@ -344,7 +344,7 @@ mod platform {
     use std::ptr::NonNull;
 
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         fn LoadLibraryW(file_name: *const u16) -> *mut c_void;
         fn GetProcAddress(module: *mut c_void, proc_name: *const c_char) -> *mut c_void;
         fn FreeLibrary(module: *mut c_void) -> i32;
@@ -408,7 +408,7 @@ mod platform {
 
     #[cfg(target_os = "linux")]
     #[link(name = "dl")]
-    extern "C" {
+    unsafe extern "C" {
         fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
         fn dlclose(handle: *mut c_void) -> i32;
@@ -416,7 +416,7 @@ mod platform {
     }
 
     #[cfg(not(target_os = "linux"))]
-    extern "C" {
+    unsafe extern "C" {
         fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
         fn dlclose(handle: *mut c_void) -> i32;

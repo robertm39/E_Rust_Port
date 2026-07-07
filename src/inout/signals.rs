@@ -429,7 +429,7 @@ mod linux_signal {
     const HARD_CPU_TIMEOUT_ERROR: &[u8] = b"eprover: CPU time limit exceeded, terminating\n";
     const UNEXPECTED_SIGNAL_WARNING: &[u8] = b"Warning: Unexpected signal caught, continuing";
 
-    extern "C" {
+    unsafe extern "C" {
         fn exit(status: i32) -> !;
         fn raise(signal_number: i32) -> i32;
         fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;

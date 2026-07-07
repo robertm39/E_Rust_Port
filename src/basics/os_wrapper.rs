@@ -630,7 +630,7 @@ mod windows_kernel32 {
     }
 
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         fn AssignProcessToJobObject(job: Handle, process: Handle) -> Bool;
         fn CloseHandle(object: Handle) -> Bool;
         fn CreateJobObjectW(job_attributes: *mut c_void, name: *const u16) -> Handle;
@@ -911,7 +911,7 @@ mod linux_rlimit {
         maximum: u64,
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn getrlimit(resource: i32, limit: *mut RLimit) -> i32;
         fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
         fn strerror(errnum: i32) -> *mut c_char;
@@ -1043,7 +1043,7 @@ mod linux_resource {
     }
 
     #[cfg(target_os = "linux")]
-    extern "C" {
+    unsafe extern "C" {
         fn clock() -> c_long;
         #[link_name = "getrusage"]
         fn libc_getrusage(who: i32, usage: *mut RUsage) -> i32;
