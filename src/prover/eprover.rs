@@ -13439,7 +13439,7 @@ fn parse_simple_fof_implication_operand(
     bank: &mut TermBank,
     problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_connective_formulas(scanner, bank, problem_type)
+    parse_simple_fof_disjunction_chain(scanner, bank, problem_type)
 }
 
 fn parse_simple_fof_equivalence_operand(
@@ -13447,7 +13447,7 @@ fn parse_simple_fof_equivalence_operand(
     bank: &mut TermBank,
     problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_connective_formulas(scanner, bank, problem_type)
+    parse_simple_fof_disjunction_chain(scanner, bank, problem_type)
 }
 
 fn parse_simple_fof_disjunction_chain(
@@ -30485,6 +30485,71 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_unparenthesized_nonassoc_chains_like_c() {
+        let _guard = global_state_lock();
+        for (name, formula) in [
+            ("imp", "p(a)=>q(a)=>r(a)"),
+            ("rimp", "p(a)<=q(a)<=r(a)"),
+            ("equiv", "p(a)<=>q(a)<=>r(a)"),
+            ("xor", "p(a)<~>q(a)<~>r(a)"),
+            ("nand", "p(a)~&q(a)~&r(a)"),
+            ("nor", "p(a)~|q(a)~|r(a)"),
+        ] {
+            let path = temp_path(&format!("syntax-fof-unparenthesized-{name}-chain"));
+            std::fs::write(&path, format!("fof({name}, axiom, {formula}).\n")).unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let error = run(
+                ["eprover", "--syntax-only", path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn run_syntax_only_parses_parenthesized_nonassoc_chains() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-parenthesized-nonassoc-chains");
+        std::fs::write(
+            &path,
+            "fof(imp, axiom, (p(a)=>(q(a)=>r(a)))).\n\
+             fof(rimp, axiom, (p(a)<=(q(a)<=r(a)))).\n\
+             fof(equiv, axiom, (p(a)<=>(q(a)<=>r(a)))).\n\
+             fof(xor, axiom, (p(a)<~>(q(a)<~>r(a)))).\n\
+             fof(nand, axiom, (p(a)~&(q(a)~&r(a)))).\n\
+             fof(nor, axiom, (p(a)~|(q(a)~|r(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
