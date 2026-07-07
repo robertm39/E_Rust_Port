@@ -514,13 +514,12 @@ impl ClauseSet {
         Ok(output)
     }
 
-    /// Writes the C `ClauseSetTSTPPrint` shape for the currently ported clause
-    /// TSTP branches.
+    /// Writes the C `ClauseSetTSTPPrint` shape through the shared clause TSTP
+    /// renderer.
     ///
     /// # Errors
     ///
-    /// Returns a diagnostic if any clause reaches an unported
-    /// `ClauseTSTPPrint` branch or if the formatter fails.
+    /// Returns a diagnostic if rendering or writing any clause fails.
     pub fn write_tstp(
         &self,
         output: &mut impl fmt::Write,
@@ -535,8 +534,7 @@ impl ClauseSet {
     ///
     /// # Errors
     ///
-    /// Returns a diagnostic if any clause reaches an unported
-    /// `ClauseTSTPPrint` branch or if the formatter fails.
+    /// Returns a diagnostic if rendering or writing any clause fails.
     pub fn write_tstp_with_type_suffixes(
         &self,
         output: &mut impl fmt::Write,
@@ -562,8 +560,8 @@ impl ClauseSet {
         Ok(())
     }
 
-    /// Returns the C `ClauseSetTSTPPrint` shape for the currently ported clause
-    /// TSTP branches.
+    /// Returns the C `ClauseSetTSTPPrint` shape through the shared clause TSTP
+    /// renderer.
     ///
     /// # Errors
     ///

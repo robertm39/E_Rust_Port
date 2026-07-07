@@ -19374,7 +19374,7 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_app_encode_prints_fof_quantified_body_term_equality_without_bridge_panic() {
+    fn run_app_encode_prints_fof_quantified_body_term_equality_without_bridge() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-fof-quant-body-term-eq");
         std::fs::write(
