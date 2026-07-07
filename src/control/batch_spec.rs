@@ -7,7 +7,7 @@ use crate::clauses::clause::{clause_parse, Clause};
 use crate::clauses::clause_props::{
     clause_type_from_identifier, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_WATCH_CLAUSE,
 };
-use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_has_free_vars};
+use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_collect_clause, tformula_has_free_vars};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
@@ -27,6 +27,7 @@ use crate::inout::scanner::{
 use crate::inout::tempfile::temp_file_create;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::Term;
 use std::fs::File;
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -1999,7 +2000,7 @@ fn parse_batch_tstp_formula(
         } else {
             bank.parse_tformula_tstp(scanner)?
         };
-        if tformula_has_free_vars(bank, &formula).is_some() {
+        if type_ != CP_TYPE_WATCH_CLAUSE && tformula_has_free_vars(bank, &formula).is_some() {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
@@ -2014,7 +2015,11 @@ fn parse_batch_tstp_formula(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut formula = WrappedFormula::wt_formula_alloc(formula);
+    let mut formula = if type_ == CP_TYPE_WATCH_CLAUSE && is_tcf {
+        batch_tcf_watchlist_formula(bank, &formula, problem_type)?
+    } else {
+        WrappedFormula::wt_formula_alloc(formula)
+    };
     formula.set_tptp_type(type_);
     formula.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
     formula.set_info(Some(ClauseInfo::new(
@@ -2028,6 +2033,22 @@ fn parse_batch_tstp_formula(
         formula,
         problem_type,
     })
+}
+
+fn batch_tcf_watchlist_formula(
+    bank: &mut TermBank,
+    formula: &Term,
+    problem_type: ProblemType,
+) -> Result<WrappedFormula, Diagnostic> {
+    let qall_code = bank.signature().qall_code();
+    let mut body = formula.clone();
+    while body.f_code() == qall_code && body.arity() == 2 {
+        body = body
+            .argument(1)
+            .expect("TCF universal formula must have a body argument");
+    }
+    let clause = tformula_collect_clause(bank, &body, None)?;
+    WrappedFormula::form_clause_alloc(bank, clause, problem_type)
 }
 
 fn parse_batch_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -2209,6 +2230,7 @@ mod tests {
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::simple_stuff::{ProblemType, ProverResult};
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_WATCH_CLAUSE};
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
@@ -3128,6 +3150,58 @@ mod tests {
             formulas[1].info().and_then(ClauseInfo::name),
             Some("goal_formula")
         );
+    }
+
+    #[test]
+    fn load_problem_from_file_accepts_tcf_watchlist_formula_entries_as_clauses() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let source = test_path("batch-load-tcf-watchlist.p");
+        fs::write(
+            &source,
+            "tcf(watch_free, watchlist, p(X)|q(X)).\n\
+             tcf(watch_quant, watchlist, ![Y]:(r(Y)|s(Y))).\n\
+             tcf(fact, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(problem.problem_type, ProblemType::FirstOrder);
+        assert_eq!(problem.clauses.len(), 2);
+        assert_eq!(problem.formulas.cardinality(), 1);
+        let watch_names = problem
+            .clauses
+            .iter()
+            .map(|clause| clause.info().and_then(ClauseInfo::name).unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(watch_names, ["watch_free", "watch_quant"]);
+        assert!(problem
+            .clauses
+            .iter()
+            .all(|clause| clause.query_tptp_type() == CP_TYPE_WATCH_CLAUSE));
+        assert!(problem
+            .clauses
+            .iter()
+            .all(|clause| clause.query_prop(CP_INITIAL | CP_INPUT_FORMULA)));
+        assert!(problem
+            .clauses
+            .iter()
+            .all(|clause| clause.literal_number() == 2));
     }
 
     #[test]
