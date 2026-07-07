@@ -26863,6 +26863,44 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_search_unfolds_formula_origin_eq_definition_before_saturation() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-eqdef-unfold");
+        std::fs::write(
+            &path,
+            "fof(def, axiom, ![X]:(f(X)=X)).\n\
+             fof(use, axiom, p(f(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
+        assert!(printed.contains("%p(a) <- ."));
+        assert!(!printed.contains("%p(f(a)) <- ."));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_statistics_count_clause_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-clause-preprocess-statistics");
