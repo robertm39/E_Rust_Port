@@ -2062,6 +2062,8 @@ mod tests {
 
     #[test]
     fn named_to_db_converts_nested_named_binders_to_db_indexes() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let i_type = bank.signature().type_bank().default_type();
         let binary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]);

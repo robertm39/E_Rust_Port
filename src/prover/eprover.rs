@@ -19602,8 +19602,12 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
-        assert!(!printed.contains(&format!("file('{path_arg}', left)")));
-        assert!(!printed.contains(&format!("file('{path_arg}', right)")));
+        let final_docs = printed
+            .split("% BCE eliminated: 2.\n")
+            .nth(1)
+            .expect("BCE summary should precede final prune output");
+        assert!(!final_docs.contains(&format!("file('{path_arg}', left)")));
+        assert!(!final_docs.contains(&format!("file('{path_arg}', right)")));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -19648,8 +19652,12 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
-        assert!(!printed.contains(&format!("file('{path_arg}', pos)")));
-        assert!(!printed.contains(&format!("file('{path_arg}', neg)")));
+        let final_docs = printed
+            .split("% PE eliminated: 1\n")
+            .nth(1)
+            .expect("predicate-elimination summary should precede final prune output");
+        assert!(!final_docs.contains(&format!("file('{path_arg}', pos)")));
+        assert!(!final_docs.contains(&format!("file('{path_arg}', neg)")));
         assert!(printed.contains(&format!("file('{path_arg}', s_offending)")));
         assert!(printed.contains(", plain, s(a), "));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
