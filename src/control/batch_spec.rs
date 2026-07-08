@@ -1890,6 +1890,12 @@ fn batch_tstp_wrapper_problem_type(kind: &str) -> ProblemType {
     }
 }
 
+fn mark_batch_typed_symbols_for_tstp_formula_kind(bank: &mut TermBank, kind: &str) {
+    if matches!(kind, "tff" | "tcf" | "thf") {
+        bank.signature_mut().set_typed_symbols(true);
+    }
+}
+
 fn combine_batch_problem_types(
     current: ProblemType,
     next: ProblemType,
@@ -1969,6 +1975,7 @@ fn parse_batch_tstp_formula(
     let is_tcf = formula_kind == "tcf";
 
     set_problem_type(problem_type)?;
+    mark_batch_typed_symbols_for_tstp_formula_kind(bank, &formula_kind);
     scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
@@ -3278,6 +3285,62 @@ mod tests {
         assert!(error.message().contains(
             "LTB batch input currently supports cnf clauses, fof/tff/tcf/thf formula entries, and include directives"
         ));
+    }
+
+    #[test]
+    fn load_problem_from_file_marks_typed_wrappers_like_c() {
+        for (formula_kind, source_text) in [
+            ("tff", "tff(typed, axiom, p(a)).\n"),
+            ("tcf", "tcf(typed, axiom, p(a)).\n"),
+            ("thf", "thf(typed, axiom, p(a)).\n"),
+        ] {
+            let source = test_path(&format!("batch-load-typed-{formula_kind}.p"));
+            fs::write(&source, source_text).unwrap();
+            let mut bank = test_bank();
+            let ctrl = StructFofSpec::new(bank.signature());
+            let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+            let source_name = source.to_string_lossy().into_owned();
+
+            assert!(!bank.signature().typed_symbols());
+            spec.load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+            assert!(
+                bank.signature().typed_symbols(),
+                "{formula_kind} wrapper did not mark typed symbols"
+            );
+        }
+    }
+
+    #[test]
+    fn load_problem_from_file_keeps_fof_wrapper_untyped_like_c() {
+        let source = test_path("batch-load-untyped-fof.p");
+        fs::write(&source, "fof(untyped, axiom, p(a)).\n").unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        spec.load_problem_from_file(
+            &mut bank,
+            &ctrl,
+            BatchProblemLoadRequest {
+                source: &source_name,
+                default_dir: None,
+                format: IoFormat::Tstp,
+            },
+        )
+        .unwrap();
+
+        assert!(!bank.signature().typed_symbols());
     }
 
     #[test]
