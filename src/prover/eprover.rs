@@ -18560,6 +18560,8 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_eq_wrapped, axiom, ($ite(p(a),q(a),r(a)) = s(a))).",
             "fof(fool_ne_wrapped, axiom, ($let(f:$o, f := p(a), f) != s(a))).",
             "fof(fool_term_eq_wrapped, axiom, ($let(f:$i, f := a, f) = b)).",
+            "fof(fool_ite_term_eq_unwrapped, axiom, $ite(p(a), a, b) = c).",
+            "fof(fool_let_term_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).",
             "fof(fool_term_eq_disjunct, axiom, s(a) | ($let(f:$i, f := a, f) = b)).",
             "fof(fool_term_eq_conjunct, axiom, s(a) & (c = $let(f:$i, f := a, f))).",
             "fof(eq_formula_right, axiom, p(a) = (q(a)|r(a))).",
@@ -20562,6 +20564,8 @@ input_clause(c2,axiom,[++q(X)]).
              tff(p_type, type, p: $i > $o).\n\
              fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
              fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n\
+             fof(ite_i_eq_unwrapped, axiom, $ite(p(a), a, b) = c).\n\
+             fof(let_i_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).\n\
              fof(ite_i_eq_right, axiom, c = $ite(p(a), a, b)).\n\
              fof(let_i_eq_right, axiom, c = ($let(f:$i, f := a, f))).\n\
              fof(let_i_eq_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) = b)).\n\
@@ -20587,6 +20591,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(ite_i_eq, axiom, $ite(app_"));
         assert!(printed.contains(",a,b)=c)."));
         assert!(printed.contains("tff(let_i_eq, axiom, $let(f:$i,f:=a,f)=b)."));
+        assert!(printed.contains("tff(ite_i_eq_unwrapped, axiom, $ite(app_"));
+        assert!(printed.contains("tff(let_i_eq_unwrapped, axiom, $let(f:$i,f:=a,f)=b)."));
         assert!(printed.contains("tff(ite_i_eq_right, axiom, c=$ite(app_"));
         assert!(printed.contains(",a,b))."));
         assert!(printed.contains("tff(let_i_eq_right, axiom, c=$let(f:$i,f:=a,f))."));
@@ -33351,7 +33357,9 @@ input_clause(c2,axiom,[++q(X)]).
              tff(c_type, type, c: $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
-             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n",
+             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n\
+             fof(ite_i_eq_unwrapped, axiom, $ite(p(a), a, b) = c).\n\
+             fof(let_i_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
