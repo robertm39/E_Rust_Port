@@ -298,7 +298,7 @@ fn execute_checkproof(
 fn parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
-        support_shell_pcl: true,
+        support_shell_pcl: false,
         clause_parse_options: ClauseParseOptions {
             clauses_have_local_variables: false,
             ..ClauseParseOptions::default()
@@ -526,7 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_options_disable_local_clause_variables_like_c() {
+    fn parse_options_match_c_pcl_global_switches() {
+        assert!(!parse_options().support_shell_pcl);
         assert!(
             !parse_options()
                 .clause_parse_options
@@ -699,6 +700,21 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("No token"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn shell_pcl_stays_disabled_like_c_checkproof() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"3 : : : 2 : final\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect_err("C checkproof does not enable SupportShellPCL");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
     }
