@@ -1,9 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::fixdarrays::FixedDArray;
 use crate::basics::simple_stuff::ProblemType;
-use crate::clauses::clause::{
-    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
-};
+use crate::clauses::clause::{clause_print_format_string, clause_print_lop_format_string, Clause};
 use crate::inout::scanner::IoFormat;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -360,13 +358,7 @@ fn freq_vector_clause_rendered_string(
     output_format: IoFormat,
     problem_type: ProblemType,
 ) -> Result<String, Diagnostic> {
-    match output_format {
-        IoFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
-        IoFormat::Tstp => clause_tstp_string(bank, clause, full_terms, true, problem_type),
-        IoFormat::Lop | IoFormat::Auto => {
-            Ok(clause_print_lop_format_string(bank, clause, full_terms))
-        }
-    }
+    clause_print_format_string(bank, clause, full_terms, output_format, problem_type)
 }
 
 #[derive(Clone, Debug, PartialEq)]

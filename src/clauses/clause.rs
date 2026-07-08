@@ -1932,6 +1932,77 @@ pub fn clause_tstp_string(
     Ok(output)
 }
 
+/// Returns the C `ClausePrint` shape with explicit output-format dispatch.
+///
+/// C dispatches from the process-global `OutputFormat`: TPTP uses
+/// `ClausePrintTPTPFormat`, TSTP uses `ClauseTSTPPrint`, and every other
+/// format falls back to LOP printing.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects the clause.
+///
+/// # Panics
+///
+/// Panics if the selected underlying printer would panic for the given clause,
+/// matching the corresponding C assertion path.
+pub fn clause_print_format_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    let options = match output_format {
+        IoFormat::Tptp => EqnPrintOptions::tptp(),
+        IoFormat::Lop | IoFormat::Tstp | IoFormat::Auto => EqnPrintOptions::lop(),
+    };
+    clause_print_format_string_with_options(
+        bank,
+        clause,
+        full_terms,
+        output_format,
+        problem_type,
+        options,
+    )
+}
+
+/// Returns the C `ClausePrint` shape with caller-provided equation options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects the clause.
+pub fn clause_print_format_string_with_options(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
+            bank, clause, options,
+        )),
+        IoFormat::Tstp => {
+            let mut output = String::new();
+            clause_write_tstp_with_type_suffixes(
+                &mut output,
+                bank,
+                clause,
+                full_terms,
+                true,
+                problem_type,
+                options.print_types,
+            )?;
+            Ok(output)
+        }
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
+            bank, clause, full_terms, options,
+        )),
+    }
+}
+
 pub fn clause_write_lop_format(
     output: &mut impl fmt::Write,
     bank: &TermBank,
@@ -2280,10 +2351,10 @@ fn skolemize_term_in_bank(
 mod tests {
     use super::{
         clause_debug_string, clause_parse, clause_pcl_parse, clause_pcl_string,
-        clause_print_axiom_string, clause_print_goal_string, clause_print_lop_format_string,
-        clause_print_query_string, clause_print_rule_string, clause_print_tptp_format_string,
-        clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string,
-        clause_write_tstp_with_type_suffixes, Clause,
+        clause_print_axiom_string, clause_print_format_string, clause_print_goal_string,
+        clause_print_lop_format_string, clause_print_query_string, clause_print_rule_string,
+        clause_print_tptp_format_string, clause_print_tstp_core_string, clause_starts_maybe,
+        clause_tstp_string, clause_write_tstp_with_type_suffixes, Clause,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
@@ -2627,6 +2698,50 @@ mod tests {
         assert_eq!(
             clause_print_tptp_format_string(&bank, &clause),
             "input_clause(c_5_77,conjecture,[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)])."
+        );
+        assert_eq!(
+            clause_print_format_string(
+                &bank,
+                &clause,
+                true,
+                IoFormat::Lop,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            clause_print_lop_format_string(&bank, &clause, true)
+        );
+        assert_eq!(
+            clause_print_format_string(
+                &bank,
+                &clause,
+                true,
+                IoFormat::Auto,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            clause_print_lop_format_string(&bank, &clause, true)
+        );
+        assert_eq!(
+            clause_print_format_string(
+                &bank,
+                &clause,
+                true,
+                IoFormat::Tptp,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            clause_print_tptp_format_string(&bank, &clause)
+        );
+        assert_eq!(
+            clause_print_format_string(
+                &bank,
+                &clause,
+                true,
+                IoFormat::Tstp,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap()
         );
         assert_eq!(
             clause_print_tstp_core_string(&bank, &clause, true, false),

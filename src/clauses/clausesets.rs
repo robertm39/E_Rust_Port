@@ -5,9 +5,10 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::{
-    clause_parse_with_options, clause_print_lop_format_string,
-    clause_print_lop_format_string_with_options, clause_print_tptp_format_string_with_options,
-    clause_starts_maybe, clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
+    clause_parse_with_options, clause_print_format_string_with_options,
+    clause_print_lop_format_string, clause_print_lop_format_string_with_options,
+    clause_print_tptp_format_string_with_options, clause_starts_maybe,
+    clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_D_INDEXED, CP_IS_SOS, CP_IS_S_INDEXED,
@@ -1488,27 +1489,14 @@ fn clause_set_render_clause_string(
     problem_type: ProblemType,
     options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
-    match output_format {
-        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
-            bank, clause, options,
-        )),
-        IoFormat::Tstp => {
-            let mut output = String::new();
-            clause_write_tstp_with_type_suffixes(
-                &mut output,
-                bank,
-                clause,
-                full_terms,
-                true,
-                problem_type,
-                options.print_types,
-            )?;
-            Ok(output)
-        }
-        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
-            bank, clause, full_terms, options,
-        )),
-    }
+    clause_print_format_string_with_options(
+        bank,
+        clause,
+        full_terms,
+        output_format,
+        problem_type,
+        options,
+    )
 }
 
 fn indexed_clause_for_anchor(
