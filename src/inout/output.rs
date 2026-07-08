@@ -34,7 +34,7 @@ struct OutputState {
     output_level: i64,
     target: OutputDestination,
     global_out_fd: i32,
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
     compat_fd: Option<windows_compat_fd::CompatFd>,
 }
 
@@ -44,7 +44,7 @@ impl Default for OutputState {
             output_level: 1,
             target: OutputDestination::Stdout,
             global_out_fd: STDOUT_FILENO_COMPAT,
-            #[cfg(all(windows, target_env = "msvc"))]
+            #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
             compat_fd: None,
         }
     }
@@ -63,7 +63,7 @@ fn lock_output_state() -> MutexGuard<'static, OutputState> {
     }
 }
 
-#[cfg(not(all(windows, target_env = "msvc")))]
+#[cfg(not(all(windows, any(target_env = "msvc", target_env = "gnu"))))]
 fn file_fd(file: &File) -> i32 {
     #[cfg(unix)]
     {
@@ -77,7 +77,7 @@ fn file_fd(file: &File) -> i32 {
     }
 }
 
-#[cfg(all(windows, target_env = "msvc"))]
+#[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
 fn file_fd_and_owner(file: &File) -> (i32, Option<windows_compat_fd::CompatFd>) {
     let Some(fd) = windows_compat_fd::CompatFd::from_file(file) else {
         return (UNKNOWN_FILENO_COMPAT, None);
@@ -104,7 +104,7 @@ pub fn set_output_level(level: i64) -> i64 {
 
 pub fn init_output() {
     let mut state = lock_output_state();
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
     {
         state.compat_fd = None;
     }
@@ -142,18 +142,18 @@ pub fn out_close(mut output: OutputDestination) -> Result<(), Diagnostic> {
 
 pub fn open_global_out(name: Option<&Path>) -> Result<(), Diagnostic> {
     let output = out_open(name)?;
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
     let (fd, compat_fd) = match &output {
         OutputDestination::Stdout => (STDOUT_FILENO_COMPAT, None),
         OutputDestination::File(file) => file_fd_and_owner(file),
     };
-    #[cfg(not(all(windows, target_env = "msvc")))]
+    #[cfg(not(all(windows, any(target_env = "msvc", target_env = "gnu"))))]
     let fd = match &output {
         OutputDestination::Stdout => STDOUT_FILENO_COMPAT,
         OutputDestination::File(file) => file_fd(file),
     };
     let mut state = lock_output_state();
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
     {
         state.compat_fd = compat_fd;
     }
@@ -168,7 +168,7 @@ pub fn close_global_out() -> Result<(), Diagnostic> {
         .target
         .flush()
         .map_err(|error| diagnostic_from_io("Error while closing file", &error))?;
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
     {
         state.compat_fd = None;
     }
@@ -222,9 +222,9 @@ pub fn print_dashed_statuses(
     output.write_all(dashed_statuses(stat1, stat2, fallback).as_bytes())
 }
 
-// Allowed external DLL boundary: Windows MSVC output compatibility needs
-// Kernel32/UCRT handle-to-fd calls hidden behind CompatFd ownership.
-#[cfg(all(windows, target_env = "msvc"))]
+// Allowed external DLL boundary: Windows output compatibility needs
+// Kernel32 plus target CRT handle-to-fd calls hidden behind CompatFd ownership.
+#[cfg(all(windows, any(target_env = "msvc", target_env = "gnu")))]
 #[allow(unsafe_code)]
 mod windows_compat_fd {
     use std::ffi::c_void;
@@ -240,7 +240,8 @@ mod windows_compat_fd {
         fn CloseHandle(object: Handle) -> i32;
     }
 
-    #[link(name = "ucrt")]
+    #[cfg_attr(target_env = "msvc", link(name = "ucrt"))]
+    #[cfg_attr(target_env = "gnu", link(name = "msvcrt"))]
     unsafe extern "C" {
         fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
         fn _close(fd: i32) -> i32;
@@ -385,9 +386,9 @@ mod tests {
         close_global_out().unwrap();
         std::fs::remove_file(&path).unwrap();
 
-        #[cfg(any(unix, all(windows, target_env = "msvc")))]
+        #[cfg(any(unix, all(windows, any(target_env = "msvc", target_env = "gnu"))))]
         assert_ne!(fd, UNKNOWN_FILENO_COMPAT);
-        #[cfg(not(any(unix, all(windows, target_env = "msvc"))))]
+        #[cfg(not(any(unix, all(windows, any(target_env = "msvc", target_env = "gnu")))))]
         assert_eq!(fd, UNKNOWN_FILENO_COMPAT);
     }
 
