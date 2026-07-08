@@ -4990,13 +4990,13 @@ fn run_config_with_stderr(
     }
 
     if config.encoding.app_encode {
-        run_app_encode(&mut output, &mut runtime_config)?;
-        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
+        let status = run_app_encode(&mut output, &mut runtime_config)?;
+        return finish_run_config(&mut output, config, status);
     }
 
     if config.flags.contains(EProverFlag::PruneOnly) {
-        run_prune_only(&mut output, &mut runtime_config)?;
-        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
+        let status = run_prune_only(&mut output, &mut runtime_config)?;
+        return finish_run_config(&mut output, config, status);
     }
 
     let status = run_proof_search(&mut output, stderr, &mut runtime_config)?;
@@ -5074,7 +5074,7 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
 fn run_app_encode<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &mut EProverConfig,
-) -> Result<(), EProverError> {
+) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
@@ -5110,8 +5110,14 @@ fn run_app_encode<W: Write + ?Sized>(
 
     state.process_distinct()?;
 
-    write_preprocessing_config_debug_line(output, config)?;
-    let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
+    let mut heuristic_params = heuristic_parms_from_config(config)?;
+    match apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)? {
+        AutoModePreprocessingSelection::Continue(_) => {}
+        AutoModePreprocessingSelection::ScheduledExit(status) => return Ok(status),
+    }
+    write_preprocessing_params_debug_line(output, &heuristic_params)?;
+    let _sine_pruned =
+        apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
     write_app_encoded_formula_set(
         output,
@@ -5119,7 +5125,7 @@ fn run_app_encode<W: Write + ?Sized>(
         saw_any_formula_owner,
         app_encode_problem_type,
     )?;
-    Ok(())
+    Ok(ErrorCode::NO_ERROR.exit_status())
 }
 
 #[cfg(test)]
@@ -5337,69 +5343,53 @@ fn simple_fof_app_encoded_formula_binary_operator(
 fn run_prune_only<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &mut EProverConfig,
-) -> Result<(), EProverError> {
+) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
-    write_preprocessing_config_debug_line(output, config)?;
+    let mut heuristic_params = heuristic_parms_from_config(config)?;
+    match apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)? {
+        AutoModePreprocessingSelection::Continue(_) => {}
+        AutoModePreprocessingSelection::ScheduledExit(status) => return Ok(status),
+    }
+    write_preprocessing_params_debug_line(output, &heuristic_params)?;
     load_configured_watchlist_source(config, &mut state)?;
-    let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
+    let _sine_pruned =
+        apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
-    let formula_params = heuristic_parms_from_config(config)?;
     let formula_cnf_result =
-        clausify_formula_axioms_with_docs(output, config, &mut state, &formula_params, 1)?;
+        clausify_formula_axioms_with_docs(output, config, &mut state, &heuristic_params, 1)?;
     let preproc_result = apply_clause_set_preprocessing_with_docs(
         output,
         config,
         &mut state,
         ClausePreprocessingDocConfig {
-            no_preprocessing: config.preprocessing.no_preprocessing,
-            replace_injectivity_defs: config.search.inference.higher_order.replace_inj_defs,
-            eqdef_incrlimit: config.preprocessing.eqdef_incrlimit,
-            eqdef_maxclauses: config.preprocessing.eqdef_maxclauses,
+            no_preprocessing: heuristic_params.no_preproc,
+            replace_injectivity_defs: heuristic_params.replace_inj_defs,
+            eqdef_incrlimit: heuristic_params.eqdef_incrlimit,
+            eqdef_maxclauses: heuristic_params.eqdef_maxclauses,
             start_ident: formula_cnf_result.next_doc_ident,
         },
     )?;
-    let choice_max_depth = i32_from_i64_config(
-        "inst_choice_max_depth",
-        config
-            .search
-            .inference
-            .higher_order_preprocessing
-            .inst_choice_max_depth,
-    )?;
-    let _choice_axioms = apply_choice_axiom_recognition(&mut state, choice_max_depth)?;
-    let _induction_instances = apply_induction_preinstantiation(
-        &mut state,
-        config
-            .search
-            .inference
-            .higher_order_preprocessing
-            .preinstantiate_induction,
-    )?;
-    let bce_max_occs = i32_from_i64_config("bce_max_occs", config.preprocessing.bce.max_occs)?;
+    let _choice_axioms =
+        apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
+    let _induction_instances =
+        apply_induction_preinstantiation(&mut state, heuristic_params.preinstantiate_induction)?;
     apply_blocked_clause_elimination(
         output,
-        config.preprocessing.bce.enabled,
-        bce_max_occs,
+        heuristic_params.bce,
+        heuristic_params.bce_max_occs,
         &mut state,
     )?;
-    let pred_elim = &config.preprocessing.predicate_elimination;
     apply_predicate_elimination(
         output,
         PredicateEliminationPreprocessingConfig {
-            enabled: pred_elim.enabled,
+            enabled: heuristic_params.pred_elim,
             clause_config: ClausePredicateEliminationConfig {
-                max_occs: pred_elim.max_occs,
-                tolerance: pred_elim.tolerance,
-                force_mu_decrease: pred_elim
-                    .flags
-                    .contains(PredicateEliminationFlag::ForceMuDecrease),
-                ignore_conj_syms: pred_elim
-                    .flags
-                    .contains(PredicateEliminationFlag::IgnoreConjectureSymbols),
-                recognize_gates: pred_elim
-                    .flags
-                    .contains(PredicateEliminationFlag::RecognizeGates),
+                max_occs: i64::from(heuristic_params.pred_elim_max_occs),
+                tolerance: i64::from(heuristic_params.pred_elim_tolerance),
+                force_mu_decrease: heuristic_params.pred_elim_force_mu_decrease,
+                ignore_conj_syms: heuristic_params.pred_elim_ignore_conj_syms,
+                recognize_gates: heuristic_params.pred_elim_gates,
             },
         },
         config.picosat_library.as_deref(),
@@ -5407,15 +5397,15 @@ fn run_prune_only<W: Write + ?Sized>(
     )?;
     apply_goal_definition_transformation(
         &mut state,
-        config.preprocessing.goal_definitions.positive,
-        config.preprocessing.goal_definitions.negative,
-        config.preprocessing.goal_definitions.subterms,
+        heuristic_params.add_goal_defs_pos,
+        heuristic_params.add_goal_defs_neg,
+        heuristic_params.add_goal_defs_subterms,
     )?;
     let _next_doc_ident =
         write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
     write_comment_line_after_blank(output, "Pruning successful!")?;
     write_tstp_status(output, "Unknown")?;
-    Ok(())
+    Ok(ErrorCode::NO_ERROR.exit_status())
 }
 
 #[expect(
@@ -6576,14 +6566,6 @@ fn parse_input_files_into_formula_owners(
     Ok(parsed_problem_type)
 }
 
-fn write_preprocessing_config_debug_line<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
-) -> Result<(), EProverError> {
-    output.write_stdout_side_channel(preprocessing_config_debug_line(config).as_bytes())?;
-    Ok(())
-}
-
 fn write_preprocessing_params_debug_line<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     params: &HeuristicParmsCell,
@@ -6592,6 +6574,7 @@ fn write_preprocessing_params_debug_line<W: Write + ?Sized>(
     Ok(())
 }
 
+#[cfg(test)]
 fn preprocessing_config_debug_line(config: &EProverConfig) -> String {
     let ho_preprocessing = &config.search.inference.higher_order_preprocessing;
     format!(
@@ -18991,6 +18974,41 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_runs_auto_preprocessing_selection_before_rendering() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-auto-preprocessing");
+        std::fs::write(&path, "fof(ax, axiom, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--sine=NoSInE",
+                "--app-encode",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with("% Preprocessing class: "));
+        assert!(printed.contains("% Configuration: "));
+        assert!(printed.contains(
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = NoSInE)\n"
+        ));
+        assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_expands_top_level_distinct_via_proof_state_owner() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-top-level-distinct-owner");
@@ -22640,6 +22658,41 @@ input_clause(c2,axiom,[++q(X)]).
 % Pruning successful!\n\
 % SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_runs_auto_preprocessing_selection_before_exit() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-auto-preprocessing");
+        std::fs::write(&path, "cnf(ax, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--sine=NoSInE",
+                "--prune",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with("% Preprocessing class: "));
+        assert!(printed.contains("% Configuration: "));
+        assert!(printed.contains(
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = NoSInE)\n"
+        ));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
