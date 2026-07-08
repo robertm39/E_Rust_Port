@@ -18562,8 +18562,12 @@ input_clause(c2,axiom,[++q(X)]).
             "fof(fool_term_eq_wrapped, axiom, ($let(f:$i, f := a, f) = b)).",
             "fof(fool_ite_term_eq_unwrapped, axiom, $ite(p(a), a, b) = c).",
             "fof(fool_let_term_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).",
+            "fof(fool_ite_term_ne_unwrapped, axiom, $ite(p(a), a, b) != c).",
+            "fof(fool_let_term_ne_unwrapped, axiom, $let(f:$i, f := a, f) != b).",
             "fof(fool_term_eq_disjunct, axiom, s(a) | ($let(f:$i, f := a, f) = b)).",
+            "fof(fool_term_ne_disjunct, axiom, s(a) | ($let(f:$i, f := a, f) != b)).",
             "fof(fool_term_eq_conjunct, axiom, s(a) & (c = $let(f:$i, f := a, f))).",
+            "fof(fool_term_ne_conjunct, axiom, s(a) & (c != $let(f:$i, f := a, f))).",
             "fof(eq_formula_right, axiom, p(a) = (q(a)|r(a))).",
             "fof(ne_formula_right, axiom, p(a) != ![X]:q(X)).",
             "fof(eq_formula_right_disjunct, axiom, s(a) | (p(a) = (q(a)|r(a)))).",
@@ -20553,9 +20557,9 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_app_encode_accepts_non_boolean_fool_term_equality() {
+    fn run_app_encode_accepts_non_boolean_fool_term_equality_and_disequality() {
         let _guard = global_state_lock();
-        let path = temp_path("app-encode-non-boolean-fool-term-equality");
+        let path = temp_path("app-encode-non-boolean-fool-term-equality-disequality");
         std::fs::write(
             &path,
             "tff(a_type, type, a: $i).\n\
@@ -20566,11 +20570,18 @@ input_clause(c2,axiom,[++q(X)]).
              fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n\
              fof(ite_i_eq_unwrapped, axiom, $ite(p(a), a, b) = c).\n\
              fof(let_i_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).\n\
+             fof(ite_i_ne_unwrapped, axiom, $ite(p(a), a, b) != c).\n\
+             fof(let_i_ne_unwrapped, axiom, $let(f:$i, f := a, f) != b).\n\
              fof(ite_i_eq_right, axiom, c = $ite(p(a), a, b)).\n\
              fof(let_i_eq_right, axiom, c = ($let(f:$i, f := a, f))).\n\
+             fof(ite_i_ne_right, axiom, c != $ite(p(a), a, b)).\n\
+             fof(let_i_ne_right, axiom, c != ($let(f:$i, f := a, f))).\n\
              fof(let_i_eq_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) = b)).\n\
+             fof(let_i_ne_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) != b)).\n\
              fof(ite_i_eq_conjunct, axiom, p(a) & (c = $ite(p(a), a, b))).\n\
+             fof(ite_i_ne_conjunct, axiom, p(a) & (c != $ite(p(a), a, b))).\n\
              fof(let_i_eq_negated, axiom, ~($let(f:$i, f := a, f) = b)).\n\
+             fof(let_i_ne_negated, axiom, ~($let(f:$i, f := a, f) != b)).\n\
              fof(let_i_eq_quantified, axiom, ?[X]:($let(f:$i, f := a, f) = X)).\n",
         )
         .unwrap();
@@ -20593,14 +20604,24 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(let_i_eq, axiom, $let(f:$i,f:=a,f)=b)."));
         assert!(printed.contains("tff(ite_i_eq_unwrapped, axiom, $ite(app_"));
         assert!(printed.contains("tff(let_i_eq_unwrapped, axiom, $let(f:$i,f:=a,f)=b)."));
+        assert!(printed.contains("tff(ite_i_ne_unwrapped, axiom, $ite(app_"));
+        assert!(printed.contains("!=c)."));
+        assert!(printed.contains("tff(let_i_ne_unwrapped, axiom, $let(f:$i,f:=a,f)!=b)."));
         assert!(printed.contains("tff(ite_i_eq_right, axiom, c=$ite(app_"));
         assert!(printed.contains(",a,b))."));
         assert!(printed.contains("tff(let_i_eq_right, axiom, c=$let(f:$i,f:=a,f))."));
+        assert!(printed.contains("tff(ite_i_ne_right, axiom, c!=$ite(app_"));
+        assert!(printed.contains("tff(let_i_ne_right, axiom, c!=$let(f:$i,f:=a,f))."));
         assert!(printed.contains("tff(let_i_eq_disjunct, axiom, (app_"));
         assert!(printed.contains("|$let(f:$i,f:=a,f)=b))."));
+        assert!(printed.contains("tff(let_i_ne_disjunct, axiom, (app_"));
+        assert!(printed.contains("|$let(f:$i,f:=a,f)!=b))."));
         assert!(printed.contains("tff(ite_i_eq_conjunct, axiom, (app_"));
         assert!(printed.contains("&c=$ite(app_"));
+        assert!(printed.contains("tff(ite_i_ne_conjunct, axiom, (app_"));
+        assert!(printed.contains("&c!=$ite(app_"));
         assert!(printed.contains("tff(let_i_eq_negated, axiom, ~($let(f:$i,f:=a,f)=b))."));
+        assert!(printed.contains("tff(let_i_ne_negated, axiom, ~($let(f:$i,f:=a,f)!=b))."));
         assert!(printed.contains("tff(let_i_eq_quantified, axiom, ?[X"));
         assert!(printed.contains("]:$let(f:$i,f:=a,f)=X"));
         assert!(stderr.is_empty());
@@ -33347,9 +33368,9 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_syntax_only_parses_non_boolean_fool_term_equality() {
+    fn run_syntax_only_parses_non_boolean_fool_term_equality_and_disequality() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-fof-non-boolean-fool-term-equality");
+        let path = temp_path("syntax-fof-non-boolean-fool-term-equality-disequality");
         std::fs::write(
             &path,
             "tff(a_type, type, a: $i).\n\
@@ -33359,7 +33380,9 @@ input_clause(c2,axiom,[++q(X)]).
              fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
              fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n\
              fof(ite_i_eq_unwrapped, axiom, $ite(p(a), a, b) = c).\n\
-             fof(let_i_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).\n",
+             fof(let_i_eq_unwrapped, axiom, $let(f:$i, f := a, f) = b).\n\
+             fof(ite_i_ne_unwrapped, axiom, $ite(p(a), a, b) != c).\n\
+             fof(let_i_ne_unwrapped, axiom, $let(f:$i, f := a, f) != b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
