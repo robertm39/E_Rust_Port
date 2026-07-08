@@ -67,6 +67,14 @@ Source files reviewed: `PROVER/e_gitcommit.h`.
 - `e_gitcommit` provides the `e gitcommit` part of the `PROVER` subsystem.
 - Executable entry-point code. These files define command-line compatibility and compose the libraries into user-visible tools.
 
+### Rust Port Notes
+
+- `src/prover/version.rs` mirrors the static upstream `ECOMMITID` string so `--version` output can match the reviewed C source snapshot.
+
+### Change Later
+
+- `ECOMMITID` identifies the upstream E source commit baked into this checkout, not the Rust port's current git commit. Keep that for drop-in `--version` compatibility, but a cleaned build-info surface should expose upstream-source and Rust-port revisions as separate fields.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

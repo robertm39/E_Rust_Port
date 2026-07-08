@@ -79,6 +79,16 @@ Source files reviewed: `PROVER/e_options.h`.
 - Proof output/checking code is externally consumed; preserve identifiers, step ordering, and formatting details.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
+### Rust Port Notes
+
+- `src/prover/options.rs` mirrors the reviewed `eprover` option table as typed `OptCell` entries so command-line parsing can preserve C short names, long names, argument kinds, defaults, and visible help text while avoiding direct C enum exposure.
+
+### Change Later
+
+- The C `OptionCodes` enum and the `E_OPTIONS` table are maintained separately, so enum/table drift is possible and typoed identifiers such as `OPT_PRESAT_SIMPLIY` and `OPT_FW_SUMBSUMPTION_AGGRESSIVE` become compatibility names. Rust keeps typed option variants and C-shaped parsing, but any future generator should derive enum ids, option metadata, and help text from one source.
+- Several C help strings contain visible historical typos and stale wording, including "peoblem", "deriviation", and old resource-limit platform notes. Preserve those where byte-compatible help output matters; a cleaned CLI should separate legacy help text from modern user-facing descriptions.
+- Some options are compatibility aliases or no-ops in current executable paths because later `eprover.c` switch handling, feature gates, or parser surfaces decide whether they have effects. Keep the table exhaustive for parsing compatibility, but future non-drop-in configuration should expose only implemented behavior or report unsupported combinations structurally.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
