@@ -4574,7 +4574,7 @@ mod tests {
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termfunc::term_standard_weight;
+    use crate::terms::termfunc::{term_has_f_code, term_standard_weight};
     use crate::terms::termtypes::{
         DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
     };
@@ -7519,6 +7519,138 @@ mod tests {
             &definition_formula
         );
         assert_eq!(original_definition.derivation_entries(), &[]);
+    }
+
+    #[test]
+    fn formula_set_unfold_def_symbols_honors_unfold_only_forms_predicate_gate() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -7111);
+        let a = typed_const(&mut bank, "set_unfold_gate_a");
+        let f_x = typed_unary(&mut bank, "set_unfold_gate_f", &x);
+        let g_x = typed_unary(&mut bank, "set_unfold_gate_g", &x);
+        let f_a = typed_unary(&mut bank, "set_unfold_gate_f", &a);
+        let g_a = typed_unary(&mut bank, "set_unfold_gate_g", &a);
+        let target_before = typed_unary_predicate(&mut bank, "set_unfold_gate_p", &f_a);
+        let target_after = typed_unary_predicate(&mut bank, "set_unfold_gate_p", &g_a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition_formula = bool_binary_with_code(&mut bank, eqn_code, &f_x, &g_x);
+        let mut definition = WrappedFormula::wt_formula_alloc(definition_formula.clone());
+        definition.set_prop(CP_IS_LAMBDA_DEF);
+
+        let mut gated = FormulaSet::new();
+        gated.insert(definition.flat_copy());
+        gated.insert(WrappedFormula::wt_formula_alloc(target_before.clone()));
+        let mut gated_archive = FormulaSet::new();
+
+        let gated_result = gated
+            .unfold_def_symbols(
+                &mut gated_archive,
+                &mut bank,
+                ProblemType::HigherOrder,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(gated_result.formulas_def_symbols_unfolded, 0);
+        assert_eq!(gated_result.unfolded_definitions_archived, 0);
+        assert_eq!(gated_result.unfolded_original_definitions_archived, 0);
+        assert!(gated_archive.is_empty());
+        assert_eq!(gated.cardinality(), 2);
+        assert!(gated
+            .iter()
+            .any(|formula| formula.formula() == &target_before));
+        assert!(gated
+            .iter()
+            .any(|formula| formula.formula() == &definition_formula));
+
+        let mut ungated = FormulaSet::new();
+        ungated.insert(definition);
+        ungated.insert(WrappedFormula::wt_formula_alloc(target_before));
+        let mut ungated_archive = FormulaSet::new();
+
+        let ungated_result = ungated
+            .unfold_def_symbols(
+                &mut ungated_archive,
+                &mut bank,
+                ProblemType::HigherOrder,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(ungated_result.formulas_def_symbols_unfolded, 1);
+        assert_eq!(ungated_result.unfolded_definitions_archived, 1);
+        assert_eq!(ungated_result.unfolded_original_definitions_archived, 1);
+        assert_eq!(ungated_result.definition_symbol_applications, 1);
+        assert_eq!(ungated.cardinality(), 1);
+        assert_eq!(ungated.iter().next().unwrap().formula(), &target_after);
+        assert_eq!(ungated_archive.cardinality(), 2);
+    }
+
+    #[test]
+    fn formula_set_unfold_def_symbols_duplicate_head_uses_later_definition() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -7112);
+        let a = typed_const(&mut bank, "set_unfold_duplicate_a");
+        let p_x = typed_unary_predicate(&mut bank, "set_unfold_duplicate_p", &x);
+        let q_x = typed_unary_predicate(&mut bank, "set_unfold_duplicate_q", &x);
+        let r_x = typed_unary_predicate(&mut bank, "set_unfold_duplicate_r", &x);
+        let p_a = typed_unary_predicate(&mut bank, "set_unfold_duplicate_p", &a);
+        let r_a = typed_unary_predicate(&mut bank, "set_unfold_duplicate_r", &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equiv_code = bank.signature().equiv_code();
+        let true_term = bank.true_term().clone();
+        let lhs_formula = bool_binary_with_code(&mut bank, eqn_code, &p_x, &true_term);
+
+        let first_definition_formula =
+            bool_binary_with_code(&mut bank, equiv_code, &lhs_formula, &q_x);
+        let mut first_definition = WrappedFormula::wt_formula_alloc(first_definition_formula);
+        first_definition.set_prop(CP_IS_LAMBDA_DEF);
+        let first_definition_entry = first_definition.entry_id();
+
+        let second_definition_formula =
+            bool_binary_with_code(&mut bank, equiv_code, &lhs_formula, &r_x);
+        let mut second_definition =
+            WrappedFormula::wt_formula_alloc(second_definition_formula.clone());
+        second_definition.set_prop(CP_IS_LAMBDA_DEF);
+        let second_definition_entry = second_definition.entry_id();
+
+        let mut set = FormulaSet::new();
+        set.insert(first_definition);
+        set.insert(second_definition);
+        set.insert(WrappedFormula::wt_formula_alloc(p_a));
+        let mut archive = FormulaSet::new();
+
+        let result = set
+            .unfold_def_symbols(&mut archive, &mut bank, ProblemType::HigherOrder, true)
+            .unwrap();
+
+        assert_eq!(result.formulas_def_symbols_unfolded, 1);
+        assert_eq!(result.unfolded_definitions_archived, 1);
+        assert_eq!(result.unfolded_original_definitions_archived, 2);
+        assert_eq!(result.definition_symbol_applications, 1);
+        assert_eq!(set.cardinality(), 1);
+        let rewritten = set.iter().next().unwrap();
+        assert_eq!(rewritten.formula(), &r_a);
+        assert_eq!(archive.cardinality(), 3);
+
+        let generated_definition = archive.iter().next().unwrap();
+        let generated_rhs = generated_definition
+            .formula()
+            .argument(1)
+            .expect("generated definition rhs is initialized");
+        assert!(term_has_f_code(&generated_rhs, r_x.f_code()));
+        assert!(!term_has_f_code(&generated_rhs, q_x.f_code()));
+        assert_eq!(
+            archive
+                .get(first_definition_entry)
+                .unwrap()
+                .derivation_entries(),
+            &[]
+        );
+        assert_eq!(
+            archive.get(second_definition_entry).unwrap().formula(),
+            &second_definition_formula
+        );
     }
 
     #[test]
