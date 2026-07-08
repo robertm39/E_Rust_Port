@@ -14,6 +14,8 @@ const DEFAULT_PROVER: &str = "eprover";
 const DEFAULT_HARD_TIME_LIMIT: i64 = 3600;
 const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
 const PROCESS_POLL_TIMEOUT: Duration = Duration::from_millis(500);
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -182,6 +184,9 @@ fn execute_process_set(
         writeln_diag(stdout, "% SZS status GaveUp")?;
     }
     controls.clear(false)?;
+    stdout
+        .flush()
+        .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(ErrorCode::NO_ERROR.exit_status())
 }
 
@@ -232,12 +237,25 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 mod tests {
     use super::{
         execute_with_spawner, print_help, process_options, run, strategy_specs, RunCommand,
-        StratparConfig, C_USAGE_ERROR, DEFAULT_PROVER, PROGRAM_NAME,
+        StratparConfig, C_USAGE_ERROR, DEFAULT_PROVER, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::control::proc_ctrl::EPCtrl;
     use crate::test_support::global_state_lock;
+    use std::io::{self, Write};
     use std::process::Command;
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
 
     #[test]
     fn help_and_version_exit_before_spawning_children() {
@@ -364,6 +382,29 @@ mod tests {
         assert!((1..=8).contains(&no_proof_messages));
         assert!(!printed.contains("% SZS status Theorem"));
         assert!(printed.ends_with("% SZS status GaveUp\n"));
+    }
+
+    #[test]
+    fn execute_reports_final_outclose_flush_failure_like_c() {
+        let _guard = global_state_lock();
+        let config = StratparConfig {
+            cpu_limit: 10,
+            problem_file: "problem.p".to_owned(),
+        };
+        let mut stdout = FlushFailWriter;
+
+        let error = execute_with_spawner(&config, &mut stdout, |strategy| {
+            EPCtrl::spawn_command(
+                pid_status_command("% SZS status GaveUp"),
+                strategy.name.clone(),
+                None,
+                strategy.cpu_limit,
+            )
+        })
+        .expect_err("final flush failure is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
     }
 
     #[test]

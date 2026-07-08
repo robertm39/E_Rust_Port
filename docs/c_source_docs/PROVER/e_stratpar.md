@@ -93,11 +93,12 @@ Source files reviewed: `PROVER/e_stratpar.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_stratpar.rs` and `src/bin/e_stratpar.rs` port the standalone wrapper over the Rust process-control owner, including C's eight hard-coded `AutoSched` children, ignored optional prover argument, first proof-output replay, no-proof child messages, and final `% SZS status GaveUp` when every child exits without a recognized proof status.
+- `src/prover/e_stratpar.rs` and `src/bin/e_stratpar.rs` port the standalone wrapper over the Rust process-control owner, including C's eight hard-coded `AutoSched` children, ignored optional prover argument, first proof-output replay, no-proof child messages, final `% SZS status GaveUp` when every child exits without a recognized proof status, and the C `OutClose(GlobalOut)` final flush/error check on the execution path.
 
 ### Change Later
 
 - The optional `<path-to-eprover>` positional argument is advertised and accepted, but the C implementation leaves `prover` fixed to `"eprover"` and never reads the second positional argument. Preserve this until drop-in tests are stable, then either honor the argument or remove it from the cleaned interface.
 - The usage error reports `e_ltb_runner` instead of `e_stratpar`. Keep the typo visible for compatibility audits, but treat it as a candidate for a future user-facing cleanup.
 - The executable is intentionally hard-coded to eight `AutoSched` children and halves the global hard time limit for each child. That matches the CASC-2017 SLB hack, but later process scheduling should share configuration and orchestration with the normal auto-schedule path.
+- `process_options()` exits directly for help/version before `main()` reaches `OutClose(GlobalOut)`, while ordinary execution closes stdout through `OutClose`. Keep that split in compatibility wrappers; a cleaned API should make flush/close ownership explicit.
 <!-- END MANUAL REVIEW: c_source_docs -->
