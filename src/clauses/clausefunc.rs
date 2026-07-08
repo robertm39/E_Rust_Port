@@ -9489,6 +9489,10 @@ mod tests {
         assert_eq!(third_pair.argument(0).as_ref(), Some(&b));
         assert_eq!(third_pair.argument(1).as_ref(), Some(&c));
 
+        let empty = distinct_formula(&mut bank, &[]);
+        let expanded_empty = tformula_expand_distinct(&mut bank, &empty).unwrap();
+        assert_eq!(&expanded_empty, bank.true_term());
+
         let singleton = distinct_formula(&mut bank, &[a]);
         let expanded_singleton = tformula_expand_distinct(&mut bank, &singleton).unwrap();
         assert_eq!(&expanded_singleton, bank.true_term());
