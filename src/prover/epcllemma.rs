@@ -771,7 +771,7 @@ fn execute_epcllemma(
 fn parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
-        support_shell_pcl: true,
+        support_shell_pcl: false,
         clause_parse_options: ClauseParseOptions {
             clauses_have_local_variables: false,
             ..ClauseParseOptions::default()
@@ -1024,7 +1024,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_options_disable_local_clause_variables_like_c() {
+    fn parse_options_match_c_pcl_global_switches() {
+        assert!(!parse_options().support_shell_pcl);
         assert!(
             !parse_options()
                 .clause_parse_options
@@ -1309,18 +1310,14 @@ mod tests {
     }
 
     #[test]
-    fn high_output_level_prints_formula_and_shell_steps() {
+    fn high_output_level_prints_formula_steps() {
         let _guard = global_state_lock();
-        let input = "\
-1 : : p(a) : initial
-2 : : : 1 : final
-";
+        let input = "1 : : p(a) : initial\n";
         let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME, "--output-level=3"], input);
 
         assert_eq!(status, 0);
         assert!(output.contains("% Selecting at most 0 lemmas\n"));
         assert!(output.contains("      1 :  : p(a) : initial\n"));
-        assert!(output.contains("      2 :  :  : 1 : final\n"));
         assert!(stderr.is_empty());
     }
 
@@ -1414,6 +1411,21 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("No token"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn shell_pcl_stays_disabled_like_c_epcllemma() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"2 : : : 1 : final\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect_err("C epcllemma does not enable SupportShellPCL");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
     }
