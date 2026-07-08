@@ -123,7 +123,7 @@ Source files reviewed: `PROVER/classify_problem.c`.
 ### Change Later
 
 - `raw_mask` is initialized to `"aaaaaaaaaa"` even though `--raw-mask` validation rejects strings shorter than 11 characters. Preserve the initialized default for compatibility, then choose a single documented mask width in a cleanup mode.
-- The option table includes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case. Release builds effectively ignore it, while assertion-enabled builds can hit the default assertion. Treat this as a compatibility quirk until the real-input classification path is fully ported.
+- The option table includes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case. Release builds effectively ignore it, while assertion-enabled builds can hit the default assertion. Treat this as a compatibility quirk; a cleaned CLI should remove the dead switch or wire it to a deliberate CNF mode after parser parity is secured.
 - `process_options()` mutates many globals that are used only by the real-input branch. A Rust cleanup should keep parse-feature options separate from clausification/preprocessing options once drop-in behavior is covered.
 - `OpenGlobalOut(outname)` runs before defaulting missing input to `-` and before feature-line or real-input scanners are opened, so `-o` can create or truncate the output path before later input failures while `-o -` remains stdout. Rust preserves that side effect through an explicit output owner; transactional output belongs outside drop-in mode.
 - `do_raw_classification()` depends on global `raw_mask` even though the mask is otherwise parsed as command-line state. A cleaned API should pass all classification inputs explicitly after the drop-in executable behavior is covered.

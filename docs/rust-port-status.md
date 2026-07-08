@@ -810,13 +810,13 @@ Implemented:
 
 Pending:
 
-- Full real problem parsing/classification remains pending: exact `FormulaAndClauseSetParse` parity beyond the parser fragments already shared with `eprover`, plus exact merged-classification POSIX `fork()` inherited-state and `RLIMIT_CPU` semantics beyond Rust's portable re-exec child and elapsed-time fallback.
+- Exact `FormulaAndClauseSetParse` parity remains pending beyond the parser fragments already shared with `eprover`, plus exact merged-classification POSIX `fork()` inherited-state and `RLIMIT_CPU` semantics beyond Rust's portable re-exec child and elapsed-time fallback.
 - Byte-for-byte comparison against a built C `classify_problem` executable remains pending for exact malformed feature-line wording, platform-specific system-error suffixes, raw real-input formula edge cases, standard/specsig/header real-input edge cases, and merged classification timeout/failure behavior across real child failures.
 
 Change-later notes:
 
 - `classify_problem.c` initializes `raw_mask` to a 10-character string but rejects user-provided `--raw-mask` values shorter than 11 characters. Rust preserves the initialized default for the wrapper; a cleaned CLI should choose one documented raw-class mask width after compatibility is secured.
-- The C option table exposes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case, so release builds effectively ignore it while assertion-enabled builds can trip the default case. Rust accepts it as a no-op for now and documents the real-input path as pending.
+- The C option table exposes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case, so release builds effectively ignore it while assertion-enabled builds can trip the default case. Rust accepts it as a no-op for compatibility.
 - The C help text states `--parse-features` conflicts with `--generate-tptp-header`, but the parse-feature branch simply ignores header generation. Rust keeps parse-feature output focused on the C branch behavior.
 - The C executable opens the selected output stream before defaulting missing input to `-` and before reading any input, so output-file creation or truncation can occur even when a later feature-line or real-input parse fails while `-o -` remains stdout. Rust preserves that operation order; a transactional output mode should be a separate non-compatibility behavior.
 - C standard real-input classification runs formula conjecture preprocessing and `FormulaSetCNF2()` before the `--no-preprocessing` branch that gates clause cleanup and equality-definition unfolding, so the advertised preprocessing switch is not a single global off switch. Other proof-state preprocessing callers can place equality-definition normalization at a different boundary. Rust now applies the represented formula-owner stage for supported parser fragments while preserving the `classify_problem` caller gate; a cleaned classifier should separate those phases in the user-facing model.
