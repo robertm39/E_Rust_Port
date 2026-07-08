@@ -791,8 +791,9 @@ pub fn proof_state_init_indexing(
 /// This covers the processed-set precondition, FV-index/watchlist prefix,
 /// `Uniq` ordering of axioms, copying axioms into `unprocessed`, initial-clause
 /// watchlist checks, active-HCB evaluation, `prefer_initial_clauses` priority
-/// adjustment, SOS marking, and AC scanning. Proof-documentation/derivation
-/// ownership and state-owned global-index storage remain pending.
+/// adjustment, SOS marking, and AC scanning. Use the documentation wrappers for
+/// represented proof-output side effects; state-owned global-index storage
+/// remains pending.
 ///
 /// # Errors
 ///
@@ -828,6 +829,45 @@ pub fn proof_state_init_with_docs(
         None,
         |state, control| Ok(proof_state_init_ac_handling(state, control)),
     )
+}
+
+/// Initializes the ported proof-state portions of C `ProofStateInit` while
+/// emitting represented initial-clause `eval` proof-documentation quotes and
+/// rendering represented `OutputLevel` text from AC scanning.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_init_with_docs`], plus any
+/// output diagnostic from AC scan/status rendering.
+pub fn proof_state_init_with_docs_and_output(
+    output: &mut (impl fmt::Write + std::io::Write),
+    session: &mut ProofDocSession,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    debug_assert!(state.processed_pos_rules().is_empty());
+    debug_assert!(state.processed_pos_eqns().is_empty());
+    debug_assert!(state.processed_neg_units().is_empty());
+    debug_assert!(state.processed_non_units().is_empty());
+
+    let _ = proof_state_recognize_choice_axioms(state, control)?;
+    let watchlist_indexed = proof_state_init_indexing(state, control)?;
+    let axiom_outcome = {
+        let mut doc_context = Some((&mut *output, session));
+        let mut output_context = None;
+        proof_state_init_axioms_impl(state, control, &mut doc_context, &mut output_context)?
+    };
+    let ac_handling_active =
+        proof_state_init_ac_handling_with_output(output, output_level, state, control)?;
+    Ok(ProofStateInitOutcome {
+        watchlist_indexed,
+        initial_clauses: axiom_outcome.initial_clauses,
+        sos_marked: axiom_outcome.sos_marked,
+        watchlist_matches: axiom_outcome.watchlist_matches,
+        watchlist_removed: axiom_outcome.watchlist_removed,
+        ac_handling_active,
+    })
 }
 
 /// Initializes the ported proof-state portions of C `ProofStateInit` while

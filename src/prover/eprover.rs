@@ -111,8 +111,9 @@ use crate::heuristics::new_autoschedule::{
 };
 use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
-    proof_state_filter_unprocessed, proof_state_init_with_output,
-    proof_state_insert_watchlist_global_indices, proof_state_reset_processed_with_global_indices,
+    proof_state_filter_unprocessed, proof_state_init_with_docs_and_output,
+    proof_state_init_with_output, proof_state_insert_watchlist_global_indices,
+    proof_state_reset_processed_with_global_indices,
     proof_state_reset_processed_with_global_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_output, ProofControl,
@@ -2454,6 +2455,16 @@ impl<W: Write + ?Sized> fmt::Write for ConfiguredFmtOutput<'_, '_, W> {
         self.output
             .write_all(text.as_bytes())
             .map_err(|_| fmt::Error)
+    }
+}
+
+impl<W: Write + ?Sized> Write for ConfiguredFmtOutput<'_, '_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.output.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
     }
 }
 
@@ -5516,7 +5527,22 @@ fn run_proof_search<W: Write + ?Sized>(
             false,
         )?;
     }
-    proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
+    if config.output_level >= 6 {
+        let mut session = clause_proof_doc_session(config, next_doc_ident)?;
+        {
+            let mut fmt_output = ConfiguredFmtOutput { output };
+            proof_state_init_with_docs_and_output(
+                &mut fmt_output,
+                &mut session,
+                config.output_level,
+                &mut state,
+                &mut control,
+            )?;
+        }
+        next_doc_ident = session.id_source.current_ident().saturating_add(1);
+    } else {
+        proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
+    }
     let index_signature = state.terms().signature().clone();
     let mut watchlist_indices = proof_search_watchlist_indices(&index_signature, &control);
     let _watchlist_indexed = proof_state_insert_watchlist_global_indices(
@@ -28456,6 +28482,39 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.contains("\n     2 : :[++p(a)] : 1 : 'final'\n\n% No proof found!\n"));
         assert!(printed.contains("% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_six_threads_initial_eval_docs_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-init-eval-docs-pcl");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--output-level=6",
+                "--no-generation",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("\n     2 : :[++p(a)] : 1 : 'eval'\n"));
+        assert!(printed.contains("\n     3 : :[++p(a)] : 2 : 'new_given'\n"));
+        assert!(printed.contains(
+            "\n     4 : :[++p(a)] : 3 : 'exists'\n\n% Clause set closed under restricted calculus!\n"
+        ));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
