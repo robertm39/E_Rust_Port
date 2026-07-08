@@ -225,7 +225,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated with Change Later notes on 2026-07-08.
 
 Source files reviewed: `CLAUSES/ccl_inferencedoc.h`, `CLAUSES/ccl_inferencedoc.c`.
 
@@ -263,6 +263,15 @@ Source files reviewed: `CLAUSES/ccl_inferencedoc.h`, `CLAUSES/ccl_inferencedoc.c
 - A formula-documentation session helper now covers the represented `DocFormulaCreation` branches for initial formulas, formula definition introduction, and equivalence splitting, plus represented `DocFormulaModification` branches for simplification, conjecture negation, NNF conversion, quantifier shifting, variable renaming, Skolemization, distribution, and answer-literal annotation. It uses an explicit pre-rendered formula view until `WFormula` exists, and preserves C's creation-side lack of `CPInputFormula` clearing, modification-side clearing before the output-level gate, id reassignment from the session counter, unsupported-format fallback after id assignment, and default modification branch that assigns an id but prints nothing.
 - Additional session helpers now cover the represented `DocClauseFromForm`, `DocClauseQuote`, `DocClauseRewrite`, `DocClauseEqUnfold`, `DocIntroSplitDef`, `DocIntroSplitDefRest`, `DocClauseApplyDefs`, and `DocFormulaIntroDefs` surfaces, including their C-specific comment handling, target-level gate, id-assignment timing, rewrite-chain/demodulator-parent rendering, and unsupported-format fallback behavior.
 - Executable initial-clause and watchlist initial-clause documentation now use the shared creation helper, and supported final proof-object list output uses the shared C-shaped root-backward display order and direct-parent stack-pop order so represented clause/formula parents print before children while display ids are remapped. Tests cover the creation helper's level gate, id assignment, PCL/TSTP surfaces, unsupported-format fallback, exact output-format discriminants, output-file stdout marker leaks, formula creation/modification and exported helper session behavior, executable initial-documentation output, and parent-before-child list proof-object rendering; generated/modification proof-control call sites remain separate work.
+
+### Change Later
+
+- `print_initial` writes `XX` debug markers to process stdout even when proof documentation is being written to another stream. Rust keeps this as explicit side-channel metadata for compatibility; remove or route it through the proof-documentation writer only after byte-for-byte proof traces show the marker leak is not required.
+- C stores proof-documentation mode in globals such as `DocOutputFormat`, `PCLFullTerms`, `PCLStepCompact`, `PCLShellLevel`, and `ClauseIdentCounter`. Rust currently uses session-owned state for the ported surfaces; once every proof-control call site is session-backed, decide whether any executable path still needs mutable process-global documentation state.
+- Many helpers hand-format PCL/TSTP inference terms with branch-specific spacing, comment packing, watchlist annotations, and id-assignment timing. Preserve these byte-compatible strings in compatibility output, but a later proof model should store structured inference data first and then render C-compatible or cleaned output as separate views.
+- Unsupported documentation formats still print `% Output format not implemented.` after some helpers have already assigned ids or cleared properties. Keep that timing while matching C; a cleaned API should reject unsupported formats before mutating documentation identifiers or clause/formula metadata.
+- `DocClauseEqUnfold` ignores the actual demodulator-position entries and repeats the same demodulator parent id once per stack element. Rust mirrors that visible shape; a later proof-object model should either represent unfolded positions precisely or deliberately collapse them with an explicit compatibility note.
+- Formula ids can come from input names when C's global formula-name policy is enabled, but the current Rust session view mostly works with pre-rendered formula ids. Revisit source-name preservation when stable `WFormula` ownership and the full formula proof-documentation pipeline are represented.
 
 ### Porting Focus
 
