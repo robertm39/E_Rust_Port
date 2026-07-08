@@ -9,6 +9,7 @@ use crate::inout::commandline::{
 };
 use crate::inout::fileops::file_find_base_name;
 use crate::inout::initio::{exit_io, init_io};
+use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::learn::annoterms::{anno_set_parse, anno_set_print_string};
 use crate::learn::examplerep::{
@@ -135,6 +136,7 @@ where
     init_io(PROGRAM_NAME);
     set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
+    let _ = set_output_level(0);
     let result = run_inner(argv, stdin, stdout, stderr);
     exit_io();
     stderr
@@ -439,6 +441,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
+    use crate::inout::output::{output_level, set_output_level};
     use crate::learn::kbdesc::{KbDesc, KB_VERSION};
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
@@ -489,6 +492,18 @@ mod tests {
             String::from_utf8(stdout).expect("stdout is utf8"),
             String::from_utf8(stderr).expect("stderr is utf8"),
         )
+    }
+
+    #[test]
+    fn run_resets_global_output_level_to_zero_like_c() {
+        let _guard = global_state_lock();
+        let _ = set_output_level(7);
+
+        let (status, _help, stderr) = run_with_args(&[PROGRAM_NAME, "--help"], "");
+
+        assert_eq!(status, 0);
+        assert_eq!(output_level(), 0);
+        assert!(stderr.is_empty());
     }
 
     #[test]
