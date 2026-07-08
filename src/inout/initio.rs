@@ -1,3 +1,4 @@
+use crate::basics::error::init_error;
 use crate::inout::output::init_output;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -32,6 +33,7 @@ fn tptp_env_dir() -> Option<String> {
 
 pub fn init_io(program_name: &str) {
     init_output();
+    init_error(program_name);
     let mut state = lock_io_state();
     state.program_name = Some(program_name.to_owned());
     if let Some(tptp_dir) = tptp_env_dir() {
@@ -61,7 +63,9 @@ fn reset_io_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::{exit_io, init_io, program_name, reset_io_for_tests, tptp_dir};
+    use crate::basics::error::{init_error, program_name as error_program_name};
     use crate::inout::output::{global_out_fd, init_output, open_global_out, STDOUT_FILENO_COMPAT};
+    use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
@@ -106,8 +110,10 @@ mod tests {
 
     #[test]
     fn init_io_sets_program_name_tptp_dir_and_output_target() {
+        let _global_guard = global_state_lock();
         let _guard = global_test_lock();
         reset_io_for_tests();
+        init_error("Unknown program");
         let _env = set_tptp(Some("Problems"));
         let output_path = target_path("out");
         remove_if_present(&output_path);
@@ -116,40 +122,52 @@ mod tests {
         init_io("eprover");
 
         assert_eq!(program_name().as_deref(), Some("eprover"));
+        assert_eq!(error_program_name(), "eprover");
         assert_eq!(tptp_dir().as_deref(), Some("Problems/"));
         assert_eq!(global_out_fd(), STDOUT_FILENO_COMPAT);
+        init_error("Unknown program");
         remove_if_present(&output_path);
     }
 
     #[test]
     fn init_io_preserves_c_tptp_reinitialization_shape() {
+        let _global_guard = global_state_lock();
         let _guard = global_test_lock();
         reset_io_for_tests();
+        init_error("Unknown program");
         let env = set_tptp(Some("First/"));
         init_io("first");
         assert_eq!(tptp_dir().as_deref(), Some("First/"));
+        assert_eq!(error_program_name(), "first");
         drop(env);
 
         let _env = set_tptp(None);
         init_io("second");
 
         assert_eq!(program_name().as_deref(), Some("second"));
+        assert_eq!(error_program_name(), "second");
         assert_eq!(tptp_dir().as_deref(), Some("First/"));
 
         exit_io();
         assert_eq!(tptp_dir(), None);
         assert_eq!(program_name().as_deref(), Some("second"));
+        assert_eq!(error_program_name(), "second");
+        init_error("Unknown program");
     }
 
     #[test]
     fn empty_tptp_is_stored_without_appending_a_slash() {
+        let _global_guard = global_state_lock();
         let _guard = global_test_lock();
         reset_io_for_tests();
+        init_error("Unknown program");
         let _env = set_tptp(Some(""));
 
         init_io("empty");
 
         assert_eq!(tptp_dir().as_deref(), Some(""));
+        assert_eq!(error_program_name(), "empty");
+        init_error("Unknown program");
         init_output();
     }
 }
