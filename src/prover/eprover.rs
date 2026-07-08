@@ -17521,6 +17521,9 @@ input_clause(c2,axiom,[++q(X)]).
         let higher_order = proof_search_global_indices(bank.signature(), &control);
 
         assert_eq!(higher_order.problem_type(), ProblemType::HigherOrder);
+        assert!(higher_order.has_ext_into_index());
+        assert!(higher_order.has_ext_from_index());
+        assert_eq!(higher_order.ext_rules_max_depth(), hcb_params::NO_EXT_SUP);
     }
 
     #[test]

@@ -405,6 +405,8 @@ impl<'sig> GlobalIndices<'sig> {
         bank: &TermBank,
         lambda_demod: bool,
     ) -> i64 {
+        // C GlobalIndicesInsertClauseSet returns before inserting into any
+        // configured index unless the backward rewrite index is present.
         if self.bw_rw_index.is_none() {
             return 0;
         }
@@ -828,6 +830,39 @@ mod tests {
         assert!(set
             .iter()
             .all(|clause| !clause.query_prop(CP_IS_GLOBAL_INDEXED)));
+    }
+
+    #[test]
+    fn insert_clause_set_skips_extension_index_without_backward_index_like_c() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let arrow_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let arrow = typed_const_of_type(&mut bank, "gidx_set_ext_arrow", arrow_type);
+        let left = typed_unary_with_return(&mut bank, "gidx_set_ext_left", &arrow, individual);
+        let right = typed_const(&mut bank, "gidx_set_ext_right");
+        let literal = Eqn::alloc(left.clone(), right, &mut bank, true).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(21);
+        let mut set = ClauseSet::new();
+        set.insert(clause);
+        let mut indices = GlobalIndices::new_for_problem(
+            bank.signature(),
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            3,
+            ProblemType::HigherOrder,
+        );
+        assert!(indices.has_ext_into_index());
+        assert!(indices.has_ext_from_index());
+
+        assert_eq!(indices.insert_clause_set(&mut set, &bank, false), 0);
+
+        assert!(set
+            .iter()
+            .all(|clause| !clause.query_prop(CP_IS_GLOBAL_INDEXED)));
+        assert!(indices.find_ext_into_symbol(left.f_code()).is_none());
+        assert!(indices.find_ext_from_symbol(left.f_code()).is_none());
     }
 
     #[test]
