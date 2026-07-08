@@ -153,8 +153,7 @@ impl PicoSatApi {
 }
 
 pub struct PicoSat {
-    solver: NonNull<PicoSatOpaque>,
-    api: PicoSatApi,
+    solver: PicoSatSolver,
     _library: DynamicLibrary,
 }
 
@@ -168,15 +167,66 @@ impl PicoSat {
     pub fn open(path: &Path) -> Result<Self, PicoSatError> {
         let library = DynamicLibrary::open(path)?;
         let api = PicoSatApi::load(&library)?;
-        let solver = init_trace_enabled_solver(api)?;
+        let solver = PicoSatSolver::new(api)?;
         Ok(Self {
             solver,
-            api,
             _library: library,
         })
     }
 
     pub fn reset(&mut self) -> Result<(), PicoSatError> {
+        self.solver.reset()
+    }
+
+    #[must_use]
+    pub fn version(&self) -> Option<String> {
+        self.solver.version()
+    }
+
+    pub fn add_clause(&mut self, clause: &[i32]) -> Result<(), PicoSatError> {
+        self.solver.add_clause(clause)
+    }
+
+    pub fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), PicoSatError> {
+        self.solver.add_clauses(clauses)
+    }
+
+    #[must_use]
+    pub fn added_original_clauses(&self) -> c_int {
+        self.solver.added_original_clauses()
+    }
+
+    pub fn validate_added_original_clause_count(
+        &self,
+        expected: usize,
+    ) -> Result<(), PicoSatError> {
+        self.solver.validate_added_original_clause_count(expected)
+    }
+
+    #[must_use]
+    pub fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult {
+        self.solver.solve(decision_limit)
+    }
+
+    pub fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, PicoSatError> {
+        self.solver.core_indices(exported_len)
+    }
+}
+
+struct PicoSatSolver {
+    solver: NonNull<PicoSatOpaque>,
+    api: PicoSatApi,
+}
+
+impl PicoSatSolver {
+    fn new(api: PicoSatApi) -> Result<Self, PicoSatError> {
+        Ok(Self {
+            solver: init_trace_enabled_solver(api)?,
+            api,
+        })
+    }
+
+    fn reset(&mut self) -> Result<(), PicoSatError> {
         let replacement = init_trace_enabled_solver(self.api)?;
         let previous = std::mem::replace(&mut self.solver, replacement);
         // SAFETY: previous is the unique owned pointer returned by picosat_init
@@ -185,8 +235,7 @@ impl PicoSat {
         Ok(())
     }
 
-    #[must_use]
-    pub fn version(&self) -> Option<String> {
+    fn version(&self) -> Option<String> {
         // SAFETY: picosat_version returns a process-static C string pointer or
         // NULL. The returned pointer is copied into an owned Rust String before
         // this method returns.
@@ -203,7 +252,7 @@ impl PicoSat {
         }
     }
 
-    pub fn add_clause(&mut self, clause: &[i32]) -> Result<(), PicoSatError> {
+    fn add_clause(&mut self, clause: &[i32]) -> Result<(), PicoSatError> {
         let mut literals = sentinel_terminated_clause(clause)?;
         // SAFETY: literals is a mutable, NUL-terminated c_int buffer that lives
         // for the whole picosat_add_lits call. solver is owned by self.
@@ -211,24 +260,20 @@ impl PicoSat {
         Ok(())
     }
 
-    pub fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), PicoSatError> {
+    fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), PicoSatError> {
         for clause in clauses {
             self.add_clause(clause)?;
         }
         self.validate_added_original_clause_count(clauses.len())
     }
 
-    #[must_use]
-    pub fn added_original_clauses(&self) -> c_int {
+    fn added_original_clauses(&self) -> c_int {
         // SAFETY: solver is owned by self and remains valid until Drop calls
         // picosat_reset.
         unsafe { (self.api.added_original_clauses)(self.solver.as_ptr()) }
     }
 
-    pub fn validate_added_original_clause_count(
-        &self,
-        expected: usize,
-    ) -> Result<(), PicoSatError> {
+    fn validate_added_original_clause_count(&self, expected: usize) -> Result<(), PicoSatError> {
         let expected = c_int::try_from(expected)
             .map_err(|_| PicoSatError::ClauseCountOutOfRange { count: expected })?;
         let actual = self.added_original_clauses();
@@ -239,8 +284,7 @@ impl PicoSat {
         }
     }
 
-    #[must_use]
-    pub fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult {
+    fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult {
         // SAFETY: solver is owned by self and all clauses were added through
         // this wrapper's sentinel-checked add_clause path.
         PicoSatSolveResult::from_raw(unsafe {
@@ -248,7 +292,7 @@ impl PicoSat {
         })
     }
 
-    pub fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, PicoSatError> {
+    fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, PicoSatError> {
         let mut core = Vec::new();
         for index in 0..exported_len {
             let c_index =
@@ -277,11 +321,10 @@ fn init_trace_enabled_solver(api: PicoSatApi) -> Result<NonNull<PicoSatOpaque>, 
     Ok(solver)
 }
 
-impl Drop for PicoSat {
+impl Drop for PicoSatSolver {
     fn drop(&mut self) {
         // SAFETY: solver is the unique owned pointer returned by picosat_init
-        // and is reset exactly once here, before the DynamicLibrary field is
-        // dropped.
+        // and is reset exactly once here.
         unsafe { (self.api.reset)(self.solver.as_ptr()) };
     }
 }
@@ -502,11 +545,14 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::{
-        sentinel_terminated_clause, PicoSat, PicoSatError, PicoSatSolveResult, PICOSAT_SATISFIABLE,
+        sentinel_terminated_clause, PicoSat, PicoSatApi, PicoSatEnableTraceGeneration,
+        PicoSatError, PicoSatOpaque, PicoSatSolveResult, PicoSatSolver, PICOSAT_SATISFIABLE,
         PICOSAT_UNSATISFIABLE,
     };
     use std::env;
+    use std::ffi::c_int;
     use std::process;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn solve_result_mapping_matches_picosat_header() {
@@ -543,5 +589,129 @@ mod tests {
             PicoSat::open(&path),
             Err(PicoSatError::LoadLibrary { .. })
         ));
+    }
+
+    #[derive(Default)]
+    struct FakePicoSat {
+        clauses: Vec<Vec<c_int>>,
+        trace_enabled: bool,
+        last_decision_limit: c_int,
+    }
+
+    static FAKE_INITS: AtomicUsize = AtomicUsize::new(0);
+    static FAKE_RESETS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn fake_picosat_init() -> *mut PicoSatOpaque {
+        FAKE_INITS.fetch_add(1, Ordering::SeqCst);
+        Box::into_raw(Box::<FakePicoSat>::default()).cast::<PicoSatOpaque>()
+    }
+
+    unsafe extern "C" fn fake_picosat_reset(solver: *mut PicoSatOpaque) {
+        FAKE_RESETS.fetch_add(1, Ordering::SeqCst);
+        if !solver.is_null() {
+            // SAFETY: fake_picosat_init allocated this pointer as FakePicoSat,
+            // and PicoSatSolver owns each initialized pointer until reset/drop.
+            drop(unsafe { Box::from_raw(solver.cast::<FakePicoSat>()) });
+        }
+    }
+
+    unsafe extern "C" fn fake_picosat_enable_trace_generation(solver: *mut PicoSatOpaque) -> c_int {
+        // SAFETY: tests pass only live FakePicoSat pointers through the fake
+        // PicoSAT API table.
+        let solver = unsafe { &mut *solver.cast::<FakePicoSat>() };
+        solver.trace_enabled = true;
+        0
+    }
+
+    unsafe extern "C" fn fake_picosat_add_lits(
+        solver: *mut PicoSatOpaque,
+        literals: *mut c_int,
+    ) -> c_int {
+        // SAFETY: tests pass only live FakePicoSat pointers through the fake
+        // PicoSAT API table.
+        let solver = unsafe { &mut *solver.cast::<FakePicoSat>() };
+        let mut clause = Vec::new();
+        let mut offset = 0;
+        loop {
+            // SAFETY: PicoSatSolver gives the fake ABI a sentinel-terminated
+            // buffer that lives for the duration of this call.
+            let literal = unsafe { *literals.add(offset) };
+            if literal == 0 {
+                break;
+            }
+            clause.push(literal);
+            offset += 1;
+        }
+        solver.clauses.push(clause);
+        0
+    }
+
+    unsafe extern "C" fn fake_picosat_added_original_clauses(solver: *mut PicoSatOpaque) -> c_int {
+        // SAFETY: tests pass only live FakePicoSat pointers through the fake
+        // PicoSAT API table.
+        let solver = unsafe { &*solver.cast::<FakePicoSat>() };
+        c_int::try_from(solver.clauses.len()).unwrap()
+    }
+
+    unsafe extern "C" fn fake_picosat_sat(
+        solver: *mut PicoSatOpaque,
+        decision_limit: c_int,
+    ) -> c_int {
+        // SAFETY: tests pass only live FakePicoSat pointers through the fake
+        // PicoSAT API table.
+        let solver = unsafe { &mut *solver.cast::<FakePicoSat>() };
+        solver.last_decision_limit = decision_limit;
+        PICOSAT_UNSATISFIABLE
+    }
+
+    unsafe extern "C" fn fake_picosat_coreclause(_solver: *mut PicoSatOpaque, id: c_int) -> c_int {
+        i32::from(id % 2 == 0)
+    }
+
+    unsafe extern "C" fn fake_picosat_version() -> *const std::ffi::c_char {
+        c"fake-picosat".as_ptr()
+    }
+
+    fn fake_api() -> PicoSatApi {
+        PicoSatApi {
+            init: fake_picosat_init,
+            reset: fake_picosat_reset,
+            enable_trace_generation: fake_picosat_enable_trace_generation
+                as PicoSatEnableTraceGeneration,
+            add_lits: fake_picosat_add_lits,
+            added_original_clauses: fake_picosat_added_original_clauses,
+            sat: fake_picosat_sat,
+            coreclause: fake_picosat_coreclause,
+            version: fake_picosat_version,
+        }
+    }
+
+    #[test]
+    fn solver_wrapper_exercises_picosat_abi_lifecycle_with_fake_api() {
+        let start_inits = FAKE_INITS.load(Ordering::SeqCst);
+        let start_resets = FAKE_RESETS.load(Ordering::SeqCst);
+
+        {
+            let mut solver = PicoSatSolver::new(fake_api()).unwrap();
+            assert_eq!(FAKE_INITS.load(Ordering::SeqCst), start_inits + 1);
+            assert_eq!(solver.version(), Some("fake-picosat".to_owned()));
+            assert_eq!(solver.added_original_clauses(), 0);
+
+            solver
+                .add_clauses(&[vec![1, -2], vec![3], vec![-4, 5]])
+                .unwrap();
+
+            assert_eq!(solver.added_original_clauses(), 3);
+            assert_eq!(solver.solve(10_000), PicoSatSolveResult::Unsatisfiable);
+            assert_eq!(solver.core_indices(3).unwrap(), vec![0, 2]);
+
+            let before_reset = FAKE_RESETS.load(Ordering::SeqCst);
+            solver.reset().unwrap();
+            assert_eq!(FAKE_INITS.load(Ordering::SeqCst), start_inits + 2);
+            assert_eq!(FAKE_RESETS.load(Ordering::SeqCst), before_reset + 1);
+            assert_eq!(solver.added_original_clauses(), 0);
+        }
+
+        assert_eq!(FAKE_RESETS.load(Ordering::SeqCst), start_resets + 2);
     }
 }

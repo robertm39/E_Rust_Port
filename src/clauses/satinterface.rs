@@ -261,8 +261,10 @@ impl SatClauseSet {
     /// This mirrors `SatClauseSetCheckAndGetCore`: it refreshes pure-literal
     /// marks, exports only non-pure clauses, uses C's fixed decision limit of
     /// 10000, and returns `None` for satisfiable or gave-up solver results.
-    /// Until `PicoSAT` ownership is wired in, the Rust internal solver supplies a
-    /// deletion-minimized core in exported-clause order.
+    /// The default internal solver supplies a deletion-minimized core in
+    /// exported-clause order; callers with a runtime-loaded `PicoSAT` backend
+    /// use `check_and_get_core_with_picosat` to read solver-reported core
+    /// indices.
     #[must_use]
     pub fn check_and_get_core(&mut self) -> Option<Vec<Clause>> {
         let solver_clauses = self.export_non_pure_to_solver_clauses();
