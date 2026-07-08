@@ -27954,6 +27954,44 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_print_formulas_preserves_typed_term_position_fool_arguments() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-term-position-fool-args");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(fool_arg_ite, axiom, p($ite(q,a,b)) | r(a)).\n\
+             fof(fool_arg_let, axiom, p($let(f:$i, f := a, f)) | r(b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &[
+                "fof(fool_arg_ite, axiom, (p($ite(q,a,b))|r(a))).",
+                "fof(fool_arg_let, axiom, (p($let(f : $i, f := a, f))|r(b))).",
+            ],
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_lifts_existential_let_formula_atom() {
         let _guard = global_state_lock();
         let path = temp_path("proof-cnf-existential-let");
@@ -27979,6 +28017,45 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("epred1_1(esk1_0) <- .\n"));
         assert!(printed.contains("q(X1) <- epred1_1(X1).\n"));
         assert!(printed.contains("epred1_1(X1) <- q(X1).\n"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_unrolls_typed_term_position_fool_arguments() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-term-position-fool-args");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(fool_arg_ite, axiom, p($ite(q,a,b)) | r(a)).\n\
+             fof(fool_arg_let, axiom, p($let(f:$i, f := a, f)) | r(b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("q; p(b); r(a) <- .\n"));
+        assert!(printed.contains("p(a); r(a) <- q.\n"));
+        assert!(printed.contains("esk1_0=a <- .\n"));
+        assert!(printed.contains("p(esk1_0); r(b) <- .\n"));
+        assert!(!printed.contains("$ite"));
         assert!(!printed.contains("$let"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
