@@ -83,8 +83,8 @@ impl VarHash {
     ///
     /// # Panics
     ///
-    /// Panics if dereferencing reaches an unsupported applied-variable binding,
-    /// or if a counted variable has a non-negative f-code.
+    /// Panics if a counted variable has a non-negative f-code, matching the C
+    /// hash function assertion.
     pub fn add_var_distrib(&mut self, term: &Term, deref: DerefType, add: i64) {
         let mut stack = vec![(term.clone(), deref)];
         while let Some((candidate, mut current_deref)) = stack.pop() {
@@ -133,7 +133,8 @@ pub fn var_hash_list_find<'a>(list: &'a [VarHashEntry], var: &Term) -> Option<&'
 ///
 /// # Panics
 ///
-/// Panics if dereferencing reaches an unsupported applied-variable binding.
+/// Panics if Rust integer arithmetic overflows while accumulating the
+/// distribution in debug builds.
 pub fn add_var_distrib_to_map(
     distrib: &mut BTreeMap<i64, i64>,
     term: &Term,

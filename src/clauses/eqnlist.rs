@@ -530,8 +530,7 @@ impl EqnList {
     ///
     /// # Panics
     ///
-    /// Panics if dereferencing reaches an unsupported applied-variable binding
-    /// or if any printed term violates the C printing preconditions.
+    /// Panics if any printed term violates the C printing preconditions.
     pub fn write_deref_print(
         &self,
         output: &mut impl fmt::Write,

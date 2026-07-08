@@ -100,8 +100,8 @@ pub fn kbo_greater(
 ///
 /// # Panics
 ///
-/// Panics if dereferencing reaches an unsupported applied-variable binding, or
-/// if a counted variable has a non-negative f-code.
+/// Panics if a counted variable has a non-negative f-code, matching the C hash
+/// function assertion.
 #[must_use]
 pub fn kbo_var_compare(
     s: &Term,

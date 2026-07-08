@@ -2450,9 +2450,8 @@ pub fn eqn_write(
 ///
 /// # Panics
 ///
-/// Panics if dereferencing reaches an unsupported applied-variable binding or
-/// if a printed term has an uninitialized argument, matching the current term
-/// dereference and printing preconditions.
+/// Panics if a printed term has an uninitialized argument, matching the current
+/// term printing preconditions.
 pub fn eqn_write_deref(
     output: &mut impl fmt::Write,
     bank: &TermBank,
