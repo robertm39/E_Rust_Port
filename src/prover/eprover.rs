@@ -5111,6 +5111,8 @@ fn run_app_encode<W: Write + ?Sized>(
     state.process_distinct()?;
 
     write_preprocessing_config_debug_line(output, config)?;
+    let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
+    let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
     write_app_encoded_formula_set(
         output,
         &mut state,
@@ -18909,6 +18911,81 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(rule, axiom, !["));
         assert!(printed.contains("]:("));
         assert!(printed.contains("|app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_applies_threshold_sine_before_rendering() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-threshold-sine");
+        std::fs::write(
+            &path,
+            "fof(first, axiom, p(a)).\n\
+             fof(second, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--sine=Threshold(1)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Threshold(1))\n"
+        ));
+        assert!(printed.contains("% SinE strategy is Threshold(1)\n"));
+        assert!(!printed.contains("first"));
+        assert!(!printed.contains("second"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_applies_formula_relevance_pruning_before_rendering() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-relevance-pruning");
+        std::fs::write(
+            &path,
+            "fof(goal, conjecture, g = g).\n\
+             fof(link, axiom, g = h).\n\
+             fof(unrelated, axiom, u = u).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--rel-pruning-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(goal, conjecture, "));
+        assert!(printed.contains("tff(link, axiom, "));
+        assert!(!printed.contains("unrelated"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
