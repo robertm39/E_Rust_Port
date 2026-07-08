@@ -38,8 +38,9 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, PatEqnDirection, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::eqnresolution::{
-    clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
-    compute_all_eqn_resolvents_with_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+    clause_er_normalize_var_with_fresh_vars, clause_er_normalize_var_with_fresh_vars_and_docs,
+    compute_all_eqn_resolvents_with_fresh_vars,
+    compute_all_eqn_resolvents_with_fresh_vars_and_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
 use crate::clauses::ext_index::{
     collect_ext_sup_from_pos, collect_ext_sup_into_pos, term_has_ext_eligible_subterm,
@@ -3197,10 +3198,18 @@ fn proof_state_clause_er_normalize_var_maybe_docs<W: fmt::Write>(
     strong: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(Clause, i64), Diagnostic> {
+    let fresh_vars = state.fresh_vars().clone();
     if let Some((output, session)) = doc_context.as_mut() {
-        clause_er_normalize_var_with_docs(&mut **output, session, state.terms_mut(), clause, strong)
+        clause_er_normalize_var_with_fresh_vars_and_docs(
+            &mut **output,
+            session,
+            state.terms_mut(),
+            clause,
+            strong,
+            &fresh_vars,
+        )
     } else {
-        clause_er_normalize_var(state.terms_mut(), clause, strong)
+        clause_er_normalize_var_with_fresh_vars(state.terms_mut(), clause, strong, &fresh_vars)
     }
 }
 
@@ -6212,20 +6221,22 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
         }
 
         let count = if let Some((output, session)) = doc_context.as_mut() {
-            compute_all_eqn_resolvents_with_docs(
+            compute_all_eqn_resolvents_with_fresh_vars_and_docs(
                 &mut **output,
                 session,
                 terms,
                 clause,
                 generation.tmp_store,
                 EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+                generation.fresh_vars,
             )?
         } else {
-            compute_all_eqn_resolvents(
+            compute_all_eqn_resolvents_with_fresh_vars(
                 terms,
                 clause,
                 generation.tmp_store,
                 EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+                generation.fresh_vars,
             )?
         };
         outcome.equality_resolvents = i64_to_u64_saturating(count);

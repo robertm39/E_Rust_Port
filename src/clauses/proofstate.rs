@@ -171,6 +171,7 @@ pub struct ProofStateProcessedSets<'a> {
 
 #[derive(Debug)]
 pub struct ProofStateGenerationContext<'a> {
+    pub fresh_vars: &'a VarBank,
     pub processed_pos_rules: &'a ClauseSet,
     pub processed_pos_eqns: &'a ClauseSet,
     pub processed_neg_units: &'a ClauseSet,
@@ -720,11 +721,13 @@ impl ProofState {
             tmp_store,
             archive,
             choice_opcodes,
+            fresh_vars,
             ..
         } = self;
         (
             terms,
             ProofStateGenerationContext {
+                fresh_vars,
                 processed_pos_rules,
                 processed_pos_eqns,
                 processed_neg_units,

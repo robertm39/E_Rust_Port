@@ -37,7 +37,9 @@ pub fn compute_eq_res(
     clause: &Clause,
     literal_index: usize,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let (resolvent, _) = compute_eq_res_with_ho_flag(bank, clause, literal_index)?;
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    let (resolvent, _) =
+        compute_eq_res_with_ho_flag(bank, clause, literal_index, &freshvars, false)?;
     Ok(resolvent)
 }
 
@@ -45,7 +47,12 @@ fn compute_eq_res_with_ho_flag(
     bank: &mut TermBank,
     clause: &Clause,
     literal_index: usize,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
 ) -> Result<(Option<Clause>, bool), Diagnostic> {
+    if reset_freshvars {
+        freshvars.reset_v_counts();
+    }
     let literal = eq_res_literal(clause, literal_index);
     let mut subst = Substitution::new();
     if !subst_mgu_complete(literal.left(), literal.right(), &mut subst) {
@@ -53,8 +60,7 @@ fn compute_eq_res_with_ho_flag(
     }
 
     let subst_is_ho = subst.has_ho_binding();
-    let freshvars = fresh_var_bank_for_clause(bank, clause);
-    let resolvent = match build_resolvent(bank, clause, literal_index, &freshvars, &mut subst) {
+    let resolvent = match build_resolvent(bank, clause, literal_index, freshvars, &mut subst) {
         Ok(resolvent) => resolvent,
         Err(err) => {
             subst.backtrack();
@@ -65,15 +71,39 @@ fn compute_eq_res_with_ho_flag(
     Ok((Some(resolvent), subst_is_ho))
 }
 
+/// Builds the single-clause C `ComputeEqRes` result with a caller-owned
+/// `freshvars` bank.
+///
+/// This mirrors C's proof-state-owned `freshvars` path by resetting variable
+/// counts before the inference.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term-bank insertion fails while copying the
+/// resolvent.
+pub fn compute_eq_res_with_fresh_vars(
+    bank: &mut TermBank,
+    clause: &Clause,
+    literal_index: usize,
+    freshvars: &VarBank,
+) -> Result<Option<Clause>, Diagnostic> {
+    let (resolvent, _) = compute_eq_res_with_ho_flag(bank, clause, literal_index, freshvars, true)?;
+    Ok(resolvent)
+}
+
 fn compute_eq_res_csu_resolvents(
     bank: &mut TermBank,
     clause: &Clause,
     literal_index: usize,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
 ) -> Result<(Vec<Clause>, bool), Diagnostic> {
+    if reset_freshvars {
+        freshvars.reset_v_counts();
+    }
     let literal = eq_res_literal(clause, literal_index);
     let mut subst = Substitution::new();
     let mut iter = CsuIterator::new(literal.left(), literal.right(), &subst);
-    let freshvars = fresh_var_bank_for_clause(bank, clause);
     let mut resolvents = Vec::new();
     let mut subst_is_ho = false;
 
@@ -90,7 +120,7 @@ fn compute_eq_res_csu_resolvents(
         }
 
         subst_is_ho |= subst.has_ho_binding();
-        let resolvent = match build_resolvent(bank, clause, literal_index, &freshvars, &mut subst) {
+        let resolvent = match build_resolvent(bank, clause, literal_index, freshvars, &mut subst) {
             Ok(resolvent) => resolvent,
             Err(err) => {
                 iter.destroy(&mut subst);
@@ -201,7 +231,39 @@ pub fn compute_all_eqn_resolvents(
     store: &mut ClauseSet,
     maximal_only: bool,
 ) -> Result<i64, Diagnostic> {
-    compute_all_eqn_resolvents_impl::<String>(bank, clause, store, maximal_only, None)
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_all_eqn_resolvents_impl::<String>(
+        bank,
+        clause,
+        store,
+        maximal_only,
+        &freshvars,
+        false,
+        None,
+    )
+}
+
+/// Computes all equality resolvents using a caller-owned C `freshvars` bank.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_eq_res_with_fresh_vars`].
+pub fn compute_all_eqn_resolvents_with_fresh_vars(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    maximal_only: bool,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_eqn_resolvents_impl::<String>(
+        bank,
+        clause,
+        store,
+        maximal_only,
+        freshvars,
+        true,
+        None,
+    )
 }
 
 /// Computes all equality resolvents while emitting represented C
@@ -219,7 +281,45 @@ pub fn compute_all_eqn_resolvents_with_docs(
     store: &mut ClauseSet,
     maximal_only: bool,
 ) -> Result<i64, Diagnostic> {
-    compute_all_eqn_resolvents_impl(bank, clause, store, maximal_only, Some((output, session)))
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_all_eqn_resolvents_impl(
+        bank,
+        clause,
+        store,
+        maximal_only,
+        &freshvars,
+        false,
+        Some((output, session)),
+    )
+}
+
+/// Computes all equality resolvents using a caller-owned C `freshvars` bank
+/// while emitting represented C `DocClauseCreationDefault(..., inf_eres, ...)`
+/// output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`compute_all_eqn_resolvents_with_fresh_vars`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_eqn_resolvents_with_fresh_vars_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    maximal_only: bool,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_eqn_resolvents_impl(
+        bank,
+        clause,
+        store,
+        maximal_only,
+        freshvars,
+        true,
+        Some((output, session)),
+    )
 }
 
 fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
@@ -227,6 +327,8 @@ fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
     clause: &Clause,
     store: &mut ClauseSet,
     maximal_only: bool,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut resolv_count = 0;
@@ -239,9 +341,10 @@ fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
     while let Some(index) = next {
         next = next_eq_res_literal_index(clause, index, maximal_only);
         let (mut resolvents, subst_is_ho) = if higher_order_problem {
-            compute_eq_res_csu_resolvents(bank, clause, index)?
+            compute_eq_res_csu_resolvents(bank, clause, index, freshvars, reset_freshvars)?
         } else {
-            let (resolvent, subst_is_ho) = compute_eq_res_with_ho_flag(bank, clause, index)?;
+            let (resolvent, subst_is_ho) =
+                compute_eq_res_with_ho_flag(bank, clause, index, freshvars, reset_freshvars)?;
             (resolvent.into_iter().collect(), subst_is_ho)
         };
 
@@ -289,7 +392,23 @@ pub fn clause_er_normalize_var(
     clause: Clause,
     strong: bool,
 ) -> Result<(Clause, i64), Diagnostic> {
-    clause_er_normalize_var_impl::<String>(bank, clause, strong, None)
+    let freshvars = fresh_var_bank_for_clause(bank, &clause);
+    clause_er_normalize_var_impl::<String>(bank, clause, strong, &freshvars, false, None)
+}
+
+/// Performs C `ClauseERNormalizeVar` over one owned clause using a caller-owned
+/// `freshvars` bank.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_eq_res_with_fresh_vars`].
+pub fn clause_er_normalize_var_with_fresh_vars(
+    bank: &mut TermBank,
+    clause: Clause,
+    strong: bool,
+    freshvars: &VarBank,
+) -> Result<(Clause, i64), Diagnostic> {
+    clause_er_normalize_var_impl::<String>(bank, clause, strong, freshvars, true, None)
 }
 
 /// Performs C `ClauseERNormalizeVar` while emitting represented
@@ -306,13 +425,50 @@ pub fn clause_er_normalize_var_with_docs(
     clause: Clause,
     strong: bool,
 ) -> Result<(Clause, i64), Diagnostic> {
-    clause_er_normalize_var_impl(bank, clause, strong, Some((output, session)))
+    let freshvars = fresh_var_bank_for_clause(bank, &clause);
+    clause_er_normalize_var_impl(
+        bank,
+        clause,
+        strong,
+        &freshvars,
+        false,
+        Some((output, session)),
+    )
+}
+
+/// Performs C `ClauseERNormalizeVar` with a caller-owned `freshvars` bank while
+/// emitting represented `DocClauseModificationDefault(..., inf_eres, clause)`
+/// output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`clause_er_normalize_var_with_fresh_vars`], plus any proof-documentation
+/// write diagnostic.
+pub fn clause_er_normalize_var_with_fresh_vars_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    clause: Clause,
+    strong: bool,
+    freshvars: &VarBank,
+) -> Result<(Clause, i64), Diagnostic> {
+    clause_er_normalize_var_impl(
+        bank,
+        clause,
+        strong,
+        freshvars,
+        true,
+        Some((output, session)),
+    )
 }
 
 fn clause_er_normalize_var_impl<W: fmt::Write>(
     bank: &mut TermBank,
     mut clause: Clause,
     strong: bool,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(Clause, i64), Diagnostic> {
     let mut count = 0;
@@ -326,7 +482,7 @@ fn clause_er_normalize_var_impl<W: fmt::Write>(
             if literal.is_negative() && (literal.is_pure_var() || (strong && literal.is_part_var()))
             {
                 if let (Some(resolvent), subst_is_ho) =
-                    compute_eq_res_with_ho_flag(bank, &clause, index)?
+                    compute_eq_res_with_ho_flag(bank, &clause, index, freshvars, reset_freshvars)?
                 {
                     resolved = Some((resolvent, subst_is_ho));
                     break;
@@ -367,8 +523,8 @@ fn clause_er_normalize_var_impl<W: fmt::Write>(
 mod tests {
     use super::{
         clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
-        compute_all_eqn_resolvents_with_docs, compute_eq_res, first_eq_res_literal_index,
-        next_eq_res_literal_index,
+        compute_all_eqn_resolvents_with_docs, compute_eq_res, compute_eq_res_with_fresh_vars,
+        first_eq_res_literal_index, next_eq_res_literal_index,
     };
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
@@ -388,6 +544,7 @@ mod tests {
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
@@ -518,6 +675,32 @@ mod tests {
         assert!(literal.is_positive());
         assert_eq!(literal.left(), &a);
         assert_eq!(literal.right(), &b);
+    }
+
+    #[test]
+    fn compute_eq_res_with_fresh_vars_resets_caller_bank_like_c() {
+        let mut bank = test_bank();
+        let freshvars = VarBank::new(bank.signature().type_bank());
+        bank.vars().pair_shadow(&freshvars);
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let type_ = bank.signature().type_bank().default_type();
+        let _ = freshvars.get_fresh_var(&type_);
+        let _ = freshvars.get_fresh_var(&type_);
+        let a = typed_const(&mut bank, "er_fresh_a");
+        let b = typed_const(&mut bank, "er_fresh_b");
+        let rest = lit(&mut bank, &y, &b, true);
+        let diseq = lit(&mut bank, &x, &a, false);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+
+        let resolvent = compute_eq_res_with_fresh_vars(&mut bank, &clause, 1, &freshvars)
+            .unwrap()
+            .expect("variable disequality should resolve");
+
+        let literal = &resolvent.literals().as_slice()[0];
+        assert_eq!(literal.left().f_code(), -2);
+        assert_eq!(literal.right(), &b);
+        assert_eq!(freshvars.v_count_for_type(&type_), 1);
     }
 
     #[test]
