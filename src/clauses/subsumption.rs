@@ -9,6 +9,9 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndex, FvIndexAnchor};
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
+use crate::clauses::unit_simplify::{
+    find_signed_top_simplifying_unit, find_simplifying_unit, SimplifyingUnit,
+};
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -163,12 +166,12 @@ pub fn unit_clause_set_subsumes_clause_with_strong<'set>(
     clause.literals().as_slice().iter().find_map(|literal| {
         if literal.is_positive() {
             if strong_unit_forward_subsumption {
-                find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
+                find_strong_unit_simplifier_plain(set, literal.left(), literal.right(), true)
             } else {
-                find_positive_unit_simplifier(set, literal.left(), literal.right())
+                find_positive_unit_simplifier_plain(set, literal.left(), literal.right())
             }
         } else {
-            find_negative_top_unit_simplifier(set, literal.left(), literal.right())
+            find_negative_top_unit_simplifier_plain(set, literal.left(), literal.right())
         }
     })
 }
@@ -967,6 +970,14 @@ fn find_positive_unit_simplifier<'set>(
     left: &Term,
     right: &Term,
 ) -> Option<&'set Clause> {
+    find_simplifying_unit(set, left, right, true).map(SimplifyingUnit::clause)
+}
+
+fn find_positive_unit_simplifier_plain<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Option<&'set Clause> {
     set.iter().find(|candidate| {
         candidate
             .literals()
@@ -1026,7 +1037,63 @@ fn find_strong_unit_simplifier<'set>(
     None
 }
 
+fn find_strong_unit_simplifier_plain<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Option<&'set Clause> {
+    let mut stack = vec![(left.clone(), right.clone())];
+    while let Some((current_left, current_right)) = stack.pop() {
+        if let Some(result) =
+            find_top_unit_simplifier_plain(set, &current_left, &current_right, positive)
+        {
+            return Some(result);
+        }
+        if current_left.is_applied_free_var()
+            || current_right.is_applied_free_var()
+            || current_left.is_lambda()
+            || current_right.is_lambda()
+            || current_left.f_code() != current_right.f_code()
+            || current_left.arity() == 0
+        {
+            break;
+        }
+        assert_eq!(
+            current_left.arity(),
+            current_right.arity(),
+            "strong unit subsumption descent expects equal arities"
+        );
+        assert_eq!(
+            current_left.type_(),
+            current_right.type_(),
+            "strong unit subsumption descent expects equal types"
+        );
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                stack.push((next_left, next_right));
+            }
+        }
+    }
+    None
+}
+
 fn find_top_unit_simplifier<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Option<&'set Clause> {
+    find_signed_top_simplifying_unit(set, left, right, positive).map(SimplifyingUnit::clause)
+}
+
+fn find_top_unit_simplifier_plain<'set>(
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
@@ -1051,6 +1118,14 @@ fn find_negative_top_unit_simplifier<'set>(
     right: &Term,
 ) -> Option<&'set Clause> {
     find_top_unit_simplifier(set, left, right, false)
+}
+
+fn find_negative_top_unit_simplifier_plain<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Option<&'set Clause> {
+    find_top_unit_simplifier_plain(set, left, right, false)
 }
 
 #[cfg(test)]
@@ -1083,6 +1158,7 @@ mod tests {
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
     use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1746,6 +1822,46 @@ mod tests {
     }
 
     #[test]
+    fn positive_simplify_reflect_uses_demod_index_candidate_order() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "indexed_sr_a");
+        let rhs = typed_const(&mut bank, "indexed_sr_rhs");
+        let kept = typed_const(&mut bank, "indexed_sr_kept");
+        let mut specific = clause_from(vec![literal(&mut bank, &constant, &rhs, true)]);
+        let mut general = clause_from(vec![literal(&mut bank, &variable, &rhs, true)]);
+        specific.set_ident(106);
+        general.set_ident(107);
+        specific.set_weight(specific.standard_weight());
+        general.set_weight(general.standard_weight());
+        let mut set = ClauseSet::new_demod_indexed();
+        set.indexed_insert_clause_owned(specific, &bank);
+        set.indexed_insert_clause_owned(general, &bank);
+        let mut target = clause_from(vec![
+            literal(&mut bank, &constant, &rhs, false),
+            literal(&mut bank, &kept, &rhs, true),
+        ]);
+        target.set_weight(target.standard_weight());
+
+        assert_eq!(set.demod_index_match_count(), 0);
+        assert!(!clause_positive_simplify_reflect(&set, &mut target));
+
+        assert_eq!(set.demod_index_match_count(), 1);
+        assert_eq!(
+            set.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::variables_first())
+        );
+        assert_eq!(target.literal_number(), 1);
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(107, 0)),
+            ]
+        );
+    }
+
+    #[test]
     fn positive_simplify_reflect_with_docs_emits_step_before_derivation() {
         let mut bank = test_bank();
         let variable = typed_var(&bank, -10);
@@ -1866,6 +1982,44 @@ mod tests {
             &[
                 DerivationEntry::Operation(DC_SR),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(103, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn negative_simplify_reflect_uses_demod_indexed_top_lookup() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "indexed_neg_sr_a");
+        let witness = typed_const(&mut bank, "indexed_neg_sr_witness");
+        let kept = typed_const(&mut bank, "indexed_neg_sr_kept");
+        let mut negative_unit = clause_from(vec![literal(&mut bank, &variable, &constant, false)]);
+        negative_unit.set_ident(108);
+        negative_unit.set_weight(negative_unit.standard_weight());
+        let mut set = ClauseSet::new_demod_indexed();
+        set.indexed_insert_clause_owned(negative_unit, &bank);
+        let mut target = clause_from(vec![
+            literal(&mut bank, &witness, &constant, true),
+            literal(&mut bank, &kept, &constant, true),
+        ]);
+        target.set_weight(target.standard_weight());
+
+        assert_eq!(set.demod_index_match_count(), 0);
+        assert!(clause_negative_simplify_reflect(&set, &mut target));
+
+        assert_eq!(set.demod_index_match_count(), 2);
+        assert_eq!(
+            set.demod_index_traversal_order(),
+            Some(PdtTraversalOrder::variables_first())
+        );
+        assert_eq!(target.literal_number(), 0);
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(108, 0)),
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(108, 0)),
             ]
         );
     }
