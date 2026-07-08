@@ -17,7 +17,8 @@ use crate::clauses::derivation::{
     DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
 use crate::clauses::eqn::{
-    eqn_fof_parse, eqn_write_app_encode, eqn_write_fof, Eqn, EqnFofPrintOptions,
+    eqn_fof_parse, eqn_write_app_encode, eqn_write_app_encode_with_type_suffixes, eqn_write_fof,
+    Eqn, EqnFofPrintOptions,
 };
 use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
@@ -3253,6 +3254,24 @@ pub fn tformula_write_app_encode(
     bank: &mut TermBank,
     form: &Term,
 ) -> Result<(), Diagnostic> {
+    tformula_write_app_encode_with_type_suffixes(output, bank, form, false)
+}
+
+/// Writes the C `TFormulaAppEncode` rendering with optional `TermPrintTypes` suffixes.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`tformula_write_app_encode`].
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`tformula_write_app_encode`].
+pub fn tformula_write_app_encode_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+    print_types: bool,
+) -> Result<(), Diagnostic> {
     if tformula_is_literal(bank, form) {
         let literal = Eqn::alloc(
             formula_argument(form, 0),
@@ -3265,19 +3284,20 @@ pub fn tformula_write_app_encode(
             bank,
             &literal,
             form.f_code() == bank.signature().neqn_code(),
+            print_types,
         );
     }
 
     if tformula_is_quantified(bank, form) {
-        return tformula_write_app_encoded_quantifier(output, bank, form);
+        return tformula_write_app_encoded_quantifier(output, bank, form, print_types);
     }
 
     if form.f_code() == SIG_ITE_CODE {
-        return tformula_write_app_encoded_ite(output, bank, form);
+        return tformula_write_app_encoded_ite(output, bank, form, print_types);
     }
 
     if form.f_code() == SIG_LET_CODE {
-        return tformula_write_app_encoded_let(output, bank, form);
+        return tformula_write_app_encoded_let(output, bank, form, print_types);
     }
 
     if form.arity() == 1 {
@@ -3287,7 +3307,12 @@ pub fn tformula_write_app_encode(
             "TFormulaAppEncode unary formula must be negation"
         );
         output.write_str("~(").map_err(tformula_write_error)?;
-        tformula_write_app_encode(output, bank, &formula_argument(form, 0))?;
+        tformula_write_app_encode_with_type_suffixes(
+            output,
+            bank,
+            &formula_argument(form, 0),
+            print_types,
+        )?;
         output.write_char(')').map_err(tformula_write_error)?;
         return Ok(());
     }
@@ -3299,13 +3324,23 @@ pub fn tformula_write_app_encode(
     );
     output.write_char('(').map_err(tformula_write_error)?;
     if form.f_code() == bank.signature().or_code() {
-        tformula_write_app_encoded_or_chain(output, bank, form)?;
+        tformula_write_app_encoded_or_chain(output, bank, form, print_types)?;
     } else {
-        tformula_write_app_encode(output, bank, &formula_argument(form, 0))?;
+        tformula_write_app_encode_with_type_suffixes(
+            output,
+            bank,
+            &formula_argument(form, 0),
+            print_types,
+        )?;
         let operator = tformula_app_encoded_binary_operator(bank, form.f_code())
             .unwrap_or_else(|| panic!("TFormulaAppEncode binary formula has the wrong operator"));
         output.write_str(operator).map_err(tformula_write_error)?;
-        tformula_write_app_encode(output, bank, &formula_argument(form, 1))?;
+        tformula_write_app_encode_with_type_suffixes(
+            output,
+            bank,
+            &formula_argument(form, 1),
+            print_types,
+        )?;
     }
     output.write_char(')').map_err(tformula_write_error)?;
     Ok(())
@@ -3318,8 +3353,21 @@ pub fn tformula_write_app_encode(
 /// Returns a diagnostic under the same conditions as
 /// [`tformula_write_app_encode`].
 pub fn tformula_app_encode_string(bank: &mut TermBank, form: &Term) -> Result<String, Diagnostic> {
+    tformula_app_encode_string_with_type_suffixes(bank, form, false)
+}
+
+/// Returns the C `TFormulaAppEncode` rendering with optional type suffixes.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`tformula_app_encode_string`].
+pub fn tformula_app_encode_string_with_type_suffixes(
+    bank: &mut TermBank,
+    form: &Term,
+    print_types: bool,
+) -> Result<String, Diagnostic> {
     let mut output = String::new();
-    tformula_write_app_encode(&mut output, bank, form)?;
+    tformula_write_app_encode_with_type_suffixes(&mut output, bank, form, print_types)?;
     Ok(output)
 }
 
@@ -3364,10 +3412,11 @@ fn tformula_write_app_encoded_literal(
     bank: &mut TermBank,
     literal: &Eqn,
     negated: bool,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     let positive = literal.is_positive() ^ negated;
     if literal.is_equ_lit(bank) {
-        tformula_write_app_encoded_formula_or_term(output, bank, literal.left())?;
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.left(), print_types)?;
         if !positive {
             output
                 .write_char('!')
@@ -3376,14 +3425,14 @@ fn tformula_write_app_encoded_literal(
         output
             .write_char('=')
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
-        tformula_write_app_encoded_formula_or_term(output, bank, literal.right())?;
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.right(), print_types)?;
     } else {
         if !positive {
             output
                 .write_char('~')
                 .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
         }
-        tformula_write_app_encoded_formula_or_term(output, bank, literal.left())?;
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.left(), print_types)?;
     }
     Ok(())
 }
@@ -3419,25 +3468,26 @@ fn tformula_write_app_encoded_formula_or_term(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     term: &Term,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     if term.f_code() == SIG_ITE_CODE {
-        return tformula_write_app_encoded_ite(output, bank, term);
+        return tformula_write_app_encoded_ite(output, bank, term, print_types);
     }
 
     if term.f_code() == SIG_LET_CODE {
-        return tformula_write_app_encoded_let(output, bank, term);
+        return tformula_write_app_encoded_let(output, bank, term, print_types);
     }
 
     if term.type_().as_ref().is_some_and(Type::is_bool) {
         if tformula_is_app_encoded_formula_node(bank, term) {
-            return tformula_write_app_encode(output, bank, term);
+            return tformula_write_app_encode_with_type_suffixes(output, bank, term, print_types);
         }
         let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
-        return eqn_write_app_encode(output, bank, &literal, false);
+        return eqn_write_app_encode_with_type_suffixes(output, bank, &literal, false, print_types);
     }
 
     let encoded = term_app_encode(term, bank.signature_mut())?;
-    bank.write_term(output, &encoded, true)
+    bank.write_term_with_type_suffixes(output, &encoded, true, print_types)
         .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))
 }
 
@@ -3454,6 +3504,7 @@ fn tformula_write_app_encoded_ite(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     form: &Term,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     assert_eq!(form.arity(), 3, "$ite formula must have three arguments");
     output
@@ -3465,7 +3516,12 @@ fn tformula_write_app_encoded_ite(
                 .write_char(',')
                 .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
         }
-        tformula_write_app_encoded_formula_or_term(output, bank, &formula_argument(form, index))?;
+        tformula_write_app_encoded_formula_or_term(
+            output,
+            bank,
+            &formula_argument(form, index),
+            print_types,
+        )?;
     }
     output
         .write_char(')')
@@ -3487,6 +3543,7 @@ fn tformula_write_app_encoded_let(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     form: &Term,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     assert!(form.arity() >= 1, "$let formula must have at least a body");
     let mut definitions = Vec::with_capacity(form.arity().saturating_sub(1));
@@ -3503,7 +3560,7 @@ fn tformula_write_app_encoded_let(
     output
         .write_char(',')
         .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-    tformula_write_app_encoded_let_definitions(output, bank, &definitions)?;
+    tformula_write_app_encoded_let_definitions(output, bank, &definitions, print_types)?;
     output
         .write_char(',')
         .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
@@ -3511,6 +3568,7 @@ fn tformula_write_app_encoded_let(
         output,
         bank,
         &formula_argument(form, form.arity() - 1),
+        print_types,
     )?;
     output
         .write_char(')')
@@ -3556,6 +3614,7 @@ fn tformula_write_app_encoded_let_definitions(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     definitions: &[(Term, Term)],
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     for (index, (left, right)) in definitions.iter().enumerate() {
         if index != 0 {
@@ -3563,11 +3622,11 @@ fn tformula_write_app_encoded_let_definitions(
                 .write_char(',')
                 .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
         }
-        tformula_write_app_encoded_formula_or_term(output, bank, left)?;
+        tformula_write_app_encoded_formula_or_term(output, bank, left, print_types)?;
         output
             .write_str(":=")
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
-        tformula_write_app_encoded_formula_or_term(output, bank, right)?;
+        tformula_write_app_encoded_formula_or_term(output, bank, right, print_types)?;
     }
     Ok(())
 }
@@ -3576,6 +3635,7 @@ fn tformula_write_app_encoded_quantifier(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     form: &Term,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     let quantifier = form.f_code();
     output
@@ -3606,7 +3666,7 @@ fn tformula_write_app_encoded_quantifier(
         let body = formula_argument(&current, 1);
         if body.f_code() != quantifier {
             output.write_str("]:").map_err(tformula_write_error)?;
-            return tformula_write_app_encode(output, bank, &body);
+            return tformula_write_app_encode_with_type_suffixes(output, bank, &body, print_types);
         }
 
         output.write_str(", ").map_err(tformula_write_error)?;
@@ -3618,14 +3678,20 @@ fn tformula_write_app_encoded_or_chain(
     output: &mut impl fmt::Write,
     bank: &mut TermBank,
     form: &Term,
+    print_types: bool,
 ) -> Result<(), Diagnostic> {
     if form.f_code() != bank.signature().or_code() {
-        return tformula_write_app_encode(output, bank, form);
+        return tformula_write_app_encode_with_type_suffixes(output, bank, form, print_types);
     }
 
-    tformula_write_app_encoded_or_chain(output, bank, &formula_argument(form, 0))?;
+    tformula_write_app_encoded_or_chain(output, bank, &formula_argument(form, 0), print_types)?;
     output.write_char('|').map_err(tformula_write_error)?;
-    tformula_write_app_encode(output, bank, &formula_argument(form, 1))
+    tformula_write_app_encode_with_type_suffixes(
+        output,
+        bank,
+        &formula_argument(form, 1),
+        print_types,
+    )
 }
 
 fn tformula_app_encoded_binary_operator(bank: &TermBank, f_code: i64) -> Option<&'static str> {

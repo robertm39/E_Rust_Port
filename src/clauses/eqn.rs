@@ -2696,11 +2696,30 @@ pub fn eqn_write_app_encode(
     eqn: &Eqn,
     negated: bool,
 ) -> Result<(), Diagnostic> {
+    eqn_write_app_encode_with_type_suffixes(output, bank, eqn, negated, false)
+}
+
+/// Writes the C `EqnAppEncode` shape with optional `TermPrintTypes` suffixes.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`eqn_write_app_encode`].
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`eqn_write_app_encode`].
+pub fn eqn_write_app_encode_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    print_types: bool,
+) -> Result<(), Diagnostic> {
     let positive = eqn.is_positive() ^ negated;
     let left = term_app_encode(eqn.left(), bank.signature_mut())?;
     if eqn.is_equ_lit(bank) {
         let right = term_app_encode(eqn.right(), bank.signature_mut())?;
-        bank.write_term(output, &left, true)
+        bank.write_term_with_type_suffixes(output, &left, true, print_types)
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
         if !positive {
             output
@@ -2710,7 +2729,7 @@ pub fn eqn_write_app_encode(
         output
             .write_char('=')
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
-        bank.write_term(output, &right, true)
+        bank.write_term_with_type_suffixes(output, &right, true, print_types)
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
     } else {
         if !positive {
@@ -2718,7 +2737,7 @@ pub fn eqn_write_app_encode(
                 .write_char('~')
                 .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
         }
-        bank.write_term(output, &left, true)
+        bank.write_term_with_type_suffixes(output, &left, true, print_types)
             .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
     }
     Ok(())
@@ -2914,8 +2933,26 @@ pub fn eqn_app_encode_string(
     eqn: &Eqn,
     negated: bool,
 ) -> Result<String, Diagnostic> {
+    eqn_app_encode_string_with_type_suffixes(bank, eqn, negated, false)
+}
+
+/// Returns the C `EqnAppEncode` rendering with optional `TermPrintTypes` suffixes.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`eqn_app_encode_string`].
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`eqn_app_encode_string`].
+pub fn eqn_app_encode_string_with_type_suffixes(
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    print_types: bool,
+) -> Result<String, Diagnostic> {
     let mut output = String::new();
-    eqn_write_app_encode(&mut output, bank, eqn, negated)?;
+    eqn_write_app_encode_with_type_suffixes(&mut output, bank, eqn, negated, print_types)?;
     Ok(output)
 }
 
@@ -2954,8 +2991,9 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 #[cfg(test)]
 mod tests {
     use super::{
-        eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_parse, eqn_fof_string,
-        eqn_parse, eqn_string, eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
+        eqn_app_encode_string, eqn_app_encode_string_with_type_suffixes, eqn_debug_string,
+        eqn_deref_string, eqn_fof_parse, eqn_fof_string, eqn_parse, eqn_string, eqn_tstp_string,
+        Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
@@ -3453,6 +3491,23 @@ mod tests {
             eqn_app_encode_string(&mut bank, &pred_lit, true).unwrap(),
             "~app_p"
         );
+    }
+
+    #[test]
+    fn eqn_app_encode_string_honors_print_types() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "app_type_a");
+        let b = typed_const(&mut bank, "app_type_b");
+        let f_ab = typed_binary(&mut bank, "app_type_f", &a, &b);
+        let equality = Eqn::alloc(f_ab, a, &mut bank, true).unwrap();
+
+        let rendered =
+            eqn_app_encode_string_with_type_suffixes(&mut bank, &equality, false, true).unwrap();
+
+        assert!(rendered.contains("app_type_f:"));
+        assert!(rendered.contains("app_type_a:$i"));
+        assert!(rendered.contains("app_type_b:$i"));
+        assert!(rendered.contains("=app_type_a:$i"));
     }
 
     fn assert_f64_bits_eq(actual: f64, expected: f64) {

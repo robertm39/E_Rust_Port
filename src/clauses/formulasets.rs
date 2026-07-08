@@ -11,10 +11,10 @@ use crate::clauses::clause_props::{
     CP_TYPE_QUESTION,
 };
 use crate::clauses::clausefunc::{
-    post_cnf_encode_clause_terms, tformula_add_quantor, tformula_app_encode_string,
-    tformula_clause_closed_encode, tformula_clause_encode, tformula_closure,
-    tformula_collect_clause, tformula_collect_free_vars, tformula_conjunctive_nf3,
-    tformula_copy_def, tformula_create_def, tformula_decode_polarity,
+    post_cnf_encode_clause_terms, tformula_add_quantor,
+    tformula_app_encode_string_with_type_suffixes, tformula_clause_closed_encode,
+    tformula_clause_encode, tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
+    tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
     tformula_encode_predicate_as_eqn, tformula_fcode_alloc, tformula_find_defs,
     tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
     tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
@@ -2065,8 +2065,27 @@ impl WrappedFormula {
         bank: &mut TermBank,
         keep_input_names: bool,
     ) -> Result<String, Diagnostic> {
+        self.app_encode_string_with_type_suffixes(bank, keep_input_names, false)
+    }
+
+    /// Renders C's `WFormulaAppEncode` shape with optional `TermPrintTypes` suffixes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic under the same conditions as [`Self::app_encode_string`].
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::app_encode_string`].
+    pub fn app_encode_string_with_type_suffixes(
+        &self,
+        bank: &mut TermBank,
+        keep_input_names: bool,
+        print_types: bool,
+    ) -> Result<String, Diagnostic> {
         assert!(!self.is_clause, "WFormulaAppEncode expects a formula");
-        let encoded = tformula_app_encode_string(bank, self.formula())?;
+        let encoded =
+            tformula_app_encode_string_with_type_suffixes(bank, self.formula(), print_types)?;
         Ok(format!(
             "tff({}, {}, {encoded}).",
             self.get_id(keep_input_names),
@@ -4228,6 +4247,25 @@ impl FormulaSet {
         problem_type: ProblemType,
         keep_input_names: bool,
     ) -> Result<String, Diagnostic> {
+        self.app_encode_string_with_type_suffixes(bank, problem_type, keep_input_names, false)
+    }
+
+    /// Renders C's `FormulaSetAppEncode` output with optional `TermPrintTypes` suffixes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic under the same conditions as [`Self::app_encode_string`].
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::app_encode_string`].
+    pub fn app_encode_string_with_type_suffixes(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+        print_types: bool,
+    ) -> Result<String, Diagnostic> {
         if self.formulas.is_empty() {
             return Ok(String::new());
         }
@@ -4257,7 +4295,11 @@ impl FormulaSet {
 
         for formula in &self.formulas {
             if !tformula_is_prop_true(bank, formula.formula()) {
-                output.push_str(&formula.app_encode_string(bank, keep_input_names)?);
+                output.push_str(&formula.app_encode_string_with_type_suffixes(
+                    bank,
+                    keep_input_names,
+                    print_types,
+                )?);
                 output.push('\n');
             }
         }

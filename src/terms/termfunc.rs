@@ -1586,6 +1586,7 @@ pub fn term_app_encode(orig: &Term, sig: &mut Signature) -> Result<Term, Diagnos
 
     let app_code = sig.get_typed_app(&prefix_type, &applied_type, &ret_type);
     let encoded = Term::top_alloc(app_code, 2);
+    encoded.set_type(Some(ret_type));
     encoded.set_argument(0, term_app_encode(&orig_prefix, sig)?);
     encoded.set_argument(1, term_app_encode(&applied_to, sig)?);
     Ok(encoded)

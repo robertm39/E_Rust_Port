@@ -5124,6 +5124,7 @@ fn run_app_encode<W: Write + ?Sized>(
         &mut state,
         saw_any_formula_owner,
         app_encode_problem_type,
+        config.encoding.print_types,
     )?;
     Ok(ErrorCode::NO_ERROR.exit_status())
 }
@@ -5143,13 +5144,15 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
     state: &mut ProofState,
     saw_formula_owner: bool,
     problem_type: ProblemType,
+    print_types: bool,
 ) -> Result<(), EProverError> {
     if !saw_formula_owner {
         return Ok(());
     }
 
     let (bank, formula_set, _watchlist) = state.terms_f_axioms_watchlist_mut();
-    let rendered = formula_set.app_encode_string(bank, problem_type, true)?;
+    let rendered =
+        formula_set.app_encode_string_with_type_suffixes(bank, problem_type, true, print_types)?;
     output.write_stdout_side_channel(rendered.as_bytes())?;
     Ok(())
 }
@@ -18842,6 +18845,45 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("app_"));
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_honors_print_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-print-types");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(f_type, type, f: person > person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(ax, axiom, p(f(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("f:person > person"));
+        assert!(printed.contains("a:person"));
+        assert!(printed.contains(":$o)."));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
