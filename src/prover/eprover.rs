@@ -1676,23 +1676,34 @@ fn heuristic_parms_with_strategy_io(
     config: &EProverConfig,
 ) -> Result<HeuristicParmsCell, Diagnostic> {
     let mut params = heuristic_parms_from_config(config)?;
-    apply_strategy_io_to_params(config, &mut params)?;
+    let _ = apply_strategy_io_to_params(config, &mut params)?;
     Ok(params)
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct StrategyIoDefinitions {
+    heuristic_definitions: Vec<String>,
 }
 
 fn apply_strategy_io_to_params(
     config: &EProverConfig,
     params: &mut HeuristicParmsCell,
-) -> Result<(), Diagnostic> {
+) -> Result<StrategyIoDefinitions, Diagnostic> {
+    let mut definitions = StrategyIoDefinitions::default();
     if let Some(path) = &config.parse_strategy_file {
         let mut scanner = Scanner::from_file(Path::new(path), true)?;
         heuristic_parms_parse_into(&mut scanner, params, true)?;
         scanner.check_tok(TokenType::NO_TOKEN)?;
+        if let Some(heuristic_def) = &params.heuristic_def {
+            definitions
+                .heuristic_definitions
+                .push(heuristic_def.clone());
+        }
     }
     if let Some(name) = &config.select_strategy {
         get_heuristic_with_name(name, params)?;
     }
-    Ok(())
+    Ok(definitions)
 }
 
 fn overlay_explicit_heuristic_options(
@@ -5456,12 +5467,13 @@ fn run_proof_search<W: Write + ?Sized>(
         AutoModeSearchSelection::Continue => {}
         AutoModeSearchSelection::ScheduledExit(status) => return Ok(status),
     }
-    apply_strategy_io_to_params(config, &mut heuristic_params)?;
+    let strategy_io_definitions = apply_strategy_io_to_params(config, &mut heuristic_params)?;
     let mut control = proof_control_from_heuristic_parms(config, heuristic_params)?;
     let mut params = control.heuristic_parms().clone();
     let fvi_params = control.fvi_parms().clone();
     let wfcb_defs = &config.search.heuristic.weight_function_definitions;
     let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();
+    hcb_defs.extend(strategy_io_definitions.heuristic_definitions);
     {
         let (bank, axioms, formula_axioms) = state.terms_axioms_f_axioms_mut();
         proof_control_init_with_formula_axioms(
@@ -15206,6 +15218,15 @@ mod tests {
             .join(format!("eprover-{name}-{}.out", std::process::id()))
     }
 
+    fn write_temp_strategy_file(
+        name: &str,
+        params: &hcb_params::HeuristicParmsCell,
+    ) -> std::path::PathBuf {
+        let path = temp_path(name);
+        std::fs::write(&path, hcb_params::heuristic_parms_print_string(params)).unwrap();
+        path
+    }
+
     fn assert_formula_owner_print(stdout: Vec<u8>, stderr: Vec<u8>, expected_fragments: &[&str]) {
         let printed = String::from_utf8(stdout).unwrap();
         let stderr = String::from_utf8(stderr).unwrap();
@@ -18498,6 +18519,56 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.starts_with("{\n"));
         assert!(output.contains("selection_strategy:             PSelectComplexExceptUniqMaxHorn"));
         assert!(output.contains("pm_type:                        ParamodSim"));
+    }
+
+    #[test]
+    fn apply_strategy_io_retains_parsed_heuristic_definition_before_select_like_c() {
+        let _guard = global_state_lock();
+        let strategy_path = write_temp_strategy_file(
+            "strategy-io-parse-select",
+            &hcb_params::HeuristicParmsCell {
+                heuristic_name: "ParsedStrategy".to_owned(),
+                heuristic_def: Some("ParsedStrategy=(1*fifo_f)".to_owned()),
+                ..hcb_params::HeuristicParmsCell::default()
+            },
+        );
+        let strategy_arg = strategy_path.to_string_lossy().into_owned();
+        let selected_strategy = "G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN";
+        let config = EProverConfig {
+            parse_strategy_file: Some(strategy_arg),
+            select_strategy: Some(selected_strategy.to_owned()),
+            ..EProverConfig::default()
+        };
+        let mut params = heuristic_parms_from_config(&config).unwrap();
+
+        let strategy_io_definitions = super::apply_strategy_io_to_params(&config, &mut params)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert_eq!(
+            strategy_io_definitions.heuristic_definitions,
+            ["ParsedStrategy=(1*fifo_f)"]
+        );
+        assert_eq!(params.heuristic_name, hcb_params::HCB_DEFAULT_HEURISTIC);
+        assert_ne!(
+            params.heuristic_def.as_deref(),
+            Some("ParsedStrategy=(1*fifo_f)")
+        );
+        let mut control = ProofControl::new();
+        let axioms = ClauseSet::new();
+        let mut hcb_defs = strategy_io_definitions.heuristic_definitions;
+        crate::heuristics::proofcontrol::proof_control_init_heuristics(
+            &mut control,
+            &axioms,
+            &mut params,
+            &crate::clauses::fcvindexing::FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(control.hcbs().find_hcb_handle("ParsedStrategy").is_some());
+        std::fs::remove_file(&strategy_path).unwrap();
     }
 
     #[test]
@@ -26309,6 +26380,50 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_installs_strategy_file_heuristic_definition() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-strategy-file-heuristic-definition");
+        let strategy_path = write_temp_strategy_file(
+            "proof-strategy-file-heuristic-definition-strategy",
+            &hcb_params::HeuristicParmsCell {
+                heuristic_name: "StrategyFileSearch".to_owned(),
+                heuristic_def: Some("StrategyFileSearch=(1*strategy_fifo)".to_owned()),
+                ..hcb_params::HeuristicParmsCell::default()
+            },
+        );
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let strategy_arg = format!("--parse-strategy={}", strategy_path.to_string_lossy());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--define-weight-function=strategy_fifo=FIFOWeight(ConstPrio)",
+                strategy_arg.as_str(),
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_proof_search_prefix()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&strategy_path).unwrap();
     }
 
     #[test]
