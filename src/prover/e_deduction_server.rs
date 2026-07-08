@@ -24,6 +24,8 @@ const DEFAULT_PROVER: &str = "eprover";
 const DEFAULT_TOTAL_WTC_LIMIT: i64 = 30;
 const STDOUT_SERVER_UNIMPLEMENTED_MESSAGE: &str =
     "e_deduction_server: Server mode not implemented yet for stdout\n";
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -150,9 +152,6 @@ where
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout);
     exit_io();
-    stdout
-        .flush()
-        .map_err(|error| io_diagnostic(format!("Cannot flush output: {error}")))?;
     result
 }
 
@@ -233,6 +232,9 @@ where
     } else {
         write_all(stdout, STDOUT_SERVER_UNIMPLEMENTED_MESSAGE.as_bytes())?;
     }
+    stdout
+        .flush()
+        .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(ErrorCode::NO_ERROR.exit_status())
 }
 
@@ -447,12 +449,13 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Write};
 
     use super::{
         deduction_batch_spec, emit_run_report_global_output, parse_port, print_help,
         process_options, run, run_text_server_with, DeductionServerConfig, RunCommand,
-        DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, PROGRAM_NAME, STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
+        DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -466,6 +469,18 @@ mod tests {
     use crate::inout::scanner::IoFormat;
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use crate::test_support::global_state_lock;
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
 
     fn parser_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -516,6 +531,32 @@ mod tests {
         assert!(String::from_utf8(stdout)
             .unwrap()
             .starts_with("e_deduction_server "));
+    }
+
+    #[test]
+    fn help_and_version_exit_before_outclose_like_c() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+
+        let help_status = run(
+            [PROGRAM_NAME, "--help"],
+            &mut stdin,
+            &mut FlushFailWriter,
+            &mut stderr,
+        )
+        .expect("help does not final-flush stdout");
+        assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
+
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let version_status = run(
+            [PROGRAM_NAME, "--version"],
+            &mut stdin,
+            &mut FlushFailWriter,
+            &mut stderr,
+        )
+        .expect("version does not final-flush stdout");
+        assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
     }
 
     #[test]
@@ -699,6 +740,24 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             STDOUT_SERVER_UNIMPLEMENTED_MESSAGE
         );
+    }
+
+    #[test]
+    fn run_reports_final_outclose_flush_failure_like_c() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME],
+            &mut stdin,
+            &mut FlushFailWriter,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
     }
 
     #[test]
