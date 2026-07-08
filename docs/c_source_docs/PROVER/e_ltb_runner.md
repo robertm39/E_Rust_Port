@@ -96,7 +96,7 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_ltb_runner.rs` and `src/bin/e_ltb_runner.rs` port the standalone runner wrapper over the Rust batch backend, including global output redirection through `-o`, the `-o -` stdout route, C-shaped `OutOpen` diagnostics for configured output files, and the C ordering where configured output is opened before positional usage validation.
+- `src/prover/e_ltb_runner.rs` and `src/bin/e_ltb_runner.rs` port the standalone runner wrapper over the Rust batch backend, including global output redirection through `-o`, the `-o -` stdout route, C-shaped `OutOpen` diagnostics for configured output files, the C ordering where configured output is opened before positional usage validation, and the C `OutClose(GlobalOut)` final flush/error check on the execution path.
 
 ### Change Later
 
@@ -107,4 +107,5 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 - Several option descriptions are historical competition text, including the duplicate-word interactive description and "very specific hack" variant wording. Rust preserves them for visible CLI compatibility; a cleaned help path should separate modern user-facing descriptions from the legacy drop-in text.
 - A global wall-clock limit from `-w/--wtc-limit` is copied into a parsed spec only when the spec omits `limit.time.overall.wc`; the per-problem limit is still required unless one of those total limits is positive. Later configuration code should represent that precedence explicitly instead of mutating parsed specs in place.
 - Runner state is stored in process globals such as `outname`, `outdir`, `total_wtc_limit`, `interactive`, `use_variants`, and `provers`. A future Rust runner should make those fields explicit while preserving option timing and output behavior.
+- `process_options()` exits directly for help/version before `main()` opens and later closes `GlobalOut`, while ordinary execution reports close-time output errors through `OutClose`. Keep that split visible in compatibility wrappers; a cleaned API should expose explicit output ownership instead of inheriting executable control flow.
 <!-- END MANUAL REVIEW: c_source_docs -->

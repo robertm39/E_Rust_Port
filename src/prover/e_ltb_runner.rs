@@ -29,6 +29,8 @@ pub const PROGRAM_NAME: &str = "e_ltb_runner";
 
 const DEFAULT_PROVER: &str = "eprover";
 const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const INTERNAL_VARIANT_CHILD_ARG: &str = "--internal-ltb-variant-child";
 const VARIANT_CHILD_NAME: &str = "E-LTB wrapper";
 const VARIANT_CHILD_CORES: usize = 1;
@@ -373,13 +375,25 @@ fn execute_config_to_configured_output(
 ) -> Result<u8, Diagnostic> {
     if let Some(path) = &config.output_file {
         if path == "-" {
-            return execute_config(config, stdout);
+            let status = execute_config(config, stdout)?;
+            flush_configured_output(stdout)?;
+            return Ok(status);
         }
         let mut output = create_output_file(path)?;
-        execute_config(config, &mut output)
+        let status = execute_config(config, &mut output)?;
+        flush_configured_output(&mut output)?;
+        Ok(status)
     } else {
-        execute_config(config, stdout)
+        let status = execute_config(config, stdout)?;
+        flush_configured_output(stdout)?;
+        Ok(status)
     }
+}
+
+fn flush_configured_output(output: &mut impl Write) -> Result<(), Diagnostic> {
+    output
+        .flush()
+        .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))
 }
 
 fn open_output_file_before_usage_error(path: Option<&str>) -> Result<(), Diagnostic> {
@@ -937,11 +951,12 @@ fn e_ltb_runner_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Erro
 #[cfg(test)]
 mod tests {
     use super::{
-        create_output_file, execute_config_with_processor, execute_config_with_processors,
-        execute_variant_child_with_backend, new_term_bank, parse_variant_child_args, print_help,
-        process_interactive_batch_with_backend, process_options, remaining_total_wtc_limit, run,
-        LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig, LtbVariantMode, RunCommand,
-        C_USAGE_ERROR, DEFAULT_PROVER, PROGRAM_NAME,
+        create_output_file, execute_config_to_configured_output, execute_config_with_processor,
+        execute_config_with_processors, execute_variant_child_with_backend, new_term_bank,
+        parse_variant_child_args, print_help, process_interactive_batch_with_backend,
+        process_options, remaining_total_wtc_limit, run, LtbBatchJob, LtbRunnerConfig,
+        LtbVariantChildConfig, LtbVariantMode, RunCommand, C_USAGE_ERROR, DEFAULT_PROVER,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
@@ -957,8 +972,20 @@ mod tests {
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::fs;
-    use std::io::{Cursor, Write};
+    use std::io::{self, Cursor, Write};
     use std::path::PathBuf;
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
 
     #[test]
     fn help_and_version_exit_before_processing_specs() {
@@ -978,6 +1005,23 @@ mod tests {
         assert!(String::from_utf8(stdout)
             .unwrap()
             .starts_with("e_ltb_runner "));
+    }
+
+    #[test]
+    fn help_and_version_exit_before_outclose_like_c() {
+        let _guard = global_state_lock();
+        let mut stderr = Vec::new();
+
+        let help_status = run([PROGRAM_NAME, "--help"], &mut FlushFailWriter, &mut stderr).unwrap();
+        assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
+
+        let version_status = run(
+            [PROGRAM_NAME, "--version"],
+            &mut FlushFailWriter,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
     }
 
     #[test]
@@ -1331,6 +1375,28 @@ mod tests {
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(seen_interactive, Some(true));
+    }
+
+    #[test]
+    fn execute_reports_final_outclose_flush_failure_like_c() {
+        let _guard = global_state_lock();
+        let path = write_temp_spec("runner-empty-for-flush.spec", "division.category LTB.SAT\n");
+        let config = LtbRunnerConfig {
+            spec_file: path.to_string_lossy().into_owned(),
+            prover: DEFAULT_PROVER.to_owned(),
+            output_file: None,
+            output_dir: None,
+            total_wtc_limit: 0,
+            verbose_level: 0,
+            output_level: 1,
+            interactive: false,
+            variant_mode: None,
+        };
+
+        let error = execute_config_to_configured_output(&config, &mut FlushFailWriter).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
     }
 
     #[test]
