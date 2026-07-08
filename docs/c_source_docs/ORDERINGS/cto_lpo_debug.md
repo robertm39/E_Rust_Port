@@ -97,6 +97,11 @@ Source files reviewed: `ORDERINGS/cto_lpo_debug.h`, `ORDERINGS/cto_lpo_debug.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- The debug LPO implementation has no recursion-depth guard and its same-head tail checks can index past the shorter argument vector when arities differ. Rust should preserve intended LPO results without reproducing unsafe memory access; if this path becomes externally visible, decide whether to keep it as a compatibility-only debug feature or retire it in favor of the production LPO implementation.
+- `D_LPOCompare` and related helpers duplicate old LPO logic without the production path's later LFHO and recursion-limit behavior. Avoid extending this copy unless a reference comparison requires it; a cleaned implementation should share the maintained comparison core and keep debug tracing separate.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

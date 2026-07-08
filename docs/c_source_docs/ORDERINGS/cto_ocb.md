@@ -144,6 +144,13 @@ Source files reviewed: `ORDERINGS/cto_ocb.h`, `ORDERINGS/cto_ocb.c`.
 - `OCBTermMaxFunCode` skips argument zero in its recursive scan (`for(i=1; i<term->arity; i++)`). Rust preserves this exactly; decide later whether a corrected traversal belongs behind a compatibility switch once ordering reference tests cover the affected callers.
 - `OCBDebugPrint` handles a null `ocb->sig` for the signature and weight sections, but the precedence-matrix section still calls `OCBFunCompare`, which uses `ocb->sig` for distinct-symbol checks. Rust keeps the signature outside the OCB and uses raw matrix cells when debug-printing without one; revisit only if null-signature OCB diagnostics become observable.
 
+### Change Later
+
+- `OCBPrecedenceAddTuple` has a surprising return surface: already-present relations return the old state, newly inserted successful relations return `1`, and conflicts return `0`. It also rolls back only the most recent stored pair on transitive-closure failure rather than restoring the whole saved matrix state. Rust preserves this for compatibility; a later precedence API should return a typed result and make rollback atomic.
+- `OCBSetMinConst` is declared in the header but not implemented in `cto_ocb.c`. Rust has an explicit setter for internal use; treat the missing C definition as a source inconsistency until link-level compatibility or dead-declaration cleanup decides whether the symbol should exist.
+- `OCBTermMaxFunCode` skips the first argument during recursive scanning. Keep the C-compatible traversal until reference ordering/search tests prove whether this affects callers, then consider a corrected traversal behind an explicit compatibility switch.
+- `OCBDebugPrint` partially handles `ocb->sig == NULL` but can still reach `OCBFunCompare` paths that dereference the signature. Rust avoids that null-dereference shape in diagnostics; if null-signature OCBs become observable, keep the safer rendering and document the compatibility deviation.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

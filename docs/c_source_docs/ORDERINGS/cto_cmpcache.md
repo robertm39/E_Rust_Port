@@ -87,6 +87,11 @@ Source files reviewed: `ORDERINGS/cto_cmpcache.h`, `ORDERINGS/cto_cmpcache.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `CmpCache` canonicalizes cache keys with raw term pointer ordering and stores them in a splay-tree-backed `QuadTree`, so cache hit locality and even canonical key order depend on allocator addresses. Rust preserves term-identity keys with stable term ids; after drop-in compatibility, benchmark recursive LPO/LPO4 workloads before deciding whether address-like ordering or splay locality should be modeled more exactly or replaced with a cleaner deterministic cache.
+- The cache stores dereference modes as part of the key but depends on callers to clear it when term-bank or substitution state can invalidate comparisons. Keep that invalidation responsibility explicit; a later ordering API should tie cache lifetime to the comparison context rather than exposing a mutable global-ish cache handle.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

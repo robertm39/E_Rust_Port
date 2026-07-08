@@ -100,6 +100,12 @@ Source files reviewed: `ORDERINGS/cto_kbo.h`, `ORDERINGS/cto_kbo.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `KBOVarGreater`'s comment describes `vars(s) subseteq vars(t)`, while the implementation accepts the `Var(s)-Var(t) >= 0` balance needed for `s > t`. Rust follows the implementation; clean up naming or comments only after ordering reference tests make the intended public contract unambiguous.
+- Classic KBO asserts against higher-order problem mode, while KBO6 owns the active LFHO branches. Rust preserves classic KBO for first-order-shaped higher-order calls behind explicit surface guards; a later dispatcher should make the problem-type split explicit instead of exposing two similarly named KBO APIs without context.
+- Classic KBO accumulates term weights with unchecked C `long` arithmetic. Rust currently mirrors this hot path with ordinary `i64` addition; revisit checked, saturating, or wrapping policy only after resource-limit and performance compatibility tests cover large weighted terms.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

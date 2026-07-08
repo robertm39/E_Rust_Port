@@ -134,6 +134,12 @@ Source files reviewed: `ORDERINGS/cto_lpo.h`, `ORDERINGS/cto_lpo.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- Standard LPO uses a file-static `recursion_depth` counter plus the process-global `LPORecursionDepthLimit`, making the C comparison helper non-reentrant. Rust keeps the global limit but makes current depth comparison-local; retain that cleanup unless reference tests show observable dependence on the C static state.
+- Standard LPO, LPO copy wrappers, and context-term LPO4 are separate algorithms with different higher-order assumptions. Once every ordering call site passes explicit problem-type and term-bank context, replace the current compatibility guards with a clearer API that makes standard first-order LPO and LFHO-capable LPO4 distinct choices.
+- The `ENABLE_LFHO` LPO4 path mixes owner-bank lookup, WHNF preparation, beta/eta normalization, and applied-variable instantiation into comparison recursion. Rust now covers the public mutable-bank normalization subset; revisit C's cache-backed owner-bank behavior and legacy no-bank callers before treating higher-order LPO4 as complete or optimizing the normalization path.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
