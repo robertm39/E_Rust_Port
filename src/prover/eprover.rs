@@ -32043,6 +32043,47 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_formula_owner_modes_reject_tcf_embedded_distinct_like_c() {
+        let _guard = global_state_lock();
+        for (mode_name, mode_args) in [
+            ("syntax", &["--syntax-only"][..]),
+            ("print", &["--print-formulas"][..]),
+            ("cnf", &["--cnf"][..]),
+        ] {
+            let path = temp_path(&format!("{mode_name}-tcf-embedded-distinct"));
+            std::fs::write(
+                &path,
+                "tff(a_type, type, a: $i).\n\
+                 tff(b_type, type, b: $i).\n\
+                 tff(c_type, type, c: $i).\n\
+                 tff(p_type, type, p: $i > $o).\n\
+                 tcf(bad, axiom, p(a) | $distinct(a,b,c)).\n",
+            )
+            .unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut args = vec!["eprover"];
+            args.extend_from_slice(mode_args);
+            args.push(path_arg.as_str());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let error = run(args, &mut stdout, &mut stderr).unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(
+                error
+                    .message()
+                    .contains("$distinct is only allowed as the sole predicate symbol"),
+                "unexpected diagnostic: {}",
+                error.message()
+            );
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
     fn run_syntax_only_rejects_non_tcf_watchlist_formula_role() {
         let _guard = global_state_lock();
         for formula_kind in ["fof", "tff"] {
