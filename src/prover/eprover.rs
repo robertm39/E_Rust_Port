@@ -23725,6 +23725,73 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_cnf_only_expands_embedded_distinct_formula_owners() {
+        let _guard = global_state_lock();
+        let first_order = temp_path("cnf-embedded-distinct-fo-tff");
+        std::fs::write(
+            &first_order,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(fof_embedded, axiom, p(a) | $distinct(a,b,c)).\n\
+             tff(tff_embedded, axiom, p(a) | $distinct(a,b,c)).\n",
+        )
+        .unwrap();
+        let first_order_arg = first_order.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", first_order_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert_eq!(printed.matches("p(a) <- a=b.\n").count(), 2);
+        assert_eq!(printed.matches("p(a) <- c=a.\n").count(), 2);
+        assert_eq!(printed.matches("p(a) <- c=b.\n").count(), 2);
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&first_order).unwrap();
+
+        let higher_order = temp_path("cnf-embedded-distinct-thf");
+        std::fs::write(
+            &higher_order,
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
+             thf(p_type, type, p: $i > $o).\n\
+             thf(thf_embedded, axiom, p @ a | $distinct(a,b,c)).\n",
+        )
+        .unwrap();
+        let higher_order_arg = higher_order.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", higher_order_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert_eq!(printed.matches("p(a) <- a=b.\n").count(), 1);
+        assert_eq!(printed.matches("p(a) <- c=a.\n").count(), 1);
+        assert_eq!(printed.matches("p(a) <- c=b.\n").count(), 1);
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&higher_order).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_conjunction_with_existential_conjunct() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjunction-existential-conjunct");
@@ -30212,6 +30279,68 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_print_formulas_expands_embedded_distinct_formula_owners() {
+        let _guard = global_state_lock();
+        let first_order = temp_path("print-formulas-embedded-distinct-fo-tff");
+        std::fs::write(
+            &first_order,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(fof_embedded, axiom, p(a) | $distinct(a,b,c)).\n\
+             tff(tff_embedded, axiom, p(a) | $distinct(a,b,c)).\n",
+        )
+        .unwrap();
+        let first_order_arg = first_order.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", first_order_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("fof(fof_embedded, axiom, (p(a)|(a!=b&(a!=c&b!=c))))"));
+        assert!(printed.contains("fof(tff_embedded, axiom, (p(a)|(a!=b&(a!=c&b!=c))))"));
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&first_order).unwrap();
+
+        let higher_order = temp_path("print-formulas-embedded-distinct-thf");
+        std::fs::write(
+            &higher_order,
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
+             thf(p_type, type, p: $i > $o).\n\
+             thf(thf_embedded, axiom, p @ a | $distinct(a,b,c)).\n",
+        )
+        .unwrap();
+        let higher_order_arg = higher_order.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", higher_order_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("thf(thf_embedded, axiom, (p(a)|(a!=b&(a!=c&b!=c))))"));
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&higher_order).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_expands_fof_distinct_conjecture_as_plain_wrapper() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-fof-distinct-conjecture");
@@ -33332,6 +33461,51 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_embedded_distinct_formula_owners() {
+        let _guard = global_state_lock();
+        for (name, input) in [
+            (
+                "syntax-embedded-distinct-fo-tff",
+                "tff(a_type, type, a: $i).\n\
+                 tff(b_type, type, b: $i).\n\
+                 tff(c_type, type, c: $i).\n\
+                 tff(p_type, type, p: $i > $o).\n\
+                 fof(fof_embedded, axiom, p(a) | $distinct(a,b,c)).\n\
+                 tff(tff_embedded, axiom, p(a) | $distinct(a,b,c)).\n",
+            ),
+            (
+                "syntax-embedded-distinct-thf",
+                "thf(a_type, type, a: $i).\n\
+                 thf(b_type, type, b: $i).\n\
+                 thf(c_type, type, c: $i).\n\
+                 thf(p_type, type, p: $i > $o).\n\
+                 thf(thf_embedded, axiom, p @ a | $distinct(a,b,c)).\n",
+            ),
+        ] {
+            let path = temp_path(name);
+            std::fs::write(&path, input).unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                ["eprover", "--syntax-only", path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                "\n% Parsing successful!\n% SZS status Unknown\n"
+            );
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 
     #[test]
