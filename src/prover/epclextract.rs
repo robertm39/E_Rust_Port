@@ -8,6 +8,7 @@ use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
 use crate::inout::initio::{exit_io, init_io};
+use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::pcl2::miniprotocol::PclMiniProtocol;
 use crate::pcl2::ministeps::PclMiniStepParseOptions;
@@ -214,6 +215,7 @@ where
     init_io(PROGRAM_NAME);
     set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
+    let _ = set_output_level(1);
     let result = run_inner(argv, stdin, stdout, stderr);
     exit_io();
     result
@@ -275,7 +277,9 @@ where
             OptionCode::Output => {
                 config.output_file = parsed.arg().map(PathBuf::from);
             }
-            OptionCode::Silent => {}
+            OptionCode::Silent => {
+                let _ = set_output_level(0);
+            }
         }
     }
 
@@ -562,6 +566,7 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 mod tests {
     use super::{full_parse_options, print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
+    use crate::inout::output::output_level;
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
@@ -633,6 +638,17 @@ mod tests {
                 .clause_parse_options
                 .clauses_have_local_variables
         );
+    }
+
+    #[test]
+    fn silent_option_sets_global_output_level_like_c() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME, "--silent"], SAMPLE_PROTOCOL);
+
+        assert_eq!(status, 0);
+        assert_eq!(output_level(), 0);
+        assert!(output.contains("      1 :  : [++p] : initial\n"));
+        assert!(stderr.is_empty());
     }
 
     #[test]
