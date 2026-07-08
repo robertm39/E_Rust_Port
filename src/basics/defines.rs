@@ -32,6 +32,37 @@ pub fn c_cmp<T: Ord + ?Sized>(left: &T, right: &T) -> i32 {
     }
 }
 
+/// Return the C `MAX` macro result.
+///
+/// The C macro evaluates both operands once and returns the right operand on
+/// ties because it uses a strict `>` comparison.
+#[must_use]
+pub fn c_max<T: PartialOrd>(left: T, right: T) -> T {
+    if left > right {
+        left
+    } else {
+        right
+    }
+}
+
+/// Return the C `MIN` macro result.
+///
+/// The C macro evaluates both operands once and returns the right operand on
+/// ties because it uses a strict `<` comparison.
+#[must_use]
+pub fn c_min<T: PartialOrd>(left: T, right: T) -> T {
+    if left < right {
+        left
+    } else {
+        right
+    }
+}
+
+/// Swap two same-typed Rust values with the C `SWAP` macro's value exchange.
+pub fn c_swap<T>(left: &mut T, right: &mut T) {
+    std::mem::swap(left, right);
+}
+
 /// Return the C `ABS` macro value for a signed `long`-shaped integer.
 ///
 /// # Panics
@@ -248,11 +279,23 @@ mod fd_write {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_to_str, c_abs, c_cmp, c_string_prefix, logical_equiv, logical_xor, tstp_out_fd,
-        tstp_out_fd_string, tstp_out_string, write_str_to_fd, IntOrP, IntOrPInt, INT_OR_P_MEM,
-        KILO, LONG_MEM, MEGA,
+        bool_to_str, c_abs, c_cmp, c_max, c_min, c_string_prefix, c_swap, logical_equiv,
+        logical_xor, tstp_out_fd, tstp_out_fd_string, tstp_out_string, write_str_to_fd, IntOrP,
+        IntOrPInt, INT_OR_P_MEM, KILO, LONG_MEM, MEGA,
     };
     use std::mem::size_of;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct TaggedValue {
+        key: i32,
+        tag: &'static str,
+    }
+
+    impl PartialOrd for TaggedValue {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.key.cmp(&other.key))
+        }
+    }
 
     #[test]
     fn constants_match_c_default_defines() {
@@ -269,6 +312,10 @@ mod tests {
         assert_eq!(c_cmp(&1, &2), -1);
         assert_eq!(c_cmp(&2, &2), 0);
         assert_eq!(c_cmp(&3, &2), 1);
+        assert_eq!(c_max(1, 2), 2);
+        assert_eq!(c_max(3, 2), 3);
+        assert_eq!(c_min(1, 2), 1);
+        assert_eq!(c_min(3, 2), 2);
         assert_eq!(c_abs(5), 5);
         assert_eq!(c_abs(0), 0);
         assert_eq!(c_abs(-5), 5);
@@ -276,6 +323,40 @@ mod tests {
         assert!(!logical_xor(true, true));
         assert!(logical_equiv(false, false));
         assert!(!logical_equiv(false, true));
+    }
+
+    #[test]
+    fn c_max_and_min_return_right_operand_on_ties_like_strict_c_macros() {
+        let left = TaggedValue {
+            key: 7,
+            tag: "left",
+        };
+        let right = TaggedValue {
+            key: 7,
+            tag: "right",
+        };
+
+        assert_eq!(c_max(left.clone(), right.clone()).tag, "right");
+        assert_eq!(c_min(left, right).tag, "right");
+    }
+
+    #[test]
+    fn c_max_and_min_preserve_c_nan_branch_shape() {
+        assert!(c_max(f64::NAN, 1.0).is_finite());
+        assert!(c_min(f64::NAN, 1.0).is_finite());
+        assert!(c_max(1.0, f64::NAN).is_nan());
+        assert!(c_min(1.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn c_swap_exchanges_values_like_c_macro() {
+        let mut left = "left";
+        let mut right = "right";
+
+        c_swap(&mut left, &mut right);
+
+        assert_eq!(left, "right");
+        assert_eq!(right, "left");
     }
 
     #[test]
