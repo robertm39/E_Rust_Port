@@ -1212,16 +1212,16 @@ fn preprocess_real_input_clauses(
             config.eqdef_incrlimit,
             config.eqdef_maxclauses,
         )?;
+        let _unfolded = clause_set_unfold_eq_def_normalize(
+            axioms,
+            watchlist,
+            archive,
+            &mut tmp_bank,
+            bank,
+            config.eqdef_incrlimit,
+            config.eqdef_maxclauses,
+        )?;
     }
-    let _unfolded = clause_set_unfold_eq_def_normalize(
-        axioms,
-        watchlist,
-        archive,
-        &mut tmp_bank,
-        bank,
-        config.eqdef_incrlimit,
-        config.eqdef_maxclauses,
-    )?;
     Ok(())
 }
 
@@ -1802,9 +1802,9 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 mod tests {
     use super::{
         classify_current_cnf_state_inline, clausify_real_input_formula_axioms, parse_feature_line,
-        parse_raw_feature_line, parse_real_input_file, process_options,
-        raw_features_for_standard_classification, run, ClassifyProblemConfig, RunCommand,
-        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        parse_raw_feature_line, parse_real_input_file, preprocess_real_input_clauses,
+        process_options, raw_features_for_standard_classification, run, ClassifyProblemConfig,
+        RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -2315,6 +2315,56 @@ mod tests {
         assert_eq!(state.axioms().members(), 1);
         assert_eq!(state.f_axioms().cardinality(), 0);
         assert_eq!(state.f_ax_archive().cardinality(), 2);
+    }
+
+    #[test]
+    fn standard_real_input_preprocessing_unfolds_eq_definitions() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"cnf(def, axiom, (f(X)=X)).\n\
+            cnf(use, axiom, (p(f(a)))).\n";
+
+        let parsed_problem_type = parse_real_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("real-input parsing succeeds");
+        preprocess_real_input_clauses(&config, &mut state, parsed_problem_type)
+            .expect("real-input preprocessing succeeds");
+
+        let printed = state.axioms().print_tptp_format_string(state.terms());
+        assert_eq!(state.axioms().members(), 1);
+        assert!(printed.contains("p(a)"));
+        assert!(!printed.contains("p(f(a))"));
+    }
+
+    #[test]
+    fn standard_real_input_no_preprocessing_skips_eq_definition_unfolding() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            no_preprocessing: true,
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"cnf(def, axiom, (f(X)=X)).\n\
+            cnf(use, axiom, (p(f(a)))).\n";
+
+        let parsed_problem_type = parse_real_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("real-input parsing succeeds");
+        preprocess_real_input_clauses(&config, &mut state, parsed_problem_type)
+            .expect("real-input preprocessing succeeds");
+
+        let printed = state.axioms().print_tptp_format_string(state.terms());
+        assert_eq!(state.axioms().members(), 2);
+        assert!(printed.contains("p(f(a))"));
     }
 
     #[test]
