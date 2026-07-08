@@ -112,6 +112,7 @@ Source files reviewed: `BASICS/clb_defines.h`.
 - `COMCHAR` is compile-time selected: the reference WSL/Linux build used by `e-interop` does not define `UNIX_COMMENTS`, so C prints `%`-prefixed status, proof, resource, and statistics comments. Rust now uses that reference default for supported executable comment output; if a `UNIX_COMMENTS` C build becomes a supported target, expose the comment prefix as a deliberate compatibility mode rather than scattering literals through output call sites.
 - `ABS(x)` uses the plain expression `((x)>0?(x):-(x))`, so ordinary signed values map to their positive magnitude but `LONG_MIN` would overflow in C. Rust keeps the helper for ordinary `long` values and panics on the minimum signed value instead of importing undefined behavior.
 - `WriteStr` is a one-shot low-allocation descriptor write: it truncates at the first C-string NUL byte through `strlen`, returns the raw write result as `size_t`, and therefore maps failed writes to an unsigned maximum value. Rust exposes this through a safe wrapper around a narrowly scoped platform C-runtime call.
+- The `TSTPOUT` and `TSTPOUTFD` macros use the same logical status text but different comment-prefix spellings in the default build: `fprintf(..., COMCHAR, ...)` renders `%`, while direct `WriteStr(fd, COMCHAR ...)` writes `%%`. Rust now exposes helpers for both shapes.
 
 ### Porting Focus
 

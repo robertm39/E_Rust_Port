@@ -60,6 +60,41 @@ pub fn write_str_to_fd(fd: i32, message: &str) -> usize {
     fd_write::write(fd, c_string_prefix(message))
 }
 
+/// Return the C `TSTPOUT(file, msg)` line shape for formatted output.
+#[must_use]
+pub fn tstp_out_string(status: &str) -> String {
+    format!(
+        "{} SZS status {}\n",
+        DEFAULT_COMCHAR_RAW,
+        c_string_prefix_str(status)
+    )
+}
+
+/// Write the C `TSTPOUTFD(fd, msg)` shape directly to a raw descriptor.
+///
+/// The default C build uses `COMCHAR == "%%"` for printf-format strings.
+/// `TSTPOUTFD` writes that string through `WriteStr`, so the direct descriptor
+/// output intentionally contains two percent signs.
+pub fn tstp_out_fd(fd: i32, status: &str) {
+    for chunk in tstp_out_fd_chunks(status) {
+        let _ = write_str_to_fd(fd, chunk);
+    }
+}
+
+fn tstp_out_fd_chunks(status: &str) -> [&str; 4] {
+    [
+        DEFAULT_COMCHAR_DIRECT,
+        " SZS status ",
+        c_string_prefix_str(status),
+        "\n",
+    ]
+}
+
+#[cfg(test)]
+fn tstp_out_fd_string(status: &str) -> String {
+    tstp_out_fd_chunks(status).concat()
+}
+
 fn c_string_prefix(message: &str) -> &[u8] {
     let bytes = message.as_bytes();
     let end = bytes
@@ -67,6 +102,11 @@ fn c_string_prefix(message: &str) -> &[u8] {
         .position(|byte| *byte == 0)
         .unwrap_or(bytes.len());
     &bytes[..end]
+}
+
+fn c_string_prefix_str(message: &str) -> &str {
+    let end = message.find('\0').unwrap_or(message.len());
+    &message[..end]
 }
 
 #[must_use]
@@ -208,8 +248,9 @@ mod fd_write {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_to_str, c_abs, c_cmp, c_string_prefix, logical_equiv, logical_xor, write_str_to_fd,
-        IntOrP, IntOrPInt, INT_OR_P_MEM, KILO, LONG_MEM, MEGA,
+        bool_to_str, c_abs, c_cmp, c_string_prefix, logical_equiv, logical_xor, tstp_out_fd,
+        tstp_out_fd_string, tstp_out_string, write_str_to_fd, IntOrP, IntOrPInt, INT_OR_P_MEM,
+        KILO, LONG_MEM, MEGA,
     };
     use std::mem::size_of;
 
@@ -269,5 +310,21 @@ mod tests {
     #[test]
     fn write_str_to_fd_reports_failed_raw_descriptor_like_c_unsigned_return() {
         assert_eq!(write_str_to_fd(-1, "x"), usize::MAX);
+    }
+
+    #[test]
+    fn tstp_status_helpers_preserve_formatted_and_direct_comment_prefixes() {
+        assert_eq!(tstp_out_string("Theorem"), "% SZS status Theorem\n");
+        assert_eq!(
+            tstp_out_fd_string("ResourceOut"),
+            "%% SZS status ResourceOut\n"
+        );
+        assert_eq!(tstp_out_string("Sat\0tail"), "% SZS status Sat\n");
+        assert_eq!(tstp_out_fd_string("Sat\0tail"), "%% SZS status Sat\n");
+    }
+
+    #[test]
+    fn tstp_out_fd_ignores_failed_raw_descriptor_like_c_macro() {
+        tstp_out_fd(-1, "ResourceOut");
     }
 }
