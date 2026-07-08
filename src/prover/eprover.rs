@@ -33333,6 +33333,36 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_untyped_fool_term_ite_branches() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-untyped-fool-term-ite-branches");
+        std::fs::write(
+            &path,
+            "fof(arg, axiom, p($ite(q(a), a, b))).\n\
+             fof(eq_left, axiom, ($ite(q(a), a, b) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_quantified_variable_fool_term_branches() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-quantified-variable-fool-term-branches");

@@ -15,7 +15,7 @@ use crate::terms::signature::{
     FunctionProperties, Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::signature::{
-    FP_FOF_OP, SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
+    FP_FOF_OP, FP_TYPE_FIXED, SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
     SIG_NAMED_LAMBDA_CODE,
 };
 use crate::terms::simpletypes::{
@@ -67,6 +67,12 @@ struct LetTypeDeclaration {
     name: String,
     f_code: FunCode,
     type_: Type,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedIteBranch {
+    term: Term,
+    pre_parse_f_count: FunCode,
 }
 
 fn let_type_declaration_codes(declarations: &[LetTypeDeclaration]) -> Vec<FunCode> {
@@ -2698,26 +2704,108 @@ impl TermBank {
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let condition = self.parse_tformula_tstp_subset(scanner)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let if_true = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
+        let mut if_true = self.parse_ite_tformula_branch(scanner)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let if_false = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
+        let mut if_false = self.parse_ite_tformula_branch(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
         Self::require_same_sort(&condition, &self.true_term, "$ite condition")?;
-        Self::require_same_sort(&if_true, &if_false, "$ite branches")?;
-        let result_type = if_true.type_().ok_or_else(|| {
+        let result_type = self.require_compatible_ite_branch_sorts(&mut if_true, &mut if_false)?;
+
+        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        ite.set_type(Some(result_type));
+        ite.set_argument(0, condition);
+        ite.set_argument(1, if_true.term);
+        ite.set_argument(2, if_false.term);
+        self.term_top_insert(ite)
+    }
+
+    fn parse_ite_tformula_branch(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<ParsedIteBranch, Diagnostic> {
+        let pre_parse_f_count = self.sig.f_count();
+        let term = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
+        Ok(ParsedIteBranch {
+            term,
+            pre_parse_f_count,
+        })
+    }
+
+    fn require_compatible_ite_branch_sorts(
+        &mut self,
+        if_true: &mut ParsedIteBranch,
+        if_false: &mut ParsedIteBranch,
+    ) -> Result<Type, Diagnostic> {
+        let true_type = if_true.term.type_().ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::TYPE_ERROR,
                 "$ite true branch must have an inferred type",
             )
         })?;
+        let false_type = if_false.term.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$ite false branch must have an inferred type",
+            )
+        })?;
 
-        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
-        ite.set_type(Some(result_type));
-        ite.set_argument(0, condition);
-        ite.set_argument(1, if_true);
-        ite.set_argument(2, if_false);
-        self.term_top_insert(ite)
+        if true_type != false_type {
+            self.recover_untyped_ite_default_branch(if_true, &false_type)?;
+            self.recover_untyped_ite_default_branch(if_false, &true_type)?;
+        }
+
+        Self::require_same_sort(&if_true.term, &if_false.term, "$ite branches")?;
+        if_true.term.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$ite true branch must have an inferred type",
+            )
+        })
+    }
+
+    fn recover_untyped_ite_default_branch(
+        &mut self,
+        branch: &mut ParsedIteBranch,
+        other_type: &Type,
+    ) -> Result<(), Diagnostic> {
+        let default_type = self.sig.type_bank().default_type();
+        if other_type != &default_type {
+            return Ok(());
+        }
+
+        let Some(candidate) = self.untyped_ite_default_branch_candidate(&branch.term) else {
+            return Ok(());
+        };
+
+        let f_code = candidate.f_code();
+        if f_code <= branch.pre_parse_f_count || f_code <= self.sig.internal_symbols() {
+            return Ok(());
+        }
+
+        self.sig.del_func_prop(f_code, FP_TYPE_FIXED);
+        self.sig.declare_type(f_code, default_type.clone())?;
+        self.sig.fix_type(f_code);
+        candidate.set_type(Some(default_type));
+        branch.term = candidate;
+        Ok(())
+    }
+
+    fn untyped_ite_default_branch_candidate(&self, term: &Term) -> Option<Term> {
+        if term.type_().as_ref() != Some(&self.sig.type_bank().bool_type()) {
+            return None;
+        }
+        if !term.is_any_var() && term.arity() == 0 {
+            return Some(term.clone());
+        }
+        if term.f_code() != self.sig.eqn_code() || term.arity() != 2 {
+            return None;
+        }
+        if term.argument(1) != Some(self.true_term.clone()) {
+            return None;
+        }
+        let left = term.argument(0)?;
+        (!left.is_any_var() && left.arity() == 0).then_some(left)
     }
 
     fn parse_let_tformula_tstp_subset(
@@ -5510,6 +5598,32 @@ mod tests {
                 .find_name(ite.argument(2).unwrap().f_code()),
             Some("ite_var_else")
         );
+    }
+
+    #[test]
+    fn checked_parser_recovers_untyped_individual_ite_branch_like_c() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        let mut scanner =
+            Scanner::from_user_string("takes_i_arg($ite(pred_untyped_ite_cond(a), a, b))", false)
+                .unwrap();
+
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let ite = parsed.argument(0).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(i_type.clone()));
+        assert_eq!(
+            bank.signature()
+                .find_name(ite.argument(1).unwrap().f_code()),
+            Some("a")
+        );
+        let false_branch = ite.argument(2).unwrap();
+        assert_eq!(bank.signature().find_name(false_branch.f_code()), Some("b"));
+        assert_eq!(false_branch.type_(), Some(i_type));
+        assert!(bank.signature().is_function(false_branch.f_code()));
+        assert!(!bank.signature().is_predicate(false_branch.f_code()));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]
