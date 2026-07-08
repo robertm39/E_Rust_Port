@@ -113,6 +113,8 @@ use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
     proof_state_filter_unprocessed, proof_state_init_with_output,
     proof_state_insert_watchlist_global_indices, proof_state_reset_processed_with_global_indices,
+    proof_state_reset_processed_with_global_indices_and_docs,
+    proof_state_saturate_with_global_and_watchlist_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_output, ProofControl,
     SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
@@ -2440,6 +2442,18 @@ impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
             Self::Writer { writer, .. } => writer.write_all(buffer),
             Self::File { file, .. } => file.write_all(buffer),
         }
+    }
+}
+
+struct ConfiguredFmtOutput<'a, 'out, W: Write + ?Sized> {
+    output: &'a mut ConfiguredOutput<'out, W>,
+}
+
+impl<W: Write + ?Sized> fmt::Write for ConfiguredFmtOutput<'_, '_, W> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.output
+            .write_all(text.as_bytes())
+            .map_err(|_| fmt::Error)
     }
 }
 
@@ -5468,7 +5482,7 @@ fn run_proof_search<W: Write + ?Sized>(
     )?;
     let next_doc_ident =
         write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
-    let next_doc_ident =
+    let mut next_doc_ident =
         write_watchlist_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
 
     match apply_auto_mode_search_selection(
@@ -5529,30 +5543,41 @@ fn run_proof_search<W: Write + ?Sized>(
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
     let mut global_indices = proof_search_global_indices(&index_signature, &control);
-    let presat_outcome = if control.heuristic_parms().presat_interreduction {
+    let presat_result = if control.heuristic_parms().presat_interreduction {
         run_presaturation_interreduction(
             output,
-            config.output_level,
+            config,
+            next_doc_ident,
             &mut state,
             &mut control,
             &mut global_indices,
             &mut watchlist_indices,
         )?
     } else {
-        None
+        PresaturationInterreductionResult {
+            outcome: None,
+            next_doc_ident,
+        }
     };
-    let mut outcome = if let Some(outcome) = presat_outcome {
-        outcome
+    next_doc_ident = presat_result.next_doc_ident;
+    let saturation = if let Some(outcome) = presat_result.outcome {
+        SaturationRunResult {
+            outcome,
+            next_doc_ident,
+        }
     } else {
         run_main_saturation(
             output,
             config,
+            next_doc_ident,
             &mut state,
             &mut control,
             &mut global_indices,
             &mut watchlist_indices,
         )?
     };
+    next_doc_ident = saturation.next_doc_ident;
+    let mut outcome = saturation.outcome;
     if hard_time_limit_expired_in_saturation(&outcome) {
         return finalize_hard_time_limit_stop(output, hard_timeout_stderr);
     }
@@ -5645,15 +5670,45 @@ fn hard_time_limit_diagnostic() -> Diagnostic {
     )
 }
 
+struct SaturationRunResult {
+    outcome: SaturateOutcome,
+    next_doc_ident: i64,
+}
+
 fn run_main_saturation<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
+    start_doc_ident: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
     watchlist_indices: &mut GlobalIndices<'_>,
-) -> Result<SaturateOutcome, EProverError> {
-    Ok(
+) -> Result<SaturationRunResult, EProverError> {
+    let mut next_doc_ident = start_doc_ident;
+    let outcome = if config.output_level >= 2 {
+        let mut session = clause_proof_doc_session(config, start_doc_ident)?;
+        let outcome = {
+            let mut fmt_output = ConfiguredFmtOutput { output };
+            proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+                &mut fmt_output,
+                &mut session,
+                config.output_level,
+                state,
+                control,
+                config.step_limit,
+                config.processed_set_limit,
+                config.unprocessed_limit,
+                config.total_clause_set_limit,
+                config.generated_limit,
+                config.term_bank_insert_limit,
+                config.answer_limit,
+                indices,
+                watchlist_indices,
+            )?
+        };
+        next_doc_ident = session.id_source.current_ident().saturating_add(1);
+        outcome
+    } else {
         proof_state_saturate_with_global_and_watchlist_indices_and_output(
             output,
             config.output_level,
@@ -5668,8 +5723,12 @@ fn run_main_saturation<W: Write + ?Sized>(
             config.answer_limit,
             indices,
             watchlist_indices,
-        )?,
-    )
+        )?
+    };
+    Ok(SaturationRunResult {
+        outcome,
+        next_doc_ident,
+    })
 }
 
 fn should_suppress_saturated_output_after_force_deriv(
@@ -6378,39 +6437,92 @@ fn write_sat_check_success_output(
     Ok(())
 }
 
-fn run_presaturation_interreduction(
-    output: &mut impl Write,
-    output_level: i64,
+struct PresaturationInterreductionResult {
+    outcome: Option<SaturateOutcome>,
+    next_doc_ident: i64,
+}
+
+fn run_presaturation_interreduction<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    start_doc_ident: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
     watchlist_indices: &mut GlobalIndices<'_>,
-) -> Result<Option<SaturateOutcome>, EProverError> {
+) -> Result<PresaturationInterreductionResult, EProverError> {
+    let mut session = if config.output_level >= 2 {
+        Some(clause_proof_doc_session(config, start_doc_ident)?)
+    } else {
+        None
+    };
     let selection_strategy = control.heuristic_parms().selection_strategy.clone();
     NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
-    let outcome = proof_state_saturate_with_global_and_watchlist_indices_and_output(
-        output,
-        output_level,
-        state,
-        control,
-        i64::MAX,
-        i64::MAX,
-        i64::MAX,
-        i64::MAX,
-        i64::MAX,
-        i64::MAX,
-        i64::MAX,
-        indices,
-        watchlist_indices,
-    );
+    let outcome = if let Some(session) = session.as_mut() {
+        let mut fmt_output = ConfiguredFmtOutput { output };
+        proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+            &mut fmt_output,
+            session,
+            config.output_level,
+            state,
+            control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            indices,
+            watchlist_indices,
+        )
+    } else {
+        proof_state_saturate_with_global_and_watchlist_indices_and_output(
+            output,
+            config.output_level,
+            state,
+            control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            indices,
+            watchlist_indices,
+        )
+    };
     control.heuristic_parms_mut().selection_strategy = selection_strategy;
     let outcome = outcome?;
     write_comment_line(output, "Presaturation interreduction done")?;
     if matches!(outcome, SaturateOutcome::Returned { .. }) {
-        Ok(Some(outcome))
+        let next_doc_ident = session.as_ref().map_or(start_doc_ident, |session| {
+            session.id_source.current_ident().saturating_add(1)
+        });
+        Ok(PresaturationInterreductionResult {
+            outcome: Some(outcome),
+            next_doc_ident,
+        })
     } else {
-        proof_state_reset_processed_with_global_indices(state, control, indices)?;
-        Ok(None)
+        let next_doc_ident = if let Some(session) = session.as_mut() {
+            let mut fmt_output = ConfiguredFmtOutput { output };
+            proof_state_reset_processed_with_global_indices_and_docs(
+                &mut fmt_output,
+                session,
+                state,
+                control,
+                indices,
+            )?;
+            session.id_source.current_ident().saturating_add(1)
+        } else {
+            proof_state_reset_processed_with_global_indices(state, control, indices)?;
+            start_doc_ident
+        };
+        Ok(PresaturationInterreductionResult {
+            outcome: None,
+            next_doc_ident,
+        })
     }
 }
 
@@ -28367,6 +28479,31 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.contains("\n     2 : :[] : 1 : 'proof'\n\n% Proof found!\n"));
+        assert!(printed.contains("% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_threads_saturation_inference_docs_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-saturation-docs-pcl");
+        std::fs::write(&path, "X!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("\n     2 : :[] : er(1)\n"));
+        assert!(printed.contains("\n     3 : :[] : 2 : 'proof'\n\n% Proof found!\n"));
         assert!(printed.contains("% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

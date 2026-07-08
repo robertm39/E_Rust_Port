@@ -126,7 +126,7 @@ use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
 use crate::terms::termvars::VarBank;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt,
+    fmt::{self, Write as _},
     path::Path,
     time::Instant,
 };
@@ -7174,7 +7174,7 @@ pub fn proof_state_saturate(
     tb_insert_limit: i64,
     answer_limit: i64,
 ) -> Result<SaturateOutcome, Diagnostic> {
-    proof_state_saturate_impl(
+    proof_state_saturate_impl::<String>(
         state,
         control,
         step_limit,
@@ -7184,6 +7184,7 @@ pub fn proof_state_saturate(
         generated_limit,
         tb_insert_limit,
         answer_limit,
+        None,
         None,
         None,
         None,
@@ -7215,7 +7216,7 @@ pub fn proof_state_saturate_with_output(
     answer_limit: i64,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
-    proof_state_saturate_impl(
+    proof_state_saturate_impl::<String>(
         state,
         control,
         step_limit,
@@ -7227,6 +7228,7 @@ pub fn proof_state_saturate_with_output(
         answer_limit,
         None,
         Some((output, output_level)),
+        None,
         None,
     )
 }
@@ -7259,7 +7261,7 @@ pub fn proof_state_saturate_with_global_indices(
     answer_limit: i64,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, Diagnostic> {
-    proof_state_saturate_impl(
+    proof_state_saturate_impl::<String>(
         state,
         control,
         step_limit,
@@ -7270,6 +7272,7 @@ pub fn proof_state_saturate_with_global_indices(
         tb_insert_limit,
         answer_limit,
         Some(indices),
+        None,
         None,
         None,
     )
@@ -7302,7 +7305,7 @@ pub fn proof_state_saturate_with_global_indices_and_output(
     indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
-    proof_state_saturate_impl(
+    proof_state_saturate_impl::<String>(
         state,
         control,
         step_limit,
@@ -7314,6 +7317,7 @@ pub fn proof_state_saturate_with_global_indices_and_output(
         answer_limit,
         Some(indices),
         Some((output, output_level)),
+        None,
         None,
     )
 }
@@ -7346,7 +7350,7 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
     watchlist_indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
-    proof_state_saturate_impl(
+    proof_state_saturate_impl::<String>(
         state,
         control,
         step_limit,
@@ -7359,6 +7363,53 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
         Some(indices),
         Some((output, output_level)),
         Some(watchlist_indices),
+        None,
+    )
+}
+
+/// Runs the ported C `Saturate` loop using caller-owned global indices and
+/// caller-owned watchlist global indices while emitting represented C
+/// `document_processing` and generated-clause proof-documentation output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_saturate_with_global_and_watchlist_indices_and_output`], plus
+/// any proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<SaturateOutcome, Diagnostic> {
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        Some(indices),
+        None,
+        Some(watchlist_indices),
+        Some((output, session, output_level)),
     )
 }
 
@@ -7412,7 +7463,7 @@ enum SatCheckTrigger {
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
 )]
-fn proof_state_saturate_impl(
+fn proof_state_saturate_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     step_limit: i64,
@@ -7425,6 +7476,7 @@ fn proof_state_saturate_impl(
     mut indices: Option<&mut GlobalIndices<'_>>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
     mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
     let mut sat_check_thresholds = SatCheckThresholds::new(control.heuristic_parms());
@@ -7447,14 +7499,26 @@ fn proof_state_saturate_impl(
         }
 
         processed_steps = processed_steps.saturating_add(1);
-        let process_outcome = proof_state_process_clause_for_saturate(
-            state,
-            control,
-            answer_limit,
-            indices.as_deref_mut(),
-            watchlist_indices.as_deref_mut(),
-            output_context.as_mut(),
-        )?;
+        let process_outcome = if let Some((output, session, output_level)) = doc_context.as_mut() {
+            proof_state_process_clause_impl(
+                state,
+                control,
+                answer_limit,
+                indices.as_deref_mut(),
+                watchlist_indices.as_deref_mut(),
+                Some((&mut **output, &mut **session, *output_level)),
+                None,
+            )
+        } else {
+            proof_state_process_clause_for_saturate(
+                state,
+                control,
+                answer_limit,
+                indices.as_deref_mut(),
+                watchlist_indices.as_deref_mut(),
+                output_context.as_mut(),
+            )
+        }?;
         match process_outcome {
             ProcessClauseOutcome::NoClause => {
                 return Ok(SaturateOutcome::Stopped {
@@ -7493,7 +7557,9 @@ fn proof_state_saturate_impl(
         }
 
         let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
-        if let Some((output, output_level)) = output_context.as_mut() {
+        if let Some((output, _session, output_level)) = doc_context.as_mut() {
+            write_cleanup_unprocessed_fmt_output(&mut **output, *output_level, &cleanup)?;
+        } else if let Some((output, output_level)) = output_context.as_mut() {
             write_cleanup_unprocessed_output(&mut **output, *output_level, &cleanup)?;
         }
         if let Some(clause) = cleanup.unsatisfiable {
@@ -7523,40 +7589,57 @@ fn write_cleanup_unprocessed_output(
     output_level: i64,
     outcome: &CleanupUnprocessedOutcome,
 ) -> Result<(), Diagnostic> {
+    let rendered = cleanup_unprocessed_output_string(output_level, outcome);
+    std::io::Write::write_all(output, rendered.as_bytes())
+        .map_err(|error| proof_control_io_error(&error))
+}
+
+fn write_cleanup_unprocessed_fmt_output(
+    output: &mut impl fmt::Write,
+    output_level: i64,
+    outcome: &CleanupUnprocessedOutcome,
+) -> Result<(), Diagnostic> {
+    let rendered = cleanup_unprocessed_output_string(output_level, outcome);
+    fmt::Write::write_str(output, &rendered).map_err(proof_control_write_error)
+}
+
+fn cleanup_unprocessed_output_string(
+    output_level: i64,
+    outcome: &CleanupUnprocessedOutcome,
+) -> String {
     if output_level == 0 {
-        return Ok(());
+        return String::new();
     }
 
+    let mut rendered = String::new();
     if outcome.orphan_cleanup_triggered {
-        let line = format!(
-            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses (remaining: {})\n",
+        let _ = writeln!(
+            &mut rendered,
+            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses (remaining: {})",
             outcome.orphan_cleanup_deleted, outcome.orphan_cleanup_remaining
         );
-        std::io::Write::write_all(output, line.as_bytes())
-            .map_err(|error| proof_control_io_error(&error))?;
     }
     if outcome.forward_contract_triggered {
-        let line = format!(
-            "{DEFAULT_COMCHAR_RAW} Special forward-contraction deletes {} clauses(remaining: {}) \n",
+        let _ = writeln!(
+            &mut rendered,
+            "{DEFAULT_COMCHAR_RAW} Special forward-contraction deletes {} clauses(remaining: {}) ",
             outcome.forward_contract_deleted, outcome.forward_contract_remaining
         );
-        std::io::Write::write_all(output, line.as_bytes())
-            .map_err(|error| proof_control_io_error(&error))?;
         if outcome.unsatisfiable.is_none() && output_level >= 1 {
-            let line = format!("{DEFAULT_COMCHAR_RAW} Reweighting unprocessed clauses...\n");
-            std::io::Write::write_all(output, line.as_bytes())
-                .map_err(|error| proof_control_io_error(&error))?;
+            let _ = writeln!(
+                &mut rendered,
+                "{DEFAULT_COMCHAR_RAW} Reweighting unprocessed clauses..."
+            );
         }
     }
     if outcome.delete_bad_triggered {
-        let line = format!(
-            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses and {} bad clauses (prover may be incomplete now)\n",
+        let _ = writeln!(
+            &mut rendered,
+            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses and {} bad clauses (prover may be incomplete now)",
             outcome.delete_bad_orphaned_deleted, outcome.bad_deleted
         );
-        std::io::Write::write_all(output, line.as_bytes())
-            .map_err(|error| proof_control_io_error(&error))?;
     }
-    Ok(())
+    rendered
 }
 
 fn proof_control_io_error(error: &std::io::Error) -> Diagnostic {
@@ -9077,9 +9160,9 @@ mod tests {
         proof_state_recognize_choice_axioms, proof_state_replacing_inferences,
         proof_state_replacing_inferences_with_docs, proof_state_reset_processed,
         proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
-        proof_state_saturate, proof_state_saturate_with_global_indices,
-        proof_state_saturate_with_output, proof_state_simplify_watchlist,
-        proof_state_simplify_watchlist_with_docs,
+        proof_state_saturate, proof_state_saturate_with_global_and_watchlist_indices_and_docs,
+        proof_state_saturate_with_global_indices, proof_state_saturate_with_output,
+        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
         proof_state_simplify_watchlist_with_global_indices, proof_state_storage_estimate,
         select_inherited_literal, write_cleanup_unprocessed_output, BackwardSimplificationOutcome,
         CleanupUnprocessedOutcome, ForwardContractCounts, ForwardContractOptions,
@@ -15655,6 +15738,73 @@ mod tests {
         assert_eq!(state.processed_cardinality(), 1);
         assert_eq!(state.unprocessed().members(), 1);
         assert!(indices.find_pm_from_occurrence(&source).is_some());
+    }
+
+    #[test]
+    fn proof_state_saturate_with_docs_quotes_indexed_paramodulation() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut indexed_partner, source) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_saturate_doc_idx_pm_source");
+            let replacement = typed_const(terms, "pc_saturate_doc_idx_pm_replacement");
+            let rhs = typed_const(terms, "pc_saturate_doc_idx_pm_rhs");
+            let f_source = typed_unary(terms, "pc_saturate_doc_idx_pm_f", &source);
+            let mut selected_lit = literal(terms, &source, &replacement, true);
+            let mut partner_lit = literal(terms, &f_source, &rhs, true);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_155);
+            let mut partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            partner.set_ident(4_156);
+            (selected, partner, source)
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_partner, state.terms(), false);
+        let mut watchlist_indices =
+            GlobalIndices::new(&index_signature, "NoIndex", "NoIndex", "NoIndex", 0);
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "SaturateIndexedDocsTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+            &mut output,
+            &mut session,
+            2,
+            &mut state,
+            &mut control,
+            1,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+            &mut indices,
+            &mut watchlist_indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::StepLimit,
+                processed_steps: 1,
+            }
+        );
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.processed_cardinality(), 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(indices.find_pm_from_occurrence(&source).is_some());
+        assert!(output.contains(" : pm(4156,4155)\n"), "{output}");
     }
 
     #[test]
