@@ -47,7 +47,8 @@ use crate::clauses::ext_index::{
     type_ext_eligible,
 };
 use crate::clauses::factor::{
-    compute_all_equality_factors, compute_all_equality_factors_with_docs,
+    compute_all_equality_factors_with_fresh_vars,
+    compute_all_equality_factors_with_fresh_vars_and_docs,
 };
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
@@ -6206,16 +6207,23 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
                 ));
             };
             let count = if let Some((output, session)) = doc_context.as_mut() {
-                compute_all_equality_factors_with_docs(
+                compute_all_equality_factors_with_fresh_vars_and_docs(
                     &mut **output,
                     session,
                     terms,
                     ocb,
                     clause,
                     generation.tmp_store,
+                    generation.fresh_vars,
                 )?
             } else {
-                compute_all_equality_factors(terms, ocb, clause, generation.tmp_store)?
+                compute_all_equality_factors_with_fresh_vars(
+                    terms,
+                    ocb,
+                    clause,
+                    generation.tmp_store,
+                    generation.fresh_vars,
+                )?
             };
             outcome.equality_factors = i64_to_u64_saturating(count);
         }

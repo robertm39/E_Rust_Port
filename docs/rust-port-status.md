@@ -84,20 +84,20 @@ C source references:
 Implemented:
 
 - First-order ordered factor candidate enumeration matching `ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`.
-- First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, bank-backed post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, proof-state-owned fresh-variable-bank reset, bank-backed post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - First-order `ComputeAllOrderedFactors`, including Horn and `CPNoGeneration` gates, clause-set insertion, parent proof-depth/proof-size/TPTP/SOS metadata propagation, `DCOrderedFactor` derivation entries, and opt-in represented `inf_factor` proof-documentation output.
 - First-order equality factor candidate enumeration matching `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`.
-- `ComputeEqualityFactor` and `ComputeAllEqualityFactors` for first-order complete-MGU candidates and higher-order `CsuIterator` enumeration, including higher-order pattern-oracle CSU results, the C free-variable/equational guard, bank-backed `TOGreater` side check and post-unifier maximality recheck for KBO6 Lambda-order beta/eta ordering preparation, generated negative condition, DB-lambda beta/eta normalization of generated equality-factor literal lists before cleanup, Horn and `CPNoGeneration` gates, multi-CSU stack-pop insertion order, clause-set insertion, parent metadata propagation, ordinary and higher-order `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
+- `ComputeEqualityFactor` and `ComputeAllEqualityFactors` for first-order complete-MGU candidates and higher-order `CsuIterator` enumeration, including higher-order pattern-oracle CSU results, the C free-variable/equational guard, proof-state-owned fresh-variable-bank reuse without an equality-factor-local reset, bank-backed `TOGreater` side check and post-unifier maximality recheck for KBO6 Lambda-order beta/eta ordering preparation, generated negative condition, DB-lambda beta/eta normalization of generated equality-factor literal lists before cleanup, Horn and `CPNoGeneration` gates, multi-CSU stack-pop insertion order, clause-set insertion, parent metadata propagation, ordinary and higher-order `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
 
 Pending:
 
-- Proof-state-owned fresh-variable-bank reuse may need a performance pass once stable clause/literal ownership is ported.
 - Broader C trace coverage for multi-CSU equality-factor order, proof-documentation streams, and performance.
 
 Change-later notes:
 
 - C equality factoring pushes CSU results to a stack and the wrapper later pops them, reversing multi-CSU insertion order. Rust mirrors this with a temporary vector and `pop`; preserve or intentionally change the reversal only after HO trace tests show proof output can change safely.
 - C assigns `*subst_is_ho = SubstHasHOBinding(subst)` for each accepted equality factor, then the control wrapper applies the final flag value to every factor popped for that candidate. Rust mirrors this last-accepted-factor behavior even though per-factor metadata would be a cleaner API.
+- Factoring has an asymmetric fresh-variable-bank boundary: `ComputeOrderedFactor` resets the caller-owned `freshvars` before each attempt, while `ComputeEqualityFactor` consumes the caller's current counts. Rust proof-control wrappers mirror that behavior; a future cleanup could make the reset policy explicit in the C API after proof traces confirm compatibility.
 
 ## Equality Resolution
 

@@ -227,6 +227,42 @@ pub fn compute_ordered_factor(
     clause: &Clause,
     position: OrderedFactorPosition,
 ) -> Result<Option<Clause>, Diagnostic> {
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_ordered_factor_impl(bank, ocb, clause, position, &freshvars, false)
+}
+
+/// Builds the first-order C `ComputeOrderedFactor` result using a caller-owned
+/// `freshvars` bank.
+///
+/// This mirrors C's proof-control path by resetting variable counts before the
+/// directed unification attempt.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term-bank insertion fails while copying the factor.
+///
+/// # Panics
+///
+/// Panics under the same internal-caller invariant violations as
+/// [`compute_ordered_factor`].
+pub fn compute_ordered_factor_with_fresh_vars(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: OrderedFactorPosition,
+    freshvars: &VarBank,
+) -> Result<Option<Clause>, Diagnostic> {
+    compute_ordered_factor_impl(bank, ocb, clause, position, freshvars, true)
+}
+
+fn compute_ordered_factor_impl(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: OrderedFactorPosition,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
+) -> Result<Option<Clause>, Diagnostic> {
     let literals = clause.literals().as_slice();
     assert_ne!(
         position.first_literal_index, position.second_literal_index,
@@ -258,12 +294,21 @@ pub fn compute_ordered_factor(
     }
 
     let mut subst = Substitution::new();
+    if reset_freshvars {
+        freshvars.reset_v_counts();
+    }
     if !first.unify_directed(&oriented_second, &mut subst) {
         return Ok(None);
     }
 
     let result = if eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)? {
-        build_ordered_factor(bank, clause, position.second_literal_index, &mut subst)
+        build_ordered_factor(
+            bank,
+            clause,
+            position.second_literal_index,
+            freshvars,
+            &mut subst,
+        )
     } else {
         Ok(None)
     };
@@ -294,12 +339,43 @@ pub fn compute_equality_factor(
     clause: &Clause,
     position: EqualityFactorPosition,
 ) -> Result<Option<Clause>, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        let (mut factors, _) = compute_equality_factor_csu_factors(bank, ocb, clause, position)?;
-        return Ok(factors.pop());
-    }
-    let (factor, _) = compute_equality_factor_mgu(bank, ocb, clause, position)?;
-    Ok(factor)
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_equality_factor_impl(bank, ocb, clause, position, &freshvars)
+}
+
+/// Builds one equality-factor result using a caller-owned C `freshvars` bank.
+///
+/// Unlike ordered factoring, C `ComputeEqualityFactor` does not reset
+/// `freshvars` before candidate construction; callers control the count state.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term-bank insertion fails while copying the
+/// generated factor or if higher-order CSU limits have not been initialized.
+///
+/// # Panics
+///
+/// Panics under the same internal-caller invariant violations as
+/// [`compute_equality_factor`].
+pub fn compute_equality_factor_with_fresh_vars(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+    freshvars: &VarBank,
+) -> Result<Option<Clause>, Diagnostic> {
+    compute_equality_factor_impl(bank, ocb, clause, position, freshvars)
+}
+
+fn compute_equality_factor_impl(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+    freshvars: &VarBank,
+) -> Result<Option<Clause>, Diagnostic> {
+    let (mut factors, _) = compute_equality_factor_factors(bank, ocb, clause, position, freshvars)?;
+    Ok(factors.pop())
 }
 
 fn equality_factor_input(
@@ -377,6 +453,7 @@ fn compute_equality_factor_mgu(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     position: EqualityFactorPosition,
+    freshvars: &VarBank,
 ) -> Result<(Option<Clause>, bool), Diagnostic> {
     let input = equality_factor_input(bank, clause, position);
     if equality_factor_free_var_guard(&input) {
@@ -396,6 +473,7 @@ fn compute_equality_factor_mgu(
             position,
             &input.min_term,
             &input.second_other,
+            freshvars,
             &mut subst,
         )
     } else {
@@ -410,6 +488,7 @@ fn compute_equality_factor_csu_factors(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     position: EqualityFactorPosition,
+    freshvars: &VarBank,
 ) -> Result<(Vec<Clause>, bool), Diagnostic> {
     let input = equality_factor_input(bank, clause, position);
     if equality_factor_free_var_guard(&input) {
@@ -441,6 +520,7 @@ fn compute_equality_factor_csu_factors(
                 position,
                 &input.min_term,
                 &input.second_other,
+                freshvars,
                 &mut subst,
             ) {
                 Ok(Some(factor)) => factor,
@@ -456,6 +536,22 @@ fn compute_equality_factor_csu_factors(
 
     iter.destroy(&mut subst);
     Ok((factors, subst_is_ho))
+}
+
+fn compute_equality_factor_factors(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+    freshvars: &VarBank,
+) -> Result<(Vec<Clause>, bool), Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        compute_equality_factor_csu_factors(bank, ocb, clause, position, freshvars)
+    } else {
+        let (factor, subst_is_ho) =
+            compute_equality_factor_mgu(bank, ocb, clause, position, freshvars)?;
+        Ok((factor.into_iter().collect(), subst_is_ho))
+    }
 }
 
 /// Computes all first-order ordered factors and inserts them into `store`.
@@ -474,7 +570,24 @@ pub fn compute_all_ordered_factors(
     clause: &Clause,
     store: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
-    compute_all_ordered_factors_impl::<String>(bank, ocb, clause, store, None)
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_all_ordered_factors_impl::<String>(bank, ocb, clause, store, &freshvars, false, None)
+}
+
+/// Computes all first-order ordered factors with a caller-owned C `freshvars`
+/// bank and inserts them into `store`.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_ordered_factor_with_fresh_vars`].
+pub fn compute_all_ordered_factors_with_fresh_vars(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_ordered_factors_impl::<String>(bank, ocb, clause, store, freshvars, true, None)
 }
 
 /// Computes all first-order ordered factors while emitting represented C
@@ -492,7 +605,45 @@ pub fn compute_all_ordered_factors_with_docs(
     clause: &Clause,
     store: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
-    compute_all_ordered_factors_impl(bank, ocb, clause, store, Some((output, session)))
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    compute_all_ordered_factors_impl(
+        bank,
+        ocb,
+        clause,
+        store,
+        &freshvars,
+        false,
+        Some((output, session)),
+    )
+}
+
+/// Computes all first-order ordered factors with a caller-owned C `freshvars`
+/// bank while emitting represented C `DocClauseCreationDefault(...,
+/// inf_factor, ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`compute_all_ordered_factors_with_fresh_vars`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_ordered_factors_with_fresh_vars_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_ordered_factors_impl(
+        bank,
+        ocb,
+        clause,
+        store,
+        freshvars,
+        true,
+        Some((output, session)),
+    )
 }
 
 fn compute_all_ordered_factors_impl<W: fmt::Write>(
@@ -500,6 +651,8 @@ fn compute_all_ordered_factors_impl<W: fmt::Write>(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     store: &mut ClauseSet,
+    freshvars: &VarBank,
+    reset_freshvars: bool,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut factor_count = 0;
@@ -508,7 +661,9 @@ fn compute_all_ordered_factors_impl<W: fmt::Write>(
     }
 
     for position in ordered_factor_positions(clause) {
-        if let Some(mut factor) = compute_ordered_factor(bank, ocb, clause, position)? {
+        if let Some(mut factor) =
+            compute_ordered_factor_impl(bank, ocb, clause, position, freshvars, reset_freshvars)?
+        {
             factor_count += 1;
             factor.set_proof_depth(clause.proof_depth().saturating_add(1));
             factor.set_proof_size(clause.proof_size().saturating_add(1));
@@ -548,7 +703,23 @@ pub fn compute_all_equality_factors(
     clause: &Clause,
     store: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
-    compute_all_equality_factors_impl::<String>(bank, ocb, clause, store, None)
+    compute_all_equality_factors_impl::<String>(bank, ocb, clause, store, None, None)
+}
+
+/// Computes all equality factors with a caller-owned C `freshvars` bank and
+/// inserts them into `store`.
+///
+/// # Errors
+///
+/// Returns diagnostics from factor construction or higher-order CSU iteration.
+pub fn compute_all_equality_factors_with_fresh_vars(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_equality_factors_impl::<String>(bank, ocb, clause, store, Some(freshvars), None)
 }
 
 /// Computes all equality factors while emitting represented C
@@ -566,7 +737,35 @@ pub fn compute_all_equality_factors_with_docs(
     clause: &Clause,
     store: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
-    compute_all_equality_factors_impl(bank, ocb, clause, store, Some((output, session)))
+    compute_all_equality_factors_impl(bank, ocb, clause, store, None, Some((output, session)))
+}
+
+/// Computes all equality factors with a caller-owned C `freshvars` bank while
+/// emitting represented C `DocClauseCreationDefault(..., inf_efactor, ...)`
+/// output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`compute_all_equality_factors_with_fresh_vars`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_equality_factors_with_fresh_vars_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_equality_factors_impl(
+        bank,
+        ocb,
+        clause,
+        store,
+        Some(freshvars),
+        Some((output, session)),
+    )
 }
 
 fn compute_all_equality_factors_impl<W: fmt::Write>(
@@ -574,6 +773,7 @@ fn compute_all_equality_factors_impl<W: fmt::Write>(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     store: &mut ClauseSet,
+    freshvars: Option<&VarBank>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut factor_count = 0;
@@ -581,13 +781,12 @@ fn compute_all_equality_factors_impl<W: fmt::Write>(
         return Ok(factor_count);
     }
 
-    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
     for position in equality_factor_positions(clause) {
-        let (mut factors, subst_is_ho) = if higher_order_problem {
-            compute_equality_factor_csu_factors(bank, ocb, clause, position)?
+        let (mut factors, subst_is_ho) = if let Some(freshvars) = freshvars {
+            compute_equality_factor_factors(bank, ocb, clause, position, freshvars)?
         } else {
-            let (factor, subst_is_ho) = compute_equality_factor_mgu(bank, ocb, clause, position)?;
-            (factor.into_iter().collect(), subst_is_ho)
+            let scratch_freshvars = fresh_var_bank_for_clause(bank, clause);
+            compute_equality_factor_factors(bank, ocb, clause, position, &scratch_freshvars)?
         };
 
         while let Some(mut factor) = factors.pop() {
@@ -664,13 +863,13 @@ fn build_ordered_factor(
     bank: &mut TermBank,
     clause: &Clause,
     removed_literal_index: usize,
+    freshvars: &VarBank,
     subst: &mut Substitution,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let freshvars = fresh_var_bank_for_clause(bank, clause);
     let backtrack =
         clause
             .literals()
-            .subst_norm_except(Some(removed_literal_index), subst, &freshvars);
+            .subst_norm_except(Some(removed_literal_index), subst, freshvars);
     let mut new_literals = clause
         .literals()
         .copy_opt_except_index(Some(removed_literal_index), bank)?;
@@ -686,13 +885,13 @@ fn build_equality_factor(
     position: EqualityFactorPosition,
     min_term: &Term,
     second_other: &Term,
+    freshvars: &VarBank,
     subst: &mut Substitution,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let freshvars = fresh_var_bank_for_clause(bank, clause);
     let backtrack =
         clause
             .literals()
-            .subst_norm_except(Some(position.second_literal_index), subst, &freshvars);
+            .subst_norm_except(Some(position.second_literal_index), subst, freshvars);
     let condition_left = bank.insert_no_props_cached(min_term, DerefType::Always)?;
     let condition_right = bank.insert_no_props_cached(second_other, DerefType::Always)?;
     let new_condition = Eqn::alloc(condition_left, condition_right, bank, false)?;
@@ -721,9 +920,10 @@ fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {
 mod tests {
     use super::{
         compute_all_equality_factors, compute_all_equality_factors_with_docs,
-        compute_all_ordered_factors, compute_equality_factor, compute_ordered_factor,
-        equality_factor_positions, ordered_factor_positions, EqualityFactorPosition,
-        OrderedFactorPosition,
+        compute_all_ordered_factors, compute_equality_factor,
+        compute_equality_factor_with_fresh_vars, compute_ordered_factor,
+        compute_ordered_factor_with_fresh_vars, equality_factor_positions,
+        ordered_factor_positions, EqualityFactorPosition, OrderedFactorPosition,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -746,6 +946,7 @@ mod tests {
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
@@ -989,6 +1190,47 @@ mod tests {
     }
 
     #[test]
+    fn compute_ordered_factor_with_fresh_vars_resets_caller_bank_like_c() {
+        let mut bank = test_bank();
+        let freshvars = VarBank::new(bank.signature().type_bank());
+        bank.vars().pair_shadow(&freshvars);
+        let matched_var = typed_var(&bank, -2);
+        let residual_var = typed_var(&bank, -4);
+        let type_ = bank.signature().type_bank().default_type();
+        let _ = freshvars.get_fresh_var(&type_);
+        let _ = freshvars.get_fresh_var(&type_);
+        let matched_const = typed_const(&mut bank, "of_fresh_a");
+        let shared_const = typed_const(&mut bank, "of_fresh_b");
+        let residual_const = typed_const(&mut bank, "of_fresh_c");
+        let rest = lit(&mut bank, &residual_var, &residual_const, true);
+        let mut factor_lit = lit(&mut bank, &matched_var, &shared_const, true);
+        let mut removed_lit = lit(&mut bank, &matched_const, &shared_const, true);
+        maximal(&mut factor_lit);
+        maximal(&mut removed_lit);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, factor_lit, removed_lit]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let factor = compute_ordered_factor_with_fresh_vars(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            OrderedFactorPosition::new(1, 2, EqnSide::LeftSide),
+            &freshvars,
+        )
+        .unwrap()
+        .expect("directed positive equalities should factor");
+
+        let residual = factor
+            .literals()
+            .as_slice()
+            .iter()
+            .find(|literal| literal.right() == &residual_const)
+            .expect("unbound residual literal should be copied");
+        assert_eq!(residual.left().f_code(), -2);
+        assert_eq!(freshvars.v_count_for_type(&type_), 1);
+    }
+
+    #[test]
     fn compute_equality_factor_adds_condition_and_removes_first_literal() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
@@ -1022,6 +1264,51 @@ mod tests {
         assert!(literals[1].is_negative());
         assert_eq!(literals[1].left(), &a);
         assert_eq!(literals[1].right(), &c);
+    }
+
+    #[test]
+    fn compute_equality_factor_with_fresh_vars_keeps_caller_counts_like_c() {
+        let mut bank = test_bank();
+        let freshvars = VarBank::new(bank.signature().type_bank());
+        bank.vars().pair_shadow(&freshvars);
+        let type_ = bank.signature().type_bank().default_type();
+        let matched_var = bank.vars().get_fresh_var(&type_);
+        let residual_var = bank.vars().get_fresh_var(&type_);
+        let _ = freshvars.get_fresh_var(&type_);
+        let _ = freshvars.get_fresh_var(&type_);
+        assert_eq!(freshvars.v_count_for_type(&type_), 2);
+        let condition_const = typed_const(&mut bank, "ef_fresh_a");
+        let match_const = typed_const(&mut bank, "ef_fresh_b");
+        let partner_const = typed_const(&mut bank, "ef_fresh_c");
+        let residual_const = typed_const(&mut bank, "ef_fresh_d");
+        let f_code = typed_unary_code(&mut bank, "ef_fresh_f");
+        let matched_app = typed_unary(&mut bank, f_code, &matched_var);
+        let partner_app = typed_unary(&mut bank, f_code, &match_const);
+        let rest = lit(&mut bank, &residual_var, &residual_const, true);
+        let mut first = lit(&mut bank, &matched_app, &condition_const, true);
+        let second = lit(&mut bank, &partner_app, &partner_const, true);
+        maximal(&mut first);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let factor = compute_equality_factor_with_fresh_vars(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(1, EqnSide::LeftSide, 2, EqnSide::LeftSide),
+            &freshvars,
+        )
+        .unwrap()
+        .expect("matching positive equalities should equality-factor");
+
+        let residual = factor
+            .literals()
+            .as_slice()
+            .iter()
+            .find(|literal| literal.right() == &residual_const)
+            .expect("unbound residual literal should be copied");
+        assert_eq!(freshvars.v_count_for_type(&type_), 3);
+        assert_eq!(residual.left().f_code(), -6);
     }
 
     #[test]
