@@ -20580,6 +20580,10 @@ input_clause(c2,axiom,[++q(X)]).
              fof(let_i_eq_right, axiom, c = ($let(f:$i, f := a, f))).\n\
              fof(ite_i_ne_right, axiom, c != $ite(p(a), a, b)).\n\
              fof(let_i_ne_right, axiom, c != ($let(f:$i, f := a, f))).\n\
+             fof(let_i_eq_right_unwrapped, axiom, c = $let(f:$i, f := a, f)).\n\
+             fof(let_i_ne_right_unwrapped, axiom, c != $let(f:$i, f := a, f)).\n\
+             fof(let_i_param_eq_right, axiom, c = $let(f:$i>$i, f(X) := X, f(a))).\n\
+             fof(let_i_param_ne_right, axiom, c != $let(f:$i>$i, f(X) := X, f(a))).\n\
              fof(let_i_eq_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) = b)).\n\
              fof(let_i_ne_disjunct, axiom, p(a) | ($let(f:$i, f := a, f) != b)).\n\
              fof(ite_i_eq_conjunct, axiom, p(a) & (c = $ite(p(a), a, b))).\n\
@@ -20622,6 +20626,24 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(let_i_eq_right, axiom, c=$let(f:$i,f:=a,f))."));
         assert!(printed.contains("tff(ite_i_ne_right, axiom, c!=$ite(app_"));
         assert!(printed.contains("tff(let_i_ne_right, axiom, c!=$let(f:$i,f:=a,f))."));
+        assert!(printed.contains("tff(let_i_eq_right_unwrapped, axiom, c=$let(f:$i,f:=a,f))."));
+        assert!(printed.contains("tff(let_i_ne_right_unwrapped, axiom, c!=$let(f:$i,f:=a,f))."));
+        let param_eq_right = printed
+            .lines()
+            .find(|line| line.contains("tff(let_i_param_eq_right"))
+            .unwrap();
+        assert!(param_eq_right.contains("c=$let(f(X"));
+        assert!(param_eq_right.contains("):$i,app_"));
+        assert!(param_eq_right.contains(":=X"));
+        assert!(param_eq_right.ends_with("(f,a)))."));
+        let param_ne_right = printed
+            .lines()
+            .find(|line| line.contains("tff(let_i_param_ne_right"))
+            .unwrap();
+        assert!(param_ne_right.contains("c!=$let(f(X"));
+        assert!(param_ne_right.contains("):$i,app_"));
+        assert!(param_ne_right.contains(":=X"));
+        assert!(param_ne_right.ends_with("(f,a)))."));
         assert!(printed.contains("tff(let_i_eq_disjunct, axiom, (app_"));
         assert!(printed.contains("|$let(f:$i,f:=a,f)=b))."));
         assert!(printed.contains("tff(let_i_ne_disjunct, axiom, (app_"));
@@ -33394,7 +33416,11 @@ input_clause(c2,axiom,[++q(X)]).
              fof(ite_i_ne_unwrapped, axiom, $ite(p(a), a, b) != c).\n\
              fof(let_i_ne_unwrapped, axiom, $let(f:$i, f := a, f) != b).\n\
              fof(let_i_param_eq, axiom, $let(f:$i>$i, f(X) := X, f(a)) = b).\n\
-             fof(let_i_param_ne, axiom, $let(f:$i>$i, f(X) := X, f(a)) != b).\n",
+             fof(let_i_param_ne, axiom, $let(f:$i>$i, f(X) := X, f(a)) != b).\n\
+             fof(let_i_eq_right_unwrapped, axiom, c = $let(f:$i, f := a, f)).\n\
+             fof(let_i_ne_right_unwrapped, axiom, c != $let(f:$i, f := a, f)).\n\
+             fof(let_i_param_eq_right, axiom, c = $let(f:$i>$i, f(X) := X, f(a))).\n\
+             fof(let_i_param_ne_right, axiom, c != $let(f:$i>$i, f(X) := X, f(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
