@@ -17,8 +17,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "termprops";
-const OUTPUT_CLOSE_ERROR: &str =
-    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -200,9 +198,6 @@ fn execute_termprops(
     }
 
     writeln_diag(&mut output, &termprops_summary(stats))?;
-    output
-        .flush()
-        .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(0)
 }
 
@@ -347,13 +342,14 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
+    use super::{print_help, run, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
 
+    #[derive(Default)]
     struct FlushFailWriter;
 
     impl Write for FlushFailWriter {
@@ -633,17 +629,16 @@ mod tests {
     }
 
     #[test]
-    fn output_close_failure_uses_c_outclose_diagnostic() {
+    fn final_output_is_not_outclose_checked_like_c() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(b"a\n".to_vec());
         let mut stdout = FlushFailWriter;
         let mut stderr = Vec::new();
 
-        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("flush failure is reported");
+        let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect("termprops does not run OutClose-style final flush");
 
-        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        assert_eq!(status, 0);
         assert!(stderr.is_empty());
     }
 

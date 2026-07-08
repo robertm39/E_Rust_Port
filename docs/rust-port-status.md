@@ -592,7 +592,7 @@ C source references:
 
 Implemented:
 
-- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank with checked `TBTermParse`-style distinct-number/object argument-list rejection, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C-compatible absence of an explicit final `OutClose` flush/error check with unit coverage.
 
 Pending:
 
@@ -602,6 +602,7 @@ Change-later notes:
 
 - C calls `OpenGlobalOut(outname)` after defaulting missing input to `-` but before scanner creation, so `-o` can create or truncate an output file before later input failures while `-o -` stays on stdout. Rust preserves this ordering; transactional output should be a separate cleaned mode.
 - The C `com` probe reads a second argument from a child whose arity was just checked to be one. Rust does not reproduce that undefined memory access; decide later whether to remove the flag, preserve the safe false result, or implement the likely intended first-child comparison behind compatibility tests.
+- Unlike most nearby tools, C `termprops` does not call `OutClose(GlobalOut)` before `ExitIO()`. Rust preserves the missing final close/error check for drop-in behavior; an explicit flush/close result belongs in a cleaned API.
 
 ## term2dag Executable
 
