@@ -1,3 +1,4 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::string_index_c;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LIMITED_RW};
@@ -5,12 +6,15 @@ use crate::clauses::clausefunc::clause_remove_literal_index;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::pdtrees::{PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
 use crate::clauses::subsumption::eqn_topsubsumes_termpair;
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -153,6 +157,57 @@ pub fn clause_simplify_with_unit_set(
     unit_set: &mut ClauseSet,
     how: UnitSimplifyType,
 ) -> bool {
+    clause_simplify_with_unit_set_impl::<String>(clause, unit_set, how, None)
+        .expect("undocumented unit simplification cannot fail")
+}
+
+/// Simplifies `clause` with a unit set and emits the proof-documentation side
+/// effects from C `ClauseSimplifyWithUnitSet`.
+///
+/// Same-signed unit subsumption is documented with `DocClauseQuote` at target
+/// level 6 and opposite-signed cuts with `DocClauseModification` using
+/// simplify-reflect, matching the C comments.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the selected proof-documentation renderer fails.
+///
+/// # Panics
+///
+/// Panics for [`UnitSimplifyType::NoUnitSimplify`], matching the C assertion
+/// that the caller selects either top-level or full unit simplification.
+pub fn clause_simplify_with_unit_set_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &TermBank,
+    clause: &mut Clause,
+    unit_set: &mut ClauseSet,
+    how: UnitSimplifyType,
+) -> Result<bool, Diagnostic> {
+    clause_simplify_with_unit_set_impl(
+        clause,
+        unit_set,
+        how,
+        Some(UnitSimplifyDocContext {
+            output,
+            session,
+            bank,
+        }),
+    )
+}
+
+struct UnitSimplifyDocContext<'doc, W: fmt::Write> {
+    output: &'doc mut W,
+    session: &'doc mut ProofDocSession,
+    bank: &'doc TermBank,
+}
+
+fn clause_simplify_with_unit_set_impl<W: fmt::Write>(
+    clause: &mut Clause,
+    unit_set: &mut ClauseSet,
+    how: UnitSimplifyType,
+    mut doc_context: Option<UnitSimplifyDocContext<'_, W>>,
+) -> Result<bool, Diagnostic> {
     assert_ne!(
         how,
         UnitSimplifyType::NoUnitSimplify,
@@ -191,6 +246,20 @@ pub fn clause_simplify_with_unit_set(
             .is_positive();
 
         if sign == simplifier_sign {
+            if let Some(context) = doc_context.as_mut() {
+                let simplifier = unit_set
+                    .iter()
+                    .nth(simplifier_index)
+                    .expect("simplifying unit index must select a clause");
+                context.session.doc_clause_quote(
+                    context.output,
+                    context.bank,
+                    6,
+                    clause,
+                    Some("subsumed by unprocessed unit"),
+                    Some(simplifier),
+                )?;
+            }
             let protect_unit = !clause.is_unit()
                 && clause.standard_weight()
                     == unit_set
@@ -211,14 +280,28 @@ pub fn clause_simplify_with_unit_set(
                 simplifier.set_prop(CP_IS_PROTECTED);
             }
             simplifier.set_prop(c_sos_as_property);
-            return false;
+            return Ok(false);
         }
 
         clause.del_prop(CP_LIMITED_RW);
         let removed = clause_remove_literal_index(clause, index);
         debug_assert!(removed.is_some(), "current literal must be removable");
+        if let Some(context) = doc_context.as_mut() {
+            let simplifier = unit_set
+                .iter()
+                .nth(simplifier_index)
+                .expect("simplifying unit index must select a clause");
+            context.session.doc_clause_modification(
+                context.output,
+                context.bank,
+                clause,
+                ClauseModificationInference::SimplifyReflect,
+                Some(simplifier),
+                Some("cut with unprocessed unit"),
+            )?;
+        }
     }
-    true
+    Ok(true)
 }
 
 fn find_top_simplifying_unit_with_sign<'set>(
@@ -459,15 +542,18 @@ fn unit_literal(clause: &Clause) -> Option<&Eqn> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_simplify_with_unit_set, find_signed_top_simplifying_unit, find_simplifying_unit,
-        find_top_simplifying_unit, trans_unit_simplify_string, UnitSimplifyType,
+        clause_simplify_with_unit_set, clause_simplify_with_unit_set_with_docs,
+        find_signed_top_simplifying_unit, find_simplifying_unit, find_top_simplifying_unit,
+        trans_unit_simplify_string, UnitSimplifyType,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::pdtrees::PdtTraversalOrder;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -714,5 +800,78 @@ mod tests {
         assert!(!unit.query_prop(CP_IS_SOS));
         assert!(!unit.query_prop(CP_IS_PROTECTED));
         assert_eq!(target.literal_number(), 1);
+    }
+
+    #[test]
+    fn documented_unit_cut_emits_simplify_reflect_modification() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let a = typed_const(&mut bank, "doc_cut_a");
+        let b = typed_const(&mut bank, "doc_cut_b");
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &a, true)]);
+        let unit_id = positive_unit.ident();
+        let mut unit_set = ClauseSet::from_clauses([positive_unit]);
+        let mut target = clause_from(vec![literal(&mut bank, &b, &a, false)]);
+        let target_id = target.ident();
+        target.set_weight(target.standard_weight());
+        target.set_prop(CP_INITIAL | CP_LIMITED_RW);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        assert!(clause_simplify_with_unit_set_with_docs(
+            &mut rendered,
+            &mut session,
+            &bank,
+            &mut target,
+            &mut unit_set,
+            UnitSimplifyType::FullUnitSimplify,
+        )
+        .unwrap());
+
+        assert_eq!(target.literal_number(), 0);
+        assert_eq!(target.ident(), 1);
+        assert!(target.query_prop(CP_INITIAL));
+        assert!(!target.query_prop(CP_LIMITED_RW));
+        assert_eq!(
+            rendered,
+            format!("     1 : :[] : sr({target_id},{unit_id}) : 'cut with unprocessed unit'\n")
+        );
+    }
+
+    #[test]
+    fn documented_same_signed_unit_subsumption_emits_c_quote() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let a = typed_const(&mut bank, "doc_same_a");
+        let b = typed_const(&mut bank, "doc_same_b");
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &a, true)]);
+        let unit_id = positive_unit.ident();
+        let mut unit_set = ClauseSet::from_clauses([positive_unit]);
+        let mut target = clause_from(vec![literal(&mut bank, &b, &a, true)]);
+        let target_id = target.ident();
+        target.set_prop(CP_IS_SOS);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        assert!(!clause_simplify_with_unit_set_with_docs(
+            &mut rendered,
+            &mut session,
+            &bank,
+            &mut target,
+            &mut unit_set,
+            UnitSimplifyType::TopLevelUnitSimplify,
+        )
+        .unwrap());
+
+        let unit = unit_set.find_by_id(unit_id).unwrap();
+        assert_eq!(target.ident(), 1);
+        assert_eq!(target.literal_number(), 1);
+        assert!(unit.query_prop(CP_INITIAL));
+        assert!(!unit.query_prop(CP_IS_SOS));
+        assert!(rendered.contains(&format!(
+            " : {target_id} : 'subsumed by unprocessed unit({unit_id})'\n"
+        )));
     }
 }
