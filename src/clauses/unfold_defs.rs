@@ -15,6 +15,7 @@ use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::inferencedoc::ProofDocSession;
 use crate::terms::lambda::{abstract_vars, apply_terms, whnf_step};
 use crate::terms::match_mgu::subst_match_complete;
+use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
@@ -610,7 +611,27 @@ fn term_top_unfold_def_ho(
     Ok(result)
 }
 
-fn clause_extract_ho_definition(
+/// Extracts the symbol/lambda pair from a higher-order equational definition.
+///
+/// This mirrors C `ClauseExtractHODefinition`: from a unit equation whose
+/// selected side is `f(X1,...,Xn)`, return the zero-arity symbol `f` as the
+/// left side and the other equation side abstracted over `X1,...,Xn` as the
+/// right side.
+///
+/// # Errors
+///
+/// Returns a diagnostic if abstracting the right side or inserting the
+/// extracted symbol into the term bank fails.
+///
+/// # Panics
+///
+/// Panics if `def_side` is not an equation side, if `clause` is not a unit
+/// equation demodulator, if any definition argument is not a free variable, or
+/// if the abstracted definition type shape does not match the selected
+/// symbol's signature type. These are the same caller-side invariants asserted
+/// by the C helper after `ClauseIsEqDefinition` selects a valid definition
+/// side; Rust compares type shape here because `Type` equality models sharing.
+pub fn clause_extract_ho_definition(
     clause: &Clause,
     def_side: EqnSide,
     bank: &mut TermBank,
@@ -645,9 +666,35 @@ fn clause_extract_ho_definition(
         .collect::<Vec<_>>();
     let abstracted = abstract_vars(bank, other_term, &vars)?;
     let symbol = Term::top_alloc(def_term.f_code(), 0);
-    symbol.set_type(abstracted.type_());
+    let symbol_type = abstracted.type_();
+    assert!(
+        type_shapes_equal(
+            symbol_type.as_ref(),
+            bank.signature().get_type(symbol.f_code()),
+        ),
+        "higher-order definition symbol type must match its signature type"
+    );
+    symbol.set_type(symbol_type);
     let symbol = bank.term_top_insert(symbol)?;
     Ok((symbol, abstracted))
+}
+
+fn type_shapes_equal(left: Option<&Type>, right: Option<&Type>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => type_shape_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn type_shape_equal(left: &Type, right: &Type) -> bool {
+    left.f_code() == right.f_code()
+        && left.arity() == right.arity()
+        && left
+            .args()
+            .iter()
+            .zip(right.args())
+            .all(|(left_arg, right_arg)| type_shape_equal(left_arg, right_arg))
 }
 
 fn find_eq_definition_from_start(
@@ -688,7 +735,7 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_has_f_code;
@@ -738,10 +785,30 @@ mod tests {
         f_code
     }
 
+    fn object_binary_code(bank: &mut TermBank, name: &str) -> i64 {
+        let type_ = bank.signature().type_bank().i_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        bank.signature_mut()
+            .declare_final_type(
+                f_code,
+                alloc_arrow_type(vec![type_.clone(), type_.clone(), type_]),
+            )
+            .unwrap();
+        f_code
+    }
+
     fn unary_with_code(bank: &mut TermBank, f_code: i64, arg: &Term) -> Term {
         let term = Term::top_alloc(f_code, 1);
         term.set_type(arg.type_());
         term.set_argument(0, arg.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(left.type_());
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
     }
 
@@ -753,6 +820,68 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    #[test]
+    fn clause_extract_ho_definition_abstracts_left_side_arguments_in_c_order() {
+        let mut terms = test_bank();
+        let x = object_var(&terms, -2);
+        let y = object_var(&terms, -3);
+        let a = object_const(&mut terms, "extract_ho_left_a");
+        let b = object_const(&mut terms, "extract_ho_left_b");
+        let f_code = object_binary_code(&mut terms, "extract_ho_left_f");
+        let h_code = object_binary_code(&mut terms, "extract_ho_left_h");
+        let f_x_y = binary_with_code(&mut terms, f_code, &x, &y);
+        let h_y_x = binary_with_code(&mut terms, h_code, &y, &x);
+        let def = clause(vec![literal(&mut terms, &f_x_y, &h_y_x, true)]);
+
+        let (symbol, lambda) =
+            clause_extract_ho_definition(&def, EqnSide::LeftSide, &mut terms).unwrap();
+
+        assert_eq!(symbol.f_code(), f_code);
+        assert_eq!(symbol.arity(), 0);
+        assert!(type_shapes_equal(
+            symbol.type_().as_ref(),
+            terms.signature().get_type(f_code),
+        ));
+        assert_eq!(lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        assert_eq!(lambda.type_(), symbol.type_());
+
+        let applied = apply_terms(&mut terms, &lambda, &[a.clone(), b.clone()]).unwrap();
+        let normalized = whnf_step(&mut terms, &applied).unwrap();
+        let expected = binary_with_code(&mut terms, h_code, &b, &a);
+        assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn clause_extract_ho_definition_uses_right_side_when_selected() {
+        let mut terms = test_bank();
+        let x = object_var(&terms, -2);
+        let y = object_var(&terms, -3);
+        let a = object_const(&mut terms, "extract_ho_right_a");
+        let b = object_const(&mut terms, "extract_ho_right_b");
+        let f_code = object_binary_code(&mut terms, "extract_ho_right_f");
+        let h_code = object_binary_code(&mut terms, "extract_ho_right_h");
+        let f_x_y = binary_with_code(&mut terms, f_code, &x, &y);
+        let h_y_x = binary_with_code(&mut terms, h_code, &y, &x);
+        let def = clause(vec![literal(&mut terms, &h_y_x, &f_x_y, true)]);
+
+        let (symbol, lambda) =
+            clause_extract_ho_definition(&def, EqnSide::RightSide, &mut terms).unwrap();
+
+        assert_eq!(symbol.f_code(), f_code);
+        assert_eq!(symbol.arity(), 0);
+        assert!(type_shapes_equal(
+            symbol.type_().as_ref(),
+            terms.signature().get_type(f_code),
+        ));
+        assert_eq!(lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        assert_eq!(lambda.type_(), symbol.type_());
+
+        let applied = apply_terms(&mut terms, &lambda, &[a.clone(), b.clone()]).unwrap();
+        let normalized = whnf_step(&mut terms, &applied).unwrap();
+        let expected = binary_with_code(&mut terms, h_code, &b, &a);
+        assert_eq!(normalized, expected);
     }
 
     #[test]

@@ -2655,16 +2655,14 @@ mod tests {
         assert!(later_equal.literals().as_slice()[1].query_prop(EP_HAS_EQUIV));
     }
 
-    #[test]
-    fn clause_print_strings_match_c_lop_tptp_and_pcl_shapes() {
-        let mut bank = test_bank();
-        let a = typed_const(&mut bank, "print_a");
-        let b = typed_const(&mut bank, "print_b");
-        let p = typed_pred_const(&mut bank, "print_p");
+    fn mixed_print_clause(bank: &mut TermBank) -> Clause {
+        let a = typed_const(bank, "print_a");
+        let b = typed_const(bank, "print_b");
+        let p = typed_pred_const(bank, "print_p");
         let true_term = bank.true_term().clone();
-        let positive_equality = eqn(&mut bank, &a, &b, true);
-        let positive_predicate = eqn(&mut bank, &p, &true_term, true);
-        let negative_equality = eqn(&mut bank, &b, &a, false);
+        let positive_equality = eqn(bank, &a, &b, true);
+        let positive_predicate = eqn(bank, &p, &true_term, true);
+        let negative_equality = eqn(bank, &b, &a, false);
         let mut clause = Clause::alloc(EqnList::from_vec(vec![
             negative_equality,
             positive_equality,
@@ -2672,6 +2670,13 @@ mod tests {
         ]));
         clause.set_ident(77);
         clause.set_csscpa_source(5);
+        clause
+    }
+
+    #[test]
+    fn clause_lop_print_strings_match_c_shapes() {
+        let mut bank = test_bank();
+        let mut clause = mixed_print_clause(&mut bank);
 
         assert_eq!(
             clause_print_axiom_string(&bank, &clause, true),
@@ -2695,6 +2700,14 @@ mod tests {
             clause_print_lop_format_string(&bank, &clause, true),
             "?- print_a!=print_b, ~print_p, print_b=print_a."
         );
+    }
+
+    #[test]
+    fn clause_print_format_string_dispatches_c_shapes() {
+        let mut bank = test_bank();
+        let mut clause = mixed_print_clause(&mut bank);
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+
         assert_eq!(
             clause_print_tptp_format_string(&bank, &clause),
             "input_clause(c_5_77,conjecture,[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)])."
@@ -2743,6 +2756,14 @@ mod tests {
             .unwrap(),
             clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap()
         );
+    }
+
+    #[test]
+    fn clause_tstp_core_and_pcl_strings_match_c_shapes() {
+        let mut bank = test_bank();
+        let mut clause = mixed_print_clause(&mut bank);
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+
         assert_eq!(
             clause_print_tstp_core_string(&bank, &clause, true, false),
             "(print_a=print_b|print_p|print_b!=print_a)"
