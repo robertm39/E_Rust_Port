@@ -1979,12 +1979,21 @@ impl TermBank {
         scanner: &mut Scanner,
         check_symbol_properties: bool,
     ) -> Result<Term, Diagnostic> {
+        self.parse_term_real_with_expected(scanner, check_symbol_properties, None)
+    }
+
+    fn parse_term_real_with_expected(
+        &mut self,
+        scanner: &mut Scanner,
+        check_symbol_properties: bool,
+        expected_type: Option<&Type>,
+    ) -> Result<Term, Diagnostic> {
         if self.sig.supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE) {
             return self.parse_cons_list_real(scanner, check_symbol_properties);
         }
 
         if scanner.test_tok(TokenType::ITE_TOKEN) {
-            return self.parse_ite_tformula_tstp_subset(scanner);
+            return self.parse_ite_tformula_tstp_subset(scanner, expected_type);
         }
         if scanner.test_tok(TokenType::LET_TOKEN) {
             return self.parse_let_tformula_tstp_subset(scanner);
@@ -2179,23 +2188,28 @@ impl TermBank {
         type_: Option<&Type>,
         index: usize,
     ) -> Result<Term, Diagnostic> {
-        if type_
-            .is_some_and(|type_| index < type_get_max_arity(type_) && type_.args()[index].is_bool())
-        {
+        let expected_type = type_.and_then(|type_| {
+            (index < type_get_max_arity(type_)).then(|| type_.args()[index].clone())
+        });
+        if expected_type.as_ref().is_some_and(Type::is_bool) {
             let formula = self.parse_tformula_tstp_subset(scanner)?;
             return Ok(self.normalize_boolean_term_arg(formula));
         }
 
         let term = if check_symbol_properties {
-            self.parse_subterm(scanner)?
+            self.parse_subterm_with_expected(scanner, expected_type.as_ref())?
         } else {
-            self.parse_term_real(scanner, true)?
+            self.parse_term_real_with_expected(scanner, true, expected_type.as_ref())?
         };
         Ok(self.normalize_boolean_term_arg(term))
     }
 
-    fn parse_subterm(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
-        let term = self.parse_term_real(scanner, true)?;
+    fn parse_subterm_with_expected(
+        &mut self,
+        scanner: &mut Scanner,
+        expected_type: Option<&Type>,
+    ) -> Result<Term, Diagnostic> {
+        let term = self.parse_term_real_with_expected(scanner, true, expected_type)?;
         if !term.is_free_var() {
             if self.sig.is_predicate(term.f_code()) {
                 if self.sig.is_fixed_type(term.f_code()) {
@@ -2699,6 +2713,7 @@ impl TermBank {
     fn parse_ite_tformula_tstp_subset(
         &mut self,
         scanner: &mut Scanner,
+        expected_type: Option<&Type>,
     ) -> Result<Term, Diagnostic> {
         scanner.accept_tok(TokenType::ITE_TOKEN)?;
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -2710,7 +2725,8 @@ impl TermBank {
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
         Self::require_same_sort(&condition, &self.true_term, "$ite condition")?;
-        let result_type = self.require_compatible_ite_branch_sorts(&mut if_true, &mut if_false)?;
+        let result_type =
+            self.require_compatible_ite_branch_sorts(&mut if_true, &mut if_false, expected_type)?;
 
         let ite = Term::top_alloc(SIG_ITE_CODE, 3);
         ite.set_type(Some(result_type));
@@ -2736,6 +2752,7 @@ impl TermBank {
         &mut self,
         if_true: &mut ParsedIteBranch,
         if_false: &mut ParsedIteBranch,
+        expected_type: Option<&Type>,
     ) -> Result<Type, Diagnostic> {
         let true_type = if_true.term.type_().ok_or_else(|| {
             Diagnostic::new(
@@ -2754,14 +2771,23 @@ impl TermBank {
             self.recover_untyped_ite_default_branch(if_true, &false_type)?;
             self.recover_untyped_ite_default_branch(if_false, &true_type)?;
         }
+        if let Some(expected_type) = expected_type.filter(|type_| !type_.is_bool()) {
+            self.recover_untyped_ite_branch_to_expected_sort(if_true, expected_type)?;
+            self.recover_untyped_ite_branch_to_expected_sort(if_false, expected_type)?;
+        }
 
         Self::require_same_sort(&if_true.term, &if_false.term, "$ite branches")?;
-        if_true.term.type_().ok_or_else(|| {
+        let result_type = if_true.term.type_().ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::TYPE_ERROR,
                 "$ite true branch must have an inferred type",
             )
-        })
+        })?;
+        if let Some(expected_type) = expected_type {
+            Self::require_term_sort(&if_true.term, expected_type, "$ite true branch")?;
+            Self::require_term_sort(&if_false.term, expected_type, "$ite false branch")?;
+        }
+        Ok(result_type)
     }
 
     fn recover_untyped_ite_default_branch(
@@ -2773,20 +2799,51 @@ impl TermBank {
         if other_type != &default_type {
             return Ok(());
         }
+        self.recover_untyped_ite_branch_to_expected_sort(branch, &default_type)
+    }
 
+    fn recover_untyped_ite_branch_to_expected_sort(
+        &mut self,
+        branch: &mut ParsedIteBranch,
+        expected_type: &Type,
+    ) -> Result<(), Diagnostic> {
+        if branch.term.type_().as_ref() == Some(expected_type) {
+            return Ok(());
+        }
         let Some(candidate) = self.untyped_ite_default_branch_candidate(&branch.term) else {
             return Ok(());
         };
-
         let f_code = candidate.f_code();
         if f_code <= branch.pre_parse_f_count || f_code <= self.sig.internal_symbols() {
             return Ok(());
         }
 
+        let symbol_type = if candidate.arity() == 0 {
+            expected_type.clone()
+        } else {
+            let mut args = Vec::with_capacity(candidate.arity() + 1);
+            for index in 0..candidate.arity() {
+                let arg_type = candidate
+                    .argument(index)
+                    .and_then(|arg| arg.type_())
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            ErrorCode::TYPE_ERROR,
+                            "$ite branch argument has no inferred type",
+                        )
+                    })?;
+                args.push(arg_type);
+            }
+            args.push(expected_type.clone());
+            self.sig
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(args))
+        };
+
         self.sig.del_func_prop(f_code, FP_TYPE_FIXED);
-        self.sig.declare_type(f_code, default_type.clone())?;
+        self.sig.declare_type(f_code, symbol_type)?;
         self.sig.fix_type(f_code);
-        candidate.set_type(Some(default_type));
+        candidate.set_type(Some(expected_type.clone()));
         branch.term = candidate;
         Ok(())
     }
@@ -2805,7 +2862,7 @@ impl TermBank {
             return None;
         }
         let left = term.argument(0)?;
-        (!left.is_any_var() && left.arity() == 0).then_some(left)
+        (!left.is_any_var()).then_some(left)
     }
 
     fn parse_let_tformula_tstp_subset(
@@ -5624,6 +5681,64 @@ mod tests {
         assert!(bank.signature().is_function(false_branch.f_code()));
         assert!(!bank.signature().is_predicate(false_branch.f_code()));
         assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn checked_parser_recovers_typed_context_compound_ite_branch_like_c() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        let mut scanner = Scanner::from_user_string(
+            "takes_i_arg($ite(pred_compound_ite_cond(a), f(a), b))",
+            false,
+        )
+        .unwrap();
+
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let ite = parsed.argument(0).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(i_type.clone()));
+        let true_branch = ite.argument(1).unwrap();
+        assert_eq!(bank.signature().find_name(true_branch.f_code()), Some("f"));
+        assert_eq!(true_branch.type_(), Some(i_type.clone()));
+        assert!(bank.signature().is_function(true_branch.f_code()));
+        assert!(!bank.signature().is_predicate(true_branch.f_code()));
+        assert_eq!(
+            true_branch.argument(0).and_then(|arg| arg.type_()),
+            Some(i_type.clone())
+        );
+        let false_branch = ite.argument(2).unwrap();
+        assert_eq!(bank.signature().find_name(false_branch.f_code()), Some("b"));
+        assert_eq!(false_branch.type_(), Some(i_type));
+        assert!(bank.signature().is_function(false_branch.f_code()));
+        assert!(!bank.signature().is_predicate(false_branch.f_code()));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn checked_parser_rejects_fixed_predicate_ite_branch_in_typed_term_context() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type, bool_type]));
+        let code = bank.signature_mut().insert_id("fixed_ite_pred", 1, false);
+        bank.signature_mut()
+            .declare_final_type(code, predicate_type)
+            .unwrap();
+        let mut scanner = Scanner::from_user_string(
+            "takes_i_arg($ite(pred_fixed_ite_cond(a), fixed_ite_pred(a), b))",
+            false,
+        )
+        .unwrap();
+
+        let err = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::TYPE_ERROR);
     }
 
     #[test]
