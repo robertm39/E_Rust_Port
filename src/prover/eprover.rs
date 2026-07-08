@@ -33333,6 +33333,42 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_syntax_only_parses_quantified_variable_fool_term_branches() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-quantified-variable-fool-term-branches");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(forall_ite, axiom, ![X]: p($ite(q(a), X, a))).\n\
+             fof(exists_ite, axiom, ?[Y]: p($ite(q(a), Y, b))).\n\
+             fof(forall_let_rhs, axiom, ![Z]: p($let(f:$i, f := Z, f))).\n\
+             fof(forall_let_body, axiom, ![W]: p($let(f:$i, f := a, W))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_direct_fof_formula_ite() {
         let _guard = global_state_lock();
         let path = temp_path("direct-fof-formula-ite-proof");

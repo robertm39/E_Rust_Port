@@ -2698,9 +2698,9 @@ impl TermBank {
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let condition = self.parse_tformula_tstp_subset(scanner)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let if_true = self.parse_tformula_tstp_subset(scanner)?;
+        let if_true = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let if_false = self.parse_tformula_tstp_subset(scanner)?;
+        let if_false = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
         Self::require_same_sort(&condition, &self.true_term, "$ite condition")?;
@@ -2735,7 +2735,7 @@ impl TermBank {
 
         self.sig
             .enter_let_scope(&let_type_declaration_codes(&type_declarations));
-        let body = match self.parse_tformula_tstp_subset(scanner) {
+        let body = match self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true) {
             Ok(body) => {
                 self.sig.exit_let_scope();
                 body
@@ -2838,7 +2838,7 @@ impl TermBank {
         let parsed = (|| {
             scanner.accept_tok(TokenType::COLON)?;
             scanner.accept_tok(TokenType::EQUAL_SIGN)?;
-            let rhs = self.parse_tformula_tstp_subset(scanner)?;
+            let rhs = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
             let lhs = self.let_definition_lhs(declaration.f_code, &variables)?;
             self.encode_equality_term(lhs, rhs, true)
         })();
@@ -5486,6 +5486,33 @@ mod tests {
     }
 
     #[test]
+    fn checked_parser_reads_non_boolean_ite_variable_branches() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        declare_i_const(&mut bank, "ite_var_else");
+        bank.vars.push_env();
+        let variable = bank.vars.ext_name_assert_alloc_sort("X", &i_type);
+        let mut scanner = Scanner::from_user_string(
+            "takes_i_arg($ite(pred_ite_var_cond, X, ite_var_else))",
+            false,
+        )
+        .unwrap();
+
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        bank.vars.pop_env();
+        let ite = parsed.argument(0).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(i_type));
+        assert_eq!(ite.argument(1), Some(variable));
+        assert_eq!(
+            bank.signature()
+                .find_name(ite.argument(2).unwrap().f_code()),
+            Some("ite_var_else")
+        );
+    }
+
+    #[test]
     fn checked_parser_reads_non_boolean_ite_compound_branches() {
         let mut bank = unary_i_arg_bank("takes_i_arg");
         let i_type = bank.signature().type_bank().i_type();
@@ -5643,6 +5670,27 @@ mod tests {
         let body = let_term.argument(1).unwrap();
         assert_eq!(body.f_code(), defined_head.f_code());
         assert_eq!(body.type_(), Some(bank.signature().type_bank().i_type()));
+    }
+
+    #[test]
+    fn checked_parser_reads_non_boolean_let_variable_rhs_and_body() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        bank.vars.push_env();
+        let variable = bank.vars.ext_name_assert_alloc_sort("X", &i_type);
+        let mut scanner = Scanner::from_user_string("$let(f:$i, f := X, X)", false).unwrap();
+
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        bank.vars.pop_env();
+
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        assert_eq!(let_term.type_(), Some(i_type));
+        let definition = let_term.argument(0).unwrap();
+        assert_eq!(definition.argument(1), Some(variable.clone()));
+        let body = let_term.argument(1).unwrap();
+        assert_eq!(body, variable);
     }
 
     #[test]
