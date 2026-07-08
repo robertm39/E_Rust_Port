@@ -27689,6 +27689,40 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_cnf_only_lifts_parameterized_non_boolean_let_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-parameterized-non-boolean-let");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             fof(let_param_left, axiom, $let(f:$i>$i, f(X) := X, f(a)) = b).\n\
+             fof(let_param_right, axiom, c = $let(f:$i>$i, f(X) := X, f(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("a=b <- .\n"));
+        assert!(printed.contains("c=a <- .\n"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_lifts_let_definitions_out_of_disjunction() {
         let _guard = global_state_lock();
         let path = temp_path("proof-cnf-let-disjunction");
@@ -30817,13 +30851,16 @@ input_clause(c2,axiom,[++q(X)]).
             &path,
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
              tff(p_type, type, p: $i > $o).\n\
              tff(q_type, type, q: $i > $o).\n\
              tff(r_type, type, r: $i > $o).\n\
              fof(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
              fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n\
              fof(ite_rhs_eq, axiom, p(a) = $ite(p(a), q(a), r(a))).\n\
-             fof(let_rhs_ne, axiom, p(a) != $let(f:$o, f := q(a), f)).\n",
+             fof(let_rhs_ne, axiom, p(a) != $let(f:$o, f := q(a), f)).\n\
+             fof(let_param_eq, axiom, $let(f:$i>$i, f(X) := X, f(a)) = b).\n\
+             fof(let_param_eq_right, axiom, c = $let(f:$i>$i, f(X) := X, f(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -30846,8 +30883,11 @@ input_clause(c2,axiom,[++q(X)]).
                 "fof(ex_let_eq, axiom",
                 "fof(ite_rhs_eq, axiom",
                 "fof(let_rhs_ne, axiom",
+                "fof(let_param_eq, axiom",
+                "fof(let_param_eq_right, axiom",
                 "$ite",
                 "$let",
+                "$i > $i",
             ],
         );
         std::fs::remove_file(&path).unwrap();
