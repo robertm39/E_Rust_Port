@@ -72,4 +72,8 @@ Source files reviewed: `CONTRIB/picosat-965/main.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `main.c` is only a thin forwarding entry point to `picosat_main`, so the executable behavior is hidden in `app.c`. Rust should keep the vendored utility entry point separate from E's solver-library boundary; if a standalone PicoSAT binary is ported later, document that it is a utility wrapper rather than the prover's primary SAT integration path.
 <!-- END MANUAL REVIEW: c_source_docs -->

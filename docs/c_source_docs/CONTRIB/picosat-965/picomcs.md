@@ -107,4 +107,9 @@ Source files reviewed: `CONTRIB/picosat-965/picomcs.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The MCS utility stores clauses and selector-variable mappings in hand-managed dynamic arrays and mutates them around PicoSAT calls. If this tool is ported, use explicit typed owners for clauses, selector variables, and correction-set output instead of reusing E's proof-clause structures.
+- Output for all/minimal correction sets is mixed directly with parsing and solver iteration. A cleaned Rust implementation should separate enumeration from rendering once compatibility with the vendored utility output has been established.
 <!-- END MANUAL REVIEW: c_source_docs -->

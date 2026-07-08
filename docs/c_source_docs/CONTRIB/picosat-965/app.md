@@ -118,4 +118,9 @@ Source files reviewed: `CONTRIB/picosat-965/app.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The standalone PicoSAT app code owns signal handlers, alarm setup, decompressor subprocesses, and solver callbacks through file-static state. Rust should keep E's library-level SAT integration on an explicit solver object and avoid importing this process-global command-line behavior unless the vendored utility executable surface is intentionally ported.
+- Compressed input handling is delegated to shell commands through `popen`, making diagnostics, quoting, and process cleanup platform-dependent. If these utilities are ever exposed by the Rust port, prefer an explicit decompression abstraction while preserving C compatibility only for reference comparison mode.
 <!-- END MANUAL REVIEW: c_source_docs -->
