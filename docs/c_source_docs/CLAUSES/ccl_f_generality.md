@@ -112,7 +112,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated with Change Later notes on 2026-07-08.
 
 Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c`.
 
@@ -142,6 +142,10 @@ Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c
 
 ### Change Later
 
+- `extract_generality` and `compute_d_rel` only implement `GMTerms` and `GMFormulas`, while the shared parser/name table also exposes literal, polarity-specific formula, and polarity-specific term measures. Rust preserves the same split with parser rejection plus D-relation assertions; implement or remove those apparent measures only together with `che_axfilter` strategy-file compatibility tests.
+- `compute_d_rel` accepts symbols with `f_code >= sig->internal_symbols`, while `GenDistribPrint` totals and row output begin at `sig->internal_symbols+1`. Rust preserves both boundaries; a later signature API should make the internal-symbol cutoff explicit before normalizing these tests.
+- The D-relation limit multiplies a `long` count by `double benevolence` and assigns the result back to `long`, then caps it by the `generosity`-indexed sorted symbol. Rust mirrors the C truncation and cap shape; replace it with checked arithmetic only after reference strategies cover edge values for benevolence and generosity.
+- `GenDistribSizeAdjust` keeps the main distribution dense by f-code, initializes only newly added `FunGen` cells, and recreates the temporary scratch array as all zeroes. A later sparse or generation-counted scratch representation could reduce resize cost, but should wait until symbol allocation order and debug-output identity are covered by tests.
 - `TermTrimImplications` skips leading quantifiers and then strips only a right-nested implication chain, and only if it sees at least 10 implications. Rust preserves this for SInE compatibility; after compatibility, consider replacing the magic threshold/right-spine special case with an explicit formula-normalization policy.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
