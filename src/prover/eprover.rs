@@ -27522,6 +27522,42 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_output_level_two_documents_formula_owner_simplification() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-formula-owner-simplification-docs");
+        std::fs::write(
+            &path,
+            "fof(formula_doc, axiom, (($true != $true) | p(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--cnf",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("initial(\"{path_arg}\", formula_doc)")));
+        assert!(printed.contains("fof_simplification(1)"), "{printed}");
+        assert!(printed.contains("split_conjunct(2)"), "{printed}");
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_routes_thf_formula_owners_through_cnf_docs() {
         let _guard = global_state_lock();
         let path = temp_path("proof-thf-formula-owner-cnf-docs");
