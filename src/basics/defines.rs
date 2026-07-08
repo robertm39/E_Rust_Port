@@ -254,7 +254,33 @@ mod fd_write {
     }
 }
 
-#[cfg(all(windows, not(target_env = "msvc")))]
+// Allowed external DLL boundary: on GNU Windows, the compatibility fd surface
+// is a MinGW/MSVCRT file descriptor, so `WriteStr` uses MSVCRT `_write`.
+#[cfg(all(windows, target_env = "gnu"))]
+#[allow(unsafe_code)]
+mod fd_write {
+    use std::ffi::c_void;
+
+    #[link(name = "msvcrt")]
+    unsafe extern "C" {
+        fn _write(fd: i32, buffer: *const c_void, count: u32) -> i32;
+    }
+
+    pub(super) fn write(fd: i32, bytes: &[u8]) -> usize {
+        if fd < 0 {
+            return usize::MAX;
+        }
+        let count = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        let capped_len = usize::try_from(count).unwrap_or(bytes.len());
+        let capped = &bytes[..capped_len];
+        // SAFETY: capped points to a live buffer for exactly count bytes. The
+        // fd is intentionally raw to match C `WriteStr`.
+        let result = unsafe { _write(fd, capped.as_ptr().cast::<c_void>(), count) };
+        usize::try_from(result).unwrap_or(usize::MAX)
+    }
+}
+
+#[cfg(all(windows, not(any(target_env = "msvc", target_env = "gnu"))))]
 mod fd_write {
     pub(super) fn write(_fd: i32, bytes: &[u8]) -> usize {
         if bytes.is_empty() {
