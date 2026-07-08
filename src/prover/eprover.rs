@@ -166,6 +166,8 @@ const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
 const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--e-rust-port-schedule-search-worker";
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
 const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
 const TRAINING_PRINT_POS: i64 = 1;
@@ -5047,7 +5049,9 @@ fn finish_run_config(
     if config.flags.contains(EProverFlag::ResourceInfo) {
         output.write_all(format_resource_usage(current_resource_usage()).as_bytes())?;
     }
-    output.flush()?;
+    output.flush().map_err(|_error| {
+        EProverError::Diagnostic(Diagnostic::new(ErrorCode::FILE_ERROR, OUTPUT_CLOSE_ERROR))
+    })?;
     Ok(status)
 }
 
@@ -15290,8 +15294,9 @@ mod tests {
         ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
         SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
         WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES,
-        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
@@ -15345,9 +15350,38 @@ mod tests {
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::fmt::Write as _;
-    use std::io::Write as _;
+    use std::io::{self, Write as _};
     use std::path::PathBuf;
     use std::sync::atomic::Ordering as AtomicOrdering;
+
+    struct FlushFailOnNthWriter {
+        fail_on: usize,
+        flushes: usize,
+    }
+
+    impl FlushFailOnNthWriter {
+        const fn new(fail_on: usize) -> Self {
+            Self {
+                fail_on,
+                flushes: 0,
+            }
+        }
+    }
+
+    impl std::io::Write for FlushFailOnNthWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            if self.flushes == self.fail_on {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     struct EnvGuard {
         name: &'static str,
@@ -18584,6 +18618,40 @@ input_clause(c2,axiom,[++q(X)]).
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("Usage: eprover [options] [files]"));
         assert!(output.contains("--version"));
+    }
+
+    #[test]
+    fn run_help_and_version_exit_before_outclose_like_c() {
+        let _guard = global_state_lock();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--help"],
+            &mut FlushFailOnNthWriter::new(1),
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+
+        let status = run(
+            ["eprover", "--version"],
+            &mut FlushFailOnNthWriter::new(1),
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+    }
+
+    #[test]
+    fn run_print_strategy_reports_final_outclose_flush_failure_like_c() {
+        let _guard = global_state_lock();
+        let mut stdout = FlushFailOnNthWriter::new(2);
+        let mut stderr = Vec::new();
+
+        let error = run(["eprover", "--print-strategy"], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
     }
 
     #[test]
