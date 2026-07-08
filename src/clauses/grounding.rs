@@ -1593,6 +1593,7 @@ mod tests {
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_IS_D_INDEXED, CP_IS_S_INDEXED};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_SELECTED};
@@ -2240,6 +2241,7 @@ mod tests {
             predicate_literal(&mut bank, &second, true),
             predicate_literal(&mut bank, &third, true),
         ]);
+        clause.set_prop(CP_IS_D_INDEXED | CP_IS_S_INDEXED);
         let original_weight = clause.weight();
 
         assert!(!set.unit_simplify_clause(&mut clause, false, true));
@@ -2253,6 +2255,8 @@ mod tests {
         );
         assert_eq!(clause.weight(), original_weight);
         assert_ne!(clause.weight(), clause.standard_weight());
+        assert!(clause.query_prop(CP_IS_D_INDEXED));
+        assert!(clause.query_prop(CP_IS_S_INDEXED));
     }
 
     #[test]
