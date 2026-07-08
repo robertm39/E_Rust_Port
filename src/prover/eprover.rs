@@ -19107,6 +19107,40 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_skips_top_level_singleton_distinct_truth() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-singleton-distinct-owner");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(singleton, axiom, $distinct(a)).\n\
+             fof(embedded_singleton, axiom, p(a) | $distinct(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(!printed.contains("tff(singleton"));
+        assert!(printed.contains("tff(embedded_singleton, axiom, (app_"));
+        assert!(printed.contains("|$true))."));
+        assert!(!printed.contains("$distinct"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_expands_thf_wrapped_distinct_via_proof_state_owner() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-thf-wrapped-distinct-owner");

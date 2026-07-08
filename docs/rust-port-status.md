@@ -236,6 +236,7 @@ Implemented:
 - Helper executables that parse real problems into formula sets for later CNF now request CNF-oriented represented-owner handling instead of print-oriented handling, so supported FOOL/lambda owners promote the returned problem type before helper clausification. Focused coverage now pins `classify_problem`, `eground`, `enormalizer`, and `epatternize` on typed TSTP formula owners with term-position `$let` payloads, and `TFormulaVarRename` copies term-valued `$let` definition children as terms rather than trying to rebuild them as formula operators.
 - `enormalizer` formula targets and LTB batch problem loading now share the same wrapper-aware represented top-level `$distinct(...)` parser as `eprover`, so direct, parenthesized, and top-level negated `$distinct` formula entries are accepted consistently while embedded TCF `$distinct` remains on the C-shaped clause-parser path.
 - Nonempty embedded `$distinct(...)` formulas in represented FOF/TFF/THF owners, such as `p(a) | $distinct(a,b,c)` and `p @ a | $distinct(a,b,c)`, are now pinned through executable syntax-only, print-formulas, app-encode, and CNF paths; embedded TCF `$distinct` remains intentionally on the C-shaped typed-clause parser diagnostic path.
+- Singleton `$distinct(a)` expansion to `$true` is now pinned for `--app-encode`: top-level singleton truth formulas are skipped like other top-level `$true` formulas, while embedded singleton expansions such as `p(a) | $distinct(a)` render as `p(a)|$true` instead of panicking during declaration preloading.
 
 Pending:
 

@@ -4271,7 +4271,11 @@ impl FormulaSet {
         }
 
         for formula in &self.formulas {
-            tformula_preload_types(bank, formula.formula())?;
+            if formula.formula() != bank.true_term()
+                && !tformula_is_prop_true(bank, formula.formula())
+            {
+                tformula_preload_types(bank, formula.formula())?;
+            }
         }
 
         let mut output = Vec::new();
@@ -4294,7 +4298,9 @@ impl FormulaSet {
         })?;
 
         for formula in &self.formulas {
-            if !tformula_is_prop_true(bank, formula.formula()) {
+            if formula.formula() != bank.true_term()
+                && !tformula_is_prop_true(bank, formula.formula())
+            {
                 output.push_str(&formula.app_encode_string_with_type_suffixes(
                     bank,
                     keep_input_names,
@@ -8421,10 +8427,13 @@ mod tests {
         let true_formula = bool_binary_with_code(&mut bank, eqn_code, &true_term, &true_term);
         let mut skipped = WrappedFormula::wt_formula_alloc(true_formula);
         skipped.set_info(Some(ClauseInfo::new(Some("set_app_true"), None, 3, 1)));
+        let mut skipped_raw = WrappedFormula::wt_formula_alloc(true_term);
+        skipped_raw.set_info(Some(ClauseInfo::new(Some("set_app_raw_true"), None, 4, 1)));
 
         let mut set = FormulaSet::new();
         set.insert(axiom);
         set.insert(skipped);
+        set.insert(skipped_raw);
         set.insert(conjecture);
 
         let rendered = set
@@ -8444,6 +8453,7 @@ mod tests {
         assert!(symbol_decl < axiom_line);
         assert!(rendered.contains("tff(set_app_neg_conj, negated_conjecture, "));
         assert!(!rendered.contains("set_app_true"));
+        assert!(!rendered.contains("set_app_raw_true"));
         assert_eq!(
             FormulaSet::new()
                 .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
