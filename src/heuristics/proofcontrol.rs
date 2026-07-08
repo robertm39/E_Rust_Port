@@ -13977,6 +13977,46 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_generate_new_clauses_higher_order_pos_ext_off_suppresses_c_gate() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left_head = typed_arrow_const(terms, "pc_generate_pos_ext_off_left", 1);
+            let right_head = typed_arrow_const(terms, "pc_generate_pos_ext_off_right", 1);
+            let shared = typed_var(terms, -2);
+            let applied_left = terms.term_apply_arg(&left_head, &shared);
+            let left = terms.term_top_insert(applied_left).unwrap();
+            let applied_right = terms.term_apply_arg(&right_head, &shared);
+            let right = terms.term_top_insert(applied_right).unwrap();
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().neg_ext = ExtInferenceType::AllLits;
+        control.heuristic_parms_mut().pos_ext = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.statistics().neg_ext_count, 0);
+        assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
     fn compute_ext_eq_res_generates_disagreement_conditions() {
         let mut bank = test_bank();
         let (p_code, q_code, clause) = {
