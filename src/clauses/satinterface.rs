@@ -264,7 +264,7 @@ impl SatClauseSet {
     /// The default internal solver supplies a deletion-minimized core in
     /// exported-clause order; callers with a runtime-loaded `PicoSAT` backend
     /// use `check_and_get_core_with_picosat` to read solver-reported core
-    /// indices.
+    /// indices from a fresh solver state for this export.
     #[must_use]
     pub fn check_and_get_core(&mut self) -> Option<Vec<Clause>> {
         let solver_clauses = self.export_non_pure_to_solver_clauses();
@@ -279,12 +279,28 @@ impl SatClauseSet {
         &mut self,
         solver: &mut PicoSat,
     ) -> Result<Option<Vec<Clause>>, PicoSatError> {
+        self.check_and_get_core_with_external_solver(solver)
+    }
+
+    fn check_and_get_core_with_external_solver<S>(
+        &mut self,
+        solver: &mut S,
+    ) -> Result<Option<Vec<Clause>>, S::Error>
+    where
+        S: ExternalSatSolver,
+    {
         let solver_clauses = self.export_non_pure_to_solver_clauses();
-        solver.add_clauses(&solver_clauses)?;
-        if solver.solve(10_000) != PicoSatSolveResult::Unsatisfiable {
+        let exported_len = self.exported.len();
+        let solver_core = with_fresh_external_solver(solver, |solver| {
+            solver.add_clauses(&solver_clauses)?;
+            if solver.solve(10_000) != PicoSatSolveResult::Unsatisfiable {
+                return Ok(None);
+            }
+            solver.core_indices(exported_len).map(Some)
+        })?;
+        let Some(solver_core) = solver_core else {
             return Ok(None);
-        }
-        let solver_core = solver.core_indices(self.exported.len())?;
+        };
         let core = self.exported_core_from_solver_core(&solver_core);
         Ok(Some(self.clauses_for_indices(&core)))
     }
@@ -347,16 +363,37 @@ impl SatClauseSet {
         solver: &mut PicoSat,
         decision_limit: i32,
     ) -> Result<(ProverResult, Option<Clause>), PicoSatError> {
+        self.check_unsat_with_external_solver(solver, decision_limit)
+    }
+
+    fn check_unsat_with_external_solver<S>(
+        &mut self,
+        solver: &mut S,
+        decision_limit: i32,
+    ) -> Result<(ProverResult, Option<Clause>), S::Error>
+    where
+        S: ExternalSatSolver,
+    {
         self.core.clear();
         self.core_size = 0;
 
         let solver_clauses = self.export_non_pure_to_solver_clauses();
-        solver.add_clauses(&solver_clauses)?;
-        match solver.solve(decision_limit) {
+        let exported_len = self.exported.len();
+        let (result, solver_core) = with_fresh_external_solver(solver, |solver| {
+            solver.add_clauses(&solver_clauses)?;
+            let result = solver.solve(decision_limit);
+            let solver_core = if result == PicoSatSolveResult::Unsatisfiable {
+                Some(solver.core_indices(exported_len)?)
+            } else {
+                None
+            };
+            Ok((result, solver_core))
+        })?;
+        match result {
             PicoSatSolveResult::Satisfiable => Ok((ProverResult::Satisfiable, None)),
             PicoSatSolveResult::GaveUp => Ok((ProverResult::GaveUp, None)),
             PicoSatSolveResult::Unsatisfiable => {
-                let solver_core = solver.core_indices(self.exported.len())?;
+                let solver_core = solver_core.expect("UNSAT external solver returns core indices");
                 self.core = self.exported_core_from_solver_core(&solver_core);
                 self.core_size = usize_to_u64(self.core.len());
                 Ok((
@@ -465,6 +502,51 @@ impl SatClauseSet {
             }
         }
         empty
+    }
+}
+
+trait ExternalSatSolver {
+    type Error;
+
+    fn reset(&mut self) -> Result<(), Self::Error>;
+    fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), Self::Error>;
+    fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult;
+    fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, Self::Error>;
+}
+
+impl ExternalSatSolver for PicoSat {
+    type Error = PicoSatError;
+
+    fn reset(&mut self) -> Result<(), Self::Error> {
+        PicoSat::reset(self)
+    }
+
+    fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), Self::Error> {
+        PicoSat::add_clauses(self, clauses)
+    }
+
+    fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult {
+        PicoSat::solve(self, decision_limit)
+    }
+
+    fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, Self::Error> {
+        PicoSat::core_indices(self, exported_len)
+    }
+}
+
+fn with_fresh_external_solver<S, T>(
+    solver: &mut S,
+    action: impl FnOnce(&mut S) -> Result<T, S::Error>,
+) -> Result<T, S::Error>
+where
+    S: ExternalSatSolver,
+{
+    solver.reset()?;
+    let result = action(solver);
+    let reset_result = solver.reset();
+    match (result, reset_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
     }
 }
 
@@ -936,8 +1018,8 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         prefer_conj_max_max_freq, prefer_conj_max_min_freq, prefer_conj_min_max_freq,
-        prefer_conj_min_min_freq, sat_check_proof_state, solve_sat, SatClause, SatClauseSet,
-        SolverStatus,
+        prefer_conj_min_min_freq, sat_check_proof_state, solve_sat, ExternalSatSolver,
+        PicoSatSolveResult, SatClause, SatClauseSet, SolverStatus,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
@@ -1283,6 +1365,164 @@ mod tests {
             set.exported_core_from_solver_core(&[2, 0, 1]),
             vec![4, 1, 3]
         );
+    }
+
+    #[derive(Debug)]
+    struct FakeExternalSolver {
+        active_clauses: Vec<Vec<i32>>,
+        exports: Vec<Vec<Vec<i32>>>,
+        reset_calls: usize,
+        solve_limits: Vec<i32>,
+        result: PicoSatSolveResult,
+        core: Vec<usize>,
+        core_error: Option<&'static str>,
+        expected_exported_len: usize,
+    }
+
+    impl Default for FakeExternalSolver {
+        fn default() -> Self {
+            Self {
+                active_clauses: Vec::new(),
+                exports: Vec::new(),
+                reset_calls: 0,
+                solve_limits: Vec::new(),
+                result: PicoSatSolveResult::Unsatisfiable,
+                core: Vec::new(),
+                core_error: None,
+                expected_exported_len: 0,
+            }
+        }
+    }
+
+    impl ExternalSatSolver for FakeExternalSolver {
+        type Error = &'static str;
+
+        fn reset(&mut self) -> Result<(), Self::Error> {
+            self.reset_calls += 1;
+            self.active_clauses.clear();
+            Ok(())
+        }
+
+        fn add_clauses(&mut self, clauses: &[Vec<i32>]) -> Result<(), Self::Error> {
+            if !self.active_clauses.is_empty() {
+                return Err("stale clauses");
+            }
+            self.active_clauses = clauses.to_vec();
+            self.exports.push(clauses.to_vec());
+            Ok(())
+        }
+
+        fn solve(&mut self, decision_limit: i32) -> PicoSatSolveResult {
+            self.solve_limits.push(decision_limit);
+            self.result
+        }
+
+        fn core_indices(&self, exported_len: usize) -> Result<Vec<usize>, Self::Error> {
+            if let Some(error) = self.core_error {
+                return Err(error);
+            }
+            if exported_len != self.expected_exported_len {
+                return Err("wrong exported length");
+            }
+            Ok(self.core.clone())
+        }
+    }
+
+    fn contradictory_fake_sat_set() -> (SatClauseSet, Clause, Clause) {
+        let mut positive = Clause::empty();
+        positive.set_ident(401);
+        positive.set_csscpa_source(1);
+        let mut negative = Clause::empty();
+        negative.set_ident(402);
+        negative.set_csscpa_source(1);
+        (
+            SatClauseSet {
+                max_lit: 1,
+                clauses: vec![
+                    SatClause {
+                        literals: vec![1],
+                        source: positive.clone(),
+                        has_pure_lit: false,
+                    },
+                    SatClause {
+                        literals: vec![-1],
+                        source: negative.clone(),
+                        has_pure_lit: false,
+                    },
+                ],
+                ..SatClauseSet::default()
+            },
+            positive,
+            negative,
+        )
+    }
+
+    #[test]
+    fn picosat_core_helper_uses_fresh_solver_state_for_each_export() {
+        let (mut set, positive, negative) = contradictory_fake_sat_set();
+        let mut solver = FakeExternalSolver {
+            active_clauses: vec![vec![99]],
+            result: PicoSatSolveResult::Unsatisfiable,
+            core: vec![1, 0],
+            expected_exported_len: 2,
+            ..FakeExternalSolver::default()
+        };
+
+        let core = set
+            .check_and_get_core_with_external_solver(&mut solver)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(solver.reset_calls, 2);
+        assert!(solver.active_clauses.is_empty());
+        assert_eq!(solver.exports, vec![vec![vec![1], vec![-1]]]);
+        assert_eq!(solver.solve_limits, vec![10_000]);
+        assert_eq!(
+            core.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![negative.ident(), positive.ident()]
+        );
+    }
+
+    #[test]
+    fn picosat_satcheck_helper_resets_after_non_unsat_result() {
+        let (mut set, _, _) = contradictory_fake_sat_set();
+        let mut solver = FakeExternalSolver {
+            active_clauses: vec![vec![99]],
+            result: PicoSatSolveResult::Satisfiable,
+            ..FakeExternalSolver::default()
+        };
+
+        let (result, empty) = set
+            .check_unsat_with_external_solver(&mut solver, 7)
+            .unwrap();
+
+        assert_eq!(result, ProverResult::Satisfiable);
+        assert!(empty.is_none());
+        assert_eq!(solver.reset_calls, 2);
+        assert!(solver.active_clauses.is_empty());
+        assert_eq!(solver.exports, vec![vec![vec![1], vec![-1]]]);
+        assert_eq!(solver.solve_limits, vec![7]);
+    }
+
+    #[test]
+    fn picosat_core_helper_resets_after_core_extraction_error() {
+        let (mut set, _, _) = contradictory_fake_sat_set();
+        let mut solver = FakeExternalSolver {
+            active_clauses: vec![vec![99]],
+            result: PicoSatSolveResult::Unsatisfiable,
+            core_error: Some("core extraction failed"),
+            expected_exported_len: 2,
+            ..FakeExternalSolver::default()
+        };
+
+        let error = set
+            .check_and_get_core_with_external_solver(&mut solver)
+            .unwrap_err();
+
+        assert_eq!(error, "core extraction failed");
+        assert_eq!(solver.reset_calls, 2);
+        assert!(solver.active_clauses.is_empty());
+        assert_eq!(solver.exports, vec![vec![vec![1], vec![-1]]]);
     }
 
     #[test]

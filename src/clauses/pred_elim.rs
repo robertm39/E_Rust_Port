@@ -713,14 +713,8 @@ fn check_and_get_gate_core(
     match gate_backend {
         GateValidationBackend::Internal => Ok(environment.check_and_get_core()),
         GateValidationBackend::PicoSat(solver) => {
-            solver
-                .reset()
-                .map_err(|error| picosat_error_to_diagnostic(&error))?;
             let core = environment
                 .check_and_get_core_with_picosat(solver)
-                .map_err(|error| picosat_error_to_diagnostic(&error))?;
-            solver
-                .reset()
                 .map_err(|error| picosat_error_to_diagnostic(&error))?;
             Ok(core)
         }
