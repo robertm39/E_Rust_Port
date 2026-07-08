@@ -5093,10 +5093,24 @@ fn run_app_encode<W: Write + ?Sized>(
 
     let files = config.files.clone();
     for file in &files {
+        let mut include_echoes = String::new();
         let parsed_file = {
             let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
-            parse_app_encode_file(file, config.parse_format, bank, formulas)?
+            match parse_app_encode_file(
+                file,
+                config.parse_format,
+                bank,
+                formulas,
+                &mut include_echoes,
+            ) {
+                Ok(parsed_file) => parsed_file,
+                Err(error) => {
+                    output.write_stdout_side_channel(include_echoes.as_bytes())?;
+                    return Err(error.into());
+                }
+            }
         };
+        output.write_stdout_side_channel(include_echoes.as_bytes())?;
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_input_owner {
             return Err(Diagnostic::new(
@@ -9627,6 +9641,7 @@ fn parse_app_encode_file(
     parse_format: IoFormat,
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
+    include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeFile, Diagnostic> {
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
@@ -9643,8 +9658,12 @@ fn parse_app_encode_file(
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let parsed_entries = match detected_format {
-        IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank, formulas, None)?,
-        IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank, formulas, None)?,
+        IoFormat::Tstp => {
+            parse_tstp_app_encode_entry_list(&mut scanner, bank, formulas, None, include_echoes)?
+        }
+        IoFormat::Tptp => {
+            parse_tptp_app_encode_entry_list(&mut scanner, bank, formulas, None, include_echoes)?
+        }
         _ => {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9792,12 +9811,6 @@ impl ParsedAppEncodeEntries {
         formulas.insert(wrapped);
         Ok(())
     }
-
-    fn add(&mut self, other: Self) {
-        self.saw_input_owner |= other.saw_input_owner;
-        self.saw_formula_owner |= other.saw_formula_owner;
-        self.problem_type = combine_problem_types(self.problem_type, other.problem_type);
-    }
 }
 
 impl Default for ParsedAppEncodeEntries {
@@ -9856,6 +9869,7 @@ fn parse_tptp_app_encode_entry_list(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
+    include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeEntries, Diagnostic> {
     let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -9874,18 +9888,7 @@ fn parse_tptp_app_encode_entry_list(
                 result.add_formula_owner(formula, bank, formulas)?;
             }
         } else if scanner.test_id("include") {
-            let mut include_selectors = StrTree::new();
-            let skip_includes = StrTree::new();
-            if let Some(mut included) =
-                scanner.parse_include(&mut include_selectors, &skip_includes)?
-            {
-                result.add(parse_tptp_app_encode_entry_list(
-                    &mut included,
-                    bank,
-                    formulas,
-                    Some(&mut include_selectors),
-                )?);
-            }
+            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9908,6 +9911,7 @@ fn parse_tstp_app_encode_entry_list(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
+    include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeEntries, Diagnostic> {
     let mut result = ParsedAppEncodeEntries::new();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -9948,18 +9952,7 @@ fn parse_tstp_app_encode_entry_list(
                 }
             }
         } else if scanner.test_id("include") {
-            let mut include_selectors = StrTree::new();
-            let skip_includes = StrTree::new();
-            if let Some(mut included) =
-                scanner.parse_include(&mut include_selectors, &skip_includes)?
-            {
-                result.add(parse_tstp_app_encode_entry_list(
-                    &mut included,
-                    bank,
-                    formulas,
-                    Some(&mut include_selectors),
-                )?);
-            }
+            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -9975,6 +9968,27 @@ fn parse_tstp_app_encode_entry_list(
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
     Ok(result)
+}
+
+fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+    scanner.accept_id("include")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    scanner.check_tok(TokenType::SQ_STRING)?;
+    let name = strip_quoted_token_core(scanner.current_token().literal_bytes())?;
+    scanner.next_token()?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    Ok(format!("include('{name}').\n"))
+}
+
+fn strip_quoted_token_core(bytes: &[u8]) -> Result<String, Diagnostic> {
+    if bytes.len() < 2 {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Quoted string literal is too short",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&bytes[1..bytes.len() - 1]).into_owned())
 }
 
 fn parse_old_tptp_clause_record(
@@ -18589,9 +18603,17 @@ input_clause(c2,axiom,[++q(X)]).
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
 
         let mut plain_set = FormulaSet::new();
-        let plain =
-            parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank, &mut plain_set).unwrap();
+        let mut plain_include_echoes = String::new();
+        let plain = parse_app_encode_file(
+            &plain_arg,
+            IoFormat::Auto,
+            &mut bank,
+            &mut plain_set,
+            &mut plain_include_echoes,
+        )
+        .unwrap();
         assert!(plain.saw_formula_owner);
+        assert!(plain_include_echoes.is_empty());
         assert_eq!(plain_set.cardinality(), 1);
         let plain_owner = plain_set.iter().next().unwrap();
         assert!(plain_owner.query_prop(CP_INITIAL));
@@ -18603,9 +18625,17 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(rendered.contains('&'));
 
         let mut fool_set = FormulaSet::new();
-        let fool =
-            parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank, &mut fool_set).unwrap();
+        let mut fool_include_echoes = String::new();
+        let fool = parse_app_encode_file(
+            &fool_arg,
+            IoFormat::Auto,
+            &mut bank,
+            &mut fool_set,
+            &mut fool_include_echoes,
+        )
+        .unwrap();
         assert!(fool.saw_formula_owner);
+        assert!(fool_include_echoes.is_empty());
         assert_eq!(fool_set.cardinality(), 3);
         for formula in fool_set.iter() {
             assert!(formula.query_prop(CP_INITIAL));
@@ -20126,7 +20156,7 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_app_encode_loads_relative_include_and_skips_top_level_true() {
+    fn run_app_encode_ignores_relative_include_and_skips_top_level_true() {
         let _guard = global_state_lock();
         let dir = temp_path("app-encode-include-dir");
         std::fs::create_dir_all(&dir).unwrap();
@@ -20152,15 +20182,18 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.starts_with(&format!(
+            "include('inc.ax').\n{}",
+            default_preprocessing_debug_line()
+        )));
         assert!(!printed.contains("skip_true"));
-        assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(!printed.contains("show_false"));
         assert!(stderr.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn run_app_encode_tptp_in_loads_old_tptp_includes() {
+    fn run_app_encode_tptp_in_ignores_old_tptp_includes() {
         let _guard = global_state_lock();
         let dir = temp_path("app-encode-tptp-include-dir");
         std::fs::create_dir_all(&dir).unwrap();
@@ -20181,14 +20214,20 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.starts_with(&default_preprocessing_debug_line()));
-        assert!(printed.contains("tff(show_false, axiom, "));
+        assert_eq!(
+            printed,
+            format!(
+                "include('old_inc.ax').\n{}",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(!printed.contains("show_false"));
         assert!(stderr.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn run_app_encode_honors_include_selectors() {
+    fn run_app_encode_rejects_include_selectors() {
         let _guard = global_state_lock();
         let dir = temp_path("app-encode-include-selector-dir");
         std::fs::create_dir_all(&dir).unwrap();
@@ -20205,23 +20244,21 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(
+        let error = run(
             ["eprover", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap();
+        .unwrap_err();
 
-        let printed = String::from_utf8(stdout).unwrap();
-        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.contains("tff(selected, axiom, "));
-        assert!(!printed.contains("unselected"));
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn run_app_encode_loads_includes_to_stdout_with_output_file() {
+    fn run_app_encode_ignores_includes_to_stdout_with_output_file() {
         let _guard = global_state_lock();
         let dir = temp_path("app-encode-include-output-dir");
         std::fs::create_dir_all(&dir).unwrap();
@@ -20250,9 +20287,50 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.starts_with(&default_preprocessing_debug_line()));
-        assert!(printed.contains("tff(show_false, axiom, "));
+        assert_eq!(
+            printed,
+            format!(
+                "include('out_inc.ax').\n{}",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(!printed.contains("show_false"));
         assert!(std::fs::read_to_string(&output_path).unwrap().is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_error_on_empty_ignores_includes_after_echo() {
+        let _guard = global_state_lock();
+        let dir = temp_path("app-encode-include-empty-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let include = dir.join("empty_inc.ax");
+        let path = dir.join("main.p");
+        std::fs::write(&include, "fof(not_loaded, axiom, $false).\n").unwrap();
+        std::fs::write(&path, "include('empty_inc.ax').\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--error-on-empty",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains("did not contain any clauses"));
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "include('empty_inc.ax').\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
