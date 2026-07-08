@@ -49,6 +49,26 @@ pub fn c_abs(value: IntOrPInt) -> IntOrPInt {
     }
 }
 
+/// Write a C string-shaped message to a raw file descriptor.
+///
+/// This mirrors `clb_defines.h`'s `WriteStr`: it computes the message length
+/// up to the first NUL byte, performs one low-level write call, and returns the
+/// raw C result converted to `usize`. A failed write therefore returns
+/// `usize::MAX`, matching C's signed-to-unsigned return conversion.
+#[must_use]
+pub fn write_str_to_fd(fd: i32, message: &str) -> usize {
+    fd_write::write(fd, c_string_prefix(message))
+}
+
+fn c_string_prefix(message: &str) -> &[u8] {
+    let bytes = message.as_bytes();
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    &bytes[..end]
+}
+
 #[must_use]
 pub const fn logical_xor(left: bool, right: bool) -> bool {
     left != right
@@ -117,11 +137,79 @@ impl<P> IntOrP<P> {
     }
 }
 
+// Allowed external shared-library boundary: `WriteStr` is a raw descriptor
+// helper, so the Rust port calls the platform C runtime's one-shot write ABI
+// behind a safe, C-shaped wrapper.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod fd_write {
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
+    }
+
+    pub(super) fn write(fd: i32, bytes: &[u8]) -> usize {
+        // SAFETY: bytes points to a live buffer for exactly bytes.len() bytes.
+        // The fd is intentionally raw to match C `WriteStr`.
+        let result = unsafe { write(fd, bytes.as_ptr().cast::<c_void>(), bytes.len()) };
+        usize::try_from(result).unwrap_or(usize::MAX)
+    }
+}
+
+// Allowed external DLL boundary: on MSVC Windows, the compatibility fd surface
+// is a UCRT file descriptor, so `WriteStr` uses UCRT `_write`.
+#[cfg(all(windows, target_env = "msvc"))]
+#[allow(unsafe_code)]
+mod fd_write {
+    use std::ffi::c_void;
+
+    #[link(name = "ucrt")]
+    unsafe extern "C" {
+        fn _write(fd: i32, buffer: *const c_void, count: u32) -> i32;
+    }
+
+    pub(super) fn write(fd: i32, bytes: &[u8]) -> usize {
+        if fd < 0 {
+            return usize::MAX;
+        }
+        let count = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        let capped_len = usize::try_from(count).unwrap_or(bytes.len());
+        let capped = &bytes[..capped_len];
+        // SAFETY: capped points to a live buffer for exactly count bytes. The
+        // fd is intentionally raw to match C `WriteStr`.
+        let result = unsafe { _write(fd, capped.as_ptr().cast::<c_void>(), count) };
+        usize::try_from(result).unwrap_or(usize::MAX)
+    }
+}
+
+#[cfg(all(windows, not(target_env = "msvc")))]
+mod fd_write {
+    pub(super) fn write(_fd: i32, bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            0
+        } else {
+            usize::MAX
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+mod fd_write {
+    pub(super) fn write(_fd: i32, bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            0
+        } else {
+            usize::MAX
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_to_str, c_abs, c_cmp, logical_equiv, logical_xor, IntOrP, IntOrPInt, INT_OR_P_MEM,
-        KILO, LONG_MEM, MEGA,
+        bool_to_str, c_abs, c_cmp, c_string_prefix, logical_equiv, logical_xor, write_str_to_fd,
+        IntOrP, IntOrPInt, INT_OR_P_MEM, KILO, LONG_MEM, MEGA,
     };
     use std::mem::size_of;
 
@@ -170,5 +258,16 @@ mod tests {
         assert_eq!(pointer_value.as_int(), None);
         assert_eq!(pointer_value.as_pointer(), Some(&"payload"));
         assert_eq!(pointer_value.into_pointer(), Some("payload"));
+    }
+
+    #[test]
+    fn c_string_prefix_stops_at_first_nul_like_strlen() {
+        assert_eq!(c_string_prefix("abc"), b"abc");
+        assert_eq!(c_string_prefix("abc\0def"), b"abc");
+    }
+
+    #[test]
+    fn write_str_to_fd_reports_failed_raw_descriptor_like_c_unsigned_return() {
+        assert_eq!(write_str_to_fd(-1, "x"), usize::MAX);
     }
 }
