@@ -149,6 +149,18 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
     ),
+    "epclextract": (
+        (
+            "stdin-basic",
+            (),
+            (
+                "1 : : [++p] : initial\n"
+                "2 : lemma : [++q] : 1\n"
+                "3 : : [] : 2 : 'final'\n"
+                "4 : : [++r] : initial\n"
+            ),
+        ),
+    ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
     ),
