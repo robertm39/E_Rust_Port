@@ -114,6 +114,7 @@ class ComparisonTests(unittest.TestCase):
                 "e_axfilter",
                 "e_deduction_server",
                 "ekb_create",
+                "ekb_delete",
                 "ekb_insert",
                 "e_stratpar",
                 "eground",
@@ -176,6 +177,9 @@ class ComparisonTests(unittest.TestCase):
                         "kb",
                     ],
                 ),
+                ("ekb_delete/help", ["--help"]),
+                ("ekb_delete/version", ["--version"]),
+                ("ekb_delete/drop-example", ["--knowledge-base=kb", "drop"]),
                 ("ekb_insert/help", ["--help"]),
                 ("ekb_insert/version", ["--version"]),
                 ("ekb_insert/stdin-example", ["--knowledge-base=kb"]),
@@ -255,6 +259,20 @@ class ComparisonTests(unittest.TestCase):
             ],
         )
         self.assertEqual(ekb_create_case["output_directories"], ["kb/FILES"])
+        ekb_delete_case = cases_by_name["ekb_delete/drop-example"]
+        self.assertIn("1: \"drop\"", ekb_delete_case["workdir_files"]["kb/problems"])
+        self.assertIn(
+            "q(a) : 1:(1,0,0,0,0,0,0).",
+            ekb_delete_case["workdir_files"]["kb/clausepatterns"],
+        )
+        self.assertEqual(ekb_delete_case["workdir_files"]["kb/FILES/drop"], "drop problem")
+        self.assertEqual(ekb_delete_case["workdir_files"]["kb/FILES/keep"], "keep problem")
+        self.assertEqual(ekb_delete_case["workdir_directories"], ["kb/FILES"])
+        self.assertEqual(
+            ekb_delete_case["output_files"],
+            ["kb/FILES/keep", "kb/problems", "kb/clausepatterns"],
+        )
+        self.assertEqual(ekb_delete_case["output_absent_files"], ["kb/FILES/drop"])
         ekb_insert_case = cases_by_name["ekb_insert/stdin-example"]
         self.assertEqual(ekb_insert_case["stdin"], "a=b.\n.\n0:(0): a=b.\n")
         self.assertEqual(
@@ -406,6 +424,57 @@ class ComparisonTests(unittest.TestCase):
             ],
         )
         self.assertFalse(details["global.out"]["normalized_equal"])
+
+    def test_tool_absent_output_file_comparison_requires_absence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            (reference_cwd / "kb" / "FILES").mkdir(parents=True)
+            (candidate_cwd / "kb" / "FILES").mkdir(parents=True)
+            (reference_cwd / "kb" / "FILES" / "drop").write_text(
+                "still present\n", encoding="utf-8"
+            )
+
+            records = e_interop.compare_tool_absent_output_files(
+                ["kb/FILES/drop"], reference_cwd, candidate_cwd
+            )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "name": "kb/FILES/drop",
+                    "reference_absent": False,
+                    "candidate_absent": True,
+                    "absent_equal": False,
+                }
+            ],
+        )
+
+    def test_tool_absent_output_file_comparison_accepts_absence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            reference_cwd.mkdir()
+            candidate_cwd.mkdir()
+
+            records = e_interop.compare_tool_absent_output_files(
+                ["drop"], reference_cwd, candidate_cwd
+            )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "name": "drop",
+                    "reference_absent": True,
+                    "candidate_absent": True,
+                    "absent_equal": True,
+                }
+            ],
+        )
 
     def test_tool_output_directory_comparison_requires_declared_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -43,6 +43,7 @@ TOOL_CASE_METADATA_KEYS = frozenset(
         "workdir_files",
         "workdir_directories",
         "output_files",
+        "output_absent_files",
         "output_directories",
     }
 )
@@ -193,6 +194,41 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "e_deduction_server": (
         ("stdout-unimplemented", (), None),
+    ),
+    "ekb_delete": (
+        (
+            "drop-example",
+            ("--knowledge-base=kb", "drop"),
+            None,
+            {
+                "workdir_files": {
+                    "kb/problems": (
+                        "% Example names and features. \n"
+                        "1: \"drop\"\n"
+                        "PA: () FA: () "
+                        "(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                        "2: \"keep\"\n"
+                        "PA: () FA: () "
+                        "(2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                    ),
+                    "kb/clausepatterns": (
+                        "% Individual annotated patterns. \n"
+                        "p(a) : 1:(1,0,0,0,0,0,0),2:(1,0,0,0,0,0,0).\n"
+                        "q(a) : 1:(1,0,0,0,0,0,0).\n"
+                        "r(a) : 2:(1,0,0,0,0,0,0).\n"
+                    ),
+                    "kb/FILES/drop": "drop problem",
+                    "kb/FILES/keep": "keep problem",
+                },
+                "workdir_directories": ("kb/FILES",),
+                "output_files": (
+                    "kb/FILES/keep",
+                    "kb/problems",
+                    "kb/clausepatterns",
+                ),
+                "output_absent_files": ("kb/FILES/drop",),
+            },
+        ),
     ),
     "ekb_create": (
         (
@@ -1064,6 +1100,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             "workdir_files": {},
             "workdir_directories": [],
             "output_files": [],
+            "output_absent_files": [],
             "output_directories": [],
         }
     if len(fixture_tail) != 1:
@@ -1083,12 +1120,14 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         workdir_files = tail.get("workdir_files", {})
         workdir_directories = tail.get("workdir_directories", ())
         output_files = tail.get("output_files", ())
+        output_absent_files = tail.get("output_absent_files", ())
         output_directories = tail.get("output_directories", ())
     else:
         fixture_files = tail
         workdir_files = {}
         workdir_directories = ()
         output_files = ()
+        output_absent_files = ()
         output_directories = ()
 
     return {
@@ -1096,6 +1135,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         "workdir_files": dict(workdir_files),
         "workdir_directories": list(workdir_directories),
         "output_files": list(output_files),
+        "output_absent_files": list(output_absent_files),
         "output_directories": list(output_directories),
     }
 
@@ -1231,6 +1271,27 @@ def compare_tool_output_files(
     return records, details
 
 
+def compare_tool_absent_output_files(
+    output_absent_files: Sequence[str],
+    reference_cwd: Path,
+    candidate_cwd: Path,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for name in output_absent_files:
+        relative = validate_tool_output_name(name)
+        reference_exists = (reference_cwd / relative).exists()
+        candidate_exists = (candidate_cwd / relative).exists()
+        records.append(
+            {
+                "name": name,
+                "reference_absent": not reference_exists,
+                "candidate_absent": not candidate_exists,
+                "absent_equal": not reference_exists and not candidate_exists,
+            }
+        )
+    return records
+
+
 def compare_tool_output_directories(
     output_directories: Sequence[str],
     reference_cwd: Path,
@@ -1297,6 +1358,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             case.get("workdir_files")
             or case.get("workdir_directories")
             or case.get("output_files")
+            or case.get("output_absent_files")
             or case.get("output_directories")
         )
         if uses_case_workdir:
@@ -1391,6 +1453,16 @@ def compare_tools(args: argparse.Namespace) -> None:
         output_files_equal = all(record["normalized_equal"] for record in output_file_records)
         if not output_files_equal:
             mismatches.append("output_files")
+        output_absent_file_records = compare_tool_absent_output_files(
+            case.get("output_absent_files", ()),
+            reference_cwd,
+            candidate_cwd,
+        )
+        output_absent_files_equal = all(
+            record["absent_equal"] for record in output_absent_file_records
+        )
+        if not output_absent_files_equal:
+            mismatches.append("output_absent_files")
         output_directory_records = compare_tool_output_directories(
             case.get("output_directories", ()),
             reference_cwd,
@@ -1463,6 +1535,8 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "workdir_directories": bool(reference_workdir_directories),
                 "output_files": output_file_records,
                 "output_files_equal": output_files_equal,
+                "output_absent_files": output_absent_file_records,
+                "output_absent_files_equal": output_absent_files_equal,
                 "output_directories": output_directory_records,
                 "output_directories_equal": output_directories_equal,
                 "reference_exit_code": reference["exit_code"],
