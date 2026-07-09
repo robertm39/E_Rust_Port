@@ -298,7 +298,7 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
+    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME, VERSION};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::test_support::global_state_lock;
@@ -328,6 +328,43 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "                                              term2dag {version}\n",
+                "                            \n",
+                "                                              Usage: term2dag [options] [files]\n",
+                "             \n",
+                "                                                      Read a set of terms and print a DAG representing it.\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. The short form or the\n",
+                "    long form without the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -r\n",
+                "  --print-reference-number[=<arg>]\n",
+                "    Print number of references for each DAG node as a comment. The short form\n",
+                "    or the long form without the optional argument is equivalent to\n",
+                "    --print-reference-number=true.\n",
+                "\n",
+            ),
+            version = VERSION,
+        )
+    }
+
     #[test]
     fn help_exits_before_term_processing() {
         let _guard = global_state_lock();
@@ -345,16 +382,7 @@ mod tests {
 
         assert_eq!(status, 0);
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.starts_with(
-            "\n\n                                              term2dag 0.1 - Sat Nov 29 16:39:20 MET 1997\n"
-        ));
-        assert!(help.contains(
-            "\n                                              Usage: term2dag [options] [files]\n"
-        ));
-        assert!(help.contains(
-            "\n                                                      Read a set of terms and print a DAG representing it.\n"
-        ));
-        assert!(help.contains("--print-reference-number[=<arg>]"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
     }
 
@@ -633,11 +661,6 @@ mod tests {
     fn help_text_preserves_c_banner() {
         let rendered = print_help();
 
-        assert!(rendered.starts_with(
-            "\n\n                                              term2dag 0.1 - Sat Nov 29 16:39:20 MET 1997\n"
-        ));
-        assert!(rendered.contains(
-            "\n                                                      Read a set of terms and print a DAG representing it.\n"
-        ));
+        assert_eq!(rendered, expected_help());
     }
 }
