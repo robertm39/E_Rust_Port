@@ -518,6 +518,94 @@ mod tests {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "E {version} \"{nickname}\"\n",
+                "\n",
+                "Usage: e_client [options] [files]\n",
+                "\n",
+                "Read an problem specification, connect to the E deduction server, \n",
+                "and try to have the problem solved.\n",
+                "\n",
+                "Options:\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the prover. Please include this with all bug\n",
+                "    reports (if any).\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. This differs from the\n",
+                "    output level (below) in that technical information is printed to stderr,\n",
+                "    while the output level determines which logical manipulations of the\n",
+                "    clauses are printed to stdout. The short form or the long form without\n",
+                "    the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file (this affects only some output, as\n",
+                "    most is written to automatically generated files based on the input and\n",
+                "    filter names.\n",
+                "\n",
+                "   -S <arg>\n",
+                "  --server=<arg>\n",
+                "    Specify the address of the server. The default is 'localhost'.\n",
+                "\n",
+                "   -P <arg>\n",
+                "  --service-port=<arg>\n",
+                "    Specify the port to use for the deduction service. The default is to use\n",
+                "    3666\n",
+                "\n",
+                "   -P <arg>\n",
+                "  --port=<arg>\n",
+                "    Specify the port to use for the deduction service.\n",
+                "\n",
+                "\n",
+                "Copyright (C) 2011 by Stephan Schulz, schulz@eprover.org\n",
+                "\n",
+                "You can find the latest version of E and additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "This program is distributed in the hope that it will be useful,\n",
+                "but WITHOUT ANY WARRANTY; without even the implied warranty of\n",
+                "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n",
+                "GNU General Public License for more details.\n",
+                "\n",
+                "You should have received a copy of the GNU General Public License\n",
+                "along with this program (it should be contained in the top level\n",
+                "directory of the distribution in the file COPYING); if not, write to\n",
+                "the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n",
+                "Boston, MA  02111-1307 USA\n",
+                "\n",
+                "The original copyright holder can be contacted as\n",
+                "\n",
+                "Stephan Schulz\n",
+                "DHBW Stuttgart\n",
+                "Fakultaet Technik\n",
+                "Informatik\n",
+                "Lerchenstrasse 1\n",
+                "70174 Stuttgart\n",
+                "Germany\n",
+                "\n",
+            ),
+            version = VERSION,
+            nickname = E_NICKNAME,
+        )
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
@@ -537,10 +625,7 @@ mod tests {
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "ignored");
 
         assert_eq!(status, 0);
-        assert!(help.starts_with(&format!("\nE {VERSION} \"{E_NICKNAME}\"\n\n")));
-        assert!(help.contains("Usage: e_client [options] [files]"));
-        assert!(help.contains("Read an problem specification"));
-        assert!(help.contains("Copyright (C) 2011 by Stephan Schulz"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "-V"], "ignored");
@@ -822,8 +907,8 @@ mod tests {
     }
 
     #[test]
-    fn print_help_mentions_deduction_server() {
-        assert!(print_help().contains("connect to the E deduction server"));
+    fn print_help_preserves_full_c_text() {
+        assert_eq!(print_help(), expected_help());
     }
 
     #[test]
