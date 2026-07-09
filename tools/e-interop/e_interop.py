@@ -230,6 +230,37 @@ TOOL_FUNCTIONAL_CASES = {
             },
         ),
     ),
+    "ekb_ginsert": (
+        (
+            "stdin-protocol",
+            ("--knowledge-base=kb",),
+            (
+                "1 : : [++p(a)] : initial : 'proof'\n"
+                "2 : : [++q(a)] : initial\n"
+                "3 : : [++r(a)] : 2\n"
+            ),
+            {
+                "workdir_files": {
+                    "kb/description": (
+                        "% E theorem prover knowledge base description\n"
+                        "Version     : \"0.20dev\"\n"
+                        "NegProp     : 1.000000  % Negative example proportion "
+                        "(successful proof search)\n"
+                        "FailExamples:        2  % Number of clauses from a failed proof search\n"
+                    ),
+                    "kb/signature": "",
+                    "kb/problems": "",
+                    "kb/clausepatterns": "",
+                },
+                "workdir_directories": ("kb/FILES",),
+                "output_files": (
+                    "kb/FILES/__problem__1",
+                    "kb/problems",
+                    "kb/clausepatterns",
+                ),
+            },
+        ),
+    ),
     "ekb_create": (
         (
             "empty-kb-files",

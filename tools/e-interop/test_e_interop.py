@@ -115,6 +115,7 @@ class ComparisonTests(unittest.TestCase):
                 "e_deduction_server",
                 "ekb_create",
                 "ekb_delete",
+                "ekb_ginsert",
                 "ekb_insert",
                 "e_stratpar",
                 "eground",
@@ -180,6 +181,9 @@ class ComparisonTests(unittest.TestCase):
                 ("ekb_delete/help", ["--help"]),
                 ("ekb_delete/version", ["--version"]),
                 ("ekb_delete/drop-example", ["--knowledge-base=kb", "drop"]),
+                ("ekb_ginsert/help", ["--help"]),
+                ("ekb_ginsert/version", ["--version"]),
+                ("ekb_ginsert/stdin-protocol", ["--knowledge-base=kb"]),
                 ("ekb_insert/help", ["--help"]),
                 ("ekb_insert/version", ["--version"]),
                 ("ekb_insert/stdin-example", ["--knowledge-base=kb"]),
@@ -273,6 +277,24 @@ class ComparisonTests(unittest.TestCase):
             ["kb/FILES/keep", "kb/problems", "kb/clausepatterns"],
         )
         self.assertEqual(ekb_delete_case["output_absent_files"], ["kb/FILES/drop"])
+        ekb_ginsert_case = cases_by_name["ekb_ginsert/stdin-protocol"]
+        self.assertIn(
+            "1 : : [++p(a)] : initial : 'proof'",
+            ekb_ginsert_case["stdin"],
+        )
+        self.assertIn(
+            'Version     : "0.20dev"',
+            ekb_ginsert_case["workdir_files"]["kb/description"],
+        )
+        self.assertEqual(
+            ekb_ginsert_case["workdir_files"]["kb/signature"],
+            "",
+        )
+        self.assertEqual(ekb_ginsert_case["workdir_directories"], ["kb/FILES"])
+        self.assertEqual(
+            ekb_ginsert_case["output_files"],
+            ["kb/FILES/__problem__1", "kb/problems", "kb/clausepatterns"],
+        )
         ekb_insert_case = cases_by_name["ekb_insert/stdin-example"]
         self.assertEqual(ekb_insert_case["stdin"], "a=b.\n.\n0:(0): a=b.\n")
         self.assertEqual(
