@@ -651,11 +651,11 @@ C source references:
 
 Implemented:
 
-- Standalone `ex_commandline` demo binary integration, including C-shaped help text, underscore long-option spellings, required integer example output, optional floating-point example output with the default `3.1415` and `%f`-style six-decimal rendering, remaining-argument printing, default stdin marker insertion through `-`, and unit coverage for help, defaults, option output ordering, and numeric validation.
+- Standalone `ex_commandline` demo binary integration, including exact C-shaped help text through the shared option renderer, underscore long-option spellings, required integer example output, optional floating-point example output with the default `3.1415` and `%f`-style six-decimal rendering, remaining-argument printing, default stdin marker insertion through `-`, and unit coverage for the full help stream, defaults, option output ordering, and numeric validation.
 
 Pending:
 
-- Direct byte-for-byte comparison against a built C `ex_commandline` executable remains pending for the full help stream and platform-specific command-line parser diagnostics.
+- Direct byte-for-byte comparison against a built C `ex_commandline` executable remains pending for platform-specific command-line parser diagnostics.
 
 Change-later notes:
 

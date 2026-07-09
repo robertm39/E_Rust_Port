@@ -134,6 +134,33 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use std::io::Cursor;
 
+    const EXPECTED_HELP: &str = concat!(
+        "\n",
+        "\n",
+        "ex_commandline.c 1.0 Tue Jan 20 00:35:40 MET 1998\n",
+        "\n",
+        "Usage: ex_commandline [options] [files]\n",
+        "\n",
+        "Shows the usage of options, print non-option commandline arguments.\n",
+        "\n",
+        "Options\n",
+        "\n",
+        "   -h\n",
+        "  --help\n",
+        "    Print a short description of program usage and options.\n",
+        "\n",
+        "   -i <arg>\n",
+        "  --int_example=<arg>\n",
+        "    Print the value given with the option..\n",
+        "\n",
+        "   -f\n",
+        "  --float_example[=<arg>]\n",
+        "    Print the given argument or a default value. The short form or the long\n",
+        "    form without the optional argument is equivalent to\n",
+        "    --float_example=3.1415.\n",
+        "\n",
+    );
+
     #[test]
     fn help_exits_before_file_defaults() {
         let mut stdin = Cursor::new(Vec::new());
@@ -150,9 +177,7 @@ mod tests {
 
         assert_eq!(status, 0);
         let output = String::from_utf8(stdout).expect("help is utf8");
-        assert!(output.starts_with("\n\nex_commandline.c 1.0 Tue Jan 20 00:35:40 MET 1998"));
-        assert!(output.contains("Usage: ex_commandline [options] [files]"));
-        assert!(output.contains("--float_example[=<arg>]"));
+        assert_eq!(output, EXPECTED_HELP);
         assert!(stderr.is_empty());
     }
 
@@ -250,7 +275,6 @@ File to process: two.p\n"
     fn help_text_preserves_c_banner() {
         let rendered = print_help();
 
-        assert!(rendered.starts_with("\n\nex_commandline.c 1.0 Tue Jan 20 00:35:40 MET 1998\n"));
-        assert!(rendered.contains("Shows the usage of options"));
+        assert_eq!(rendered, EXPECTED_HELP);
     }
 }

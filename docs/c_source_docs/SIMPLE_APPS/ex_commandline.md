@@ -74,7 +74,7 @@ Source files reviewed: `SIMPLE_APPS/ex_commandline.c`.
 - Small application code. Useful as integration examples for command-line and term/formula APIs.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `src/simple_apps/ex_commandline.rs` and the `ex_commandline` Cargo binary now port the standalone CLIB command-line demo: C-shaped help text, required integer and optional floating-point example options, underscore long-option names, default stdin marker insertion, remaining-argument printing, and option-output ordering.
+- `src/simple_apps/ex_commandline.rs` and the `ex_commandline` Cargo binary now port the standalone CLIB command-line demo: exact C-shaped help text through the shared option renderer, required integer and optional floating-point example options, underscore long-option names, default stdin marker insertion, remaining-argument printing, and option-output ordering.
 
 ### Porting Focus
 
