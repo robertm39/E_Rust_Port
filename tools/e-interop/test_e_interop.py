@@ -113,6 +113,7 @@ class ComparisonTests(unittest.TestCase):
                 "direct_examples",
                 "eground",
                 "edpll",
+                "enormalizer",
                 "epatternize",
                 "epclanalyse",
                 "epclextract",
@@ -147,6 +148,12 @@ class ComparisonTests(unittest.TestCase):
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("eground/lop-basic", ["--lop-in", "--silent"]),
+                ("enormalizer/help", ["--help"]),
+                ("enormalizer/version", ["--version"]),
+                (
+                    "enormalizer/term-basic",
+                    ["-t", "{fixture:terms.lop}", "{fixture:rules.lop}"],
+                ),
                 ("epatternize/help", ["--help"]),
                 ("epatternize/version", ["--version"]),
                 ("epatternize/lop-basic", ["--lop-in"]),
@@ -198,6 +205,12 @@ class ComparisonTests(unittest.TestCase):
         )
         eground_case = cases_by_name["eground/lop-basic"]
         self.assertEqual(eground_case["stdin"], "p(a).\n")
+        enormalizer_case = cases_by_name["enormalizer/term-basic"]
+        self.assertIsNone(enormalizer_case["stdin"])
+        self.assertEqual(
+            enormalizer_case["fixture_files"],
+            {"rules.lop": "f(X)=a.\n", "terms.lop": "f(b)\n"},
+        )
         epclanalyse_case = cases_by_name["epclanalyse/stdin-basic"]
         self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
         epclextract_case = cases_by_name["epclextract/stdin-basic"]
@@ -215,6 +228,20 @@ class ComparisonTests(unittest.TestCase):
         tsm_case = cases_by_name["tsm_classify/stdin-basic"]
         self.assertIn("Training:\n", tsm_case["stdin"])
         self.assertIn("Test:\n", tsm_case["stdin"])
+
+    def test_tool_fixture_materialization_substitutes_arguments(self):
+        [case] = [
+            case
+            for case in e_interop.tool_comparison_cases(["enormalizer"])
+            if case["name"] == "enormalizer/term-basic"
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_paths = e_interop.materialize_tool_fixture_files(case, Path(tmp))
+            arguments = e_interop.substitute_tool_fixture_arguments(
+                case["arguments"], fixture_paths
+            )
+            self.assertEqual(Path(arguments[1]).read_text(encoding="utf-8"), "f(b)\n")
+            self.assertEqual(Path(arguments[2]).read_text(encoding="utf-8"), "f(X)=a.\n")
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))

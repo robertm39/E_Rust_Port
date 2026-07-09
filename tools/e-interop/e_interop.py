@@ -36,6 +36,7 @@ VOLATILE_LINE_RE = re.compile(
     r"(?:User time|System time|Total time|Maximum resident|date|timestamp)\s*:",
     re.IGNORECASE,
 )
+FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
 REFERENCE_TOOL_BINARIES = {
@@ -172,6 +173,17 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "eground": (
         ("lop-basic", ("--lop-in", "--silent"), "p(a).\n"),
+    ),
+    "enormalizer": (
+        (
+            "term-basic",
+            ("-t", "{fixture:terms.lop}", "{fixture:rules.lop}"),
+            None,
+            {
+                "rules.lop": "f(X)=a.\n",
+                "terms.lop": "f(b)\n",
+            },
+        ),
     ),
     "epclanalyse": (
         (
@@ -959,7 +971,9 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "stdin": None,
                 }
             )
-        for label, arguments, stdin_text in TOOL_FUNCTIONAL_CASES.get(tool, ()):
+        for functional_case in TOOL_FUNCTIONAL_CASES.get(tool, ()):
+            label, arguments, stdin_text, *fixture_tail = functional_case
+            fixture_files = fixture_tail[0] if fixture_tail else {}
             cases.append(
                 {
                     "tool": tool,
@@ -967,9 +981,44 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "arguments": list(arguments),
                     "scenario": label,
                     "stdin": stdin_text,
+                    "fixture_files": dict(fixture_files),
                 }
             )
     return cases
+
+
+def validate_tool_fixture_name(name: str) -> Path:
+    relative = Path(name)
+    if relative.is_absolute() or not relative.parts or any(part == ".." for part in relative.parts):
+        raise InteropError(f"Invalid fixture file name: {name}")
+    return relative
+
+
+def materialize_tool_fixture_files(case: dict[str, Any], fixture_dir: Path) -> dict[str, Path]:
+    fixture_paths: dict[str, Path] = {}
+    for name, contents in case.get("fixture_files", {}).items():
+        relative = validate_tool_fixture_name(name)
+        path = fixture_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+        fixture_paths[name] = path
+    return fixture_paths
+
+
+def substitute_tool_fixture_arguments(
+    arguments: Sequence[str],
+    fixture_paths: dict[str, Path],
+    *,
+    windows_paths: bool = False,
+) -> list[str]:
+    def replacement(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in fixture_paths:
+            raise InteropError(f"Unknown fixture placeholder: {name}")
+        path = fixture_paths[name]
+        return wslpath(path, windows=True) if windows_paths else str(path)
+
+    return [FIXTURE_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
 
 
 def tool_argument_cases(tool: str) -> tuple[tuple[str, ...], ...]:
@@ -1013,10 +1062,14 @@ def compare_tools(args: argparse.Namespace) -> None:
         tool = case["tool"]
         print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
         reference_binary = Path(reference_tools[tool])
+        fixture_paths = materialize_tool_fixture_files(
+            case, run_dir / "fixtures" / f"{index:04d}"
+        )
+        reference_arguments = substitute_tool_fixture_arguments(case["arguments"], fixture_paths)
         environment = os.environ.copy()
         reference = execute(
             reference_binary,
-            case["arguments"],
+            reference_arguments,
             timeout=args.timeout,
             env=environment,
             stdin_text=case["stdin"],
@@ -1030,20 +1083,27 @@ def compare_tools(args: argparse.Namespace) -> None:
             candidate_binary = rust_bin_dir / f"{tool}.exe"
             if not candidate_binary.is_file():
                 raise InteropError(f"Windows Rust tool executable not found: {candidate_binary}")
+        candidate_arguments = substitute_tool_fixture_arguments(
+            case["arguments"], fixture_paths, windows_paths=not args.self_test
+        )
 
         candidate = execute(
             candidate_binary,
-            case["arguments"],
+            candidate_arguments,
             timeout=args.timeout,
             env=environment,
             stdin_text=case["stdin"],
             cwd=repo_root,
         )
         mismatches = comparison_mismatches(reference, candidate)
-        reference_normalized_stdout = normalize_output(reference["stdout"])
-        candidate_normalized_stdout = normalize_output(candidate["stdout"])
-        reference_normalized_stderr = normalize_output(reference["stderr"])
-        candidate_normalized_stderr = normalize_output(candidate["stderr"])
+        fixture_replacements: list[tuple[str, str]] = []
+        for fixture_path in fixture_paths.values():
+            fixture_replacements.append((str(fixture_path), "<FIXTURE>"))
+            fixture_replacements.append((wslpath(fixture_path, windows=True), "<FIXTURE>"))
+        reference_normalized_stdout = normalize_output(reference["stdout"], fixture_replacements)
+        candidate_normalized_stdout = normalize_output(candidate["stdout"], fixture_replacements)
+        reference_normalized_stderr = normalize_output(reference["stderr"], fixture_replacements)
+        candidate_normalized_stderr = normalize_output(candidate["stderr"], fixture_replacements)
         normalized_stdout_equal = reference_normalized_stdout == candidate_normalized_stdout
         normalized_stderr_equal = reference_normalized_stderr == candidate_normalized_stderr
         if not normalized_stdout_equal:
@@ -1078,6 +1138,7 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "scenario": case["scenario"],
                 "arguments": case["arguments"],
                 "stdin": case["stdin"] is not None,
+                "fixtures": bool(fixture_paths),
                 "reference_exit_code": reference["exit_code"],
                 "candidate_exit_code": candidate["exit_code"],
                 "reference_seconds": reference["wall_seconds"],
