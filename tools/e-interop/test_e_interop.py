@@ -100,7 +100,7 @@ class ComparisonTests(unittest.TestCase):
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
-            ["eground", "CSSCPA_filter", "term2dag"]
+            ["eground", "CSSCPA_filter", "term2dag", "ex_commandline"]
         )
 
         self.assertEqual(
@@ -110,10 +110,17 @@ class ComparisonTests(unittest.TestCase):
                 ("CSSCPA_filter/version", ["--version"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
+                ("ex_commandline/help", ["--help"]),
+                (
+                    "ex_commandline/options-basic",
+                    ["--int_example=42", "--float_example", "one.p", "two.p"],
+                ),
                 ("term2dag/help", ["--help"]),
                 ("term2dag/stdin-basic", []),
             ],
         )
+        ex_case = cases[-3]
+        self.assertIsNone(ex_case["stdin"])
         term_case = cases[-1]
         self.assertEqual(term_case["stdin"], "f(a,a) g(f(a,a))\n")
 

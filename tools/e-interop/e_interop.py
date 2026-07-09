@@ -68,7 +68,10 @@ VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "ex_commandline",
     "term2dag",
 }
-TOOL_STDIN_CASES = {
+TOOL_FUNCTIONAL_CASES = {
+    "ex_commandline": (
+        ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
+    ),
     "term2dag": (
         ("stdin-basic", (), "f(a,a) g(f(a,a))\n"),
     ),
@@ -751,7 +754,7 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "stdin": None,
                 }
             )
-        for label, arguments, stdin_text in TOOL_STDIN_CASES.get(tool, ()):
+        for label, arguments, stdin_text in TOOL_FUNCTIONAL_CASES.get(tool, ()):
             cases.append(
                 {
                     "tool": tool,
