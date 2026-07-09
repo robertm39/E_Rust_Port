@@ -602,6 +602,91 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "epclextract {version}\n",
+                "\n",
+                "Usage: epclextract [options] [files]\n",
+                "\n",
+                "Read an PCL2 protocol and print the steps necessary for proving the clauses in \"proof\", \"final\", or \"extract\" steps.\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. The short form or the\n",
+                "    long form without the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -f\n",
+                "  --fast-extract\n",
+                "    Do a fast extract. With this option the program understands only a subset\n",
+                "    of PCL and assumes that all \"proof\" and \"final\" steps are at the end of\n",
+                "    the protocoll.\n",
+                "\n",
+                "   -C\n",
+                "  --forward-comments\n",
+                "    Pass comments found in the input through to the output while reading\n",
+                "    input.\n",
+                "\n",
+                "   -c\n",
+                "  --competition-framing\n",
+                "    Print special \"begin\" and \"end\"comments around the proof object, as\n",
+                "    required by the CASC MIX* class.\n",
+                "\n",
+                "   -n\n",
+                "  --no-extract\n",
+                "    Don't extract, print back all steps (actually, it treats all steps as\n",
+                "    proof steps). Useful as a syntax checker, or if you want to convert PCL\n",
+                "    to TSTP with the next option.\n",
+                "\n",
+                "  --tstp-out\n",
+                "    Print proof protocol in TSTP syntax (default is PCL).\n",
+                "\n",
+                "  --tptp3-out\n",
+                "    Synonymous with --tstp-out.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+        )
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
@@ -620,9 +705,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: epclextract [options] [files]"));
-        assert!(help.contains("Options\n\n"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "-V"], "not pcl");
@@ -980,9 +1063,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert!(rendered.contains(
-            "Read an PCL2 protocol and print the steps necessary for proving the clauses"
-        ));
-        assert!(rendered.contains("Copyright 1998-2026 by Stephan Schulz"));
+        assert_eq!(rendered, expected_help());
     }
 }
