@@ -467,6 +467,7 @@ mod tests {
     use crate::control::sine::{StructFofSpec, StructFofSpecBacktrackReport};
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
+    use crate::prover::version::{E_NICKNAME, VERSION};
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use crate::test_support::global_state_lock;
 
@@ -486,6 +487,87 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "e_deduction_server {version} \"{nickname}\"\n",
+                "\n",
+                "Usage: e_deduction_server -p <port> [options] [files]\n",
+                "\n",
+                "The E deduction server offers deduction services based on local or\n",
+                "uploaded axiom sets via network. See README.server.\n",
+                "\n",
+                "Options:\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the prover. Please include this with all bug\n",
+                "    reports (if any).\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. This differs from the\n",
+                "    output level (below) in that technical information is printed to stderr,\n",
+                "    while the output level determines which logical manipulations of the\n",
+                "    clauses are printed to stdout. The short form or the long form without\n",
+                "    the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -p <arg>\n",
+                "  --port=<arg>\n",
+                "    The port on which the server will receive connections. Only effective\n",
+                "    when interactive mode is on. If not given stdin/stdout will be used.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output. Level 0\n",
+                "    produces nearly no output, level 1 will output each clause as it is\n",
+                "    processed, level 2 will output generating inferences, level 3 will give a\n",
+                "    full protocol including rewrite steps and level 4 will include some\n",
+                "    internal clause renamings. Levels >= 2 also imply PCL2 or TSTP formats\n",
+                "    (which can be post-processed with suitable tools).\n",
+                "\n",
+                "   -w <arg>\n",
+                "  --wtc-limit=<arg>\n",
+                "    Set the global wall-clock limit for each batch (if any).\n",
+                "\n",
+                "   -L <arg>\n",
+                "  --lib=<arg>\n",
+                "    Set the axioms library directory of the server.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+            nickname = E_NICKNAME,
+        )
     }
 
     fn ok_run_command(
@@ -519,18 +601,17 @@ mod tests {
         .expect("help");
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).unwrap();
-        assert!(help.starts_with(&format!("\n{PROGRAM_NAME} ")));
-        assert!(help.contains("Usage: e_deduction_server -p <port> [options] [files]"));
-        assert!(help.contains("The E deduction server offers deduction services"));
+        assert_eq!(help, expected_help());
 
         let mut stdin = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
         let version_status =
             run([PROGRAM_NAME, "-V"], &mut stdin, &mut stdout, &mut stderr).expect("version");
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
-        assert!(String::from_utf8(stdout)
-            .unwrap()
-            .starts_with("e_deduction_server "));
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+        );
     }
 
     #[test]
@@ -797,10 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn print_help_uses_current_e_footer() {
-        let help = print_help();
-
-        assert!(help.contains("Options:\n\n"));
-        assert!(help.contains("Bug reports for the first-order prover"));
+    fn print_help_preserves_full_c_text() {
+        assert_eq!(print_help(), expected_help());
     }
 }

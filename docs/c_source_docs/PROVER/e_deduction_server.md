@@ -89,9 +89,9 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend, captured `RUN` global/stdout side-channel output, and the C `OutClose(GlobalOut)` final flush/error check on the successful execution path.
+- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves exact C-shaped full help text, the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend, captured `RUN` global/stdout side-channel output, and the C `OutClose(GlobalOut)` final flush/error check on the successful execution path.
 - The Rust TCP server currently serves accepted clients sequentially but creates fresh term/control state per accepted client to approximate the C child-process snapshot.
-- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under “E Server Sessions”.
+- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under `E Server Sessions`.
 
 ### Change Later
 
