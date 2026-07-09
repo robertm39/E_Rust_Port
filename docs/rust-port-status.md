@@ -566,7 +566,7 @@ C source references:
 
 Implemented:
 
-- The `e_stratpar` binary wrapper and library run path now parse C-shaped `-h`/`--help`, `-V`/`--version`, and optional-argument `--cpu-limit[=300]`, default the hard time limit to 3600 seconds, require one or two positional arguments, launch eight `eprover` children with `AutoSched0` through `AutoSched7` `-x`/`-t` strategy options plus `--sine`, pass half the hard time limit to each child, stream C-shaped no-proof child messages through the process-control writer, print the first proof-producing child output, emit `% SZS status GaveUp` if no child proves the problem, clean up remaining child processes through `EPCtrlSet`, preserve C's execution-path `OutClose(GlobalOut)` final flush/error check, and cover proof-producing, all-no-proof, and final-flush-failure subprocess outcomes with unit tests.
+- The `e_stratpar` binary wrapper and library run path now parse exact C-shaped full help text, C-shaped `-V`/`--version`, and optional-argument `--cpu-limit[=300]`, default the hard time limit to 3600 seconds, require one or two positional arguments, launch eight `eprover` children with `AutoSched0` through `AutoSched7` `-x`/`-t` strategy options plus `--sine`, pass half the hard time limit to each child, stream C-shaped no-proof child messages through the process-control writer, print the first proof-producing child output, emit `% SZS status GaveUp` if no child proves the problem, clean up remaining child processes through `EPCtrlSet`, preserve C's execution-path `OutClose(GlobalOut)` final flush/error check, and cover full help/version output, proof-producing, all-no-proof, and final-flush-failure subprocess outcomes with unit tests.
 
 Pending:
 
@@ -578,6 +578,7 @@ Change-later notes:
 - C accepts an optional `<path-to-eprover>` argument in the usage text but keeps `prover = "eprover"` and never reads that positional argument. Rust preserves the ignored argument for drop-in compatibility; later, decide whether a cleaned interface should either remove it or honor it.
 - The C usage error says `e_ltb_runner` even though the executable is `e_stratpar`. Rust preserves that message in diagnostics for now; revise only after compatibility tests say user-facing typo compatibility is unnecessary.
 - The eight strategies and `HardTimeLimit/2` child limit are hard-coded for the CASC-2017 SLB hack. Keep this as a compatibility executable, but a future scheduler-facing interface should share configurable process orchestration with the main auto-schedule machinery.
+- `print_help(FILE* out)` writes the banner and footer to `out` but calls `PrintOptions(stdout, ...)` for the option table. Rust renders one help buffer for executable parity; a cleaned reusable API should honor one output destination.
 - Help/version exit inside `process_options()` before C reaches `OutClose(GlobalOut)`, while ordinary execution reaches the close. Rust preserves that split; a cleaned API should expose explicit flush ownership instead of inheriting executable control-flow quirks.
 
 ## termprops Executable

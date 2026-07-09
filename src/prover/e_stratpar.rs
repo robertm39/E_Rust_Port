@@ -241,6 +241,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::control::proc_ctrl::EPCtrl;
+    use crate::prover::version::{E_NICKNAME, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Write};
     use std::process::Command;
@@ -257,6 +258,56 @@ mod tests {
         }
     }
 
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "e_stratpar {version} \"{nickname}\"\n",
+                "\n",
+                "Usage: e_stratpar [options] [file]\n",
+                "\n",
+                "Run 8 instances of E with different strategies in parallel.\n",
+                "\n",
+                "Options:\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the prover. Please include this with all bug\n",
+                "    reports (if any).\n",
+                "\n",
+                "  --cpu-limit[=<arg>]\n",
+                "    Limit the cpu time the prover should run. The optional argument is the\n",
+                "    CPU time in seconds. The option without the optional argument is\n",
+                "    equivalent to --cpu-limit=300.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+            nickname = E_NICKNAME,
+        )
+    }
+
     #[test]
     fn help_and_version_exit_before_spawning_children() {
         let _guard = global_state_lock();
@@ -265,16 +316,22 @@ mod tests {
 
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
-        let help = String::from_utf8(stdout).unwrap();
-        assert!(help.contains("Usage: e_stratpar [options] [file]"));
-        assert!(help.contains("Run 8 instances of E with different strategies in parallel."));
+        assert_eq!(
+            String::from_utf8(std::mem::take(&mut stdout)).unwrap(),
+            expected_help()
+        );
 
-        let mut stdout = Vec::new();
         let version_status = run([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
-        assert!(String::from_utf8(stdout)
-            .unwrap()
-            .starts_with("e_stratpar "));
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+        );
+    }
+
+    #[test]
+    fn print_help_preserves_full_c_text() {
+        assert_eq!(print_help(), expected_help());
     }
 
     #[test]
