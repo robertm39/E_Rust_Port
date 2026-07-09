@@ -89,7 +89,7 @@ Source files reviewed: `PROVER/epclanalyse.c`.
 
 ### Rust Port Notes
 
-- `src/prover/epclanalyse.rs` and `src/bin/epclanalyse.rs` port the standalone `epclanalyse` executable over the existing Rust PCL2 full-protocol owner and property-analysis functions. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, default stdin input through `-`, TPTP-format PCL parsing with C-compatible shared external variable-name mapping for compressed clause input, strict end-of-input checking, property-statistic aggregation through `PCLProtPropAnalyse`-style logic, C-shaped summary/representative-step output, two-line `SysError`-style file-open diagnostics, and C `OutClose` wording on final flush failure.
+- `src/prover/epclanalyse.rs` and `src/bin/epclanalyse.rs` port the standalone `epclanalyse` executable over the existing Rust PCL2 full-protocol owner and property-analysis functions. The port covers exact C-shaped full help text with the legacy support-tool footer, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, default stdin input through `-`, TPTP-format PCL parsing with C-compatible shared external variable-name mapping for compressed clause input, strict end-of-input checking, property-statistic aggregation through `PCLProtPropAnalyse`-style logic, C-shaped summary/representative-step output, two-line `SysError`-style file-open diagnostics, and C `OutClose` wording on final flush failure.
 
 ### Change Later
 

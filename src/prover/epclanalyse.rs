@@ -396,6 +396,79 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "epclanalyse {version}\n",
+                "\n",
+                "Usage: epclanalyse [options] [files]\n",
+                "\n",
+                "Read an PCL2 protocol and print a number of statistics about the\n",
+                "protocol and its clauses.\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. The short form or the\n",
+                "    long form without the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "\n",
+                "Copyright (C) 2002-2009 by Stephan Schulz, schulz@eprover.org\n",
+                "\n",
+                "This program is a part of the support structure for the E equational\n",
+                "theorem prover. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://wwwjessen.informatik.tu-muenchen.de/~schulz/WORK/eprover.html.\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "This program is distributed in the hope that it will be useful,\n",
+                "but WITHOUT ANY WARRANTY; without even the implied warranty of\n",
+                "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n",
+                "GNU General Public License for more details.\n",
+                "\n",
+                "You should have received a copy of the GNU General Public License\n",
+                "along with this program (it should be contained in the top level\n",
+                "directory of the distribution in the file COPYING); if not, write to\n",
+                "the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n",
+                "Boston, MA  02111-1307 USA\n",
+                "\n",
+                "The original copyright holder can be contacted as\n",
+                "\n",
+                "Stephan Schulz\n",
+                "DHBW Stuttgart\n",
+                "Fakultaet Technik\n",
+                "Informatik\n",
+                "Lerchenstrasse 1\n",
+                "70174 Stuttgart\n",
+                "Germany\n",
+                "\n",
+            ),
+            version = VERSION,
+        )
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
@@ -414,10 +487,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: epclanalyse [options] [files]"));
-        assert!(help.contains("Copyright (C) 2002-2009 by Stephan Schulz"));
-        assert!(help.contains("DHBW Stuttgart"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not pcl");
@@ -709,9 +779,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert!(rendered.contains(
-            "Read an PCL2 protocol and print a number of statistics about the\nprotocol and its clauses."
-        ));
-        assert!(rendered.contains("http://wwwjessen.informatik.tu-muenchen.de"));
+        assert_eq!(rendered, expected_help());
     }
 }
