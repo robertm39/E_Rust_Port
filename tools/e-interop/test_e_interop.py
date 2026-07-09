@@ -112,6 +112,7 @@ class ComparisonTests(unittest.TestCase):
                 "classify_problem",
                 "direct_examples",
                 "e_axfilter",
+                "e_client",
                 "e_deduction_server",
                 "e_ltb_runner",
                 "e_server",
@@ -157,6 +158,9 @@ class ComparisonTests(unittest.TestCase):
                     "e_axfilter/tstp-threshold-file",
                     ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
                 ),
+                ("e_client/help", ["--help"]),
+                ("e_client/version", ["--version"]),
+                ("e_client/invalid-port", ["--port=70000"]),
                 ("e_deduction_server/help", ["--help"]),
                 ("e_deduction_server/version", ["--version"]),
                 ("e_deduction_server/stdout-unimplemented", []),
@@ -258,6 +262,8 @@ class ComparisonTests(unittest.TestCase):
             e_axfilter_generated_case["output_files"],
             ["global.out", "problem_tiny.p"],
         )
+        e_client_case = cases_by_name["e_client/invalid-port"]
+        self.assertIsNone(e_client_case["stdin"])
         e_deduction_case = cases_by_name["e_deduction_server/stdout-unimplemented"]
         self.assertIsNone(e_deduction_case["stdin"])
         e_ltb_runner_case = cases_by_name["e_ltb_runner/usage-missing-spec"]

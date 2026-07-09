@@ -192,6 +192,9 @@ TOOL_FUNCTIONAL_CASES = {
             },
         ),
     ),
+    "e_client": (
+        ("invalid-port", ("--port=70000",), None),
+    ),
     "e_deduction_server": (
         ("stdout-unimplemented", (), None),
     ),
