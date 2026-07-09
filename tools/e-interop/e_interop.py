@@ -175,6 +175,19 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
     ),
+    "epcllemma": (
+        (
+            "stdin-basic",
+            ("--max-lemmas=0", "--min-lemma-quality=0"),
+            (
+                "1 : : [++p(a)] : initial\n"
+                "2 : : [++q(a)] : initial\n"
+                "3 : : [++r(a)] : pm(1,2)\n"
+                "4 : : [++s(a)] : pm(1,3)\n"
+                "5 : : [++t(a)] : er(4)\n"
+            ),
+        ),
+    ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
     ),

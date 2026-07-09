@@ -114,6 +114,7 @@ class ComparisonTests(unittest.TestCase):
                 "edpll",
                 "epclanalyse",
                 "epclextract",
+                "epcllemma",
                 "CSSCPA_filter",
                 "term2dag",
                 "ex_commandline",
@@ -145,6 +146,12 @@ class ComparisonTests(unittest.TestCase):
                 ("epclextract/help", ["--help"]),
                 ("epclextract/version", ["--version"]),
                 ("epclextract/stdin-basic", []),
+                ("epcllemma/help", ["--help"]),
+                ("epcllemma/version", ["--version"]),
+                (
+                    "epcllemma/stdin-basic",
+                    ["--max-lemmas=0", "--min-lemma-quality=0"],
+                ),
                 ("ex_commandline/help", ["--help"]),
                 (
                     "ex_commandline/options-basic",
@@ -177,6 +184,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
         epclextract_case = cases_by_name["epclextract/stdin-basic"]
         self.assertIn("3 : : [] : 2 : 'final'", epclextract_case["stdin"])
+        epcllemma_case = cases_by_name["epcllemma/stdin-basic"]
+        self.assertIn("5 : : [++t(a)] : er(4)", epcllemma_case["stdin"])
         ex_case = cases_by_name["ex_commandline/options-basic"]
         self.assertIsNone(ex_case["stdin"])
         term2dag_case = cases_by_name["term2dag/stdin-basic"]
