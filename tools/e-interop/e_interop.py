@@ -152,6 +152,9 @@ TOOL_FUNCTIONAL_CASES = {
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
     ),
+    "eground": (
+        ("lop-basic", ("--lop-in", "--silent"), "p(a).\n"),
+    ),
     "epclanalyse": (
         (
             "stdin-basic",

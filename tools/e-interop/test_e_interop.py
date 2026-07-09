@@ -141,6 +141,7 @@ class ComparisonTests(unittest.TestCase):
                 ("edpll/tptp-input-clause", ["--tptp-in"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
+                ("eground/lop-basic", ["--lop-in", "--silent"]),
                 ("epatternize/help", ["--help"]),
                 ("epatternize/version", ["--version"]),
                 ("epatternize/lop-basic", ["--lop-in"]),
@@ -184,6 +185,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             edpll_tptp_case["stdin"], "input_clause(c_0_1,axiom,[++p,--q])."
         )
+        eground_case = cases_by_name["eground/lop-basic"]
+        self.assertEqual(eground_case["stdin"], "p(a).\n")
         epclanalyse_case = cases_by_name["epclanalyse/stdin-basic"]
         self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
         epclextract_case = cases_by_name["epclextract/stdin-basic"]
