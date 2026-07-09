@@ -37,7 +37,9 @@ VOLATILE_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
-TOOL_CASE_METADATA_KEYS = frozenset({"fixture_files", "workdir_files", "output_files"})
+TOOL_CASE_METADATA_KEYS = frozenset(
+    {"fixture_files", "workdir_files", "output_files", "output_directories"}
+)
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
 REFERENCE_TOOL_BINARIES = {
@@ -185,6 +187,26 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "e_deduction_server": (
         ("stdout-unimplemented", (), None),
+    ),
+    "ekb_create": (
+        (
+            "empty-kb-files",
+            (
+                "--negative-example-number=7",
+                "--negative-example-proportion=0.5",
+                "kb",
+            ),
+            None,
+            {
+                "output_files": (
+                    "kb/description",
+                    "kb/signature",
+                    "kb/problems",
+                    "kb/clausepatterns",
+                ),
+                "output_directories": ("kb/FILES",),
+            },
+        ),
     ),
     "e_stratpar": (
         ("usage-missing-problem", (), None),
@@ -1011,7 +1033,12 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
 
 def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]:
     if not fixture_tail:
-        return {"fixture_files": {}, "workdir_files": {}, "output_files": []}
+        return {
+            "fixture_files": {},
+            "workdir_files": {},
+            "output_files": [],
+            "output_directories": [],
+        }
     if len(fixture_tail) != 1:
         raise InteropError("Functional support-tool cases accept at most one metadata argument")
 
@@ -1028,15 +1055,18 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         fixture_files = tail.get("fixture_files", {})
         workdir_files = tail.get("workdir_files", {})
         output_files = tail.get("output_files", ())
+        output_directories = tail.get("output_directories", ())
     else:
         fixture_files = tail
         workdir_files = {}
         output_files = ()
+        output_directories = ()
 
     return {
         "fixture_files": dict(fixture_files),
         "workdir_files": dict(workdir_files),
         "output_files": list(output_files),
+        "output_directories": list(output_directories),
     }
 
 
@@ -1053,6 +1083,10 @@ def validate_tool_fixture_name(name: str) -> Path:
 
 def validate_tool_output_name(name: str) -> Path:
     return validate_tool_relative_name(name, "output file")
+
+
+def validate_tool_output_directory_name(name: str) -> Path:
+    return validate_tool_relative_name(name, "output directory")
 
 
 def materialize_tool_named_files(files: dict[str, str], directory: Path, kind: str) -> dict[str, Path]:
@@ -1153,6 +1187,27 @@ def compare_tool_output_files(
     return records, details
 
 
+def compare_tool_output_directories(
+    output_directories: Sequence[str],
+    reference_cwd: Path,
+    candidate_cwd: Path,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for name in output_directories:
+        relative = validate_tool_output_directory_name(name)
+        reference_exists = (reference_cwd / relative).is_dir()
+        candidate_exists = (candidate_cwd / relative).is_dir()
+        records.append(
+            {
+                "name": name,
+                "reference_exists": reference_exists,
+                "candidate_exists": candidate_exists,
+                "equal": reference_exists and candidate_exists,
+            }
+        )
+    return records
+
+
 def tool_argument_cases(tool: str) -> tuple[tuple[str, ...], ...]:
     if tool in VERSIONED_REFERENCE_TOOLS:
         return (*DEFAULT_TOOL_ARGUMENT_CASES, ("--version",))
@@ -1194,7 +1249,11 @@ def compare_tools(args: argparse.Namespace) -> None:
         tool = case["tool"]
         print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
         reference_binary = Path(reference_tools[tool])
-        uses_case_workdir = bool(case.get("workdir_files") or case.get("output_files"))
+        uses_case_workdir = bool(
+            case.get("workdir_files")
+            or case.get("output_files")
+            or case.get("output_directories")
+        )
         if uses_case_workdir:
             case_workdir_root = run_dir / "workdirs" / f"{index:04d}"
             reference_cwd = case_workdir_root / "reference"
@@ -1277,6 +1336,16 @@ def compare_tools(args: argparse.Namespace) -> None:
         output_files_equal = all(record["normalized_equal"] for record in output_file_records)
         if not output_files_equal:
             mismatches.append("output_files")
+        output_directory_records = compare_tool_output_directories(
+            case.get("output_directories", ()),
+            reference_cwd,
+            candidate_cwd,
+        )
+        output_directories_equal = all(
+            record["equal"] for record in output_directory_records
+        )
+        if not output_directories_equal:
+            mismatches.append("output_directories")
 
         if mismatches:
             mismatch_count += 1
@@ -1338,6 +1407,8 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "workdir_files": bool(reference_workdir_paths),
                 "output_files": output_file_records,
                 "output_files_equal": output_files_equal,
+                "output_directories": output_directory_records,
+                "output_directories_equal": output_directories_equal,
                 "reference_exit_code": reference["exit_code"],
                 "candidate_exit_code": candidate["exit_code"],
                 "reference_seconds": reference["wall_seconds"],

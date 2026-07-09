@@ -113,6 +113,7 @@ class ComparisonTests(unittest.TestCase):
                 "direct_examples",
                 "e_axfilter",
                 "e_deduction_server",
+                "ekb_create",
                 "e_stratpar",
                 "eground",
                 "edpll",
@@ -164,6 +165,16 @@ class ComparisonTests(unittest.TestCase):
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("eground/lop-basic", ["--lop-in", "--silent"]),
+                ("ekb_create/help", ["--help"]),
+                ("ekb_create/version", ["--version"]),
+                (
+                    "ekb_create/empty-kb-files",
+                    [
+                        "--negative-example-number=7",
+                        "--negative-example-proportion=0.5",
+                        "kb",
+                    ],
+                ),
                 ("enormalizer/help", ["--help"]),
                 ("enormalizer/version", ["--version"]),
                 (
@@ -229,6 +240,17 @@ class ComparisonTests(unittest.TestCase):
         )
         e_deduction_case = cases_by_name["e_deduction_server/stdout-unimplemented"]
         self.assertIsNone(e_deduction_case["stdin"])
+        ekb_create_case = cases_by_name["ekb_create/empty-kb-files"]
+        self.assertEqual(
+            ekb_create_case["output_files"],
+            [
+                "kb/description",
+                "kb/signature",
+                "kb/problems",
+                "kb/clausepatterns",
+            ],
+        )
+        self.assertEqual(ekb_create_case["output_directories"], ["kb/FILES"])
         e_stratpar_case = cases_by_name["e_stratpar/usage-missing-problem"]
         self.assertIsNone(e_stratpar_case["stdin"])
         edpll_lop_case = cases_by_name["edpll/lop-basic"]
@@ -358,6 +380,56 @@ class ComparisonTests(unittest.TestCase):
             ],
         )
         self.assertFalse(details["global.out"]["normalized_equal"])
+
+    def test_tool_output_directory_comparison_requires_declared_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            reference_cwd.mkdir()
+            candidate_cwd.mkdir()
+            (reference_cwd / "kb").mkdir()
+            (reference_cwd / "kb" / "FILES").mkdir()
+
+            records = e_interop.compare_tool_output_directories(
+                ["kb/FILES"], reference_cwd, candidate_cwd
+            )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "name": "kb/FILES",
+                    "reference_exists": True,
+                    "candidate_exists": False,
+                    "equal": False,
+                }
+            ],
+        )
+
+    def test_tool_output_directory_comparison_accepts_matching_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            (reference_cwd / "kb" / "FILES").mkdir(parents=True)
+            (candidate_cwd / "kb" / "FILES").mkdir(parents=True)
+
+            records = e_interop.compare_tool_output_directories(
+                ["kb/FILES"], reference_cwd, candidate_cwd
+            )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "name": "kb/FILES",
+                    "reference_exists": True,
+                    "candidate_exists": True,
+                    "equal": True,
+                }
+            ],
+        )
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))
