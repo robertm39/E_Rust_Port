@@ -112,6 +112,7 @@ class ComparisonTests(unittest.TestCase):
                 "direct_examples",
                 "eground",
                 "edpll",
+                "epatternize",
                 "epclanalyse",
                 "epclextract",
                 "epcllemma",
@@ -140,6 +141,9 @@ class ComparisonTests(unittest.TestCase):
                 ("edpll/tptp-input-clause", ["--tptp-in"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
+                ("epatternize/help", ["--help"]),
+                ("epatternize/version", ["--version"]),
+                ("epatternize/lop-basic", ["--lop-in"]),
                 ("epclanalyse/help", ["--help"]),
                 ("epclanalyse/version", ["--version"]),
                 ("epclanalyse/stdin-basic", []),
@@ -186,6 +190,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("3 : : [] : 2 : 'final'", epclextract_case["stdin"])
         epcllemma_case = cases_by_name["epcllemma/stdin-basic"]
         self.assertIn("5 : : [++t(a)] : er(4)", epcllemma_case["stdin"])
+        epatternize_case = cases_by_name["epatternize/lop-basic"]
+        self.assertEqual(epatternize_case["stdin"], "p(a).\n")
         ex_case = cases_by_name["ex_commandline/options-basic"]
         self.assertIsNone(ex_case["stdin"])
         term2dag_case = cases_by_name["term2dag/stdin-basic"]

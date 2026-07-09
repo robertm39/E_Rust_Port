@@ -188,6 +188,9 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
     ),
+    "epatternize": (
+        ("lop-basic", ("--lop-in",), "p(a).\n"),
+    ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
     ),
