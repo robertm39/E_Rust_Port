@@ -9198,11 +9198,7 @@ fn write_saturated_output(
 }
 
 const fn saturated_clause_section_output_format(config: &EProverConfig) -> IoFormat {
-    if config.flags.contains(EProverFlag::CnfOnly) {
-        IoFormat::Lop
-    } else {
-        config.output_format
-    }
+    config.output_format
 }
 
 fn clause_print_for_output_format(
@@ -16187,7 +16183,7 @@ mod tests {
 
     fn default_proof_search_prefix() -> String {
         format!(
-            "{}% Scanning for AC axioms\n",
+            "{}% Initializing proof state\n% Scanning for AC axioms\n",
             default_preprocessing_debug_line()
         )
     }
@@ -21398,7 +21394,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             format!(
-                "% Version: {VERSION}\n% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
+                "% Version: {VERSION}\n% Initializing proof state\n% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
             )
         );
         std::fs::remove_file(&path).unwrap();
@@ -21415,7 +21411,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "% Version: {VERSION}\n{debug_line}% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
+                "% Version: {VERSION}\n{debug_line}% Initializing proof state\n% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
             )
         );
         std::fs::remove_file(&input_path).unwrap();
@@ -24147,7 +24143,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", first_order_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", first_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24178,7 +24174,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", higher_order_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", higher_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -27861,11 +27857,13 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% Initializing proof state\n"));
         assert!(printed.contains("% CNFization successful!\n"));
         assert!(printed.contains("% SZS status Unknown\n"));
-        assert!(printed.contains("p(a) <- .\n"));
-        assert!(printed.contains("?- q(a).\n"));
-        assert!(printed.contains("q(a) <- p(a).\n"));
+        assert!(printed.contains(", plain, (p(a))).\n"), "{printed}");
+        assert!(printed.contains(", negated_conjecture, (~q(a))).\n"));
+        assert!(printed.contains(", plain, (q(a)|~p(a))).\n"));
+        assert!(!printed.contains(" <- "));
         assert!(!printed.contains("% Proof found!"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -28033,7 +28031,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28071,7 +28069,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28163,7 +28161,13 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--fool-unroll=false", "--cnf", path_arg.as_str()],
+            [
+                "eprover",
+                "--tstp-in",
+                "--fool-unroll=false",
+                "--cnf",
+                path_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )
@@ -28190,7 +28194,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28223,7 +28227,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28257,7 +28261,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28287,7 +28291,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28419,7 +28423,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28456,7 +28460,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -30081,7 +30085,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "{}% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
+                "{}% Initializing proof state\n% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
                 default_preprocessing_debug_line()
             )
         );
@@ -30274,7 +30278,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "{}% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
+                "{}% Initializing proof state\n% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
                 default_preprocessing_debug_line()
             )
         );

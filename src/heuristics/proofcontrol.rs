@@ -846,6 +846,7 @@ pub fn proof_state_init_with_docs_and_output(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
+    proof_state_write_init_banner(output, output_level)?;
     debug_assert!(state.processed_pos_rules().is_empty());
     debug_assert!(state.processed_pos_eqns().is_empty());
     debug_assert!(state.processed_neg_units().is_empty());
@@ -884,6 +885,7 @@ pub fn proof_state_init_with_output(
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
+    proof_state_write_init_banner(output, output_level)?;
     let mut output_context = Some((output, output_level));
     debug_assert!(state.processed_pos_rules().is_empty());
     debug_assert!(state.processed_pos_eqns().is_empty());
@@ -1412,6 +1414,18 @@ fn proof_state_write_watchlist_reduction(
     );
     std::io::Write::write_all(output, line.as_bytes())
         .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))
+}
+
+fn proof_state_write_init_banner(
+    output: &mut (impl std::io::Write + ?Sized),
+    output_level: i64,
+) -> Result<(), Diagnostic> {
+    if output_level < 1 {
+        return Ok(());
+    }
+    let line = format!("{DEFAULT_COMCHAR_RAW} Initializing proof state\n");
+    std::io::Write::write_all(output, line.as_bytes())
+        .map_err(|error| proof_control_io_error(&error))
 }
 
 /// Runs the local owned-watchlist body of C `simplify_watchlist`.
@@ -10358,9 +10372,23 @@ mod tests {
         assert_eq!(outcome.watchlist_removed, 1);
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "% Watchlist reduced by 1 clause\n"
+            "% Initializing proof state\n% Watchlist reduced by 1 clause\n"
         );
         assert_eq!(state.watchlist().unwrap().members(), 0);
+    }
+
+    #[test]
+    fn proof_state_init_banner_obeys_output_level() {
+        let mut output = Vec::new();
+
+        super::proof_state_write_init_banner(&mut output, 0).unwrap();
+        assert!(output.is_empty());
+
+        super::proof_state_write_init_banner(&mut output, 1).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Initializing proof state\n"
+        );
     }
 
     #[test]
