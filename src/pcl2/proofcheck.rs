@@ -20,7 +20,7 @@ use crate::terms::termbanks::TermBank;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs;
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -376,12 +376,12 @@ pub fn prover_invocation_for_problem(
     }
 }
 
-/// C `pcl_run_prover` over an explicit argument-vector invocation.
+/// C `pcl_run_prover` over an explicit command-shape invocation.
 ///
 /// # Errors
 ///
-/// Returns diagnostics for temporary-file creation/writing/removal, stdin-file
-/// opening, or process spawning/output collection failures.
+/// Returns diagnostics for temporary-file creation/writing/removal or process
+/// spawning/output collection failures.
 pub fn run_prover_invocation(invocation: &ProverInvocation) -> Result<bool, Diagnostic> {
     let problem_file = temp_file_name()?;
     let result = run_prover_invocation_with_file(invocation, &problem_file);
@@ -689,22 +689,8 @@ fn execute_prover_invocation(
     invocation: &ProverInvocation,
     problem_file: &Path,
 ) -> Result<Vec<u8>, Diagnostic> {
-    let mut command = Command::new(&invocation.executable);
-    command.args(&invocation.args);
-    match invocation.problem_file_use {
-        ProverProblemFileUse::Argument => {
-            command.arg(problem_file);
-        }
-        ProverProblemFileUse::Stdin => {
-            let stdin = File::open(problem_file).map_err(|error| {
-                proofcheck_file_error(format!(
-                    "Could not open proofcheck problem file {}: {error}",
-                    problem_file.display()
-                ))
-            })?;
-            command.stdin(Stdio::from(stdin));
-        }
-    }
+    let command_line = prover_shell_command(invocation, problem_file, false);
+    let mut command = platform_shell_command(&command_line);
     if invocation.suppress_stderr {
         command.stderr(Stdio::null());
     }
@@ -733,6 +719,14 @@ fn prover_output_contains_success_marker(output: &[u8], success_marker: &str) ->
 }
 
 fn prover_display_command(invocation: &ProverInvocation, problem_file: &Path) -> String {
+    prover_shell_command(invocation, problem_file, true)
+}
+
+fn prover_shell_command(
+    invocation: &ProverInvocation,
+    problem_file: &Path,
+    include_stderr_redirect: bool,
+) -> String {
     let mut output = invocation.executable.clone();
     for arg in &invocation.args {
         output.push(' ');
@@ -748,10 +742,24 @@ fn prover_display_command(invocation: &ProverInvocation, problem_file: &Path) ->
             output.push_str(&problem_file.display().to_string());
         }
     }
-    if invocation.suppress_stderr {
+    if include_stderr_redirect && invocation.suppress_stderr {
         output.push_str(" 2> /dev/null");
     }
     output
+}
+
+#[cfg(windows)]
+fn platform_shell_command(command_line: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.arg("/C").arg(command_line);
+    command
+}
+
+#[cfg(not(windows))]
+fn platform_shell_command(command_line: &str) -> Command {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(command_line);
+    command
 }
 
 fn write_prover_output_trace(
@@ -1027,8 +1035,9 @@ mod tests {
         dfg_signature_string, eprover_problem_string, generate_check, generate_check_with_warnings,
         neg_skolemize_clause, otter_clause_set_string, otter_problem_string, protocol_check,
         protocol_check_with_output, protocol_check_with_output_and_warnings,
-        prover_invocation_for_problem, prover_output_contains_success_marker,
-        run_prover_invocation, run_prover_invocation_with_output, spass_problem_string, step_check,
+        prover_display_command, prover_invocation_for_problem,
+        prover_output_contains_success_marker, run_prover_invocation,
+        run_prover_invocation_with_output, spass_problem_string, step_check,
         step_check_with_runner, write_prover_output_trace, PclCheckType, ProofcheckWarningOutput,
         ProverInvocation, ProverProblemFileUse, ProverType, FOF_PROOFCHECK_WARNING,
     };
@@ -1116,6 +1125,30 @@ mod tests {
             problem: "payload\nPROOF-SUCCESS\n".to_owned(),
             problem_file_use,
             suppress_stderr: true,
+            success_marker: "PROOF-SUCCESS".to_owned(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn shell_marker_invocation() -> ProverInvocation {
+        ProverInvocation {
+            executable: "cmd /C echo PROOF-SUCCESS".to_owned(),
+            args: Vec::new(),
+            problem: "payload\n".to_owned(),
+            problem_file_use: ProverProblemFileUse::Argument,
+            suppress_stderr: false,
+            success_marker: "PROOF-SUCCESS".to_owned(),
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn shell_marker_invocation() -> ProverInvocation {
+        ProverInvocation {
+            executable: "printf 'PROOF-SUCCESS\\n'".to_owned(),
+            args: Vec::new(),
+            problem: "payload\n".to_owned(),
+            problem_file_use: ProverProblemFileUse::Argument,
+            suppress_stderr: false,
             success_marker: "PROOF-SUCCESS".to_owned(),
         }
     }
@@ -1416,6 +1449,15 @@ mod tests {
     }
 
     #[test]
+    fn run_prover_invocation_accepts_c_shell_executable_text() {
+        let _guard = temp_file_test_lock();
+        fs::create_dir_all(target_dir()).unwrap();
+        let _tmpdir = set_tmpdir(&target_dir());
+
+        assert!(run_prover_invocation(&shell_marker_invocation()).unwrap());
+    }
+
+    #[test]
     fn run_prover_invocation_with_output_traces_and_dumps_failed_problem() {
         let _guard = temp_file_test_lock();
         fs::create_dir_all(target_dir()).unwrap();
@@ -1433,6 +1475,15 @@ mod tests {
         assert!(output.contains("% ------------Problem begin--------------\n"));
         assert!(output.contains("payload\nPROOF-SUCCESS\n"));
         assert!(output.contains("% ------------Problem end----------------\n"));
+    }
+
+    #[test]
+    fn prover_display_command_preserves_c_shell_redirection_shape() {
+        let invocation = stdout_copy_invocation(ProverProblemFileUse::Stdin);
+        let display = prover_display_command(&invocation, Path::new("problem.p"));
+
+        assert!(display.contains(" < problem.p"));
+        assert!(display.ends_with(" 2> /dev/null"));
     }
 
     #[test]
