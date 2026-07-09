@@ -62,11 +62,32 @@ REFERENCE_TOOL_BINARIES = {
     "epcllemma": "PROVER/epcllemma",
     "ex_commandline": "SIMPLE_APPS/ex_commandline",
     "term2dag": "SIMPLE_APPS/term2dag",
+    "termprops": "PROVER/termprops",
+}
+ARCHIVED_REFERENCE_TOOL_LINKS = {
+    "termprops": (
+        ("make", "termprops.o"),
+        (
+            "cc",
+            "-o",
+            "termprops",
+            "termprops.o",
+            "../lib/TERMS.a",
+            "../lib/CLAUSES.a",
+            "../lib/ORDERINGS.a",
+            "../lib/TERMS.a",
+            "../lib/INOUT.a",
+            "../lib/BASICS.a",
+            "../lib/CONTRIB.a",
+            "-lm",
+        ),
+    ),
 }
 DEFAULT_TOOL_ARGUMENT_CASES = (("--help",),)
 VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "ex_commandline",
     "term2dag",
+    "termprops",
 }
 TOOL_FUNCTIONAL_CASES = {
     "ex_commandline": (
@@ -74,6 +95,9 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "term2dag": (
         ("stdin-basic", (), "f(a,a) g(f(a,a))\n"),
+    ),
+    "termprops": (
+        ("stdin-basic", (), "a f(a,a) g(f(a),a)\n"),
     ),
 }
 
@@ -252,6 +276,8 @@ def copy_reference_tools(build_dir: Path, commit: str) -> dict[str, str]:
     tools: dict[str, str] = {}
     for name, relative in sorted(REFERENCE_TOOL_BINARIES.items()):
         built_binary = build_dir / relative
+        if not built_binary.is_file() and name in ARCHIVED_REFERENCE_TOOL_LINKS:
+            build_archived_reference_tool(build_dir, name)
         if not built_binary.is_file():
             raise InteropError(f"Expected reference tool was not built: {built_binary}")
         installed_binary = cache_root() / "bin" / commit / "tools" / name
@@ -260,6 +286,15 @@ def copy_reference_tools(build_dir: Path, commit: str) -> dict[str, str]:
         installed_binary.chmod(installed_binary.stat().st_mode | 0o111)
         tools[name] = str(installed_binary)
     return tools
+
+
+def build_archived_reference_tool(build_dir: Path, name: str) -> None:
+    try:
+        compile_command, link_command = ARCHIVED_REFERENCE_TOOL_LINKS[name]
+    except KeyError as error:
+        raise InteropError(f"No archived reference-tool build is configured for {name}") from error
+    run_checked(compile_command, cwd=build_dir / "PROVER", capture=False)
+    run_checked(link_command, cwd=build_dir / "PROVER", capture=False)
 
 
 def build_reference(args: argparse.Namespace) -> None:

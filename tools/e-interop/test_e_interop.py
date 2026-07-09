@@ -100,7 +100,7 @@ class ComparisonTests(unittest.TestCase):
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
-            ["eground", "CSSCPA_filter", "term2dag", "ex_commandline"]
+            ["eground", "CSSCPA_filter", "term2dag", "ex_commandline", "termprops"]
         )
 
         self.assertEqual(
@@ -117,15 +117,20 @@ class ComparisonTests(unittest.TestCase):
                 ),
                 ("term2dag/help", ["--help"]),
                 ("term2dag/stdin-basic", []),
+                ("termprops/help", ["--help"]),
+                ("termprops/stdin-basic", []),
             ],
         )
-        ex_case = cases[-3]
+        ex_case = cases[5]
         self.assertIsNone(ex_case["stdin"])
-        term_case = cases[-1]
-        self.assertEqual(term_case["stdin"], "f(a,a) g(f(a,a))\n")
+        term2dag_case = cases[7]
+        self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
+        termprops_case = cases[-1]
+        self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))
+        self.assertEqual(e_interop.tool_argument_cases("termprops"), (("--help",),))
         self.assertEqual(
             e_interop.tool_argument_cases("ex_commandline"),
             (("--help",),),
@@ -148,6 +153,11 @@ class ComparisonTests(unittest.TestCase):
             e_interop.REFERENCE_TOOL_BINARIES["ex_commandline"],
             "SIMPLE_APPS/ex_commandline",
         )
+        self.assertEqual(
+            e_interop.REFERENCE_TOOL_BINARIES["termprops"],
+            "PROVER/termprops",
+        )
+        self.assertIn("termprops", e_interop.ARCHIVED_REFERENCE_TOOL_LINKS)
 
 
 if __name__ == "__main__":
