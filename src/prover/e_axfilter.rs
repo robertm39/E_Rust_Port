@@ -1087,7 +1087,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        init_struct_fof_spec, parse_seed_subsample_arg, process_options, run,
+        init_struct_fof_spec, parse_seed_subsample_arg, print_help, process_options, run,
         subsample_seed_symbols, EAxFilterConfig, RunCommand, SubsampleMethod, C_USAGE_ERROR,
         OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
@@ -1097,6 +1097,7 @@ mod tests {
     use crate::control::sine::StructFofSpec;
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
+    use crate::prover::version::{E_NICKNAME, VERSION};
     use crate::terms::signature::Signature;
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -1144,6 +1145,167 @@ mod tests {
             .collect()
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "e_axfilter {version} \"{nickname}\"\n",
+                "\n",
+                "Usage: e_axfilter [options] [files]\n",
+                "\n",
+                "This program applies SinE-like goal-directed filters to a problem\n",
+                "specification (a set of clauses and/or formulas) to generate reduced\n",
+                "problem specifications that are easier to handle for a theorem prover,\n",
+                "but still are likely to contain all the axioms necessary for a proof\n",
+                "(if one exists).\n",
+                "\n",
+                "In default mode, the program reads a problem specification and an\n",
+                "(optional) filter specification, and produces one reduced output file \n",
+                "for each filter given. Note that while all standard input formats (LOP,\n",
+                "TPTP-2 and TPTP-3 are supported, output is only and automatically in\n",
+                "TPTP-3. Also note that unlike most of the other tools in the E\n",
+                "distribution, this program does not support pipe-based input and output,\n",
+                "since it uses file names generated from the input file name and filter\n",
+                "names to store the different result files\n",
+                "\n",
+                "Options:\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the prover. Please include this with all bug\n",
+                "    reports (if any).\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. This technical\n",
+                "    information is printed to stderr. The short form or the long form without\n",
+                "    the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file (this affects only some output, as\n",
+                "    most is written to automatically generated files based on the input and\n",
+                "    filter names.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output.\n",
+                "\n",
+                "   -f <arg>\n",
+                "  --filter=<arg>\n",
+                "    Specify the filter definition file. If not set, the system will uses the\n",
+                "    built-in default.\n",
+                "\n",
+                "   -S\n",
+                "  --seed-symbols[=<arg>]\n",
+                "    Enable artificial seeding of the axiom selection process and determine\n",
+                "    which symbol classes should be used to generate different sets.The\n",
+                "    argument is a string of letters, each indicating one class of symbols to\n",
+                "    use. 'p' indicates predicate symbols, 'f' non-constant function symbols,\n",
+                "    and 'c' constants. Note that this will create potentially multiple output\n",
+                "    files for each activated symbols. The short form or the long form without\n",
+                "    the optional argument is equivalent to --seed-symbols=p.\n",
+                "\n",
+                "  --seeds=<arg>\n",
+                "    Explicitly specify the symbols that should be used as seed symbols for\n",
+                "    axiom extraction. This overwrites --seed-subsample and --seed-symbols.\n",
+                "\n",
+                "  --seed-subsample[=<arg>]\n",
+                "    Subsample from the set of eligible seed symbols. The argument is a\n",
+                "    one-character designator for the method ('m' uses the symbols that occur\n",
+                "    in the most input formulas, 'l' uses the symbols that occur in the least\n",
+                "    number of formulas, and 'r' samples randomly), followed by the number of\n",
+                "    symbols to select. The option without the optional argument is equivalent\n",
+                "    to --seed-subsample=r1000.\n",
+                "\n",
+                "   -m\n",
+                "  --seed-method[=<arg>]\n",
+                "    Specify how to select seed axioms when artificially seeding is used.The\n",
+                "    argument is a string of letters, each indicating one method to use. The\n",
+                "    letters are: \n",
+                "    'l': use the syntactically largest axiom in which the seed symbol occurs.\n",
+                "    'd': use the most diverse axiom in which the seed symbol occurs, i.e. the\n",
+                "    symbol with the largest set of different symbols.\n",
+                "    'a': use all axioms in which the seed symbol occurs.\n",
+                "    For 'l' and 'd', if there are multiple candidates, use the first one.If\n",
+                "    the option is not set, 'a' is assumed. The short form or the long form\n",
+                "    without the optional argument is equivalent to --seed-method=lda.\n",
+                "\n",
+                "   -d\n",
+                "  --dump-filter\n",
+                "    Print the filter definition in force.\n",
+                "\n",
+                "  --lop-in\n",
+                "    Set E-LOP as the input format. If no input format is selected by this or\n",
+                "    one of the following options, E will guess the input format based on the\n",
+                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
+                "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
+                "    symbols.\n",
+                "\n",
+                "  --lop-format\n",
+                "    Equivalent to --lop-in.\n",
+                "\n",
+                "  --tptp-in\n",
+                "    Parse TPTP-2 format instead of E-LOP (but note that includes are handled\n",
+                "    according to TPTP-3 semantics).\n",
+                "\n",
+                "  --tptp-format\n",
+                "    Equivalent to --tptp-in.\n",
+                "\n",
+                "  --tptp2-in\n",
+                "    Synonymous with --tptp-in.\n",
+                "\n",
+                "  --tptp2-format\n",
+                "    Synonymous with --tptp-in.\n",
+                "\n",
+                "  --tstp-in\n",
+                "    Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still\n",
+                "    under development, and the version in E may not be fully conforming at\n",
+                "    all times. E works on all TPTP 6.3.0 FOF and CNF input files (including\n",
+                "    includes).\n",
+                "\n",
+                "  --tstp-format\n",
+                "    Equivalent to --tstp-in.\n",
+                "\n",
+                "  --tptp3-in\n",
+                "    Synonymous with --tstp-in.\n",
+                "\n",
+                "  --tptp3-format\n",
+                "    Synonymous with --tstp-in.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+            nickname = E_NICKNAME,
+        )
+    }
+
     #[test]
     fn help_and_version_preserve_c_text() {
         let _guard = global_state_lock();
@@ -1154,19 +1316,17 @@ mod tests {
 
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.starts_with("\ne_axfilter "));
-        assert!(help.contains("Usage: e_axfilter [options] [files]"));
-        assert!(help.contains("This program applies SinE-like goal-directed filters"));
-        assert!(help.contains("Bug reports for the first-order prover"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let mut stdout = Vec::new();
         let version_status = run([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).expect("version");
 
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
-        assert!(String::from_utf8(stdout)
-            .expect("version utf8")
-            .starts_with("e_axfilter "));
+        assert_eq!(
+            String::from_utf8(stdout).expect("version utf8"),
+            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+        );
     }
 
     #[test]
@@ -1812,5 +1972,10 @@ mod tests {
             .expect("parse output utf8")
             .contains("% Parsing "));
         remove_if_present(&problem_path);
+    }
+
+    #[test]
+    fn print_help_preserves_full_c_text() {
+        assert_eq!(print_help(), expected_help());
     }
 }
