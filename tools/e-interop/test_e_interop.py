@@ -147,6 +147,10 @@ class ComparisonTests(unittest.TestCase):
                 ("e_axfilter/help", ["--help"]),
                 ("e_axfilter/version", ["--version"]),
                 ("e_axfilter/dump-filter-stdout", ["--dump-filter", "-o", "-"]),
+                (
+                    "e_axfilter/tstp-threshold-file",
+                    ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
+                ),
                 ("e_deduction_server/help", ["--help"]),
                 ("e_deduction_server/version", ["--version"]),
                 ("e_deduction_server/stdout-unimplemented", []),
@@ -211,6 +215,18 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
         e_axfilter_case = cases_by_name["e_axfilter/dump-filter-stdout"]
         self.assertIsNone(e_axfilter_case["stdin"])
+        e_axfilter_generated_case = cases_by_name["e_axfilter/tstp-threshold-file"]
+        self.assertEqual(
+            e_axfilter_generated_case["workdir_files"],
+            {
+                "filters.axf": "tiny=Threshold(10000)\n",
+                "problem.p": "fof(a, axiom, p(a)).\n",
+            },
+        )
+        self.assertEqual(
+            e_axfilter_generated_case["output_files"],
+            ["global.out", "problem_tiny.p"],
+        )
         e_deduction_case = cases_by_name["e_deduction_server/stdout-unimplemented"]
         self.assertIsNone(e_deduction_case["stdin"])
         e_stratpar_case = cases_by_name["e_stratpar/usage-missing-problem"]
@@ -260,6 +276,88 @@ class ComparisonTests(unittest.TestCase):
             )
             self.assertEqual(Path(arguments[1]).read_text(encoding="utf-8"), "f(b)\n")
             self.assertEqual(Path(arguments[2]).read_text(encoding="utf-8"), "f(X)=a.\n")
+
+    def test_tool_workdir_materialization_and_output_comparison(self):
+        case = {
+            "workdir_files": {"input.p": "fof(a, axiom, p(a)).\n"},
+            "output_files": ["global.out", "generated/result.p"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            reference_cwd.mkdir()
+            candidate_cwd.mkdir()
+
+            reference_paths = e_interop.materialize_tool_workdir_files(
+                case, reference_cwd
+            )
+            candidate_paths = e_interop.materialize_tool_workdir_files(
+                case, candidate_cwd
+            )
+            self.assertEqual(
+                reference_paths["input.p"].read_text(encoding="utf-8"),
+                "fof(a, axiom, p(a)).\n",
+            )
+            self.assertEqual(
+                candidate_paths["input.p"].read_text(encoding="utf-8"),
+                "fof(a, axiom, p(a)).\n",
+            )
+
+            (reference_cwd / "global.out").write_text(
+                f"% Parsing {reference_cwd}\\input.p\n", encoding="utf-8"
+            )
+            (candidate_cwd / "global.out").write_text(
+                f"% Parsing {candidate_cwd}\\input.p\n", encoding="utf-8"
+            )
+            (reference_cwd / "generated").mkdir()
+            (candidate_cwd / "generated").mkdir()
+            (reference_cwd / "generated" / "result.p").write_text(
+                "fof(a, axiom, p(a)).\n", encoding="utf-8"
+            )
+            (candidate_cwd / "generated" / "result.p").write_text(
+                "fof(a, axiom, p(a)).\n", encoding="utf-8"
+            )
+
+            records, details = e_interop.compare_tool_output_files(
+                case["output_files"],
+                reference_cwd,
+                candidate_cwd,
+                [
+                    (str(reference_cwd), "<WORKDIR>"),
+                    (str(candidate_cwd), "<WORKDIR>"),
+                ],
+            )
+
+        self.assertTrue(all(record["normalized_equal"] for record in records))
+        self.assertTrue(details["global.out"]["normalized_equal"])
+        self.assertTrue(details["generated/result.p"]["normalized_equal"])
+
+    def test_tool_output_comparison_requires_declared_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            reference_cwd.mkdir()
+            candidate_cwd.mkdir()
+            (reference_cwd / "global.out").write_text("reference\n", encoding="utf-8")
+
+            records, details = e_interop.compare_tool_output_files(
+                ["global.out"], reference_cwd, candidate_cwd, []
+            )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "name": "global.out",
+                    "reference_exists": True,
+                    "candidate_exists": False,
+                    "normalized_equal": False,
+                }
+            ],
+        )
+        self.assertFalse(details["global.out"]["normalized_equal"])
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))

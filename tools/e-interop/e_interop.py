@@ -37,6 +37,7 @@ VOLATILE_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
+TOOL_CASE_METADATA_KEYS = frozenset({"fixture_files", "workdir_files", "output_files"})
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
 REFERENCE_TOOL_BINARIES = {
@@ -169,6 +170,18 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "e_axfilter": (
         ("dump-filter-stdout", ("--dump-filter", "-o", "-"), None),
+        (
+            "tstp-threshold-file",
+            ("--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"),
+            None,
+            {
+                "workdir_files": {
+                    "filters.axf": "tiny=Threshold(10000)\n",
+                    "problem.p": "fof(a, axiom, p(a)).\n",
+                },
+                "output_files": ("global.out", "problem_tiny.p"),
+            },
+        ),
     ),
     "e_deduction_server": (
         ("stdout-unimplemented", (), None),
@@ -982,7 +995,7 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
             )
         for functional_case in TOOL_FUNCTIONAL_CASES.get(tool, ()):
             label, arguments, stdin_text, *fixture_tail = functional_case
-            fixture_files = fixture_tail[0] if fixture_tail else {}
+            metadata = tool_functional_case_metadata(fixture_tail)
             cases.append(
                 {
                     "tool": tool,
@@ -990,28 +1003,79 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "arguments": list(arguments),
                     "scenario": label,
                     "stdin": stdin_text,
-                    "fixture_files": dict(fixture_files),
+                    **metadata,
                 }
             )
     return cases
 
 
-def validate_tool_fixture_name(name: str) -> Path:
+def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]:
+    if not fixture_tail:
+        return {"fixture_files": {}, "workdir_files": {}, "output_files": []}
+    if len(fixture_tail) != 1:
+        raise InteropError("Functional support-tool cases accept at most one metadata argument")
+
+    tail = fixture_tail[0]
+    if not isinstance(tail, dict):
+        raise InteropError("Functional support-tool case metadata must be a dictionary")
+    if any(key in TOOL_CASE_METADATA_KEYS for key in tail):
+        unknown_keys = sorted(set(tail) - TOOL_CASE_METADATA_KEYS)
+        if unknown_keys:
+            raise InteropError(
+                "Unknown functional support-tool case metadata key(s): "
+                + ", ".join(unknown_keys)
+            )
+        fixture_files = tail.get("fixture_files", {})
+        workdir_files = tail.get("workdir_files", {})
+        output_files = tail.get("output_files", ())
+    else:
+        fixture_files = tail
+        workdir_files = {}
+        output_files = ()
+
+    return {
+        "fixture_files": dict(fixture_files),
+        "workdir_files": dict(workdir_files),
+        "output_files": list(output_files),
+    }
+
+
+def validate_tool_relative_name(name: str, kind: str) -> Path:
     relative = Path(name)
     if relative.is_absolute() or not relative.parts or any(part == ".." for part in relative.parts):
-        raise InteropError(f"Invalid fixture file name: {name}")
+        raise InteropError(f"Invalid {kind} name: {name}")
     return relative
 
 
-def materialize_tool_fixture_files(case: dict[str, Any], fixture_dir: Path) -> dict[str, Path]:
-    fixture_paths: dict[str, Path] = {}
-    for name, contents in case.get("fixture_files", {}).items():
-        relative = validate_tool_fixture_name(name)
-        path = fixture_dir / relative
+def validate_tool_fixture_name(name: str) -> Path:
+    return validate_tool_relative_name(name, "fixture file")
+
+
+def validate_tool_output_name(name: str) -> Path:
+    return validate_tool_relative_name(name, "output file")
+
+
+def materialize_tool_named_files(files: dict[str, str], directory: Path, kind: str) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    for name, contents in files.items():
+        relative = validate_tool_relative_name(name, kind)
+        path = directory / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
-        fixture_paths[name] = path
-    return fixture_paths
+        paths[name] = path
+    return paths
+
+
+def materialize_tool_fixture_files(case: dict[str, Any], fixture_dir: Path) -> dict[str, Path]:
+    return materialize_tool_named_files(
+        case.get("fixture_files", {}), fixture_dir, "fixture file"
+    )
+
+
+def materialize_tool_workdir_files(case: dict[str, Any], workdir: Path) -> dict[str, Path]:
+    return materialize_tool_named_files(
+        case.get("workdir_files", {}), workdir, "workdir file"
+    )
 
 
 def substitute_tool_fixture_arguments(
@@ -1028,6 +1092,65 @@ def substitute_tool_fixture_arguments(
         return wslpath(path, windows=True) if windows_paths else str(path)
 
     return [FIXTURE_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
+
+
+def compare_tool_output_files(
+    output_files: Sequence[str],
+    reference_cwd: Path,
+    candidate_cwd: Path,
+    replacements: Iterable[tuple[str, str]],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    records: list[dict[str, Any]] = []
+    details: dict[str, dict[str, Any]] = {}
+    replacement_list = list(replacements)
+    for name in output_files:
+        relative = validate_tool_output_name(name)
+        reference_path = reference_cwd / relative
+        candidate_path = candidate_cwd / relative
+        reference_exists = reference_path.is_file()
+        candidate_exists = candidate_path.is_file()
+        reference_text = (
+            reference_path.read_text(encoding="utf-8", errors="replace")
+            if reference_exists
+            else None
+        )
+        candidate_text = (
+            candidate_path.read_text(encoding="utf-8", errors="replace")
+            if candidate_exists
+            else None
+        )
+        reference_normalized = (
+            normalize_output(reference_text, replacement_list)
+            if reference_text is not None
+            else None
+        )
+        candidate_normalized = (
+            normalize_output(candidate_text, replacement_list)
+            if candidate_text is not None
+            else None
+        )
+        normalized_equal = (
+            reference_normalized is not None
+            and candidate_normalized is not None
+            and reference_normalized == candidate_normalized
+        )
+        records.append(
+            {
+                "name": name,
+                "reference_exists": reference_exists,
+                "candidate_exists": candidate_exists,
+                "normalized_equal": normalized_equal,
+            }
+        )
+        details[name] = {
+            "relative": relative,
+            "reference_text": reference_text,
+            "candidate_text": candidate_text,
+            "reference_normalized": reference_normalized,
+            "candidate_normalized": candidate_normalized,
+            "normalized_equal": normalized_equal,
+        }
+    return records, details
 
 
 def tool_argument_cases(tool: str) -> tuple[tuple[str, ...], ...]:
@@ -1071,6 +1194,20 @@ def compare_tools(args: argparse.Namespace) -> None:
         tool = case["tool"]
         print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
         reference_binary = Path(reference_tools[tool])
+        uses_case_workdir = bool(case.get("workdir_files") or case.get("output_files"))
+        if uses_case_workdir:
+            case_workdir_root = run_dir / "workdirs" / f"{index:04d}"
+            reference_cwd = case_workdir_root / "reference"
+            candidate_cwd = case_workdir_root / "candidate"
+            reference_cwd.mkdir(parents=True, exist_ok=False)
+            candidate_cwd.mkdir(parents=True, exist_ok=False)
+            reference_workdir_paths = materialize_tool_workdir_files(case, reference_cwd)
+            candidate_workdir_paths = materialize_tool_workdir_files(case, candidate_cwd)
+        else:
+            reference_cwd = repo_root
+            candidate_cwd = repo_root
+            reference_workdir_paths = {}
+            candidate_workdir_paths = {}
         fixture_paths = materialize_tool_fixture_files(
             case, run_dir / "fixtures" / f"{index:04d}"
         )
@@ -1082,7 +1219,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             timeout=args.timeout,
             env=environment,
             stdin_text=case["stdin"],
-            cwd=repo_root,
+            cwd=reference_cwd,
         )
 
         if args.self_test:
@@ -1102,13 +1239,25 @@ def compare_tools(args: argparse.Namespace) -> None:
             timeout=args.timeout,
             env=environment,
             stdin_text=case["stdin"],
-            cwd=repo_root,
+            cwd=candidate_cwd,
         )
         mismatches = comparison_mismatches(reference, candidate)
         fixture_replacements: list[tuple[str, str]] = []
         for fixture_path in fixture_paths.values():
             fixture_replacements.append((str(fixture_path), "<FIXTURE>"))
             fixture_replacements.append((wslpath(fixture_path, windows=True), "<FIXTURE>"))
+        if uses_case_workdir:
+            for workdir in (reference_cwd, candidate_cwd):
+                fixture_replacements.append((str(workdir), "<WORKDIR>"))
+                fixture_replacements.append((wslpath(workdir, windows=True), "<WORKDIR>"))
+            for workdir_path in (
+                *reference_workdir_paths.values(),
+                *candidate_workdir_paths.values(),
+            ):
+                fixture_replacements.append((str(workdir_path), "<WORKDIR_FILE>"))
+                fixture_replacements.append(
+                    (wslpath(workdir_path, windows=True), "<WORKDIR_FILE>")
+                )
         reference_normalized_stdout = normalize_output(reference["stdout"], fixture_replacements)
         candidate_normalized_stdout = normalize_output(candidate["stdout"], fixture_replacements)
         reference_normalized_stderr = normalize_output(reference["stderr"], fixture_replacements)
@@ -1119,6 +1268,15 @@ def compare_tools(args: argparse.Namespace) -> None:
             mismatches.append("normalized_stdout")
         if not normalized_stderr_equal:
             mismatches.append("normalized_stderr")
+        output_file_records, output_file_details = compare_tool_output_files(
+            case.get("output_files", ()),
+            reference_cwd,
+            candidate_cwd,
+            fixture_replacements,
+        )
+        output_files_equal = all(record["normalized_equal"] for record in output_file_records)
+        if not output_files_equal:
+            mismatches.append("output_files")
 
         if mismatches:
             mismatch_count += 1
@@ -1139,6 +1297,35 @@ def compare_tools(args: argparse.Namespace) -> None:
             (mismatch_dir / "candidate.normalized.stderr").write_text(
                 candidate_normalized_stderr, encoding="utf-8"
             )
+            for name, detail in output_file_details.items():
+                if detail["normalized_equal"]:
+                    continue
+                output_path = mismatch_dir / "output-files" / detail["relative"]
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                reference_text = detail["reference_text"]
+                candidate_text = detail["candidate_text"]
+                reference_normalized = detail["reference_normalized"]
+                candidate_normalized = detail["candidate_normalized"]
+                (output_path.with_name(output_path.name + ".reference")).write_text(
+                    reference_text if reference_text is not None else "<missing>\n",
+                    encoding="utf-8",
+                )
+                (output_path.with_name(output_path.name + ".candidate")).write_text(
+                    candidate_text if candidate_text is not None else "<missing>\n",
+                    encoding="utf-8",
+                )
+                (output_path.with_name(output_path.name + ".reference.normalized")).write_text(
+                    reference_normalized
+                    if reference_normalized is not None
+                    else "<missing>\n",
+                    encoding="utf-8",
+                )
+                (output_path.with_name(output_path.name + ".candidate.normalized")).write_text(
+                    candidate_normalized
+                    if candidate_normalized is not None
+                    else "<missing>\n",
+                    encoding="utf-8",
+                )
 
         records.append(
             {
@@ -1148,6 +1335,9 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "arguments": case["arguments"],
                 "stdin": case["stdin"] is not None,
                 "fixtures": bool(fixture_paths),
+                "workdir_files": bool(reference_workdir_paths),
+                "output_files": output_file_records,
+                "output_files_equal": output_files_equal,
                 "reference_exit_code": reference["exit_code"],
                 "candidate_exit_code": candidate["exit_code"],
                 "reference_seconds": reference["wall_seconds"],
