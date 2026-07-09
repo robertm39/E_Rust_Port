@@ -111,6 +111,7 @@ class ComparisonTests(unittest.TestCase):
                 "checkproof",
                 "classify_problem",
                 "direct_examples",
+                "e_axfilter",
                 "eground",
                 "edpll",
                 "enormalizer",
@@ -141,6 +142,9 @@ class ComparisonTests(unittest.TestCase):
                 ("direct_examples/help", ["--help"]),
                 ("direct_examples/version", ["--version"]),
                 ("direct_examples/stdin-basic", []),
+                ("e_axfilter/help", ["--help"]),
+                ("e_axfilter/version", ["--version"]),
+                ("e_axfilter/dump-filter-stdout", ["--dump-filter", "-o", "-"]),
                 ("edpll/help", ["--help"]),
                 ("edpll/version", ["--version"]),
                 ("edpll/lop-basic", ["--dimacs"]),
@@ -197,6 +201,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("prob : (1,2,3,4,5,6,7,8,9,10", classify_case["stdin"])
         direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
         self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
+        e_axfilter_case = cases_by_name["e_axfilter/dump-filter-stdout"]
+        self.assertIsNone(e_axfilter_case["stdin"])
         edpll_lop_case = cases_by_name["edpll/lop-basic"]
         self.assertEqual(edpll_lop_case["stdin"], "p <- q. r <- r.")
         edpll_tptp_case = cases_by_name["edpll/tptp-input-clause"]

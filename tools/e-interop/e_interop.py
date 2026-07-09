@@ -167,6 +167,9 @@ TOOL_FUNCTIONAL_CASES = {
             "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
         ),
     ),
+    "e_axfilter": (
+        ("dump-filter-stdout", ("--dump-filter", "-o", "-"), None),
+    ),
     "edpll": (
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
