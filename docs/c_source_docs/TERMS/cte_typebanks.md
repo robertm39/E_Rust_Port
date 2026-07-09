@@ -138,6 +138,7 @@ Source files reviewed: `TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`.
 ### Change Later
 
 - `TypeBankAppEncodeTypes` prints its `%-- ...` type comments through `TypePrintTSTP`, so higher-order arrow formatting depends on the process-global `problemType` rather than on the type bank itself. Rust keeps app-encode type comments explicit by threading the parsed problem type into the renderer; a future type-printing API should continue to carry the dialect directly instead of reintroducing hidden global state.
+- `hash_type` mixes raw component-type pointer addresses into type-bank bucket selection, and `TypeBankAppEncodeTypes` numbers declarations while traversing those buckets. Consequently, separate C processes can print the same type UIDs in different declaration orders and assign different `typedeclN` labels, as observed between file and stdin Socrates reference runs. Rust uses stable type-UID order, and the comparison harness canonicalizes this block; a future C implementation should use structural or UID-based hashing plus deterministic output ordering.
 
 ### Porting Focus
 

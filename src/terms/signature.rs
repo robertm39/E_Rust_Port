@@ -1120,11 +1120,7 @@ impl Signature {
             arg2.type_uid(),
             ret.type_uid()
         );
-        let app_type = self.type_bank.insert_type_shared(alloc_arrow_type(vec![
-            arg1.clone(),
-            arg2.clone(),
-            ret.clone(),
-        ]));
+        let app_type = alloc_arrow_type(vec![arg1.clone(), arg2.clone(), ret.clone()]);
         let f_code = self.insert_id(&name, 2, false);
         if self.get_type(f_code).is_none() {
             self.declare_type(f_code, app_type)
@@ -2431,6 +2427,7 @@ mod tests {
             individual.type_uid(),
             bool_type.type_uid()
         );
+        let type_count = sig.type_bank().types_count();
 
         let app = sig.get_typed_app(&unary_type, &individual, &bool_type);
 
@@ -2443,6 +2440,7 @@ mod tests {
                 .args(),
             &[unary_type.clone(), individual.clone(), bool_type.clone()]
         );
+        assert_eq!(sig.type_bank().types_count(), type_count);
         assert_eq!(sig.get_typed_app(&unary_type, &individual, &bool_type), app);
     }
 

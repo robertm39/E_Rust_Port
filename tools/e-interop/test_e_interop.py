@@ -45,6 +45,27 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(proof_b),
         )
 
+    def test_normalization_canonicalizes_app_encoded_type_declaration_order(self):
+        declarations_a = (
+            "%-- $i > $o.\n"
+            "tff(typedecl1, type, type_9: $tType).\n"
+            "%-- $i > $i.\n"
+            "tff(typedecl2, type, type_10: $tType).\n"
+            "tff(symboltypedecl2, type, p: type_9)."
+        )
+        declarations_b = (
+            "%-- $i > $i.\n"
+            "tff(typedecl1, type, type_10: $tType).\n"
+            "%-- $i > $o.\n"
+            "tff(typedecl2, type, type_9: $tType).\n"
+            "tff(symboltypedecl2, type, p: type_9)."
+        )
+
+        normalized = e_interop.normalize_output(declarations_a)
+        self.assertEqual(normalized, e_interop.normalize_output(declarations_b))
+        self.assertIn("tff(typedecl1, type, type_9: $tType).", normalized)
+        self.assertIn("tff(typedecl2, type, type_10: $tType).", normalized)
+
     def test_output_shape_tracks_proof_markers(self):
         shape = e_interop.output_shape(
             "# SZS status Theorem\n# SZS output start CNFRefutation\n# SZS output end CNFRefutation\n",

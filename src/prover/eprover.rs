@@ -19161,6 +19161,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(symboltypedecl"));
         assert!(printed.contains("app_"));
         assert!(printed.contains("tff(ax, axiom, "));
+        assert!(!printed.contains("%-- (person > $o * person) > $o."));
         assert!(!printed.contains("SZS status"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

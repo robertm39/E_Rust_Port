@@ -32,6 +32,9 @@ SZS_OUTPUT_START_RE = re.compile(r"\bSZS\s+output\s+start\s+([^\s]+)", re.IGNORE
 SZS_OUTPUT_END_RE = re.compile(r"\bSZS\s+output\s+end\s+([^\s]+)", re.IGNORECASE)
 EXPECTED_RE = re.compile(r"^%\s*Status\s*:\s*([^\s]+)", re.MULTILINE | re.IGNORECASE)
 SATURATION_GENERATED_ID_RE = re.compile(r"\bc_\d+_\d+\b")
+APP_ENCODE_TYPE_DECL_RE = re.compile(
+    r"^tff\(typedecl\d+, type, type_(\d+): \$tType\)\.$"
+)
 VOLATILE_LINE_RE = re.compile(
     r"(?:User time|System time|Total time|Maximum resident|date|timestamp)\s*:",
     re.IGNORECASE,
@@ -716,8 +719,50 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
         if old:
             normalized = normalized.replace(old, new)
     lines = [line.rstrip() for line in normalized.splitlines() if not VOLATILE_LINE_RE.search(line)]
+    lines = normalize_app_encode_type_declarations(lines)
     lines = normalize_saturation_blocks(lines)
     return "\n".join(lines).strip()
+
+
+def normalize_app_encode_type_declarations(lines: Iterable[str]) -> list[str]:
+    """Sort and renumber C app-encoded type declarations by stable type UID."""
+
+    source = list(lines)
+    result: list[str] = []
+    index = 0
+    while index < len(source):
+        entries: list[tuple[int, str | None, str]] = []
+        while index < len(source):
+            comment: str | None = None
+            declaration_index = index
+            if (
+                source[index].startswith("%-- ")
+                and index + 1 < len(source)
+                and APP_ENCODE_TYPE_DECL_RE.match(source[index + 1])
+            ):
+                comment = source[index]
+                declaration_index += 1
+
+            declaration = source[declaration_index]
+            match = APP_ENCODE_TYPE_DECL_RE.match(declaration)
+            if not match:
+                break
+            entries.append((int(match.group(1)), comment, declaration))
+            index = declaration_index + 1
+
+        if entries:
+            for ordinal, (_, comment, declaration) in enumerate(
+                sorted(entries, key=lambda entry: entry[0]), 1
+            ):
+                if comment is not None:
+                    result.append(comment)
+                result.append(re.sub(r"typedecl\d+", f"typedecl{ordinal}", declaration, count=1))
+            continue
+
+        result.append(source[index])
+        index += 1
+
+    return result
 
 
 def normalize_saturation_blocks(lines: Iterable[str]) -> list[str]:
