@@ -130,6 +130,12 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(syntax_case["arguments"], ("--syntax-only",))
         self.assertEqual(syntax_case["expected_status"], "Unknown")
         self.assertEqual(syntax_case["scenario"], "syntax-only")
+        self.assertIsNone(syntax_case["stdin"])
+        stdin_syntax_case = by_name["synthetic/stdin-syntax-only-socrates.p"]
+        self.assertEqual(stdin_syntax_case["arguments"], ("--syntax-only",))
+        self.assertEqual(stdin_syntax_case["expected_status"], "Unknown")
+        self.assertEqual(stdin_syntax_case["scenario"], "stdin-syntax-only")
+        self.assertIn("fof(goal, conjecture, p(a)).", stdin_syntax_case["stdin"])
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(

@@ -926,6 +926,17 @@ def comparison_cases(
                 "arguments": ("--syntax-only",),
             }
         )
+        cases.append(
+            {
+                "name": "synthetic/stdin-syntax-only-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": text,
+                "scenario": "stdin-syntax-only",
+                "arguments": ("--syntax-only",),
+            }
+        )
 
     malformed = run_dir / "fixtures" / "malformed.p"
     malformed.parent.mkdir(parents=True, exist_ok=True)
