@@ -105,6 +105,32 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["mode"], "ho")
 
+    def test_default_comparison_cases_include_syntax_only_socrates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo_root = Path(directory)
+            smoketest = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "SMOKETEST"
+            (repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "TPTP").mkdir(
+                parents=True
+            )
+            (repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "LFHOL").mkdir(
+                parents=True
+            )
+            smoketest.mkdir(parents=True)
+            (smoketest / "socrates.p").write_text(
+                "% Status   : Theorem\nfof(goal, conjecture, p(a)).\n",
+                encoding="utf-8",
+            )
+            run_dir = repo_root / "run"
+            run_dir.mkdir()
+
+            cases = e_interop.comparison_cases(repo_root, None, run_dir)
+
+        by_name = {case["name"]: case for case in cases}
+        syntax_case = by_name["synthetic/syntax-only-socrates.p"]
+        self.assertEqual(syntax_case["arguments"], ("--syntax-only",))
+        self.assertEqual(syntax_case["expected_status"], "Unknown")
+        self.assertEqual(syntax_case["scenario"], "syntax-only")
+
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
             [

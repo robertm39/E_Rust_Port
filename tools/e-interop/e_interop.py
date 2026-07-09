@@ -915,6 +915,17 @@ def comparison_cases(
                 "scenario": "stdin",
             }
         )
+        cases.append(
+            {
+                "name": "synthetic/syntax-only-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": None,
+                "scenario": "syntax-only",
+                "arguments": ("--syntax-only",),
+            }
+        )
 
     malformed = run_dir / "fixtures" / "malformed.p"
     malformed.parent.mkdir(parents=True, exist_ok=True)
@@ -995,10 +1006,14 @@ def compare(args: argparse.Namespace) -> None:
         reference_binary = Path(manifest["builds"][case["mode"]]["binary"])
         problem: Path = case["path"]
         tptp = tptp_root(repo_root, corpus, problem)
-        proof = case["scenario"] == "file"
-        case_cpu_limit = case.get("cpu_limit", args.timeout)
-        case_memory_limit = case.get("memory_limit_mb", args.memory_limit_mb)
-        options = common_arguments(case_cpu_limit, case_memory_limit, proof)
+        fixed_arguments = case.get("arguments")
+        if fixed_arguments is None:
+            proof = case["scenario"] == "file"
+            case_cpu_limit = case.get("cpu_limit", args.timeout)
+            case_memory_limit = case.get("memory_limit_mb", args.memory_limit_mb)
+            options = common_arguments(case_cpu_limit, case_memory_limit, proof)
+        else:
+            options = list(fixed_arguments)
         reference_args = options if case["stdin"] is not None else [str(problem), *options]
         reference_env = os.environ.copy()
         reference_env["TPTP"] = str(tptp)
@@ -1063,6 +1078,7 @@ def compare(args: argparse.Namespace) -> None:
                 "scenario": case["scenario"],
                 "mode": case["mode"],
                 "expected_status": case["expected_status"],
+                "arguments": options,
                 "reference_status": reference["status"],
                 "candidate_status": candidate["status"],
                 "reference_matches_expected": (
