@@ -134,6 +134,10 @@ VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "termprops",
 }
 TOOL_FUNCTIONAL_CASES = {
+    "edpll": (
+        ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
+        ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
+    ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
     ),

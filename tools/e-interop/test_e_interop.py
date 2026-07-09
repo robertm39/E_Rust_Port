@@ -109,6 +109,7 @@ class ComparisonTests(unittest.TestCase):
         cases = e_interop.tool_comparison_cases(
             [
                 "eground",
+                "edpll",
                 "CSSCPA_filter",
                 "term2dag",
                 "ex_commandline",
@@ -122,6 +123,10 @@ class ComparisonTests(unittest.TestCase):
             [
                 ("CSSCPA_filter/help", ["--help"]),
                 ("CSSCPA_filter/version", ["--version"]),
+                ("edpll/help", ["--help"]),
+                ("edpll/version", ["--version"]),
+                ("edpll/lop-basic", ["--dimacs"]),
+                ("edpll/tptp-input-clause", ["--tptp-in"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("ex_commandline/help", ["--help"]),
@@ -141,11 +146,17 @@ class ComparisonTests(unittest.TestCase):
                 ),
             ],
         )
-        ex_case = cases[5]
+        edpll_lop_case = cases[4]
+        self.assertEqual(edpll_lop_case["stdin"], "p <- q. r <- r.")
+        edpll_tptp_case = cases[5]
+        self.assertEqual(
+            edpll_tptp_case["stdin"], "input_clause(c_0_1,axiom,[++p,--q])."
+        )
+        ex_case = cases[9]
         self.assertIsNone(ex_case["stdin"])
-        term2dag_case = cases[7]
+        term2dag_case = cases[11]
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
-        termprops_case = cases[9]
+        termprops_case = cases[13]
         self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
         tsm_case = cases[-1]
         self.assertIn("Training:\n", tsm_case["stdin"])
@@ -160,6 +171,10 @@ class ComparisonTests(unittest.TestCase):
         )
         self.assertEqual(
             e_interop.tool_argument_cases("classify_problem"),
+            (("--help",), ("--version",)),
+        )
+        self.assertEqual(
+            e_interop.tool_argument_cases("edpll"),
             (("--help",), ("--version",)),
         )
         self.assertEqual(
