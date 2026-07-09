@@ -95,8 +95,8 @@ Source files reviewed: `PROVER/e_server.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_server.rs` and `src/bin/e_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default service port `3666`, legacy help/footer text, output-file redirection including `-o -`, C-shaped output-file open diagnostics, output-file creation before missing-domain usage errors, custom/default ax-filter parsing, domain-spec parsing through the ported structured-FOF include loader, C-shaped reset of the shared boundary after distribution initialization, the observed TCP-string response loop that prints each message and replies `wait` then `ready`, and the C one-active-connection loop behavior that closes an accepted second socket while the first remains active.
-- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under “E Server Sessions”.
+- `src/prover/e_server.rs` and `src/bin/e_server.rs` port the standalone executable wrapper. The Rust wrapper preserves exact C-shaped full help text with the legacy footer, the C option surface, default prover `eprover`, default service port `3666`, output-file redirection including `-o -`, C-shaped output-file open diagnostics, output-file creation before missing-domain usage errors, custom/default ax-filter parsing, domain-spec parsing through the ported structured-FOF include loader, C-shaped reset of the shared boundary after distribution initialization, the observed TCP-string response loop that prints each message and replies `wait` then `ready`, and the C one-active-connection loop behavior that closes an accepted second socket while the first remains active.
+- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under `E Server Sessions`.
 
 ### Change Later
 

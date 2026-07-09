@@ -783,6 +783,7 @@ mod tests {
     };
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
+    use crate::prover::version::{E_NICKNAME, VERSION};
     use crate::test_support::global_state_lock;
 
     #[derive(Debug)]
@@ -857,6 +858,142 @@ mod tests {
         (listener, address)
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "E {version} \"{nickname}\"\n",
+                "\n",
+                "Usage: e_server [options] [files]\n",
+                "\n",
+                "Read an problem specification and offer deduction in the the structure\n",
+                "described by the specification as a service.  All input formats (LOP,\n",
+                "TPTP-2 and TPTP-3 are supported for the original specification, \n",
+                "however, only TPTP-3 is used for the service. TPTP-3 is also the \n",
+                "default format. Important options allow specificatio of the filters\n",
+                "to use for proof attemtps, the dervice port, and the binary of the\n",
+                "prover to use.\n",
+                "\n",
+                "Options:\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "   -V\n",
+                "  --version\n",
+                "    Print the version number of the prover. Please include this with all bug\n",
+                "    reports (if any).\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. This differs from the\n",
+                "    output level (below) in that technical information is printed to stderr,\n",
+                "    while the output level determines which logical manipulations of the\n",
+                "    clauses are printed to stdout. The short form or the long form without\n",
+                "    the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file (this affects only some output, as\n",
+                "    most is written to automatically generated files based on the input and\n",
+                "    filter names.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output.\n",
+                "\n",
+                "   -f <arg>\n",
+                "  --filter=<arg>\n",
+                "    Specify the filter definition file. If not set, the system will uses the\n",
+                "    built-in default.\n",
+                "\n",
+                "   -p <arg>\n",
+                "  --prover=<arg>\n",
+                "    Specify the prover binary to use. The default is 'eprover', and\n",
+                "    initially, only E is supported. This option does accept absolute and\n",
+                "    relative paths.\n",
+                "\n",
+                "   -P <arg>\n",
+                "  --service-port=<arg>\n",
+                "    Specify the port to use for the deduction service.\n",
+                "\n",
+                "  --lop-in\n",
+                "    Parse input in E-LOP, not the default TPTP-3 format.\n",
+                "\n",
+                "  --lop-format\n",
+                "    Equivalent to --lop-in.\n",
+                "\n",
+                "  --tptp-in\n",
+                "    Parse TPTP-2 format instead of E-LOP (but note that includes are handled\n",
+                "    according to TPTP-3 semantics).\n",
+                "\n",
+                "  --tptp-format\n",
+                "    Equivalent to --tptp-in.\n",
+                "\n",
+                "  --tptp2-in\n",
+                "    Synonymous with --tptp-in.\n",
+                "\n",
+                "  --tptp2-format\n",
+                "    Synonymous with --tptp-in.\n",
+                "\n",
+                "  --tstp-in\n",
+                "    Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still\n",
+                "    under development, and the version in E may not be fully conforming at\n",
+                "    all times. E works on all TPTP 4.1.0 input files (including includes).\n",
+                "\n",
+                "  --tstp-format\n",
+                "    Equivalent to --tstp-in.\n",
+                "\n",
+                "  --tptp3-in\n",
+                "    Synonymous with --tstp-in.\n",
+                "\n",
+                "  --tptp3-format\n",
+                "    Synonymous with --tstp-in.\n",
+                "\n",
+                "\n",
+                "Copyright (C) 2011 by Stephan Schulz, schulz@eprover.org\n",
+                "\n",
+                "You can find the latest version of E and additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "This program is distributed in the hope that it will be useful,\n",
+                "but WITHOUT ANY WARRANTY; without even the implied warranty of\n",
+                "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n",
+                "GNU General Public License for more details.\n",
+                "\n",
+                "You should have received a copy of the GNU General Public License\n",
+                "along with this program (it should be contained in the top level\n",
+                "directory of the distribution in the file COPYING); if not, write to\n",
+                "the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n",
+                "Boston, MA  02111-1307 USA\n",
+                "\n",
+                "The original copyright holder can be contacted as\n",
+                "\n",
+                "Stephan Schulz\n",
+                "DHBW Stuttgart\n",
+                "Fakultaet Technik\n",
+                "Informatik\n",
+                "Lerchenstrasse 1\n",
+                "70174 Stuttgart\n",
+                "Germany\n",
+                "\n",
+            ),
+            version = VERSION,
+            nickname = E_NICKNAME,
+        )
+    }
+
     #[test]
     fn help_and_version_preserve_c_text() {
         let _guard = global_state_lock();
@@ -866,19 +1003,16 @@ mod tests {
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).expect("help");
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.starts_with("\nE "));
-        assert!(help.contains("Usage: e_server [options] [files]"));
-        assert!(help.contains("Read an problem specification"));
-        assert!(help.contains("specificatio of the filters"));
-        assert!(help.contains("Copyright (C) 2011 by Stephan Schulz"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let mut stdout = Vec::new();
         let version_status = run([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).expect("version");
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
-        assert!(String::from_utf8(stdout)
-            .expect("version utf8")
-            .starts_with("E "));
+        assert_eq!(
+            String::from_utf8(stdout).expect("version utf8"),
+            format!("E {VERSION} {E_NICKNAME}\n")
+        );
     }
 
     #[test]
@@ -1150,7 +1284,7 @@ mod tests {
     }
 
     #[test]
-    fn print_help_mentions_service_port() {
-        assert!(print_help().contains("dervice port"));
+    fn print_help_preserves_full_c_text() {
+        assert_eq!(print_help(), expected_help());
     }
 }
