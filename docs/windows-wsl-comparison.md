@@ -10,8 +10,21 @@ upstream commit into `~/.cache/e-rust-port/`, which is on WSL's Linux filesystem
 
 ## One-time setup
 
-WSL 2 is enabled on this machine, but an Ubuntu distribution must be installed.
-From an elevated PowerShell prompt run:
+The supported distribution name is `Ubuntu-24.04`. On this machine it is
+installed for the normal Windows user context, `robert_2023\rober`, and reports
+WSL version 2. WSL distributions are registered per Windows user, so sandboxed
+Codex commands can report no installed distributions even though normal
+PowerShell for `rober` can run the harness. Run the commands below from a normal
+`rober` PowerShell prompt; Codex tool runs that need WSL may need approval to run
+outside the sandbox in that user context.
+
+Confirm the distro first:
+
+```powershell
+wsl --list --verbose
+```
+
+If `Ubuntu-24.04` is missing, install it from an elevated PowerShell prompt:
 
 ```powershell
 wsl --install -d Ubuntu-24.04
@@ -29,7 +42,28 @@ time. It validates the distribution and compiler after installation.
 
 For Linux Rust benchmarks, also install Rust inside WSL using
 [rustup](https://rustup.rs/). The Windows Rust installation cannot produce the
-native WSL benchmark binary.
+native WSL benchmark binary. The harness supports rustup's default
+`~/.cargo/bin` install path, including `/root/.cargo/bin` when the WSL commands
+run as root.
+
+## Standard runbook
+
+From the repository root in normal PowerShell:
+
+```powershell
+wsl --list --verbose
+.\e-interop.ps1 setup
+.\e-interop.ps1 build-reference
+cargo build --locked --release --bin eprover
+.\e-interop.ps1 compare -RustExe .\target\release\eprover.exe
+.\e-interop.ps1 benchmark -Runs 5
+```
+
+The reference build writes its manifest under the WSL cache, normally
+`~/.cache/e-rust-port/reference.json`. Compatibility and benchmark reports are
+written under `.artifacts/e-compare/`; benchmark report directories end with
+`-benchmark`. A nonzero `compare` exit can mean compatibility mismatches were
+found. Inspect the generated report before treating that as a setup failure.
 
 ## Build the C references
 

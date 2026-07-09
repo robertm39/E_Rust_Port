@@ -8,6 +8,10 @@ Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-c
 
 Current Rust port implementation status is tracked in [`docs/rust-port-status.md`](docs/rust-port-status.md).
 
+## WSL C/Rust Comparison
+
+Build the upstream C references, compare the Windows Rust executable against them, and run the WSL-native benchmark with [`docs/windows-wsl-comparison.md`](docs/windows-wsl-comparison.md). That runbook also records the per-Windows-user WSL distro caveat that matters for Codex sandbox sessions.
+
 ## Runtime PicoSAT Selection
 
 The Rust executable selects a runtime-loaded PicoSAT backend when `E_RUST_PORT_PICOSAT_LIBRARY` names a PicoSAT DLL/shared-library path. When that environment variable is unset or empty, the executable also looks for a bundled PicoSAT library next to `eprover`, under `lib/` next to the executable, and under `../lib/` relative to the executable directory. If no library is found, the port falls back to the internal solver.
