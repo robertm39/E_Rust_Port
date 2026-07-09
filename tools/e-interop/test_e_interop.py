@@ -98,6 +98,31 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["mode"], "ho")
 
+    def test_tool_cases_default_to_help_for_sorted_tools(self):
+        cases = e_interop.tool_comparison_cases(["eground", "CSSCPA_filter"])
+
+        self.assertEqual(
+            [(case["name"], case["arguments"]) for case in cases],
+            [
+                ("CSSCPA_filter/help", ["--help"]),
+                ("eground/help", ["--help"]),
+            ],
+        )
+
+    def test_reference_tool_inventory_contains_ported_support_binaries(self):
+        self.assertEqual(
+            e_interop.REFERENCE_TOOL_BINARIES["CSSCPA_filter"],
+            "EXTERNAL/CSSCPA_filter",
+        )
+        self.assertEqual(
+            e_interop.REFERENCE_TOOL_BINARIES["classify_problem"],
+            "PROVER/classify_problem",
+        )
+        self.assertEqual(
+            e_interop.REFERENCE_TOOL_BINARIES["ex_commandline"],
+            "SIMPLE_APPS/ex_commandline",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

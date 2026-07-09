@@ -38,6 +38,32 @@ VOLATILE_LINE_RE = re.compile(
 )
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
+REFERENCE_TOOL_BINARIES = {
+    "CSSCPA_filter": "EXTERNAL/CSSCPA_filter",
+    "checkproof": "PROVER/checkproof",
+    "classify_problem": "PROVER/classify_problem",
+    "direct_examples": "PROVER/direct_examples",
+    "e_axfilter": "PROVER/e_axfilter",
+    "e_client": "PROVER/e_client",
+    "e_deduction_server": "PROVER/e_deduction_server",
+    "e_ltb_runner": "PROVER/e_ltb_runner",
+    "e_server": "PROVER/e_server",
+    "e_stratpar": "PROVER/e_stratpar",
+    "edpll": "PROVER/edpll",
+    "eground": "PROVER/eground",
+    "ekb_create": "PROVER/ekb_create",
+    "ekb_delete": "PROVER/ekb_delete",
+    "ekb_ginsert": "PROVER/ekb_ginsert",
+    "ekb_insert": "PROVER/ekb_insert",
+    "enormalizer": "PROVER/enormalizer",
+    "epatternize": "PROVER/epatternize",
+    "epclanalyse": "PROVER/epclanalyse",
+    "epclextract": "PROVER/epclextract",
+    "epcllemma": "PROVER/epcllemma",
+    "ex_commandline": "SIMPLE_APPS/ex_commandline",
+    "term2dag": "SIMPLE_APPS/term2dag",
+}
+DEFAULT_TOOL_ARGUMENT_CASES = (("--help",),)
 
 
 class InteropError(RuntimeError):
@@ -163,6 +189,7 @@ def build_one(source: Path, commit: str, mode: str) -> dict[str, Any]:
     installed_binary.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built_binary, installed_binary)
     installed_binary.chmod(installed_binary.stat().st_mode | 0o111)
+    tools = copy_reference_tools(build_dir, commit) if mode == "fol" else {}
 
     version = run_checked([str(installed_binary), "--version"]).stdout.strip()
     help_result = subprocess.run(
@@ -205,7 +232,22 @@ def build_one(source: Path, commit: str, mode: str) -> dict[str, Any]:
         "version": version,
         "smoke_status": smoke_status,
         "sha256": sha256_file(installed_binary),
+        "tools": tools,
     }
+
+
+def copy_reference_tools(build_dir: Path, commit: str) -> dict[str, str]:
+    tools: dict[str, str] = {}
+    for name, relative in sorted(REFERENCE_TOOL_BINARIES.items()):
+        built_binary = build_dir / relative
+        if not built_binary.is_file():
+            raise InteropError(f"Expected reference tool was not built: {built_binary}")
+        installed_binary = cache_root() / "bin" / commit / "tools" / name
+        installed_binary.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(built_binary, installed_binary)
+        installed_binary.chmod(installed_binary.stat().st_mode | 0o111)
+        tools[name] = str(installed_binary)
+    return tools
 
 
 def build_reference(args: argparse.Namespace) -> None:
@@ -258,6 +300,10 @@ def load_manifest() -> dict[str, Any]:
         binary = Path(manifest["builds"][mode]["binary"])
         if not binary.is_file():
             raise InteropError(f"Reference binary is missing: {binary}")
+    for tool, binary_name in manifest["builds"]["fol"].get("tools", {}).items():
+        binary = Path(binary_name)
+        if not binary.is_file():
+            raise InteropError(f"Reference tool {tool} is missing: {binary}")
     return manifest
 
 
@@ -682,6 +728,147 @@ def compare(args: argparse.Namespace) -> None:
         raise InteropError("Compatibility mismatches were found")
 
 
+def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    for tool in sorted(tool_names):
+        for arguments in DEFAULT_TOOL_ARGUMENT_CASES:
+            label = "-".join(part.strip("-") or "dash" for part in arguments)
+            cases.append(
+                {
+                    "tool": tool,
+                    "name": f"{tool}/{label}",
+                    "arguments": list(arguments),
+                    "scenario": label,
+                }
+            )
+    return cases
+
+
+def compare_tools(args: argparse.Namespace) -> None:
+    manifest = load_manifest()
+    repo_root = args.repo_root.resolve()
+    reference_tools = manifest["builds"]["fol"].get("tools", {})
+    if not reference_tools:
+        raise InteropError(
+            "Reference manifest has no support-tool binaries. Run build-reference again."
+        )
+
+    selected = args.tool or sorted(reference_tools)
+    unknown = sorted(set(selected) - set(reference_tools))
+    if unknown:
+        raise InteropError("Unknown reference tool(s): " + ", ".join(unknown))
+
+    output_root = repo_root / ".artifacts" / "e-compare"
+    run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-tools"
+    run_dir = output_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    if args.self_test:
+        candidate_kind = "linux-reference-tools"
+        rust_bin_dir = None
+    else:
+        rust_bin_dir = args.rust_windows_bin_dir.resolve()
+        if not rust_bin_dir.is_dir():
+            raise InteropError(f"Windows Rust bin directory not found: {rust_bin_dir}")
+        candidate_kind = "windows-rust-tools"
+
+    records: list[dict[str, Any]] = []
+    mismatch_count = 0
+    cases = tool_comparison_cases(selected)
+    for index, case in enumerate(cases, 1):
+        tool = case["tool"]
+        print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
+        reference_binary = Path(reference_tools[tool])
+        environment = os.environ.copy()
+        reference = execute(
+            reference_binary,
+            case["arguments"],
+            timeout=args.timeout,
+            env=environment,
+            cwd=repo_root,
+        )
+
+        if args.self_test:
+            candidate_binary = reference_binary
+        else:
+            assert rust_bin_dir is not None
+            candidate_binary = rust_bin_dir / f"{tool}.exe"
+            if not candidate_binary.is_file():
+                raise InteropError(f"Windows Rust tool executable not found: {candidate_binary}")
+
+        candidate = execute(
+            candidate_binary,
+            case["arguments"],
+            timeout=args.timeout,
+            env=environment,
+            cwd=repo_root,
+        )
+        mismatches = comparison_mismatches(reference, candidate)
+        reference_normalized_stdout = normalize_output(reference["stdout"])
+        candidate_normalized_stdout = normalize_output(candidate["stdout"])
+        reference_normalized_stderr = normalize_output(reference["stderr"])
+        candidate_normalized_stderr = normalize_output(candidate["stderr"])
+        normalized_stdout_equal = reference_normalized_stdout == candidate_normalized_stdout
+        normalized_stderr_equal = reference_normalized_stderr == candidate_normalized_stderr
+        if not normalized_stdout_equal:
+            mismatches.append("normalized_stdout")
+        if not normalized_stderr_equal:
+            mismatches.append("normalized_stderr")
+
+        if mismatches:
+            mismatch_count += 1
+            mismatch_dir = run_dir / "mismatches" / f"{index:04d}"
+            mismatch_dir.mkdir(parents=True, exist_ok=True)
+            for label, result in (("reference", reference), ("candidate", candidate)):
+                (mismatch_dir / f"{label}.stdout").write_text(result["stdout"], encoding="utf-8")
+                (mismatch_dir / f"{label}.stderr").write_text(result["stderr"], encoding="utf-8")
+            (mismatch_dir / "reference.normalized.stdout").write_text(
+                reference_normalized_stdout, encoding="utf-8"
+            )
+            (mismatch_dir / "candidate.normalized.stdout").write_text(
+                candidate_normalized_stdout, encoding="utf-8"
+            )
+            (mismatch_dir / "reference.normalized.stderr").write_text(
+                reference_normalized_stderr, encoding="utf-8"
+            )
+            (mismatch_dir / "candidate.normalized.stderr").write_text(
+                candidate_normalized_stderr, encoding="utf-8"
+            )
+
+        records.append(
+            {
+                "name": case["name"],
+                "tool": tool,
+                "scenario": case["scenario"],
+                "arguments": case["arguments"],
+                "reference_exit_code": reference["exit_code"],
+                "candidate_exit_code": candidate["exit_code"],
+                "reference_seconds": reference["wall_seconds"],
+                "candidate_seconds": candidate["wall_seconds"],
+                "normalized_stdout_equal": normalized_stdout_equal,
+                "normalized_stderr_equal": normalized_stderr_equal,
+                "mismatches": mismatches,
+            }
+        )
+
+    summary = {
+        "schema_version": 1,
+        "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "candidate_kind": candidate_kind,
+        "reference_manifest": manifest,
+        "timeout_seconds": args.timeout,
+        "case_count": len(records),
+        "mismatch_count": mismatch_count,
+        "cases": records,
+    }
+    write_json(run_dir / "tool-comparison.json", summary)
+    write_csv(run_dir / "tool-comparison.csv", records)
+    print(f"Tool comparison report: {run_dir}")
+    print(f"Cases: {len(records)}; mismatches: {mismatch_count}")
+    if mismatch_count:
+        raise InteropError("Support-tool compatibility mismatches were found")
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -1001,6 +1188,21 @@ def parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--timeout", type=int, default=60)
     compare_parser.add_argument("--memory-limit-mb", type=int, default=2048)
     compare_parser.set_defaults(function=compare)
+
+    compare_tools_parser = subparsers.add_parser(
+        "compare-tools", help="compare WSL support tools with Windows Rust tool EXEs"
+    )
+    compare_tools_parser.add_argument("--repo-root", type=path_argument, required=True)
+    tool_candidate = compare_tools_parser.add_mutually_exclusive_group(required=True)
+    tool_candidate.add_argument("--rust-windows-bin-dir", type=path_argument)
+    tool_candidate.add_argument("--self-test", action="store_true")
+    compare_tools_parser.add_argument(
+        "--tool",
+        action="append",
+        help="support tool to compare; may be repeated; defaults to all archived tools",
+    )
+    compare_tools_parser.add_argument("--timeout", type=int, default=30)
+    compare_tools_parser.set_defaults(function=compare_tools)
 
     benchmark_parser = subparsers.add_parser("benchmark", help="benchmark native Linux C and Rust binaries")
     benchmark_parser.add_argument("--repo-root", type=path_argument, required=True)

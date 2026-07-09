@@ -1,10 +1,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('setup', 'build-reference', 'compare', 'benchmark')]
+    [ValidateSet('setup', 'build-reference', 'compare', 'compare-tools', 'benchmark')]
     [string]$Command,
 
     [string]$RustExe,
+    [string]$RustBinDir,
+    [string[]]$Tool,
     [string]$Corpus,
     [ValidateRange(1, 100)]
     [int]$Runs = 5,
@@ -131,6 +133,32 @@ switch ($Command) {
                 throw '-RustExe must identify a native Windows .exe.'
             }
             $arguments += @('--rust-windows', (Convert-ToWslPath $resolvedRustExe))
+        }
+
+        Invoke-WslPython $arguments
+    }
+    'compare-tools' {
+        $arguments = @(
+            'compare-tools'
+        ) + $common + @(
+            '--timeout', $TimeoutSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)
+        )
+
+        foreach ($toolName in @($Tool)) {
+            if ($toolName) {
+                $arguments += @('--tool', $toolName)
+            }
+        }
+
+        if ($SelfTest) {
+            $arguments += '--self-test'
+        }
+        else {
+            if (-not $RustBinDir) {
+                throw 'compare-tools requires -RustBinDir <path>, unless -SelfTest is used.'
+            }
+            $resolvedRustBinDir = Resolve-Path $RustBinDir
+            $arguments += @('--rust-windows-bin-dir', (Convert-ToWslPath $resolvedRustBinDir))
         }
 
         Invoke-WslPython $arguments

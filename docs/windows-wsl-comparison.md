@@ -37,7 +37,8 @@ native WSL benchmark binary.
 .\e-interop.ps1 build-reference
 ```
 
-This builds both `eprover` and `eprover-ho`. The cache contains isolated source
+This builds both `eprover` and `eprover-ho`, and archives the support-tool
+binaries produced by the normal C build. The cache contains isolated source
 trees, binaries, and `~/.cache/e-rust-port/reference.json`, which records the
 upstream commit, compiler, distribution, configuration, versions, hashes, and
 binary paths. Rerunning the command replaces builds for the same commit.
@@ -72,6 +73,21 @@ Compatibility reports are written to `.artifacts/e-compare/<timestamp>/` as
 JSON and CSV. Complete stdout, stderr, and normalized output are retained for
 each mismatch. A mismatch in exit code, timeout state, SZS status, output
 structure, or normalized output makes the command fail.
+
+## Support-tool comparison
+
+After building Rust support tools in release mode, compare their C-shaped help
+surfaces against the archived C support binaries:
+
+```powershell
+cargo build --locked --release --bins
+.\e-interop.ps1 compare-tools -RustBinDir .\target\release
+```
+
+Use `-Tool classify_problem -Tool eground` to restrict the comparison. Use
+`.\e-interop.ps1 compare-tools -SelfTest` to compare the archived C tools with
+themselves. Tool reports are written beside the main compatibility reports under
+`.artifacts/e-compare/<timestamp>-tools/`.
 
 ## Performance comparison
 
