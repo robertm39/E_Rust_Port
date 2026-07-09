@@ -959,6 +959,72 @@ def comparison_cases(
                 "arguments": ("--print-formulas",),
             }
         )
+        cases.append(
+            {
+                "name": "synthetic/prune-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": None,
+                "scenario": "prune",
+                "arguments": ("--prune",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/stdin-prune-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": text,
+                "scenario": "stdin-prune",
+                "arguments": ("--prune",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/cnf-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": None,
+                "scenario": "cnf",
+                "arguments": ("--cnf",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/stdin-cnf-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": "Unknown",
+                "stdin": text,
+                "scenario": "stdin-cnf",
+                "arguments": ("--cnf",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/app-encode-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": None,
+                "stdin": None,
+                "scenario": "app-encode",
+                "arguments": ("--app-encode",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/stdin-app-encode-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": None,
+                "stdin": text,
+                "scenario": "stdin-app-encode",
+                "arguments": ("--app-encode",),
+            }
+        )
 
     malformed = run_dir / "fixtures" / "malformed.p"
     malformed.parent.mkdir(parents=True, exist_ok=True)

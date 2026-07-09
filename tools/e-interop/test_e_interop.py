@@ -146,6 +146,36 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(stdin_print_case["expected_status"])
         self.assertEqual(stdin_print_case["scenario"], "stdin-print-formulas")
         self.assertIn("fof(goal, conjecture, p(a)).", stdin_print_case["stdin"])
+        prune_case = by_name["synthetic/prune-socrates.p"]
+        self.assertEqual(prune_case["arguments"], ("--prune",))
+        self.assertEqual(prune_case["expected_status"], "Unknown")
+        self.assertEqual(prune_case["scenario"], "prune")
+        self.assertIsNone(prune_case["stdin"])
+        stdin_prune_case = by_name["synthetic/stdin-prune-socrates.p"]
+        self.assertEqual(stdin_prune_case["arguments"], ("--prune",))
+        self.assertEqual(stdin_prune_case["expected_status"], "Unknown")
+        self.assertEqual(stdin_prune_case["scenario"], "stdin-prune")
+        self.assertIn("fof(goal, conjecture, p(a)).", stdin_prune_case["stdin"])
+        cnf_case = by_name["synthetic/cnf-socrates.p"]
+        self.assertEqual(cnf_case["arguments"], ("--cnf",))
+        self.assertEqual(cnf_case["expected_status"], "Unknown")
+        self.assertEqual(cnf_case["scenario"], "cnf")
+        self.assertIsNone(cnf_case["stdin"])
+        stdin_cnf_case = by_name["synthetic/stdin-cnf-socrates.p"]
+        self.assertEqual(stdin_cnf_case["arguments"], ("--cnf",))
+        self.assertEqual(stdin_cnf_case["expected_status"], "Unknown")
+        self.assertEqual(stdin_cnf_case["scenario"], "stdin-cnf")
+        self.assertIn("fof(goal, conjecture, p(a)).", stdin_cnf_case["stdin"])
+        app_encode_case = by_name["synthetic/app-encode-socrates.p"]
+        self.assertEqual(app_encode_case["arguments"], ("--app-encode",))
+        self.assertIsNone(app_encode_case["expected_status"])
+        self.assertEqual(app_encode_case["scenario"], "app-encode")
+        self.assertIsNone(app_encode_case["stdin"])
+        stdin_app_encode_case = by_name["synthetic/stdin-app-encode-socrates.p"]
+        self.assertEqual(stdin_app_encode_case["arguments"], ("--app-encode",))
+        self.assertIsNone(stdin_app_encode_case["expected_status"])
+        self.assertEqual(stdin_app_encode_case["scenario"], "stdin-app-encode")
+        self.assertIn("fof(goal, conjecture, p(a)).", stdin_app_encode_case["stdin"])
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
