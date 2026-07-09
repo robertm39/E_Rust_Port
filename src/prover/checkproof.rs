@@ -496,6 +496,109 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "checkproof {version}\n",
+                "\n",
+                "Usage: checkproof [options] [files]\n",
+                "\n",
+                "Read an UPCL2 protocol and verify the inferences using one of a\n",
+                "varity of external provers.\n",
+                "\n",
+                "This is a _very_ experimental program. Passing checkproof does\n",
+                "indicate that all inferences in an UPCL2 protocol are correct\n",
+                "(i.e. that the conclusion is logically implied by the premisses) -\n",
+                "that is, if you believe that the transformation process and the used\n",
+                "prover are correct. However, checkproof will e.g. gladly show that the\n",
+                "empty proof protocol does not contain any buggy steps.\n",
+                "\n",
+                "If a proof protocol fails to pass this test, the proof may still be\n",
+                "correct. Due to e.g. incomplete strategies (this applies in particular\n",
+                "to Otter), build-in limits (Otter), and bugs in the prover (potentially\n",
+                "all systems, but observed in SPASS 0.55), a prover might fail to\n",
+                "verify a correct step. Moreover, due to the different strategies,\n",
+                "calculi, and in particular different term orderings chosen by the\n",
+                "systems, a single UPCL2 inference may result in a proof problem that\n",
+                "is very hard to verify for other provers. However, if a proof step is\n",
+                "rejected by more than one system, you should probably look at this\n",
+                "step in detail.\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. The short form or the\n",
+                "    long form without the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output. At the\n",
+                "    moment, level 0 only prints the result, level 1 prints inference steps as\n",
+                "    they are verified, level 2 prints prover commands issued, and level 3\n",
+                "    prints all prover output (which may be very little)\n",
+                "\n",
+                "   -p <arg>\n",
+                "  --prover-type=<arg>\n",
+                "    Set the type of the prover to use for proof verification. Determines\n",
+                "    problem syntax, options, and check for success. Supported options at are \n",
+                "    'E' (the default),'Otter' 'SPASS', and 'scheme-setheo' (not yet\n",
+                "    implemented). SPASS support is only tested with SPASS 0.55 and may fail\n",
+                "    if the problem contains identifiers reserved by SPASS. There have been\n",
+                "    some supple syntax changes, so more recent SPASS versions will probably\n",
+                "    fail as well.\n",
+                "\n",
+                "   -x <arg>\n",
+                "  --executable=<arg>\n",
+                "    Give the name under which the prover can be called. If no executable is\n",
+                "    given, checkproof will guess a name based on the type of the prover. This\n",
+                "    guess may be way off!\n",
+                "\n",
+                "   -t <arg>\n",
+                "  --prover-cpu-limit=<arg>\n",
+                "    Limit the CPU time prover may spend on a single step. Default is 10\n",
+                "    seconds.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+        )
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
@@ -514,9 +617,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: checkproof [options] [files]"));
-        assert!(help.contains("Read an UPCL2 protocol and verify the inferences"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not pcl");
@@ -839,8 +940,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert!(rendered.contains("varity of external provers."));
-        assert!(rendered.contains("empty proof protocol does not contain any buggy steps."));
-        assert!(rendered.contains("Copyright 1998-2026 by Stephan Schulz"));
+        assert_eq!(rendered, expected_help());
     }
 }

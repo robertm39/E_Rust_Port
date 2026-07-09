@@ -88,7 +88,7 @@ Source files reviewed: `PROVER/checkproof.c`.
 
 ### Rust Port Notes
 
-- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-`, TPTP-format UPCL2 parsing with C-compatible shared external variable-name mapping for compressed clause input, C-compatible shell-PCL rejection, strict end-of-input checks, external-prover verification dispatch, warning output, C-shaped file-open and output-close diagnostics, and the C-shaped final verification summary.
+- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers exact C-shaped full help text, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-`, TPTP-format UPCL2 parsing with C-compatible shared external variable-name mapping for compressed clause input, C-compatible shell-PCL rejection, strict end-of-input checks, external-prover verification dispatch, warning output, C-shaped file-open and output-close diagnostics, and the C-shaped final verification summary.
 
 ### Change Later
 
