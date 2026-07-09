@@ -937,6 +937,28 @@ def comparison_cases(
                 "arguments": ("--syntax-only",),
             }
         )
+        cases.append(
+            {
+                "name": "synthetic/print-formulas-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": None,
+                "stdin": None,
+                "scenario": "print-formulas",
+                "arguments": ("--print-formulas",),
+            }
+        )
+        cases.append(
+            {
+                "name": "synthetic/stdin-print-formulas-socrates.p",
+                "path": socrates,
+                "mode": "fol",
+                "expected_status": None,
+                "stdin": text,
+                "scenario": "stdin-print-formulas",
+                "arguments": ("--print-formulas",),
+            }
+        )
 
     malformed = run_dir / "fixtures" / "malformed.p"
     malformed.parent.mkdir(parents=True, exist_ok=True)
