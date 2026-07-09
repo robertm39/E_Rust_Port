@@ -391,6 +391,7 @@ mod tests {
     use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
+    use crate::prover::version::{footer, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -436,6 +437,80 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> String {
+        let mut expected = format!(
+            concat!(
+                "\n",
+                "\n",
+                "{program_name} {version}\n",
+                "\n",
+                "Usage: {program_name} [options] [files]\n",
+                "\n",
+                "Read a list of CSSCPA statements, print the resulting clause set on\n",
+                "termination. A CSSCPA statement is either 'accept: <clause>' or\n",
+                "'check: <clause>', where <clause> is a clause in TPTP format. Clauses\n",
+                "prepended by 'accept' are always integrated into the current clause\n",
+                "set unless they are subsumed or tautological. Clauses prepended by\n",
+                "'check' are only integrated if they subsume clauses with a total\n",
+                "weight that is higher than their own weight. Subsumed clauses are\n",
+                "always removed from the clause set.\n",
+                "\n",
+                "After every statement, clause count, literal count and total clause\n",
+                "weight are printed to the selected output channel (stdout by\n",
+                "default). If you need these results immediately, you'll have to beg\n",
+                "the progam by including the sequence\n",
+                "\n",
+                "Please process clauses now, I beg you, great shining CSSCPA,\n",
+                "wonder of the world, most beautiful program ever written.\n",
+                "\n",
+                "to overcome CLIB's input buffering.\n",
+                "\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program. The short form or the\n",
+                "    long form without the optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output. At the\n",
+                "    moment, level 0 only prints the result of each statement, and level 1\n",
+                "    also prints what happens to each clause.\n",
+                "\n",
+                "   -r\n",
+                "  --rant-about-input-buffering[=<arg>]\n",
+                "    Tell the program how much you hate to include the 'Please'-sequence in\n",
+                "    the input. The optional argument is the rant-intensity. The short form or\n",
+                "    the long form without the optional argument is equivalent to\n",
+                "    --rant-about-input-buffering=666.\n",
+                "\n",
+                "\n",
+                "\n",
+            ),
+            program_name = PROGRAM_NAME,
+            version = VERSION,
+        );
+        expected.push_str(&footer());
+        expected
+    }
+
     #[test]
     fn help_and_version_exit_before_filter_execution() {
         let _guard = global_state_lock();
@@ -452,8 +527,7 @@ mod tests {
         .expect("help succeeds");
         assert_eq!(help_status, 0);
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.contains("Usage: CSSCPA_filter [options] [files]"));
-        assert!(help.contains("Please process clauses now"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let mut stdin = Cursor::new(Vec::new());
@@ -728,8 +802,6 @@ wonder of the world, most beautiful program ever written.
     fn help_text_contains_c_footer_and_options() {
         let rendered = print_help();
 
-        assert!(rendered.contains("Options\n\n"));
-        assert!(rendered.contains("--rant-about-input-buffering[=<arg>]"));
-        assert!(rendered.contains("This program is free software"));
+        assert_eq!(rendered, expected_help());
     }
 }

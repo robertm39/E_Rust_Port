@@ -86,7 +86,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 ### Rust Port Notes
 
 - The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are represented in `src/external/csscpa.rs`.
-- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: C-shaped option parsing for help/version/verbose/output/silent/output-level/rant, including C's negative `--output-level` truthiness below `OUTPRINT(1)`, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, replay of C's state/process-clause trace flush points, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `SysError`-style two-line input/output file-open diagnostics, C `OutClose` output-stream error wording on final flush failure, and `InitIO`/`ExitIO` initialization.
+- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: exact C-shaped full help text through the shared option renderer, C-shaped option parsing for version/verbose/output/silent/output-level/rant, including C's negative `--output-level` truthiness below `OUTPRINT(1)`, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, replay of C's state/process-clause trace flush points, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `SysError`-style two-line input/output file-open diagnostics, C `OutClose` output-stream error wording on final flush failure, and `InitIO`/`ExitIO` initialization.
 
 ### Change Later
 
