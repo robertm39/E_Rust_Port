@@ -64,6 +64,10 @@ REFERENCE_TOOL_BINARIES = {
     "term2dag": "SIMPLE_APPS/term2dag",
 }
 DEFAULT_TOOL_ARGUMENT_CASES = (("--help",),)
+VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
+    "ex_commandline",
+    "term2dag",
+}
 
 
 class InteropError(RuntimeError):
@@ -731,7 +735,7 @@ def compare(args: argparse.Namespace) -> None:
 def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     for tool in sorted(tool_names):
-        for arguments in DEFAULT_TOOL_ARGUMENT_CASES:
+        for arguments in tool_argument_cases(tool):
             label = "-".join(part.strip("-") or "dash" for part in arguments)
             cases.append(
                 {
@@ -742,6 +746,12 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                 }
             )
     return cases
+
+
+def tool_argument_cases(tool: str) -> tuple[tuple[str, ...], ...]:
+    if tool in VERSIONED_REFERENCE_TOOLS:
+        return (*DEFAULT_TOOL_ARGUMENT_CASES, ("--version",))
+    return DEFAULT_TOOL_ARGUMENT_CASES
 
 
 def compare_tools(args: argparse.Namespace) -> None:

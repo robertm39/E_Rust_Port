@@ -77,7 +77,7 @@ structure, or normalized output makes the command fail.
 ## Support-tool comparison
 
 After building Rust support tools in release mode, compare their C-shaped help
-surfaces against the archived C support binaries:
+and supported version surfaces against the archived C support binaries:
 
 ```powershell
 cargo build --locked --release --bins

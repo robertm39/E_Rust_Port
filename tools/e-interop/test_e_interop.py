@@ -99,14 +99,30 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(cases[0]["mode"], "ho")
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
-        cases = e_interop.tool_comparison_cases(["eground", "CSSCPA_filter"])
+        cases = e_interop.tool_comparison_cases(
+            ["eground", "CSSCPA_filter", "term2dag"]
+        )
 
         self.assertEqual(
             [(case["name"], case["arguments"]) for case in cases],
             [
                 ("CSSCPA_filter/help", ["--help"]),
+                ("CSSCPA_filter/version", ["--version"]),
                 ("eground/help", ["--help"]),
+                ("eground/version", ["--version"]),
+                ("term2dag/help", ["--help"]),
             ],
+        )
+
+    def test_tool_argument_cases_skip_version_for_simple_apps(self):
+        self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))
+        self.assertEqual(
+            e_interop.tool_argument_cases("ex_commandline"),
+            (("--help",),),
+        )
+        self.assertEqual(
+            e_interop.tool_argument_cases("classify_problem"),
+            (("--help",), ("--version",)),
         )
 
     def test_reference_tool_inventory_contains_ported_support_binaries(self):
