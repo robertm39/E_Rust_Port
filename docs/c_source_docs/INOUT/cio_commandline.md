@@ -118,8 +118,8 @@ Source files reviewed: `INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers including LP64 `LONG_MIN` boundary acceptance, case-insensitive `strtod` named infinity/NaN spellings, C99-style hexadecimal float spellings, and C-style option help rendering, including embedded-newline wrapping from `print_start_of_str`.
-- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, LP64 signed integer boundaries, named infinity/NaN and hexadecimal float spellings, range and bool diagnostics, float trailing-garbage/range-error rejection, optional-argument help text, and embedded-newline option descriptions.
+- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers including LP64 `LONG_MIN` boundary acceptance, case-insensitive `strtod` named infinity/NaN spellings, C99-style hexadecimal float spellings, and C-style option help rendering, including embedded-newline wrapping and exact-width hard-break continuations from `print_start_of_str`.
+- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, LP64 signed integer boundaries, named infinity/NaN and hexadecimal float spellings, range and bool diagnostics, float trailing-garbage/range-error rejection, optional-argument help text, embedded-newline option descriptions, and exact-width no-blank description wrapping.
 
 ### Change Later
 
@@ -127,6 +127,7 @@ Source files reviewed: `INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`.
 - `CLStateGetIntArg` follows the host C `long` range; current Rust compatibility treats this as the LP64 range used by E's main supported Unix-like targets. Revisit if a strict LLP64/Windows C build must be byte-compatible for command-line integer limits.
 - C float parsing delegates to the active C library and locale through `strtod`, so platform-specific locale decimal separators can vary. Rust keeps the common decimal, named-infinity, named-NaN, and C99 hexadecimal-float surfaces and rejects overflow/underflow range errors deterministically for those surfaces; broaden this only if reference executable tests show callers depend on remaining libc-specific parsing.
 - C option arrays are terminated by an `option_code == 0` sentinel and may contain null short or long names. Rust uses typed slices with `Option` fields, which is safer but should remain externally equivalent for the generated executable option tables.
+- `print_start_of_str()` returns a non-null pointer to the terminating NUL after a hard break exactly at the wrap width, so `PrintOption()` emits an empty indented continuation line. Rust preserves this for help-stream parity; a cleaned help renderer should suppress that artifact outside compatibility mode.
 
 ### Porting Focus
 

@@ -642,17 +642,21 @@ fn is_c_nan_payload(argument: &str) -> bool {
 }
 
 fn wrap_c_style(text: &str, width: usize) -> Vec<String> {
-    let mut remaining = text;
+    let mut remaining = Some(text);
     let mut lines = Vec::new();
-    while !remaining.is_empty() {
-        let (line, rest) = split_c_style(remaining, width);
+    while let Some(current) = remaining {
+        if current.is_empty() {
+            lines.push(String::new());
+            break;
+        }
+        let (line, rest) = split_c_style(current, width);
         lines.push(line.to_owned());
         remaining = rest;
     }
     lines
 }
 
-fn split_c_style(text: &str, width: usize) -> (&str, &str) {
+fn split_c_style(text: &str, width: usize) -> (&str, Option<&str>) {
     let mut last_blank = None;
     let mut count = 0_usize;
     let mut forced_newline = false;
@@ -671,25 +675,26 @@ fn split_c_style(text: &str, width: usize) -> (&str, &str) {
     }
 
     if count < width && !forced_newline {
-        return (text, "");
+        return (text, None);
     }
     if let Some(blank) = last_blank {
         let next = blank + 1;
-        return (&text[..blank], text.get(next..).unwrap_or(""));
+        let rest = text.get(next..).unwrap_or("");
+        return (&text[..blank], (!rest.is_empty()).then_some(rest));
     }
 
     let split_at = text
         .char_indices()
         .nth(width)
         .map_or(text.len(), |(index, _)| index);
-    (&text[..split_at], &text[split_at..])
+    (&text[..split_at], Some(&text[split_at..]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         get_bool_arg, get_float_arg, get_int_arg, get_int_arg_check_range, print_options,
-        CommandLineState, OptArgType, OptCell,
+        CommandLineState, OptArgType, OptCell, FORMAT_WIDTH,
     };
     use crate::basics::error::ErrorCode;
 
@@ -911,5 +916,34 @@ mod tests {
         let output = print_options(MULTILINE_OPTIONS, None);
 
         assert!(output.contains("    First line.\n    Second line.\n"));
+    }
+
+    #[test]
+    fn option_printing_preserves_exact_width_hard_break_empty_line() {
+        const EXACT_WIDTH_DESC: &str = concat!(
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaa"
+        );
+        const EXACT_WIDTH_OPTIONS: &[OptCell<Code>] = &[OptCell::new(
+            Code::Help,
+            Some('w'),
+            Some("width"),
+            OptArgType::NoArg,
+            None,
+            EXACT_WIDTH_DESC,
+        )];
+
+        assert_eq!(EXACT_WIDTH_DESC.len(), FORMAT_WIDTH - 4);
+
+        let output = print_options(EXACT_WIDTH_OPTIONS, None);
+        let expected = format!("    {EXACT_WIDTH_DESC}\n    \n\n");
+
+        assert!(output.contains(&expected));
     }
 }
