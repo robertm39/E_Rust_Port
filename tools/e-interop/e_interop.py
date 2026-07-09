@@ -101,6 +101,32 @@ ARCHIVED_REFERENCE_TOOL_LINKS = {
         ),
     ),
 }
+ARCHIVED_REFERENCE_TOOL_SOURCE_PATCHES = {
+    "termprops": (
+        (
+            Path("PROVER/termprops.c"),
+            "ProblemType problemType  = PROBLEM_NOT_INIT;",
+            "/* problemType is provided by BASICS.a in current upstream. */",
+        ),
+        (
+            Path("PROVER/termprops.c"),
+            "CreateScanner(StreamTypeFile, state->argv[i], true, NULL);",
+            "CreateScanner(StreamTypeFile, state->argv[i], true, NULL, true);",
+        ),
+    ),
+    "tsm_classify": (
+        (
+            Path("PROVER/tsm_classify.c"),
+            "ProblemType problemType  = PROBLEM_NOT_INIT;",
+            "/* problemType is provided by BASICS.a in current upstream. */",
+        ),
+        (
+            Path("PROVER/tsm_classify.c"),
+            "CreateScanner(StreamTypeFile, infile, true, NULL);",
+            "CreateScanner(StreamTypeFile, infile, true, NULL, true);",
+        ),
+    ),
+}
 DEFAULT_TOOL_ARGUMENT_CASES = (("--help",),)
 VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "ex_commandline",
@@ -220,8 +246,25 @@ def os_release() -> dict[str, str]:
     return values
 
 
-def first_line(command: Sequence[str]) -> str:
-    return run_checked(command).stdout.splitlines()[0].strip()
+def first_line(command: Sequence[str], *, env: dict[str, str] | None = None) -> str:
+    return run_checked(command, env=env).stdout.splitlines()[0].strip()
+
+
+def environment_with_path_prefix(*directories: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    prefixes = [str(directory) for directory in directories if directory.is_dir()]
+    if prefixes:
+        existing = environment.get("PATH", "")
+        environment["PATH"] = (
+            os.pathsep.join([*prefixes, existing])
+            if existing
+            else os.pathsep.join(prefixes)
+        )
+    return environment
+
+
+def rust_tool_environment() -> dict[str, str]:
+    return environment_with_path_prefix(Path.home() / ".cargo" / "bin")
 
 
 def build_one(source: Path, commit: str, mode: str) -> dict[str, Any]:
@@ -327,8 +370,23 @@ def build_archived_reference_tool(build_dir: Path, name: str) -> None:
         compile_command, link_command = ARCHIVED_REFERENCE_TOOL_LINKS[name]
     except KeyError as error:
         raise InteropError(f"No archived reference-tool build is configured for {name}") from error
+    apply_archived_reference_tool_source_patches(build_dir, name)
     run_checked(compile_command, cwd=build_dir / "PROVER", capture=False)
     run_checked(link_command, cwd=build_dir / "PROVER", capture=False)
+
+
+def apply_archived_reference_tool_source_patches(build_dir: Path, name: str) -> None:
+    for relative, old, new in ARCHIVED_REFERENCE_TOOL_SOURCE_PATCHES.get(name, ()):
+        source = build_dir / relative
+        text = source.read_text(encoding="utf-8")
+        if new in text:
+            continue
+        if old not in text:
+            raise InteropError(
+                f"Could not apply archived reference-tool compatibility patch for "
+                f"{name}: {relative}"
+            )
+        source.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
 def build_reference(args: argparse.Namespace) -> None:
@@ -1012,12 +1070,12 @@ def build_rust_linux(repo_root: Path, commit: str) -> tuple[Path, dict[str, str]
             "Cargo.toml does not exist yet. The benchmark command is ready, but it "
             "requires the Rust port with a binary target named 'eprover'."
         )
-    if shutil.which("cargo") is None:
+    environment = rust_tool_environment()
+    if shutil.which("cargo", path=environment.get("PATH")) is None:
         raise InteropError(
             "cargo is not installed in WSL. Install Rust with rustup, then rerun benchmark."
         )
     target_dir = cache_root() / "rust-target" / commit
-    environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     run_checked(
         ["cargo", "build", "--locked", "--release", "--bin", "eprover"],
@@ -1031,8 +1089,8 @@ def build_rust_linux(repo_root: Path, commit: str) -> tuple[Path, dict[str, str]
     if str(binary.resolve()).startswith("/mnt/"):
         raise InteropError("Rust benchmark binary must reside on WSL's Linux filesystem")
     metadata = {
-        "cargo": first_line(["cargo", "--version"]),
-        "rustc": first_line(["rustc", "--version"]),
+        "cargo": first_line(["cargo", "--version"], env=environment),
+        "rustc": first_line(["rustc", "--version"], env=environment),
         "sha256": sha256_file(binary),
     }
     return binary, metadata

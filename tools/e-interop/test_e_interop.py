@@ -88,6 +88,13 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(math.isclose(e_interop.geometric_mean([0.5, 2.0]), 1.0))
         self.assertIsNone(e_interop.geometric_mean([]))
 
+    def test_environment_with_path_prefix_prepends_existing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            environment = e_interop.environment_with_path_prefix(prefix)
+
+        self.assertTrue(environment["PATH"].startswith(str(prefix)))
+
     def test_corpus_detects_higher_order_problem_syntax(self):
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory)
@@ -183,6 +190,30 @@ class ComparisonTests(unittest.TestCase):
             "PROVER/tsm_classify",
         )
         self.assertIn("tsm_classify", e_interop.ARCHIVED_REFERENCE_TOOL_LINKS)
+
+    def test_archived_reference_tool_source_patches_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            build_dir = Path(directory)
+            prover = build_dir / "PROVER"
+            prover.mkdir()
+            source = prover / "termprops.c"
+            source.write_text(
+                "ProblemType problemType  = PROBLEM_NOT_INIT;\n"
+                "in = CreateScanner(StreamTypeFile, state->argv[i], true, NULL);\n",
+                encoding="utf-8",
+            )
+
+            e_interop.apply_archived_reference_tool_source_patches(build_dir, "termprops")
+            first = source.read_text(encoding="utf-8")
+            e_interop.apply_archived_reference_tool_source_patches(build_dir, "termprops")
+            second = source.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            first,
+            "/* problemType is provided by BASICS.a in current upstream. */\n"
+            "in = CreateScanner(StreamTypeFile, state->argv[i], true, NULL, true);\n",
+        )
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

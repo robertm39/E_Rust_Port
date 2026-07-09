@@ -217,13 +217,14 @@ mod fd_write {
     use std::ffi::c_void;
 
     unsafe extern "C" {
-        fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
+        #[link_name = "write"]
+        fn libc_write(fd: i32, buffer: *const c_void, count: usize) -> isize;
     }
 
     pub(super) fn write(fd: i32, bytes: &[u8]) -> usize {
         // SAFETY: bytes points to a live buffer for exactly bytes.len() bytes.
         // The fd is intentionally raw to match C `WriteStr`.
-        let result = unsafe { write(fd, bytes.as_ptr().cast::<c_void>(), bytes.len()) };
+        let result = unsafe { libc_write(fd, bytes.as_ptr().cast::<c_void>(), bytes.len()) };
         usize::try_from(result).unwrap_or(usize::MAX)
     }
 }
