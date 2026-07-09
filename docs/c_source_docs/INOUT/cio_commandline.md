@@ -118,8 +118,8 @@ Source files reviewed: `INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers including LP64 `LONG_MIN` boundary acceptance, case-insensitive `strtod` named infinity/NaN spellings, C99-style hexadecimal float spellings, and C-style option help rendering.
-- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, LP64 signed integer boundaries, named infinity/NaN and hexadecimal float spellings, range and bool diagnostics, float trailing-garbage/range-error rejection, and optional-argument help text.
+- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers including LP64 `LONG_MIN` boundary acceptance, case-insensitive `strtod` named infinity/NaN spellings, C99-style hexadecimal float spellings, and C-style option help rendering, including embedded-newline wrapping from `print_start_of_str`.
+- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, LP64 signed integer boundaries, named infinity/NaN and hexadecimal float spellings, range and bool diagnostics, float trailing-garbage/range-error rejection, optional-argument help text, and embedded-newline option descriptions.
 
 ### Change Later
 

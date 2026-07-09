@@ -655,6 +655,7 @@ fn wrap_c_style(text: &str, width: usize) -> Vec<String> {
 fn split_c_style(text: &str, width: usize) -> (&str, &str) {
     let mut last_blank = None;
     let mut count = 0_usize;
+    let mut forced_newline = false;
     for (index, character) in text.char_indices() {
         if count >= width {
             break;
@@ -662,13 +663,14 @@ fn split_c_style(text: &str, width: usize) -> (&str, &str) {
         if character == ' ' || character == '\n' {
             last_blank = Some(index);
             if character == '\n' {
+                forced_newline = true;
                 break;
             }
         }
         count += 1;
     }
 
-    if count < width {
+    if count < width && !forced_newline {
         return (text, "");
     }
     if let Some(blank) = last_blank {
@@ -893,5 +895,21 @@ mod tests {
         assert!(output.contains("Options:"));
         assert!(output.contains("--verbose[=<arg>]"));
         assert!(output.contains("equivalent to --verbose=1."));
+    }
+
+    #[test]
+    fn option_printing_splits_embedded_newlines_like_c() {
+        const MULTILINE_OPTIONS: &[OptCell<Code>] = &[OptCell::new(
+            Code::Help,
+            Some('m'),
+            Some("multi"),
+            OptArgType::NoArg,
+            None,
+            "First line.\nSecond line.",
+        )];
+
+        let output = print_options(MULTILINE_OPTIONS, None);
+
+        assert!(output.contains("    First line.\n    Second line.\n"));
     }
 }
