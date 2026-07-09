@@ -198,6 +198,9 @@ TOOL_FUNCTIONAL_CASES = {
     "e_ltb_runner": (
         ("usage-missing-spec", (), None),
     ),
+    "e_server": (
+        ("usage-missing-domain", (), None),
+    ),
     "ekb_delete": (
         (
             "drop-example",

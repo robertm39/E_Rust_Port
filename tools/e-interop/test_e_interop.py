@@ -114,6 +114,7 @@ class ComparisonTests(unittest.TestCase):
                 "e_axfilter",
                 "e_deduction_server",
                 "e_ltb_runner",
+                "e_server",
                 "ekb_create",
                 "ekb_delete",
                 "ekb_ginsert",
@@ -162,6 +163,9 @@ class ComparisonTests(unittest.TestCase):
                 ("e_ltb_runner/help", ["--help"]),
                 ("e_ltb_runner/version", ["--version"]),
                 ("e_ltb_runner/usage-missing-spec", []),
+                ("e_server/help", ["--help"]),
+                ("e_server/version", ["--version"]),
+                ("e_server/usage-missing-domain", []),
                 ("e_stratpar/help", ["--help"]),
                 ("e_stratpar/version", ["--version"]),
                 ("e_stratpar/usage-missing-problem", []),
@@ -258,6 +262,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(e_deduction_case["stdin"])
         e_ltb_runner_case = cases_by_name["e_ltb_runner/usage-missing-spec"]
         self.assertIsNone(e_ltb_runner_case["stdin"])
+        e_server_case = cases_by_name["e_server/usage-missing-domain"]
+        self.assertIsNone(e_server_case["stdin"])
         ekb_create_case = cases_by_name["ekb_create/empty-kb-files"]
         self.assertEqual(
             ekb_create_case["output_files"],
