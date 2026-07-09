@@ -113,6 +113,7 @@ class ComparisonTests(unittest.TestCase):
                 "direct_examples",
                 "e_axfilter",
                 "e_deduction_server",
+                "e_stratpar",
                 "eground",
                 "edpll",
                 "enormalizer",
@@ -149,6 +150,9 @@ class ComparisonTests(unittest.TestCase):
                 ("e_deduction_server/help", ["--help"]),
                 ("e_deduction_server/version", ["--version"]),
                 ("e_deduction_server/stdout-unimplemented", []),
+                ("e_stratpar/help", ["--help"]),
+                ("e_stratpar/version", ["--version"]),
+                ("e_stratpar/usage-missing-problem", []),
                 ("edpll/help", ["--help"]),
                 ("edpll/version", ["--version"]),
                 ("edpll/lop-basic", ["--dimacs"]),
@@ -209,6 +213,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(e_axfilter_case["stdin"])
         e_deduction_case = cases_by_name["e_deduction_server/stdout-unimplemented"]
         self.assertIsNone(e_deduction_case["stdin"])
+        e_stratpar_case = cases_by_name["e_stratpar/usage-missing-problem"]
+        self.assertIsNone(e_stratpar_case["stdin"])
         edpll_lop_case = cases_by_name["edpll/lop-basic"]
         self.assertEqual(edpll_lop_case["stdin"], "p <- q. r <- r.")
         edpll_tptp_case = cases_by_name["edpll/tptp-input-clause"]
@@ -272,6 +278,10 @@ class ComparisonTests(unittest.TestCase):
         )
         self.assertEqual(
             e_interop.tool_argument_cases("e_deduction_server"),
+            (("--help",), ("--version",)),
+        )
+        self.assertEqual(
+            e_interop.tool_argument_cases("e_stratpar"),
             (("--help",), ("--version",)),
         )
         self.assertEqual(
