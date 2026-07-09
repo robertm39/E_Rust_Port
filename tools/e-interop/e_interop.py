@@ -38,7 +38,13 @@ VOLATILE_LINE_RE = re.compile(
 )
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
 TOOL_CASE_METADATA_KEYS = frozenset(
-    {"fixture_files", "workdir_files", "output_files", "output_directories"}
+    {
+        "fixture_files",
+        "workdir_files",
+        "workdir_directories",
+        "output_files",
+        "output_directories",
+    }
 )
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
@@ -205,6 +211,26 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/clausepatterns",
                 ),
                 "output_directories": ("kb/FILES",),
+            },
+        ),
+    ),
+    "ekb_insert": (
+        (
+            "stdin-example",
+            ("--knowledge-base=kb",),
+            "a=b.\n.\n0:(0): a=b.\n",
+            {
+                "workdir_files": {
+                    "kb/signature": "",
+                    "kb/problems": "",
+                    "kb/clausepatterns": "",
+                },
+                "workdir_directories": ("kb/FILES",),
+                "output_files": (
+                    "kb/FILES/__problem__1",
+                    "kb/problems",
+                    "kb/clausepatterns",
+                ),
             },
         ),
     ),
@@ -1036,6 +1062,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         return {
             "fixture_files": {},
             "workdir_files": {},
+            "workdir_directories": [],
             "output_files": [],
             "output_directories": [],
         }
@@ -1054,17 +1081,20 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             )
         fixture_files = tail.get("fixture_files", {})
         workdir_files = tail.get("workdir_files", {})
+        workdir_directories = tail.get("workdir_directories", ())
         output_files = tail.get("output_files", ())
         output_directories = tail.get("output_directories", ())
     else:
         fixture_files = tail
         workdir_files = {}
+        workdir_directories = ()
         output_files = ()
         output_directories = ()
 
     return {
         "fixture_files": dict(fixture_files),
         "workdir_files": dict(workdir_files),
+        "workdir_directories": list(workdir_directories),
         "output_files": list(output_files),
         "output_directories": list(output_directories),
     }
@@ -1083,6 +1113,10 @@ def validate_tool_fixture_name(name: str) -> Path:
 
 def validate_tool_output_name(name: str) -> Path:
     return validate_tool_relative_name(name, "output file")
+
+
+def validate_tool_workdir_directory_name(name: str) -> Path:
+    return validate_tool_relative_name(name, "workdir directory")
 
 
 def validate_tool_output_directory_name(name: str) -> Path:
@@ -1110,6 +1144,16 @@ def materialize_tool_workdir_files(case: dict[str, Any], workdir: Path) -> dict[
     return materialize_tool_named_files(
         case.get("workdir_files", {}), workdir, "workdir file"
     )
+
+
+def materialize_tool_workdir_directories(case: dict[str, Any], workdir: Path) -> list[Path]:
+    paths: list[Path] = []
+    for name in case.get("workdir_directories", ()):
+        relative = validate_tool_workdir_directory_name(name)
+        path = workdir / relative
+        path.mkdir(parents=True, exist_ok=True)
+        paths.append(path)
+    return paths
 
 
 def substitute_tool_fixture_arguments(
@@ -1251,6 +1295,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         reference_binary = Path(reference_tools[tool])
         uses_case_workdir = bool(
             case.get("workdir_files")
+            or case.get("workdir_directories")
             or case.get("output_files")
             or case.get("output_directories")
         )
@@ -1260,11 +1305,19 @@ def compare_tools(args: argparse.Namespace) -> None:
             candidate_cwd = case_workdir_root / "candidate"
             reference_cwd.mkdir(parents=True, exist_ok=False)
             candidate_cwd.mkdir(parents=True, exist_ok=False)
+            reference_workdir_directories = materialize_tool_workdir_directories(
+                case, reference_cwd
+            )
+            candidate_workdir_directories = materialize_tool_workdir_directories(
+                case, candidate_cwd
+            )
             reference_workdir_paths = materialize_tool_workdir_files(case, reference_cwd)
             candidate_workdir_paths = materialize_tool_workdir_files(case, candidate_cwd)
         else:
             reference_cwd = repo_root
             candidate_cwd = repo_root
+            reference_workdir_directories = []
+            candidate_workdir_directories = []
             reference_workdir_paths = {}
             candidate_workdir_paths = {}
         fixture_paths = materialize_tool_fixture_files(
@@ -1312,6 +1365,8 @@ def compare_tools(args: argparse.Namespace) -> None:
             for workdir_path in (
                 *reference_workdir_paths.values(),
                 *candidate_workdir_paths.values(),
+                *reference_workdir_directories,
+                *candidate_workdir_directories,
             ):
                 fixture_replacements.append((str(workdir_path), "<WORKDIR_FILE>"))
                 fixture_replacements.append(
@@ -1405,6 +1460,7 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "stdin": case["stdin"] is not None,
                 "fixtures": bool(fixture_paths),
                 "workdir_files": bool(reference_workdir_paths),
+                "workdir_directories": bool(reference_workdir_directories),
                 "output_files": output_file_records,
                 "output_files_equal": output_files_equal,
                 "output_directories": output_directory_records,

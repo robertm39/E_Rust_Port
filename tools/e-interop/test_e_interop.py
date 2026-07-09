@@ -114,6 +114,7 @@ class ComparisonTests(unittest.TestCase):
                 "e_axfilter",
                 "e_deduction_server",
                 "ekb_create",
+                "ekb_insert",
                 "e_stratpar",
                 "eground",
                 "edpll",
@@ -175,6 +176,9 @@ class ComparisonTests(unittest.TestCase):
                         "kb",
                     ],
                 ),
+                ("ekb_insert/help", ["--help"]),
+                ("ekb_insert/version", ["--version"]),
+                ("ekb_insert/stdin-example", ["--knowledge-base=kb"]),
                 ("enormalizer/help", ["--help"]),
                 ("enormalizer/version", ["--version"]),
                 (
@@ -251,6 +255,17 @@ class ComparisonTests(unittest.TestCase):
             ],
         )
         self.assertEqual(ekb_create_case["output_directories"], ["kb/FILES"])
+        ekb_insert_case = cases_by_name["ekb_insert/stdin-example"]
+        self.assertEqual(ekb_insert_case["stdin"], "a=b.\n.\n0:(0): a=b.\n")
+        self.assertEqual(
+            ekb_insert_case["workdir_files"],
+            {"kb/signature": "", "kb/problems": "", "kb/clausepatterns": ""},
+        )
+        self.assertEqual(ekb_insert_case["workdir_directories"], ["kb/FILES"])
+        self.assertEqual(
+            ekb_insert_case["output_files"],
+            ["kb/FILES/__problem__1", "kb/problems", "kb/clausepatterns"],
+        )
         e_stratpar_case = cases_by_name["e_stratpar/usage-missing-problem"]
         self.assertIsNone(e_stratpar_case["stdin"])
         edpll_lop_case = cases_by_name["edpll/lop-basic"]
@@ -302,6 +317,7 @@ class ComparisonTests(unittest.TestCase):
     def test_tool_workdir_materialization_and_output_comparison(self):
         case = {
             "workdir_files": {"input.p": "fof(a, axiom, p(a)).\n"},
+            "workdir_directories": ["kb/FILES"],
             "output_files": ["global.out", "generated/result.p"],
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -311,12 +327,22 @@ class ComparisonTests(unittest.TestCase):
             reference_cwd.mkdir()
             candidate_cwd.mkdir()
 
+            reference_directories = e_interop.materialize_tool_workdir_directories(
+                case, reference_cwd
+            )
+            candidate_directories = e_interop.materialize_tool_workdir_directories(
+                case, candidate_cwd
+            )
             reference_paths = e_interop.materialize_tool_workdir_files(
                 case, reference_cwd
             )
             candidate_paths = e_interop.materialize_tool_workdir_files(
                 case, candidate_cwd
             )
+            self.assertEqual(reference_directories, [reference_cwd / "kb" / "FILES"])
+            self.assertEqual(candidate_directories, [candidate_cwd / "kb" / "FILES"])
+            self.assertTrue((reference_cwd / "kb" / "FILES").is_dir())
+            self.assertTrue((candidate_cwd / "kb" / "FILES").is_dir())
             self.assertEqual(
                 reference_paths["input.p"].read_text(encoding="utf-8"),
                 "fof(a, axiom, p(a)).\n",
