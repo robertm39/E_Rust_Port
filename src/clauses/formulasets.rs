@@ -5149,7 +5149,7 @@ mod tests {
         assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
         assert_eq!(
             rendered,
-            format!("fof(c_0_1, axiom, {body}, file('doc.p', doc_tstp)).\n")
+            format!("fof(doc_tstp, axiom, {body}, file('doc.p', doc_tstp)).\n")
         );
         assert_eq!(set.iter().next().unwrap().ident(), 1);
     }

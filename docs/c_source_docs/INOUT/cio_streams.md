@@ -110,6 +110,7 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 
 ### Change Later
 
+- C overloads both a null source pointer and the filename string `-` to mean stdin, then replaces either with the display label `<stdin>`. Rust preserves the accepted spellings and label at compatibility boundaries, but a cleaned stream API should use an explicit stdin/file source enum so path data and source kind cannot be confused.
 - Rust file and stdin streams still load the bytes eagerly during construction. Revisit lazy streaming if large-problem parsing, interactive stdin use, or include-stack behavior makes the C `FILE*` window observable.
 - C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust keeps the optional pop for reusable callers and now exposes an asserting compatibility wrapper for direct C-shaped paths.
 - C `DestroyStream` can report `fclose` failures for file streams. Rust owns file-backed stream bytes eagerly, so close-time diagnostics are not represented; revisit only if a lazy `FILE*`-style stream backend is introduced.

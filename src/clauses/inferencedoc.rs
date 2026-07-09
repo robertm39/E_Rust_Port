@@ -1717,6 +1717,9 @@ fn compute_rewrite_demodulator_ids(old_term: &Term, normal_form: &Term) -> Vec<i
 }
 
 fn formula_tstp_identifier(formula: &FormulaDocView<'_>) -> String {
+    if let Some(name) = formula.info().and_then(ClauseInfo::name) {
+        return name.to_owned();
+    }
     if formula.ident() >= 0 {
         format!("c_0_{}", formula.ident())
     } else {
@@ -2744,7 +2747,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "fof(c_0_1, axiom, p(a), file('problem.p', form1),['input']).\n"
+            "fof(form1, axiom, p(a), file('problem.p', form1),['input']).\n"
         );
 
         rendered.clear();
@@ -2828,6 +2831,32 @@ mod tests {
         assert_eq!(
             rendered,
             "fof(c_0_1, negated_conjecture, sk,inference(skolemize, [status(esa)], [c_0_8])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_formula_modification_preserves_tstp_input_name_after_clearing_input_prop() {
+        let info = ClauseInfo::new(Some("named_formula"), Some("problem.p"), 3, 4);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut formula =
+            FormulaDocView::new(8, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)").with_info(&info);
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::Simplification,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            rendered,
+            "fof(named_formula, plain, p(a),inference(fof_simplification, [status(thm)],[c_0_8])).\n"
         );
     }
 

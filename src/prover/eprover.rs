@@ -9448,18 +9448,7 @@ fn parse_formula_file(
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
-    let mut scanner = if file == "-" {
-        let mut input = Vec::new();
-        io::stdin().read_to_end(&mut input).map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot read standard input: {error}"),
-            )
-        })?;
-        Scanner::from_file_content("-", input, false)?
-    } else {
-        Scanner::from_file(Path::new(file), false)?
-    };
+    let mut scanner = problem_input_scanner(file, false)?;
     parse_clause_scanner_into_formula_print_set_with_options(
         &mut scanner,
         parse_format,
@@ -9471,6 +9460,30 @@ fn parse_formula_file(
     )
 }
 
+fn problem_input_scanner(file: &str, ignore_comments: bool) -> Result<Scanner, Diagnostic> {
+    let mut stdin = io::stdin().lock();
+    problem_input_scanner_with_stdin(file, ignore_comments, &mut stdin)
+}
+
+fn problem_input_scanner_with_stdin(
+    file: &str,
+    ignore_comments: bool,
+    stdin: &mut impl Read,
+) -> Result<Scanner, Diagnostic> {
+    if file == "-" {
+        let mut input = Vec::new();
+        stdin.read_to_end(&mut input).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read standard input: {error}"),
+            )
+        })?;
+        Scanner::from_file_content("<stdin>", input, ignore_comments)
+    } else {
+        Scanner::from_file(Path::new(file), ignore_comments)
+    }
+}
+
 fn parse_clause_formula_file(
     file: &str,
     parse_format: IoFormat,
@@ -9480,18 +9493,7 @@ fn parse_clause_formula_file(
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
-    let mut scanner = if file == "-" {
-        let mut input = Vec::new();
-        io::stdin().read_to_end(&mut input).map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot read standard input: {error}"),
-            )
-        })?;
-        Scanner::from_file_content("-", input, false)?
-    } else {
-        Scanner::from_file(Path::new(file), false)?
-    };
+    let mut scanner = problem_input_scanner(file, false)?;
     let mut destination = InputOwnerDestination::ClausesAndFormulas { clauses, formulas };
     parse_clause_scanner_into_destination_with_options(
         &mut scanner,
@@ -15278,22 +15280,23 @@ mod tests {
         order_parms_from_config, parse_app_encode_file,
         parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
         parse_schedule_worker_args, parse_simple_tstp_app_encode_formula,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, proof_object_list_display_items,
-        proof_search_global_indices, proof_success_object_roots, proof_success_status,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, ParsedAppEncodeFormula,
-        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
-        ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
-        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        preprocessing_config_debug_line, problem_input_scanner_with_stdin, process_options,
+        proof_control_from_config, proof_object_list_display_clauses,
+        proof_object_list_display_items, proof_search_global_indices, proof_success_object_roots,
+        proof_success_status, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
+        ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
+        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
         LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
         PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
@@ -22989,13 +22992,13 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains(&format!(
-            "fof(c_0_1, axiom, (p(a)=>q(a)), file('{path_arg}', rule)).\n"
+            "fof(rule, axiom, (p(a)=>q(a)), file('{path_arg}', rule)).\n"
         )));
         assert!(printed.contains(&format!(
-            "fof(c_0_2, axiom, p(a), file('{path_arg}', fact)).\n"
+            "fof(fact, axiom, p(a), file('{path_arg}', fact)).\n"
         )));
         assert!(printed.contains(&format!(
-            "fof(c_0_3, conjecture, q(a), file('{path_arg}', goal)).\n"
+            "fof(goal, conjecture, q(a), file('{path_arg}', goal)).\n"
         )));
         assert!(!printed.contains("inference(assume_negation"));
         assert!(!printed.contains("inference(fof_nnf"));
@@ -23004,6 +23007,15 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.ends_with("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn problem_input_scanner_labels_dash_as_stdin_like_c() {
+        let mut stdin = std::io::Cursor::new(b"fof(input, axiom, p(a)).\n".to_vec());
+
+        let scanner = problem_input_scanner_with_stdin("-", false, &mut stdin).unwrap();
+
+        assert_eq!(scanner.current_token().source_bytes(), b"<stdin>");
     }
 
     #[test]
@@ -23282,7 +23294,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains(&format!(
-            "fof(c_0_1, conjecture, f(a)=a, file('{path_arg}', goal)).\n"
+            "fof(goal, conjecture, f(a)=a, file('{path_arg}', goal)).\n"
         )));
         assert!(!printed.contains("inference(assume_negation"));
         assert!(!printed.contains("negated_conjecture"));
