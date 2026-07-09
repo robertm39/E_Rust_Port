@@ -130,6 +130,7 @@ class ComparisonTests(unittest.TestCase):
             [
                 ("CSSCPA_filter/help", ["--help"]),
                 ("CSSCPA_filter/version", ["--version"]),
+                ("CSSCPA_filter/silent-accept", ["--silent"]),
                 ("checkproof/help", ["--help"]),
                 ("checkproof/version", ["--version"]),
                 ("checkproof/assumption-only", []),
@@ -179,6 +180,10 @@ class ComparisonTests(unittest.TestCase):
             ],
         )
         cases_by_name = {case["name"]: case for case in cases}
+        csscpa_case = cases_by_name["CSSCPA_filter/silent-accept"]
+        self.assertEqual(
+            csscpa_case["stdin"], "accept: cnf(csscpa_unit,axiom,p(a)).\n"
+        )
         checkproof_case = cases_by_name["checkproof/assumption-only"]
         self.assertEqual(checkproof_case["stdin"], "1 : : [++p(a)] : initial\n")
         classify_case = cases_by_name["classify_problem/parse-features-standard"]

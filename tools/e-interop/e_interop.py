@@ -134,6 +134,13 @@ VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "termprops",
 }
 TOOL_FUNCTIONAL_CASES = {
+    "CSSCPA_filter": (
+        (
+            "silent-accept",
+            ("--silent",),
+            "accept: cnf(csscpa_unit,axiom,p(a)).\n",
+        ),
+    ),
     "checkproof": (
         (
             "assumption-only",
