@@ -68,6 +68,11 @@ VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "ex_commandline",
     "term2dag",
 }
+TOOL_STDIN_CASES = {
+    "term2dag": (
+        ("stdin-basic", (), "f(a,a) g(f(a,a))\n"),
+    ),
+}
 
 
 class InteropError(RuntimeError):
@@ -743,6 +748,17 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "name": f"{tool}/{label}",
                     "arguments": list(arguments),
                     "scenario": label,
+                    "stdin": None,
+                }
+            )
+        for label, arguments, stdin_text in TOOL_STDIN_CASES.get(tool, ()):
+            cases.append(
+                {
+                    "tool": tool,
+                    "name": f"{tool}/{label}",
+                    "arguments": list(arguments),
+                    "scenario": label,
+                    "stdin": stdin_text,
                 }
             )
     return cases
@@ -795,6 +811,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             case["arguments"],
             timeout=args.timeout,
             env=environment,
+            stdin_text=case["stdin"],
             cwd=repo_root,
         )
 
@@ -811,6 +828,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             case["arguments"],
             timeout=args.timeout,
             env=environment,
+            stdin_text=case["stdin"],
             cwd=repo_root,
         )
         mismatches = comparison_mismatches(reference, candidate)
@@ -851,6 +869,7 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "tool": tool,
                 "scenario": case["scenario"],
                 "arguments": case["arguments"],
+                "stdin": case["stdin"] is not None,
                 "reference_exit_code": reference["exit_code"],
                 "candidate_exit_code": candidate["exit_code"],
                 "reference_seconds": reference["wall_seconds"],

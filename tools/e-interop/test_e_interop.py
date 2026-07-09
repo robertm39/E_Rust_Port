@@ -111,8 +111,11 @@ class ComparisonTests(unittest.TestCase):
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("term2dag/help", ["--help"]),
+                ("term2dag/stdin-basic", []),
             ],
         )
+        term_case = cases[-1]
+        self.assertEqual(term_case["stdin"], "f(a,a) g(f(a,a))\n")
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))
