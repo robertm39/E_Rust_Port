@@ -63,6 +63,7 @@ REFERENCE_TOOL_BINARIES = {
     "ex_commandline": "SIMPLE_APPS/ex_commandline",
     "term2dag": "SIMPLE_APPS/term2dag",
     "termprops": "PROVER/termprops",
+    "tsm_classify": "PROVER/tsm_classify",
 }
 ARCHIVED_REFERENCE_TOOL_LINKS = {
     "termprops": (
@@ -73,6 +74,23 @@ ARCHIVED_REFERENCE_TOOL_LINKS = {
             "termprops",
             "termprops.o",
             "../lib/TERMS.a",
+            "../lib/CLAUSES.a",
+            "../lib/ORDERINGS.a",
+            "../lib/TERMS.a",
+            "../lib/INOUT.a",
+            "../lib/BASICS.a",
+            "../lib/CONTRIB.a",
+            "-lm",
+        ),
+    ),
+    "tsm_classify": (
+        ("make", "tsm_classify.o"),
+        (
+            "cc",
+            "-o",
+            "tsm_classify",
+            "tsm_classify.o",
+            "../lib/LEARN.a",
             "../lib/CLAUSES.a",
             "../lib/ORDERINGS.a",
             "../lib/TERMS.a",
@@ -98,6 +116,22 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "termprops": (
         ("stdin-basic", (), "a f(a,a) g(f(a),a)\n"),
+    ),
+    "tsm_classify": (
+        (
+            "stdin-basic",
+            ("--index-type=IndexIdentity", "--tsm-type=Flat"),
+            (
+                "Training:\n"
+                "a : 1:(1,-1).\n"
+                "f(a) : 2:(1,1).\n"
+                ".\n"
+                "Test:\n"
+                "a : 1:(1,-1).\n"
+                "f(a) : 2:(1,1).\n"
+                ".\n"
+            ),
+        ),
     ),
 }
 

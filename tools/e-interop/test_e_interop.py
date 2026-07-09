@@ -100,7 +100,14 @@ class ComparisonTests(unittest.TestCase):
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
-            ["eground", "CSSCPA_filter", "term2dag", "ex_commandline", "termprops"]
+            [
+                "eground",
+                "CSSCPA_filter",
+                "term2dag",
+                "ex_commandline",
+                "termprops",
+                "tsm_classify",
+            ]
         )
 
         self.assertEqual(
@@ -119,14 +126,23 @@ class ComparisonTests(unittest.TestCase):
                 ("term2dag/stdin-basic", []),
                 ("termprops/help", ["--help"]),
                 ("termprops/stdin-basic", []),
+                ("tsm_classify/help", ["--help"]),
+                ("tsm_classify/version", ["--version"]),
+                (
+                    "tsm_classify/stdin-basic",
+                    ["--index-type=IndexIdentity", "--tsm-type=Flat"],
+                ),
             ],
         )
         ex_case = cases[5]
         self.assertIsNone(ex_case["stdin"])
         term2dag_case = cases[7]
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
-        termprops_case = cases[-1]
+        termprops_case = cases[9]
         self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
+        tsm_case = cases[-1]
+        self.assertIn("Training:\n", tsm_case["stdin"])
+        self.assertIn("Test:\n", tsm_case["stdin"])
 
     def test_tool_argument_cases_skip_version_for_simple_apps(self):
         self.assertEqual(e_interop.tool_argument_cases("term2dag"), (("--help",),))
@@ -137,6 +153,10 @@ class ComparisonTests(unittest.TestCase):
         )
         self.assertEqual(
             e_interop.tool_argument_cases("classify_problem"),
+            (("--help",), ("--version",)),
+        )
+        self.assertEqual(
+            e_interop.tool_argument_cases("tsm_classify"),
             (("--help",), ("--version",)),
         )
 
@@ -158,6 +178,11 @@ class ComparisonTests(unittest.TestCase):
             "PROVER/termprops",
         )
         self.assertIn("termprops", e_interop.ARCHIVED_REFERENCE_TOOL_LINKS)
+        self.assertEqual(
+            e_interop.REFERENCE_TOOL_BINARIES["tsm_classify"],
+            "PROVER/tsm_classify",
+        )
+        self.assertIn("tsm_classify", e_interop.ARCHIVED_REFERENCE_TOOL_LINKS)
 
 
 if __name__ == "__main__":
