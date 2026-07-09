@@ -141,6 +141,13 @@ TOOL_FUNCTIONAL_CASES = {
             "1 : : [++p(a)] : initial\n",
         ),
     ),
+    "direct_examples": (
+        (
+            "stdin-basic",
+            (),
+            "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
+        ),
+    ),
     "edpll": (
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),

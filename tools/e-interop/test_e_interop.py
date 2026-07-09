@@ -109,6 +109,7 @@ class ComparisonTests(unittest.TestCase):
         cases = e_interop.tool_comparison_cases(
             [
                 "checkproof",
+                "direct_examples",
                 "eground",
                 "edpll",
                 "epclanalyse",
@@ -129,6 +130,9 @@ class ComparisonTests(unittest.TestCase):
                 ("checkproof/help", ["--help"]),
                 ("checkproof/version", ["--version"]),
                 ("checkproof/assumption-only", []),
+                ("direct_examples/help", ["--help"]),
+                ("direct_examples/version", ["--version"]),
+                ("direct_examples/stdin-basic", []),
                 ("edpll/help", ["--help"]),
                 ("edpll/version", ["--version"]),
                 ("edpll/lop-basic", ["--dimacs"]),
@@ -161,6 +165,8 @@ class ComparisonTests(unittest.TestCase):
         cases_by_name = {case["name"]: case for case in cases}
         checkproof_case = cases_by_name["checkproof/assumption-only"]
         self.assertEqual(checkproof_case["stdin"], "1 : : [++p(a)] : initial\n")
+        direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
+        self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
         edpll_lop_case = cases_by_name["edpll/lop-basic"]
         self.assertEqual(edpll_lop_case["stdin"], "p <- q. r <- r.")
         edpll_tptp_case = cases_by_name["edpll/tptp-input-clause"]
