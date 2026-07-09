@@ -195,6 +195,9 @@ TOOL_FUNCTIONAL_CASES = {
     "e_deduction_server": (
         ("stdout-unimplemented", (), None),
     ),
+    "e_ltb_runner": (
+        ("usage-missing-spec", (), None),
+    ),
     "ekb_delete": (
         (
             "drop-example",
