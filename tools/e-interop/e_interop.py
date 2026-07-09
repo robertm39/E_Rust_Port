@@ -138,6 +138,17 @@ TOOL_FUNCTIONAL_CASES = {
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
     ),
+    "epclanalyse": (
+        (
+            "stdin-basic",
+            (),
+            (
+                "1 : : [++p(a)] : initial\n"
+                "2 : : [++q(a),--r(X)] : 1 : 'derived'\n"
+                "3 : : [] : 2\n"
+            ),
+        ),
+    ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
     ),

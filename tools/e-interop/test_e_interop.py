@@ -110,6 +110,7 @@ class ComparisonTests(unittest.TestCase):
             [
                 "eground",
                 "edpll",
+                "epclanalyse",
                 "CSSCPA_filter",
                 "term2dag",
                 "ex_commandline",
@@ -129,6 +130,9 @@ class ComparisonTests(unittest.TestCase):
                 ("edpll/tptp-input-clause", ["--tptp-in"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
+                ("epclanalyse/help", ["--help"]),
+                ("epclanalyse/version", ["--version"]),
+                ("epclanalyse/stdin-basic", []),
                 ("ex_commandline/help", ["--help"]),
                 (
                     "ex_commandline/options-basic",
@@ -146,19 +150,22 @@ class ComparisonTests(unittest.TestCase):
                 ),
             ],
         )
-        edpll_lop_case = cases[4]
+        cases_by_name = {case["name"]: case for case in cases}
+        edpll_lop_case = cases_by_name["edpll/lop-basic"]
         self.assertEqual(edpll_lop_case["stdin"], "p <- q. r <- r.")
-        edpll_tptp_case = cases[5]
+        edpll_tptp_case = cases_by_name["edpll/tptp-input-clause"]
         self.assertEqual(
             edpll_tptp_case["stdin"], "input_clause(c_0_1,axiom,[++p,--q])."
         )
-        ex_case = cases[9]
+        epclanalyse_case = cases_by_name["epclanalyse/stdin-basic"]
+        self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
+        ex_case = cases_by_name["ex_commandline/options-basic"]
         self.assertIsNone(ex_case["stdin"])
-        term2dag_case = cases[11]
+        term2dag_case = cases_by_name["term2dag/stdin-basic"]
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
-        termprops_case = cases[13]
+        termprops_case = cases_by_name["termprops/stdin-basic"]
         self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
-        tsm_case = cases[-1]
+        tsm_case = cases_by_name["tsm_classify/stdin-basic"]
         self.assertIn("Training:\n", tsm_case["stdin"])
         self.assertIn("Test:\n", tsm_case["stdin"])
 
@@ -175,6 +182,10 @@ class ComparisonTests(unittest.TestCase):
         )
         self.assertEqual(
             e_interop.tool_argument_cases("edpll"),
+            (("--help",), ("--version",)),
+        )
+        self.assertEqual(
+            e_interop.tool_argument_cases("epclanalyse"),
             (("--help",), ("--version",)),
         )
         self.assertEqual(
