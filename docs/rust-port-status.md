@@ -841,11 +841,11 @@ C source references:
 
 Implemented:
 
-- Standalone `edpll` binary integration over the ported DPLL formula/state shell, including C-shaped help, long-only `--version` with the historical `classify_problem` label typo, verbosity, output-file routing including `-o -`, silent/output-level, old-TPTP input mode, DIMACS flag parsing, memory/CPU option parsing, default stdin input through `-`, LOP/TPTP scanner format selection, clause parsing into a single accumulated DPLL formula, C progress trace output for accepted and tautological clauses, DPLL state allocation, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, C-compatible ignoring of non-clause trailing input, and unit coverage for stdin, file output, stdout `-o -`, early output-file creation before later input-open failure, option compatibility, TPTP input clauses, output-level side effects, resource option validation, and the intentionally unused DIMACS flag.
+- Standalone `edpll` binary integration over the ported DPLL formula/state shell, including C-shaped help, long-only `--version` with the historical `classify_problem` label typo, verbosity, output-file routing including `-o -`, silent/output-level, old-TPTP input mode, DIMACS flag parsing, memory/CPU option parsing, default stdin input through `-`, LOP/TPTP scanner format selection, clause parsing into a single accumulated DPLL formula, C progress trace output for accepted and tautological clauses, DPLL state allocation, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, C-compatible ignoring of non-clause trailing input, and unit coverage for stdin, file output, stdout `-o -`, early output-file creation before later input-open failure, option compatibility, TPTP input clauses, output-level side effects, resource option validation, the C empty procedural-tail diagnostic, and the intentionally unused DIMACS flag.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `edpll` executable remains pending for exact resource-limit warnings/failures, platform-specific system-error suffixes, platform-specific broken-pipe behavior, and malformed clause-start diagnostics.
+- Byte-for-byte comparison against a built C `edpll` executable remains pending for exact resource-limit warnings/failures, platform-specific system-error suffixes, platform-specific broken-pipe behavior, and remaining malformed term/equation diagnostics.
 - A real standalone DPLL solving mode remains unimplemented because the referenced C executable and low-level `cpr_dpll` body are incomplete.
 
 Change-later notes:

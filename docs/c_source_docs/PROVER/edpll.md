@@ -97,7 +97,7 @@ Source files reviewed: `PROVER/edpll.c`.
 - The C executable parses input clauses, prints the `DPLLFormulaParseLOP` `New clause: ...accepted` / `...discarded (tautology)` trace, allocates a `DPLLState`, and exits without calling a solver. The Rust executable intentionally preserves that incomplete behavior.
 - `--dimacs` sets C's `dimacs_format` global but no later code reads it; Rust accepts the flag as a parsed no-op and keeps output identical to the default trace.
 - `--version` prints `classify_problem VERSION` in C even though the executable name is `edpll`; Rust keeps that visible typo for drop-in CLI compatibility.
-- The Rust wrapper preserves default stdin through `-`, output-file routing including `-o -` as stdout, two-line `SysError`-style scanner/output open diagnostics, early output-file creation before later input-open failures, C `OutClose` wording on final flush failure, and the C loop's loose treatment of non-clause trailing input.
+- The Rust wrapper preserves default stdin through `-`, output-file routing including `-o -` as stdout, two-line `SysError`-style scanner/output open diagnostics, early output-file creation before later input-open failures, C `OutClose` wording on final flush failure, the C loop's loose treatment of non-clause trailing input, and the historical empty procedural-tail diagnostic text from `ClauseParse`.
 
 ### Change Later
 

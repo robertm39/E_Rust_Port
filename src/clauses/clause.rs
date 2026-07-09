@@ -1502,7 +1502,7 @@ fn clause_parse_lop(
     let mut preconditions = EqnList::parse(scanner, bank, TokenType::COMMA, problem_type)?;
     if procedural && preconditions.is_empty() {
         return Err(syntax_error(
-            "Procedural rule or query needs at least one tail literal",
+            "Procedural rule or query needs at least one tail literal (Hey! I did not make this  syntax! -StS)",
         ));
     }
     preconditions.negate_eqns();

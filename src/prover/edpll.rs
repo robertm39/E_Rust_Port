@@ -625,6 +625,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_procedural_tail_reports_c_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"p :- .\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error =
+            run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr).expect_err("tail is empty");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(
+            error.message(),
+            "Procedural rule or query needs at least one tail literal (Hey! I did not make this  syntax! -StS)"
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn output_file_receives_trace() {
         let _guard = global_state_lock();
         let input_path = temp_path("input");

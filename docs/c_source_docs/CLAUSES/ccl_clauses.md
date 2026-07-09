@@ -320,5 +320,6 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 - Keep the compatibility distinction visible, but prefer separate explicit APIs over C's nullable map argument.
 - `ClauseExtractHODefinition` has no validity result and relies on assertions after callers have already selected a definition side with `ClauseIsEqDefinition`; a later cleaned API could return a typed extraction failure for non-definition clauses while keeping the assert-backed compatibility path.
 - `ClausePrint` writes the marker `ClausePrint(stderr,...)` to `stderr` before rendering when the output stream pointer is exactly `stderr`. Rust's current dispatcher returns strings and therefore has no stream identity; if a future stream-owning wrapper is added, decide explicitly whether to keep that diagnostic side effect for compatibility.
+- `ClauseParse` reports an empty procedural rule/query tail with the historical "Hey! I did not make this  syntax! -StS" text, including the doubled space from the adjacent C string literals. A cleaned parser should replace that message only outside drop-in compatibility mode.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
