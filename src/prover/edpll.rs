@@ -544,6 +544,118 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "edpll {version}\n",
+                "\n",
+                "Usage: edpll [options] [files]\n",
+                "\n",
+                "Read a set of ground clauses and try to refute (or satisfy) it.\n",
+                "Not completed yet!\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program by printing technical\n",
+                "    information to stderr. The short form or the long form without the\n",
+                "    optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output. Level 0\n",
+                "    produces nearly no output, level 1 produces minimal additional\n",
+                "    output.Higher levels are without meaning in edpll (I think).\n",
+                "\n",
+                "  --tptp-in\n",
+                "    Parse TPTP format instead of lop (does not understand includes, as TPTP\n",
+                "    include syntax is considered harmful).\n",
+                "\n",
+                "   -d\n",
+                "  --dimacs\n",
+                "    Print output in the DIMACS format suitable for many propositional\n",
+                "    provers.\n",
+                "\n",
+                "   -m <arg>\n",
+                "  --memory-limit=<arg>\n",
+                "    Limit the memory the system may use. The argument is the allowed amount\n",
+                "    of memory in MB. This option may not work everywhere, due to broken\n",
+                "    and/or strange behaviour of setrlimit() in some UNIX implementations. It\n",
+                "    does work under all tested versions of Solaris and GNU/Linux.\n",
+                "\n",
+                "  --cpu-limit[=<arg>]\n",
+                "    Limit the cpu time the program should run. The optional argument is the\n",
+                "    CPU time in seconds. The program will terminate immediately after\n",
+                "    reaching the time limit, regardless of internal state. This option may\n",
+                "    not work everywhere, due to broken and/or strange behaviour of\n",
+                "    setrlimit() in some UNIX implementations. It does work under all tested\n",
+                "    versions of Solaris, HP-UX and GNU/Linux. As a side effect, this option\n",
+                "    will inhibit core file writing. The option without the optional argument\n",
+                "    is equivalent to --cpu-limit=300.\n",
+                "\n",
+                "  --soft-cpu-limit[=<arg>]\n",
+                "    Limit the cpu time spend in grounding. After the time expires, the prover\n",
+                "    will print an partial system. The option without the optional argument is\n",
+                "    equivalent to --soft-cpu-limit=310.\n",
+                "\n",
+                "\n",
+                "Copyright (C) 2003 by Stephan Schulz, schulz@eprover.org \n",
+                "\n",
+                "This program is a part of the support structure for the E equational\n",
+                "theorem prover. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "This program is distributed in the hope that it will be useful,\n",
+                "but WITHOUT ANY WARRANTY; without even the implied warranty of\n",
+                "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n",
+                "GNU General Public License for more details.\n",
+                "\n",
+                "You should have received a copy of the GNU General Public License\n",
+                "along with this program (it should be contained in the top level\n",
+                "directory of the distribution in the file COPYING); if not, write to\n",
+                "the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n",
+                "Boston, MA  02111-1307 USA\n",
+                "\n",
+                "The original copyright holder can be contacted as\n",
+                "\n",
+                "Stephan Schulz\n",
+                "DHBW Stuttgart\n",
+                "Fakultaet Technik\n",
+                "Informatik\n",
+                "Lerchenstrasse 1\n",
+                "70174 Stuttgart\n",
+                "Germany\n",
+                "\n",
+            ),
+            version = VERSION,
+        )
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
@@ -563,11 +675,7 @@ mod tests {
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not lop");
 
         assert_eq!(status, 0);
-        assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: edpll [options] [files]"));
-        assert!(help.contains("Not completed yet!"));
-        assert!(help.contains("--dimacs"));
-        assert!(help.contains("Copyright (C) 2003 by Stephan Schulz"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not lop");
@@ -910,6 +1018,6 @@ mod tests {
 
     #[test]
     fn print_help_mentions_incomplete_c_tool_status() {
-        assert!(print_help().contains("Not completed yet!"));
+        assert_eq!(print_help(), expected_help());
     }
 }

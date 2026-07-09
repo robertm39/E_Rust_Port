@@ -93,7 +93,7 @@ Source files reviewed: `PROVER/edpll.c`.
 
 ### Rust Port Notes
 
-- `src/prover/edpll.rs` and `src/bin/edpll.rs` port the standalone executable wrapper over the existing Rust `propositional::{dpllformula,dpll}` state-shell modules.
+- `src/prover/edpll.rs` and `src/bin/edpll.rs` port the standalone executable wrapper over the existing Rust `propositional::{dpllformula,dpll}` state-shell modules, including exact C-shaped full help text with the legacy support-tool footer.
 - The C executable parses input clauses, prints the `DPLLFormulaParseLOP` `New clause: ...accepted` / `...discarded (tautology)` trace, allocates a `DPLLState`, and exits without calling a solver. The Rust executable intentionally preserves that incomplete behavior.
 - `--dimacs` sets C's `dimacs_format` global but no later code reads it; Rust accepts the flag as a parsed no-op and keeps output identical to the default trace.
 - `--version` prints `classify_problem VERSION` in C even though the executable name is `edpll`; Rust keeps that visible typo for drop-in CLI compatibility.
