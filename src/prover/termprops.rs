@@ -373,6 +373,34 @@ mod tests {
         _ = std::fs::remove_file(path);
     }
 
+    fn expected_help() -> &'static str {
+        concat!(
+            "\n",
+            "\n",
+            "cl_test\n",
+            "\n",
+            "Usage: termprops [options] [files]\n",
+            "\n",
+            "Read a set of terms and print it with size and depth information.\n",
+            "\n",
+            "Options\n",
+            "\n",
+            "   -h\n",
+            "  --help\n",
+            "    Print a short description of program usage and options.\n",
+            "\n",
+            "   -v\n",
+            "  --verbose[=<arg>]\n",
+            "    Verbose comments on the progress of the program. The short form or the\n",
+            "    long form without the optional argument is equivalent to --verbose=1.\n",
+            "\n",
+            "   -o <arg>\n",
+            "  --output-file=<arg>\n",
+            "    Redirect output into the named file.\n",
+            "\n",
+        )
+    }
+
     #[test]
     fn help_exits_before_term_processing() {
         let _guard = global_state_lock();
@@ -390,9 +418,7 @@ mod tests {
 
         assert_eq!(status, 0);
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert!(help.contains("cl_test"));
-        assert!(help.contains("Usage: termprops [options] [files]"));
-        assert!(help.contains("Options\n\n"));
+        assert_eq!(help, expected_help());
         assert!(stderr.is_empty());
     }
 
@@ -646,9 +672,6 @@ mod tests {
     fn help_text_preserves_c_banner() {
         let rendered = print_help();
 
-        assert!(rendered.starts_with("\n\ncl_test\n\n"));
-        assert!(
-            rendered.contains("Read a set of terms and print it with size and depth information.")
-        );
+        assert_eq!(rendered, expected_help());
     }
 }
