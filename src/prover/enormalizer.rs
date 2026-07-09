@@ -112,7 +112,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("terms"),
         OptArgType::ReqArg,
         None,
-        "Read terms from the named file and normalize them.",
+        "Name of the files containing terms to be normalized. If '-' is used as the argument, terms are read from standard input.",
     ),
     OptCell::new(
         OptionCode::Clauses,
@@ -120,7 +120,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("clauses"),
         OptArgType::ReqArg,
         None,
-        "Read clauses from the named file and normalize them.",
+        "Name of the files containing clauses to be normalized. If '-' is used as the argument, clauses are read from standard input.",
     ),
     OptCell::new(
         OptionCode::Formulas,
@@ -128,7 +128,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("formulas"),
         OptArgType::ReqArg,
         None,
-        "Read formulas from the named file and normalize them.",
+        "Name of the files containing fomulas to be normalized. If '-' is used as the argument, formulas are read from standard input. Note that formula-syntax is not supported in LOP syntax, but requires --tptp2-format or --tptp3-format",
     ),
     OptCell::new(
         OptionCode::Output,
@@ -152,7 +152,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Select an output level, greater values imply more verbose output.",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in enormalizer (I think).",
     ),
     OptCell::new(
         OptionCode::PrintStatistics,
@@ -160,7 +160,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("print-statistics"),
         OptArgType::NoArg,
         None,
-        "Print additional statistics.",
+        "Print a short statistical summary of clauses read and generated.",
     ),
     OptCell::new(
         OptionCode::ResourcesInfo,
@@ -168,7 +168,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("resources-info"),
         OptArgType::NoArg,
         None,
-        "Print resource usage information.",
+        "Give some information about the resources used by the system. You will usually get CPU time information. On systems returning more information with the rusage() system call, you will also get information about memory consumption.",
     ),
     OptCell::new(
         OptionCode::LopIn,
@@ -176,7 +176,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Parse LOP input.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpIn,
@@ -184,7 +184,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp-in"),
         OptArgType::NoArg,
         None,
-        "Parse old TPTP input.",
+        "Parse TPTP-2 format instead of E-LOP (except includes, which are handles as in TPTP-3, as TPTP-2 include syntax is considered harmful).",
     ),
     OptCell::new(
         OptionCode::TptpOut,
@@ -192,7 +192,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp-out"),
         OptArgType::NoArg,
         None,
-        "Print old TPTP output.",
+        "Print TPTP-2 format instead of E-LOP.",
     ),
     OptCell::new(
         OptionCode::TptpFormat,
@@ -208,7 +208,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp2-in"),
         OptArgType::NoArg,
         None,
-        "Alias for --tptp-in.",
+        "Synonymous with --tptp-in.",
     ),
     OptCell::new(
         OptionCode::TptpOut,
@@ -216,7 +216,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp2-out"),
         OptArgType::NoArg,
         None,
-        "Alias for --tptp-out.",
+        "Synonymous with --tptp-out.",
     ),
     OptCell::new(
         OptionCode::TptpFormat,
@@ -224,7 +224,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp2-format"),
         OptArgType::NoArg,
         None,
-        "Alias for --tptp-format.",
+        "Synonymous with --tptp-format.",
     ),
     OptCell::new(
         OptionCode::TstpIn,
@@ -232,7 +232,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-in"),
         OptArgType::NoArg,
         None,
-        "Parse TSTP input.",
+        "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still under development, and the version implemented may not be fully conformant at all times. It works on all TPTP 3.0.1 input files (including includes).",
     ),
     OptCell::new(
         OptionCode::TstpOut,
@@ -240,7 +240,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-out"),
         OptArgType::NoArg,
         None,
-        "Print TSTP output.",
+        "Print output clauses in TPTP-3 syntax.",
     ),
     OptCell::new(
         OptionCode::TstpFormat,
@@ -256,7 +256,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp3-in"),
         OptArgType::NoArg,
         None,
-        "Alias for --tstp-in.",
+        "Synonymous with --tstp-in.",
     ),
     OptCell::new(
         OptionCode::TstpOut,
@@ -264,7 +264,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp3-out"),
         OptArgType::NoArg,
         None,
-        "Alias for --tstp-out.",
+        "Synonymous with --tstp-out.",
     ),
     OptCell::new(
         OptionCode::TstpFormat,
@@ -272,7 +272,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp3-format"),
         OptArgType::NoArg,
         None,
-        "Alias for --tstp-format.",
+        "Synonymous with --tstp-format.",
     ),
     OptCell::new(
         OptionCode::MemoryLimit,
@@ -280,7 +280,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("memory-limit"),
         OptArgType::ReqArg,
         None,
-        "Limit the memory the system may use. The argument is the allowed amount of memory in MB.",
+        "Limit the memory the system may use. The argument is the allowed amount of memory in MB. This option may not work everywhere, due to broken and/or strange behaviour of setrlimit() in some UNIX implementations. It does work under all tested versions of Solaris and GNU/Linux.",
     ),
     OptCell::new(
         OptionCode::CpuLimit,
@@ -288,7 +288,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("cpu-limit"),
         OptArgType::OptArg,
         Some("300"),
-        "Limit the cpu time the program should run.",
+        "Limit the cpu time the program should run. The optional argument is the CPU time in seconds. The program will terminate immediately after reaching the time limit, regardless of internal state. This option may not work everywhere, due to broken and/or strange behaviour of setrlimit() in some UNIX implementations. It does work under all tested versions of Solaris, HP-UX and GNU/Linux. As a side effect, this option will inhibit core file writing.",
     ),
     OptCell::new(
         OptionCode::SoftCpuLimit,
@@ -296,7 +296,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("soft-cpu-limit"),
         OptArgType::OptArg,
         Some("310"),
-        "Set the soft cpu time limit.",
+        "Limit the cpu time spend in grounding. After the time expires, the prover will print an partial system.",
     ),
 ];
 
@@ -1052,10 +1052,28 @@ pub fn print_help() -> String {
 \n\
 Usage: {PROGRAM_NAME} [options] [rulefiles]\n\
 \n\
-Read a set of rewrite rules and use them to normalize terms, clauses, or formulas.\n\
+Read a set of rewrite rules (in the form of unit clauses and/or\n\
+formulas) with a single positive literal) and sets of terms, clauses,\n\
+and/or formulas (the \"normalization targets\", from files specified\n\
+with the proper options - see below) to rewrite. Rewrite rules are read\n\
+from the left to right as specified in the input, without regard to any\n\
+term ordering.\n\
+\n\
+The normalization targets are rewritten using these rewrite rules until\n\
+a normal form is reached. If the rule system is not confluent, the\n\
+results are deterministic but unspecified. If the rule system is not\n\
+terminating, rewriting might get stuck into an infinite loop. \n\
+\n\
+The rewrite strategy is leftmost-innermost. The order of rewrite rules\n\
+tried at each subterm is deterministic, but unspecified and\n\
+independent of input order (it depends on the order in which rules are\n\
+returned from the perfect discrimination tree index).\n\
+\n\
+The normalized terms/clauses/formulas are printed.\n\
 \n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
+    result.push_str("\n\n");
     result.push_str(&footer());
     result
 }
@@ -1226,7 +1244,7 @@ mod tests {
     use super::{
         clausify_rule_formulas, memory_limit_bytes_from_mb, new_term_bank, parse_rule_file,
         parse_wrapped_formula, print_help, process_options, run, EnormalizerConfig, RunCommand,
-        OUTPUT_CLOSE_ERROR, PROGRAM_NAME, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME, TSTP_FORMULA_FREE_VARIABLES_MESSAGE, VERSION,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -1261,6 +1279,184 @@ mod tests {
 
     fn empty_stdin() -> Vec<u8> {
         Vec::new()
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn expected_help() -> String {
+        format!(
+            concat!(
+                "\n",
+                "\n",
+                "enormalizer {version}\n",
+                "\n",
+                "Usage: enormalizer [options] [rulefiles]\n",
+                "\n",
+                "Read a set of rewrite rules (in the form of unit clauses and/or\n",
+                "formulas) with a single positive literal) and sets of terms, clauses,\n",
+                "and/or formulas (the \"normalization targets\", from files specified\n",
+                "with the proper options - see below) to rewrite. Rewrite rules are read\n",
+                "from the left to right as specified in the input, without regard to any\n",
+                "term ordering.\n",
+                "\n",
+                "The normalization targets are rewritten using these rewrite rules until\n",
+                "a normal form is reached. If the rule system is not confluent, the\n",
+                "results are deterministic but unspecified. If the rule system is not\n",
+                "terminating, rewriting might get stuck into an infinite loop. \n",
+                "\n",
+                "The rewrite strategy is leftmost-innermost. The order of rewrite rules\n",
+                "tried at each subterm is deterministic, but unspecified and\n",
+                "independent of input order (it depends on the order in which rules are\n",
+                "returned from the perfect discrimination tree index).\n",
+                "\n",
+                "The normalized terms/clauses/formulas are printed.\n",
+                "\n",
+                "Options\n",
+                "\n",
+                "   -h\n",
+                "  --help\n",
+                "    Print a short description of program usage and options.\n",
+                "\n",
+                "  --version\n",
+                "    Print the version number of the program.\n",
+                "\n",
+                "   -v\n",
+                "  --verbose[=<arg>]\n",
+                "    Verbose comments on the progress of the program by printing technical\n",
+                "    information to stderr. The short form or the long form without the\n",
+                "    optional argument is equivalent to --verbose=1.\n",
+                "\n",
+                "   -t <arg>\n",
+                "  --terms=<arg>\n",
+                "    Name of the files containing terms to be normalized. If '-' is used as\n",
+                "    the argument, terms are read from standard input.\n",
+                "\n",
+                "   -c <arg>\n",
+                "  --clauses=<arg>\n",
+                "    Name of the files containing clauses to be normalized. If '-' is used as\n",
+                "    the argument, clauses are read from standard input.\n",
+                "\n",
+                "   -f <arg>\n",
+                "  --formulas=<arg>\n",
+                "    Name of the files containing fomulas to be normalized. If '-' is used as\n",
+                "    the argument, formulas are read from standard input. Note that\n",
+                "    formula-syntax is not supported in LOP syntax, but requires\n",
+                "    --tptp2-format or --tptp3-format\n",
+                "\n",
+                "   -o <arg>\n",
+                "  --output-file=<arg>\n",
+                "    Redirect output into the named file.\n",
+                "\n",
+                "   -s\n",
+                "  --silent\n",
+                "    Equivalent to --output-level=0.\n",
+                "\n",
+                "   -l <arg>\n",
+                "  --output-level=<arg>\n",
+                "    Select an output level, greater values imply more verbose output. Level 0\n",
+                "    produces nearly no output except for the final clauses, level 1 produces\n",
+                "    minimal additional output. Higher levels are without meaning in\n",
+                "    enormalizer (I think).\n",
+                "\n",
+                "  --print-statistics\n",
+                "    Print a short statistical summary of clauses read and generated.\n",
+                "\n",
+                "   -R\n",
+                "  --resources-info\n",
+                "    Give some information about the resources used by the system. You will\n",
+                "    usually get CPU time information. On systems returning more information\n",
+                "    with the rusage() system call, you will also get information about memory\n",
+                "    consumption.\n",
+                "\n",
+                "  --lop-in\n",
+                "    Set E-LOP as the input format. If no input format is selected by this or\n",
+                "    one of the following options, E will guess the input format based on the\n",
+                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
+                "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
+                "    symbols.\n",
+                "\n",
+                "  --tptp-in\n",
+                "    Parse TPTP-2 format instead of E-LOP (except includes, which are handles\n",
+                "    as in TPTP-3, as TPTP-2 include syntax is considered harmful).\n",
+                "\n",
+                "  --tptp-out\n",
+                "    Print TPTP-2 format instead of E-LOP.\n",
+                "\n",
+                "  --tptp-format\n",
+                "    Parse and print old TPTP format.\n",
+                "\n",
+                "  --tptp2-in\n",
+                "    Synonymous with --tptp-in.\n",
+                "\n",
+                "  --tptp2-out\n",
+                "    Synonymous with --tptp-out.\n",
+                "\n",
+                "  --tptp2-format\n",
+                "    Synonymous with --tptp-format.\n",
+                "\n",
+                "  --tstp-in\n",
+                "    Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still\n",
+                "    under development, and the version implemented may not be fully\n",
+                "    conformant at all times. It works on all TPTP 3.0.1 input files\n",
+                "    (including includes).\n",
+                "\n",
+                "  --tstp-out\n",
+                "    Print output clauses in TPTP-3 syntax.\n",
+                "\n",
+                "  --tstp-format\n",
+                "    Parse and print TSTP format.\n",
+                "\n",
+                "  --tptp3-in\n",
+                "    Synonymous with --tstp-in.\n",
+                "\n",
+                "  --tptp3-out\n",
+                "    Synonymous with --tstp-out.\n",
+                "\n",
+                "  --tptp3-format\n",
+                "    Synonymous with --tstp-format.\n",
+                "\n",
+                "   -m <arg>\n",
+                "  --memory-limit=<arg>\n",
+                "    Limit the memory the system may use. The argument is the allowed amount\n",
+                "    of memory in MB. This option may not work everywhere, due to broken\n",
+                "    and/or strange behaviour of setrlimit() in some UNIX implementations. It\n",
+                "    does work under all tested versions of Solaris and GNU/Linux.\n",
+                "\n",
+                "  --cpu-limit[=<arg>]\n",
+                "    Limit the cpu time the program should run. The optional argument is the\n",
+                "    CPU time in seconds. The program will terminate immediately after\n",
+                "    reaching the time limit, regardless of internal state. This option may\n",
+                "    not work everywhere, due to broken and/or strange behaviour of\n",
+                "    setrlimit() in some UNIX implementations. It does work under all tested\n",
+                "    versions of Solaris, HP-UX and GNU/Linux. As a side effect, this option\n",
+                "    will inhibit core file writing. The option without the optional argument\n",
+                "    is equivalent to --cpu-limit=300.\n",
+                "\n",
+                "  --soft-cpu-limit[=<arg>]\n",
+                "    Limit the cpu time spend in grounding. After the time expires, the prover\n",
+                "    will print an partial system. The option without the optional argument is\n",
+                "    equivalent to --soft-cpu-limit=310.\n",
+                "\n",
+                "\n",
+                "\n",
+                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
+                "and the E contributors (see DOC/CONTRIBUTORS).\n",
+                "\n",
+                "This program is a part of the distribution of the equational theorem\n",
+                "prover E. You can find the latest version of the E distribution\n",
+                "as well as additional information at\n",
+                "http://www.eprover.org\n",
+                "\n",
+                "This program is free software; you can redistribute it and/or modify\n",
+                "it under the terms of the GNU General Public License as published by\n",
+                "the Free Software Foundation; either version 2 of the License, or\n",
+                "(at your option) any later version.\n",
+                "\n",
+                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
+                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
+                "<jasmin.blanchette@gmail.com>.\n",
+            ),
+            version = VERSION,
+        )
     }
 
     #[test]
@@ -1438,16 +1634,25 @@ mod tests {
     }
 
     #[test]
-    fn version_is_long_only_like_c_tool() {
+    fn help_and_version_preserve_c_text() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
         assert!(process_options([PROGRAM_NAME, "-V"], &mut stdout).is_err());
+
+        let command = process_options([PROGRAM_NAME, "--help"], &mut stdout).expect("help option");
+        assert!(matches!(command, RunCommand::Exit(0)));
+        assert_eq!(
+            String::from_utf8(std::mem::take(&mut stdout)).expect("utf8"),
+            expected_help()
+        );
+
         let command =
             process_options([PROGRAM_NAME, "--version"], &mut stdout).expect("version option");
         assert!(matches!(command, RunCommand::Exit(0)));
-        assert!(String::from_utf8(stdout)
-            .expect("utf8")
-            .contains("enormalizer "));
+        assert_eq!(
+            String::from_utf8(stdout).expect("utf8"),
+            format!("{PROGRAM_NAME} {VERSION}\n")
+        );
     }
 
     #[test]
@@ -2407,11 +2612,8 @@ mod tests {
     }
 
     #[test]
-    fn print_help_mentions_rulefiles() {
+    fn print_help_preserves_full_c_text() {
         let rendered = print_help();
-        assert!(rendered.contains("Usage: enormalizer [options] [rulefiles]"));
-        assert!(rendered.contains("--terms"));
-        assert!(rendered.contains("--clauses"));
-        assert!(rendered.contains("--formulas"));
+        assert_eq!(rendered, expected_help());
     }
 }
