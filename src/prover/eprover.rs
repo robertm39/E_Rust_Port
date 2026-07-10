@@ -51,8 +51,9 @@ use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
-    deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE,
+    deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids, op_has_arg1,
+    op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
+    FormulaDerivationRef, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::{eqn_fof_parse, prepare_predicate_literal, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::PatEqnDirection;
@@ -7902,28 +7903,40 @@ fn write_proof_object_list_graph(
 ) -> Result<(), EProverError> {
     let mut formula_bank = bank.clone();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
-    for item in proof_object_list_display_items(graph) {
+    let items = proof_object_list_display_items(graph);
+    let formula_ids = items
+        .iter()
+        .filter_map(|item| match item {
+            ProofObjectListDisplayItem::Formula(formula) => {
+                Some((formula.ident(), formula.get_id(true)))
+            }
+            ProofObjectListDisplayItem::Clause { .. } => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    for item in items {
         match item {
             ProofObjectListDisplayItem::Clause {
                 clause: proof_clause,
                 is_root,
             } => {
-                write_saturation_proof_object_clause(
+                write_saturation_proof_object_clause_with_formula_ids(
                     output,
                     config,
                     bank,
                     &proof_clause,
                     is_root,
                     proof_problem_type,
+                    &formula_ids,
                 )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
-                write_saturation_proof_object_formula(
+                write_saturation_proof_object_formula_with_formula_ids(
                     output,
                     config,
                     &mut formula_bank,
                     &formula,
                     proof_problem_type,
+                    &formula_ids,
                 )?;
             }
         }
@@ -7954,10 +7967,11 @@ fn proof_object_list_display_items(
     let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
     let display_order = proof_object_list_display_order(graph);
     let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
+    let first_display_id = proof_object_first_display_id(graph);
     let mut fallback_clause_display_ids = BTreeMap::new();
     let mut fallback_formula_display_ids = BTreeMap::new();
     for (print_index, node) in display_order.iter().copied().enumerate() {
-        let display_id = usize_to_i64(print_index.saturating_add(1));
+        let display_id = first_display_id.saturating_add(usize_to_i64(print_index));
         match node {
             ProofObjectGraphNode::Clause(index) => {
                 fallback_clause_display_ids
@@ -7965,8 +7979,12 @@ fn proof_object_list_display_items(
                     .or_insert(display_id);
             }
             ProofObjectGraphNode::Formula(index) => {
+                let formula = graph.formulas[index];
                 fallback_formula_display_ids
-                    .entry(FormulaDerivationRef::new(graph.formulas[index].ident()))
+                    .entry(formula.derivation_ref())
+                    .or_insert(display_id);
+                fallback_formula_display_ids
+                    .entry(FormulaDerivationRef::new(formula.ident()))
                     .or_insert(display_id);
             }
         }
@@ -8025,13 +8043,24 @@ fn proof_object_display_ids_by_ordinal(
     display_order: &[ProofObjectGraphNode],
 ) -> Vec<i64> {
     let mut display_ids_by_ordinal = vec![0; proof_object_list_node_count(graph)];
+    let first_display_id = proof_object_first_display_id(graph);
     for (print_index, node) in display_order.iter().copied().enumerate() {
-        let display_id = usize_to_i64(print_index.saturating_add(1));
+        let display_id = first_display_id.saturating_add(usize_to_i64(print_index));
         if let Some(ordinal) = proof_object_list_node_ordinal(graph, node) {
             display_ids_by_ordinal[ordinal] = display_id;
         }
     }
     display_ids_by_ordinal
+}
+
+fn proof_object_first_display_id(graph: &ProofObjectGraph<'_>) -> i64 {
+    graph
+        .formulas
+        .iter()
+        .filter_map(|formula| formula.info().map(ClauseInfo::id_counter))
+        .max()
+        .unwrap_or(-1)
+        .saturating_add(1)
 }
 
 fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphNode> {
@@ -8163,7 +8192,7 @@ fn proof_object_list_process_c_parent_stacks(
     work_queue: &mut VecDeque<usize>,
     ax_stack: &mut Vec<usize>,
 ) {
-    for parent in parents.iter().rev().copied().filter(|parent| {
+    for parent in parents.iter().copied().filter(|parent| {
         matches!(
             proof_object_list_node_from_ordinal(graph, *parent),
             ProofObjectGraphNode::Clause(_)
@@ -8171,7 +8200,7 @@ fn proof_object_list_process_c_parent_stacks(
     }) {
         proof_object_list_process_released_parent(graph, parent, ref_counts, work_queue, ax_stack);
     }
-    for parent in parents.iter().rev().copied().filter(|parent| {
+    for parent in parents.iter().copied().filter(|parent| {
         matches!(
             proof_object_list_node_from_ordinal(graph, *parent),
             ProofObjectGraphNode::Formula(_)
@@ -8366,12 +8395,23 @@ fn proof_object_display_formula_parent_ident_if_known(
                     edge.parent,
                     ProofObjectGraphNode::Formula(parent_index)
                         if parent_index < graph.formulas.len()
-                            && FormulaDerivationRef::new(graph.formulas[parent_index].ident()) == parent
+                            && parent.matches(
+                                graph.formulas[parent_index].ident(),
+                                graph.formulas[parent_index].entry_id(),
+                            )
+                            || parent_index < graph.formulas.len()
+                                && parent.ident() == graph.formulas[parent_index].ident()
                 )
         })
         .map_or_else(
             || fallback_formula_display_ids.get(&parent).copied(),
-            |edge| Some(proof_object_display_id_for_node(graph, edge.parent, display_ids_by_ordinal)),
+            |edge| {
+                Some(proof_object_display_id_for_node(
+                    graph,
+                    edge.parent,
+                    display_ids_by_ordinal,
+                ))
+            },
         )
 }
 
@@ -8463,6 +8503,7 @@ fn write_stopped_proof_output(
     Ok(())
 }
 
+#[cfg(test)]
 fn write_saturation_proof_object_clause(
     output: &mut impl Write,
     config: &EProverConfig,
@@ -8470,6 +8511,26 @@ fn write_saturation_proof_object_clause(
     clause: &Clause,
     is_root: bool,
     proof_problem_type: ProblemType,
+) -> Result<(), EProverError> {
+    write_saturation_proof_object_clause_with_formula_ids(
+        output,
+        config,
+        bank,
+        clause,
+        is_root,
+        proof_problem_type,
+        &BTreeMap::new(),
+    )
+}
+
+fn write_saturation_proof_object_clause_with_formula_ids(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    is_root: bool,
+    proof_problem_type: ProblemType,
+    formula_ids: &BTreeMap<i64, String>,
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
@@ -8505,9 +8566,10 @@ fn write_saturation_proof_object_clause(
                 proof_problem_type,
                 config.encoding.print_types,
             )?;
-            if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
+            if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
                 clause.derivation(),
                 bank.signature().ac_axioms(),
+                formula_ids,
             ) {
                 rendered.push_str(", ");
                 rendered.push_str(&derivation);
@@ -8532,12 +8594,13 @@ fn write_saturation_proof_object_clause(
     Ok(())
 }
 
-fn write_saturation_proof_object_formula(
+fn write_saturation_proof_object_formula_with_formula_ids(
     output: &mut impl Write,
     config: &EProverConfig,
     bank: &mut TermBank,
     formula: &WrappedFormula,
     proof_problem_type: ProblemType,
+    formula_ids: &BTreeMap<i64, String>,
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
@@ -8578,9 +8641,10 @@ fn write_saturation_proof_object_formula(
                     keep_input_names: true,
                 },
             )?);
-            if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
+            if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
                 formula.derivation(),
                 bank.signature().ac_axioms(),
+                formula_ids,
             ) {
                 rendered.push_str(", ");
                 rendered.push_str(&derivation);
@@ -28742,9 +28806,10 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("     1 : :[--equal(a, a)] : initial(\""));
+        assert!(printed.contains("     0 : :[--equal(a, a)] : initial(\""));
         assert!(printed.contains("proof-object-success-pcl"));
-        assert!(printed.contains("     2 : :[--equal(a, a)] : QUOTE(1)\n"));
+        assert!(printed.contains("     1 : :[--equal(a, a)] : fof_simplification(0)\n"));
+        assert!(printed.contains("     2 : :[--equal(a, a)] : 1\n"));
         assert!(printed.contains("     3 : :[] : 2 : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
@@ -28926,15 +28991,68 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("cnf(c_0_1, axiom, ($false), file('"));
+        assert!(printed.contains("cnf(c_0_0, axiom, ($false), file('"));
         assert!(printed.contains("proof-object-success-tstp"));
         assert!(printed.contains(
-            "cnf(c_0_2, axiom, ($false), inference(QUOTE,[status(unknown)],[c_0_1])).\n"
+            "cnf(c_0_1, axiom, ($false), inference(fof_simplification,[status(thm)],[c_0_0])).\n"
         ));
+        assert!(printed.contains("cnf(c_0_2, axiom, ($false), c_0_1).\n"));
         assert!(printed.contains("cnf(c_0_3, axiom, ($false), c_0_2, ['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_answer_proof_object_preserves_formula_copy_ancestry() {
+        let _guard = global_state_lock();
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("eprover/EXAMPLE_PROBLEMS/SMOKETEST/ans_test06.p");
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--silent",
+                "--cpu-limit=60",
+                "--memory-limit=2048",
+                "--detsort-rw",
+                "--detsort-new",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout)
+            .unwrap()
+            .replace(&path_arg, "<PROBLEM>");
+        let proof_start = printed
+            .find("% SZS output start CNFRefutation\n")
+            .unwrap_or_else(|| panic!("missing proof block in:\n{printed}"));
+        assert_eq!(
+            &printed[proof_start..],
+            "% SZS output start CNFRefutation\n\
+fof(is_there_wisdom, question, ?[X1]:(wise(X1)), file('<PROBLEM>', is_there_wisdom)).\n\
+fof(phil_wise, axiom, ![X1]:((philosopher(X1)=>wise(X1))), file('<PROBLEM>', phil_wise)).\n\
+fof(hume, axiom, philosopher(hume), file('<PROBLEM>', hume)).\n\
+fof(c_0_3, negated_conjecture, ~(?[X1]:((wise(X1)&~$answer(esk1_1(X1))))), inference(fof_simplification,[status(thm)],[inference(assume_negation,[status(cth)],[inference(add_answer_literal,[status(thm)],[is_there_wisdom, theory(answers)])])])).\n\
+fof(c_0_4, negated_conjecture, ![X3]:((~wise(X3)|$answer(esk1_1(X3)))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_3])])])).\n\
+fof(c_0_5, plain, ![X2]:((~philosopher(X2)|wise(X2))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[phil_wise])])])).\n\
+cnf(c_0_6, negated_conjecture, ($answer(esk1_1(X1))|~wise(X1)), inference(split_conjunct,[status(thm)],[c_0_4])).\n\
+cnf(c_0_7, plain, (wise(X1)|~philosopher(X1)), inference(split_conjunct,[status(thm)],[c_0_5])).\n\
+cnf(c_0_8, negated_conjecture, ($answer(esk1_1(X1))|~philosopher(X1)), inference(spm,[status(thm)],[c_0_6, c_0_7])).\n\
+cnf(c_0_9, plain, (philosopher(hume)), inference(split_conjunct,[status(thm)],[hume])).\n\
+cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(thm)],[inference(spm,[status(thm)],[c_0_8, c_0_9]), theory(answers)]), ['proof']).\n\
+% SZS output end CNFRefutation\n"
+        );
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -28962,7 +29080,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(
-            printed.contains("inference(rw,[status(thm)],[c_0_7, c_0_6])"),
+            printed.contains("inference(rw,[status(thm)],[c_0_8, c_0_9])"),
             "{printed}"
         );
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
@@ -28990,8 +29108,14 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\ndigraph proof{\n"));
         assert!(printed.contains("  rankdir=TB\n"));
+        assert!(
+            printed.contains(
+                "  0 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c_0_0\"]\n"
+            ),
+            "{printed}"
+        );
         assert!(printed.contains(
-            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c_0_1\"]\n"
+            "  1 [shape=box,color=green,fillcolor=palegreen,style=filled,label=\"c_0_1\"]\n"
         ));
         assert!(printed.contains(
             "  2 [shape=box,color=green,fillcolor=palegreen,style=filled,label=\"c2\"]\n"
@@ -29000,6 +29124,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
             "  3 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c3\"]\n"
         ));
         assert!(printed.contains("    1 -> 2 [style=\"bold\",color=green,fillcolor=palegreen]\n"));
+        assert!(printed.contains("    0 -> 1 [style=\"bold\",color=green,fillcolor=palegreen]\n"));
         assert!(printed.contains("    2 -> 3 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
         assert!(!printed.contains("SZS output start CNFRefutation"));
         assert!(stderr.is_empty());
@@ -29059,7 +29184,10 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains(",\\nfile('"));
         assert!(printed.contains("proof-graph-source-info-dot"));
         assert!(printed.contains(", source_node)).\"]\n"));
-        assert!(printed.contains("inference(QUOTE,[status(unknown)],[c_0_1])"));
+        assert!(
+            printed.contains("cnf(c_0_1, axiom, (p(a)),\\nc_0_0)."),
+            "{printed}"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -29096,18 +29224,18 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(output).unwrap();
         assert!(
             printed.contains(
-                "  1 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"fof(c_0_1"
+                "  0 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"fof(c_0_0"
             ),
             "{printed}"
         );
         assert!(printed.contains("conjecture"), "{printed}");
         assert!(printed.contains("dot_formula"), "{printed}");
         assert!(
-            printed.contains("inference(QUOTE,[status(unknown)],[c_0_1])"),
+            printed.contains("cnf(c_0_1, plain, ($false),\\nc_0_0)."),
             "{printed}"
         );
         assert!(
-            printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
+            printed.contains("    0 -> 1 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"),
             "{printed}"
         );
     }
@@ -29143,7 +29271,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(output).unwrap();
         assert!(
             printed.contains(
-                "  1 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"thf(c_0_1"
+                "  0 [shape=box,color=red,fillcolor=firebrick1,style=filled,label=\"thf(c_0_0"
             ),
             "{printed}"
         );
@@ -29182,12 +29310,12 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(output).unwrap();
         assert!(
             printed.contains(
-                "  1 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"thf(c_0_1"
+                "  0 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"thf(c_0_0"
             ),
             "{printed}"
         );
         assert!(printed.contains("plain, ($false))."), "{printed}");
-        assert!(!printed.contains("label=\"cnf(c_0_1"), "{printed}");
+        assert!(!printed.contains("label=\"cnf(c_0_0"), "{printed}");
     }
 
     #[test]
@@ -29244,9 +29372,9 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Proof object total steps             : 3\n"));
+        assert!(printed.contains("% Proof object total steps             : 4\n"));
         assert!(printed.contains("% Proof object clause steps            : 2\n"));
-        assert!(printed.contains("% Proof object formula steps           : 1\n"));
+        assert!(printed.contains("% Proof object formula steps           : 2\n"));
         assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
         assert!(printed.contains("% Proof object initial formulas used   : 1\n"));
         assert!(printed.contains("% Proof object generating inferences   : 0\n"));
@@ -29407,13 +29535,16 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\ndigraph proof{\n"));
+        assert!(
+            printed.contains(
+                "  0 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"keep\"]\n"
+            ),
+            "{printed}"
+        );
         assert!(printed.contains(
-            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"keep\"]\n"
+            "  1 [shape=box,color=green,fillcolor=palegreen,style=filled,label=\"c1\"]\n"
         ));
-        assert!(printed.contains(
-            "  2 [shape=box,color=green,fillcolor=palegreen,style=filled,label=\"c2\"]\n"
-        ));
-        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=green,fillcolor=palegreen]\n"));
+        assert!(printed.contains("    0 -> 1 [style=\"bold\",color=green,fillcolor=palegreen]\n"));
         assert!(!printed.contains("SZS output start Saturation"));
         assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
@@ -29485,7 +29616,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
             .lines()
             .find(|line| line.contains("'final'"))
             .unwrap_or_else(|| panic!("missing final root line in:\n{printed}"));
-        assert!(root_line.contains("(1)"), "{printed}");
+        assert!(root_line.contains("(0)"), "{printed}");
         assert_eq!(printed.matches("'final'").count(), 1);
         assert!(printed.contains("% SZS output end Saturation\n"));
     }
@@ -29510,15 +29641,15 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let displayed = proof_object_list_display_clauses(&graph);
 
-        assert_eq!(displayed[0].0.ident(), 1);
+        assert_eq!(displayed[0].0.ident(), 0);
         assert!(!displayed[0].1);
-        assert_eq!(displayed[1].0.ident(), 2);
+        assert_eq!(displayed[1].0.ident(), 1);
         assert!(displayed[1].1);
         assert!(displayed[1]
             .0
             .derivation()
             .is_some_and(|derivation| derivation.as_slice().contains(
-                &DerivationEntry::ClauseParent(ClauseDerivationRef::new(1, 0)),
+                &DerivationEntry::ClauseParent(ClauseDerivationRef::new(0, 0)),
             )));
     }
 
@@ -29557,11 +29688,11 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let displayed = proof_object_list_display_clauses(&graph);
 
         assert_eq!(displayed.len(), 3);
-        assert_eq!(displayed[0].0.query_csscpa_source(), 3);
-        assert_eq!(displayed[0].0.ident(), 1);
-        assert_eq!(displayed[1].0.query_csscpa_source(), 4);
-        assert_eq!(displayed[1].0.ident(), 2);
-        assert_eq!(displayed[2].0.ident(), 3);
+        assert_eq!(displayed[0].0.query_csscpa_source(), 4);
+        assert_eq!(displayed[0].0.ident(), 0);
+        assert_eq!(displayed[1].0.query_csscpa_source(), 3);
+        assert_eq!(displayed[1].0.ident(), 1);
+        assert_eq!(displayed[2].0.ident(), 2);
         assert!(displayed[2].1);
         assert!(displayed[2].0.derivation().is_some_and(|derivation| {
             derivation
@@ -29572,7 +29703,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
                 && derivation
                     .as_slice()
                     .contains(&DerivationEntry::ClauseParent(ClauseDerivationRef::new(
-                        2, 4,
+                        0, 4,
                     )))
         }));
     }
@@ -29606,14 +29737,14 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
                 clause: display_clause,
                 is_root,
             }] => {
-                assert_eq!(display_formula.ident(), 1);
-                assert_eq!(display_clause.ident(), 2);
+                assert_eq!(display_formula.ident(), 0);
+                assert_eq!(display_clause.ident(), 1);
                 assert!(*is_root);
                 assert!(display_clause.derivation().is_some_and(|derivation| {
                     derivation
                         .as_slice()
                         .contains(&DerivationEntry::FormulaParent(FormulaDerivationRef::new(
-                            1,
+                            0,
                         )))
                 }));
             }
@@ -29659,12 +29790,10 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         .unwrap();
         let printed = String::from_utf8(output).unwrap();
         let formula_position = printed
-            .find("fof(c_0_1, conjecture, list_output_formula")
+            .find("fof(c_0_0, conjecture, list_output_formula")
             .unwrap_or_else(|| panic!("missing formula list node in:\n{printed}"));
         let clause_position = printed
-            .find(
-                "cnf(c_0_2, plain, ($false), inference(QUOTE,[status(unknown)],[c_0_1]), ['proof']).",
-            )
+            .find("cnf(c_0_1, plain, ($false), c_0_0, ['proof']).")
             .unwrap_or_else(|| panic!("missing remapped clause list node in:\n{printed}"));
         assert!(formula_position < clause_position, "{printed}");
 
@@ -29687,7 +29816,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
             .find("list_output_formula")
             .unwrap_or_else(|| panic!("missing formula PCL node in:\n{printed}"));
         let clause_position = printed
-            .find("     2 : :[] : QUOTE(1) : 'proof'")
+            .find("     1 : :[] : 0 : 'proof'")
             .unwrap_or_else(|| panic!("missing remapped clause PCL node in:\n{printed}"));
         assert!(formula_position < clause_position, "{printed}");
     }
@@ -29731,17 +29860,15 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(output).unwrap();
         assert!(
-            printed.contains("thf(c_0_1, conjecture, list_output_thf_formula"),
+            printed.contains("thf(c_0_0, conjecture, list_output_thf_formula"),
             "{printed}"
         );
         assert!(
-            printed.contains(
-                "thf(c_0_2, plain, ($false), inference(QUOTE,[status(unknown)],[c_0_1]), ['proof'])."
-            ),
+            printed.contains("thf(c_0_1, plain, ($false), c_0_0, ['proof'])."),
             "{printed}"
         );
-        assert!(!printed.contains("fof(c_0_1"), "{printed}");
-        assert!(!printed.contains("cnf(c_0_2"), "{printed}");
+        assert!(!printed.contains("fof(c_0_0"), "{printed}");
+        assert!(!printed.contains("cnf(c_0_1"), "{printed}");
     }
 
     #[test]

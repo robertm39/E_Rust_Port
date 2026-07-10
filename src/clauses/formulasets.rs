@@ -490,7 +490,7 @@ fn create_definition_symbol_map(
         let definition = tformula_fcode_alloc(bank, eqn_code, lhs_symbol, Some(rhs))?;
         let mut definition_wrapper = formula.flat_copy();
         definition_wrapper.set_formula(definition);
-        let source = FormulaDerivationRef::new(formula.ident());
+        let source = formula.derivation_ref();
         definition_wrapper.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
         definitions.insert(lhs_body.f_code(), definition_wrapper);
         recognized_entry_ids.push(formula.entry_id());
@@ -621,7 +621,7 @@ fn definition_parent_refs(
             let definition = definitions
                 .get(code)
                 .unwrap_or_else(|| panic!("definition symbol {code} disappeared"));
-            FormulaDerivationRef::new(definition.ident())
+            definition.derivation_ref()
         })
         .collect()
 }
@@ -900,7 +900,7 @@ fn clause_set_lift_lambdas(
                 clause_push_formula_derivation(
                     clause,
                     DC_LIFT_LAMBDAS,
-                    Some(FormulaDerivationRef::new(definition.ident())),
+                    Some(definition.derivation_ref()),
                     None,
                 );
                 result.clause_derivation_ops.push(DC_LIFT_LAMBDAS);
@@ -978,8 +978,9 @@ fn drain_formula_set_to_cnf(
     drain: &mut FormulaSetCnfDrain<'_>,
 ) -> Result<(), Diagnostic> {
     while let Some(handle) = set.extract_first() {
-        let source = FormulaDerivationRef::new(handle.ident());
+        let source = handle.derivation_ref();
         let mut form = handle.flat_copy();
+        form.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
         drain.archive.insert(handle);
         drain.result.original_formulas_archived += 1;
         drain.result.quoted_formula_sources.push(source);
@@ -1022,8 +1023,9 @@ fn drain_formula_set_to_cnf_with_docs<W: fmt::Write>(
     drain: &mut FormulaSetCnfDocDrain<'_, W>,
 ) -> Result<(), Diagnostic> {
     while let Some(handle) = set.extract_first() {
-        let source = FormulaDerivationRef::new(handle.ident());
+        let source = handle.derivation_ref();
         let mut form = handle.flat_copy();
+        form.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
         drain.archive.insert(handle);
         drain.result.cnf.original_formulas_archived += 1;
         drain.result.cnf.quoted_formula_sources.push(source);
@@ -1554,6 +1556,11 @@ impl WrappedFormula {
     #[must_use]
     pub const fn entry_id(&self) -> u64 {
         self.entry_id
+    }
+
+    #[must_use]
+    pub const fn derivation_ref(&self) -> FormulaDerivationRef {
+        FormulaDerivationRef::new_with_source(self.ident, self.entry_id)
     }
 
     #[must_use]
@@ -2275,7 +2282,7 @@ impl WrappedFormula {
     ) -> Result<WrappedFormulaCnfResult, Diagnostic> {
         let normalized = lambda_normalize_db(bank, self.formula())?;
         self.set_formula(normalized);
-        let source = FormulaDerivationRef::new(self.ident);
+        let source = self.derivation_ref();
 
         if self.is_clause {
             let mut clause = self.form_clause_to_clause(bank)?;
@@ -2295,6 +2302,9 @@ impl WrappedFormula {
         let formula_derivation_ops = cnf_result.derivation_ops().to_vec();
         self.set_formula(cnf_result.formula().clone());
         for op in &formula_derivation_ops {
+            if cnf_phase_formula_inference(*op).is_some() {
+                self.del_prop(CP_INPUT_FORMULA);
+            }
             self.push_formula_derivation(*op, None, None);
         }
         let clauses_generated = tformula_to_cnf(
@@ -2344,7 +2354,7 @@ impl WrappedFormula {
     ) -> Result<WrappedFormulaCnfDocResult, Diagnostic> {
         let normalized = lambda_normalize_db(bank, self.formula())?;
         self.set_formula(normalized);
-        let source = FormulaDerivationRef::new(self.ident);
+        let source = self.derivation_ref();
 
         if self.is_clause {
             let mut clause = self.form_clause_to_clause(bank)?;
@@ -2393,7 +2403,7 @@ impl WrappedFormula {
         }
         self.set_formula(cnf_result.formula().clone());
 
-        let source = FormulaDerivationRef::new(self.ident);
+        let source = self.derivation_ref();
         let parent_renderings = self.proof_doc_renderings(
             bank,
             doc.render_options.full_terms,
@@ -2779,7 +2789,7 @@ impl FormulaSet {
         let mut tmpset = Self::new();
 
         while let Some(handle) = self.extract_first() {
-            let source = FormulaDerivationRef::new(handle.ident());
+            let source = handle.derivation_ref();
             let mut newform = handle.flat_copy();
             newform.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
             tmpset.insert(newform);
@@ -3444,7 +3454,7 @@ impl FormulaSet {
                     definition_wrapper.push_formula_derivation(DC_INTRO_DEF, None, None);
                     formula.push_formula_derivation(
                         DC_APPLY_DEF,
-                        Some(FormulaDerivationRef::new(definition_wrapper.ident())),
+                        Some(definition_wrapper.derivation_ref()),
                         None,
                     );
                     lifted_definitions.push(definition_wrapper);
@@ -3876,7 +3886,7 @@ impl FormulaSet {
             let mut neutral_wrapper = WrappedFormula::wt_formula_alloc(neutral_def);
             doc_introduced_definition(bank, &mut neutral_wrapper, doc_context, result)?;
             let mut archived_wrapper = neutral_wrapper.flat_copy();
-            let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+            let archived_ref = archived_wrapper.derivation_ref();
             archived_wrapper.push_formula_derivation(DC_INTRO_DEF, None, None);
             let archived_formula = archived_wrapper.formula().clone();
             archive.insert(archived_wrapper);
@@ -4975,11 +4985,11 @@ mod tests {
         first.set_info(Some(ClauseInfo::new(Some("archive_name"), None, 1, 1)));
         first.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         let first_entry = first.entry_id();
-        let first_source = FormulaDerivationRef::new(first.ident());
+        let first_source = first.derivation_ref();
         let mut second = WrappedFormula::wt_formula_alloc(second_term.clone());
         second.set_is_clause(true);
         let second_entry = second.entry_id();
-        let second_source = FormulaDerivationRef::new(second.ident());
+        let second_source = second.derivation_ref();
         let mut set = FormulaSet::new();
         set.insert(first);
         set.insert(second);
@@ -6244,7 +6254,7 @@ mod tests {
         assert_eq!(formulas.len(), 2);
         assert_eq!(archive.cardinality(), 1);
         let archived_wrapper = archive.iter().next().unwrap();
-        let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+        let archived_ref = archived_wrapper.derivation_ref();
         assert_eq!(
             archived_wrapper.derivation_entries(),
             &[DerivationEntry::Operation(DC_INTRO_DEF)]
@@ -6312,7 +6322,7 @@ mod tests {
         assert_eq!(formulas.len(), 2);
         assert_eq!(archive.cardinality(), 1);
         let archived_wrapper = archive.iter().next().unwrap();
-        let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+        let archived_ref = archived_wrapper.derivation_ref();
         assert_eq!(
             archived_wrapper.derivation_entries(),
             &[DerivationEntry::Operation(DC_INTRO_DEF)]
@@ -6402,7 +6412,7 @@ mod tests {
         assert_eq!(formulas.len(), 2);
         assert_eq!(archive.cardinality(), 1);
         let archived = archive.iter().next().unwrap();
-        let archived_ref = FormulaDerivationRef::new(archived.ident());
+        let archived_ref = archived.derivation_ref();
         assert_eq!(archived.ident(), 1);
         assert_eq!(formulas[1].ident(), 2);
         assert_eq!(formulas[0].ident(), 3);
@@ -6732,7 +6742,7 @@ mod tests {
             formulas[0].derivation_entries(),
             &[
                 DerivationEntry::Operation(DC_APPLY_DEF),
-                DerivationEntry::FormulaParent(FormulaDerivationRef::new(formulas[1].ident()))
+                DerivationEntry::FormulaParent(formulas[1].derivation_ref())
             ]
         );
         assert_eq!(
@@ -7039,7 +7049,7 @@ mod tests {
         wrapped.set_is_clause(true);
         wrapped.set_tptp_type(CP_TYPE_AXIOM);
         wrapped.set_prop(CP_INPUT_FORMULA);
-        let source = FormulaDerivationRef::new(wrapped.ident());
+        let source = wrapped.derivation_ref();
         let mut set = ClauseSet::new();
         let fresh_vars = VarBank::new(bank.signature().type_bank());
 
@@ -7087,7 +7097,7 @@ mod tests {
         let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
         let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
         wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
-        let source = FormulaDerivationRef::new(wrapped.ident());
+        let source = wrapped.derivation_ref();
         let mut set = ClauseSet::new();
         let fresh_vars = VarBank::new(bank.signature().type_bank());
 
@@ -7205,7 +7215,7 @@ mod tests {
         );
         assert_eq!(session.id_source.current_ident(), 3);
 
-        let split_source = FormulaDerivationRef::new(1);
+        let split_source = wrapped.derivation_ref();
         let generated_idents = set.iter().map(Clause::ident).collect::<Vec<_>>();
         assert_eq!(generated_idents, vec![2, 3]);
         for clause in set.iter() {
@@ -7281,7 +7291,7 @@ mod tests {
         assert!(!wrapped.query_prop(CP_INPUT_FORMULA));
         assert_eq!(session.id_source.current_ident(), 0);
 
-        let split_source = FormulaDerivationRef::new(old_ident);
+        let split_source = wrapped.derivation_ref();
         for clause in set.iter() {
             assert!(!clause.query_prop(CP_INPUT_FORMULA));
             assert_eq!(
@@ -7542,8 +7552,8 @@ mod tests {
         assert_eq!(archive.cardinality(), 2);
         let generated_definition = archive.iter().next().unwrap();
         let original_definition = archive.get(definition_entry).unwrap();
-        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
-        let original_ref = FormulaDerivationRef::new(original_definition.ident());
+        let generated_ref = generated_definition.derivation_ref();
+        let original_ref = original_definition.derivation_ref();
         assert_eq!(
             rewritten.derivation_entries(),
             &[
@@ -7743,7 +7753,7 @@ mod tests {
         assert!(!rewritten.query_prop(CP_INPUT_FORMULA));
         assert_eq!(session.id_source.current_ident(), 1);
         let generated_definition = archive.iter().next().unwrap();
-        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
+        let generated_ref = generated_definition.derivation_ref();
         assert_eq!(
             rewritten.derivation_entries(),
             &[
@@ -7792,7 +7802,7 @@ mod tests {
         assert!(!rewritten.query_prop(CP_INPUT_FORMULA));
         assert_eq!(session.id_source.current_ident(), 0);
         let generated_definition = archive.iter().next().unwrap();
-        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
+        let generated_ref = generated_definition.derivation_ref();
         assert_eq!(
             rewritten.derivation_entries(),
             &[
@@ -8089,9 +8099,10 @@ mod tests {
         let original_formula = formula.clone();
         let mut first = WrappedFormula::wt_formula_alloc(formula);
         first.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        first.set_prop(CP_INPUT_FORMULA);
         first.set_info(Some(ClauseInfo::new(Some("set_cnf_formula"), None, 1, 1)));
         let first_entry = first.entry_id();
-        let first_source = FormulaDerivationRef::new(first.ident());
+        let first_source = first.derivation_ref();
 
         let clause_left = typed_const(&mut bank, "set_cnf_e");
         let clause_right = typed_const(&mut bank, "set_cnf_f");
@@ -8108,7 +8119,7 @@ mod tests {
         second.set_is_clause(true);
         second.set_tptp_type(CP_TYPE_AXIOM);
         let second_entry = second.entry_id();
-        let second_source = FormulaDerivationRef::new(second.ident());
+        let second_source = second.derivation_ref();
 
         let mut formulas = FormulaSet::new();
         formulas.insert(first);
@@ -8144,17 +8155,37 @@ mod tests {
         let archived = archive.iter().collect::<Vec<_>>();
         assert_eq!(archived[0].entry_id(), first_entry);
         assert_eq!(archived[0].formula(), &original_formula);
+        assert!(archived[0].query_prop(CP_INPUT_FORMULA));
         assert_eq!(archived[1].ident(), first_source.ident());
         assert_ne!(archived[1].entry_id(), first_entry);
         assert_eq!(archived[1].info(), None);
         assert_ne!(archived[1].formula(), &original_formula);
+        assert!(!archived[1].query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            &archived[1].derivation_entries()[..2],
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(first_source),
+            ]
+        );
         assert_eq!(archived[2].entry_id(), second_entry);
         assert_eq!(archived[2].formula(), &original_clause_formula);
         assert_eq!(archived[3].ident(), second_source.ident());
         assert!(archived[3].is_clause());
+        assert_eq!(
+            archived[3].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(second_source),
+            ]
+        );
 
         assert_eq!(
-            count_formula_set_cnf_derivations(&clauses, first_source, second_source),
+            count_formula_set_cnf_derivations(
+                &clauses,
+                archived[1].derivation_ref(),
+                archived[3].derivation_ref(),
+            ),
             (2, 1)
         );
     }

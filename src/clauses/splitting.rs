@@ -770,7 +770,7 @@ fn archive_split_formula_definition(
         (None, None) => Ok(None),
         (Some(archive), Some(parents)) => {
             let formula = get_split_formula_definition(bank, split_literals, pred)?;
-            let parent = FormulaDerivationRef::new(formula.ident());
+            let parent = formula.derivation_ref();
             archive.insert(formula);
             let _ = parents.insert(def_ident, parent);
             Ok(Some(parent))
@@ -792,7 +792,7 @@ fn archive_fresh_split_formula_definition(
         return Ok(None);
     };
     let formula = get_split_formula_definition(bank, split_literals, pred)?;
-    let parent = FormulaDerivationRef::new(formula.ident());
+    let parent = formula.derivation_ref();
     archive.insert(formula);
     Ok(Some(parent))
 }

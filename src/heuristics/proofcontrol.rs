@@ -4177,7 +4177,7 @@ fn store_induction_abstraction_form(
     clause_push_formula_derivation(
         &mut clause,
         DC_FOF_QUOTE,
-        Some(FormulaDerivationRef::new(formula.ident())),
+        Some(formula.derivation_ref()),
         None,
     );
     archive.insert(clause.clone());
@@ -8730,7 +8730,10 @@ fn document_split_definition_formula<W: fmt::Write>(
         )?;
         let mut view = formula.proof_doc_view(&rendered);
         session.doc_intro_split_def(output, &mut view)?;
-        (FormulaDerivationRef::new(view.ident()), view.properties())
+        (
+            FormulaDerivationRef::new_with_source(view.ident(), parent.source()),
+            view.properties(),
+        )
     };
 
     update_split_definition_formula_ref(state, parent, new_parent, new_properties)?;

@@ -893,7 +893,7 @@ impl ProofState {
             let Some(distinct) = self.f_axioms.extract_entry(entry_id) else {
                 continue;
             };
-            let source = FormulaDerivationRef::new(distinct.ident());
+            let source = distinct.derivation_ref();
             let diseq_form = tformula_expand_distinct(&mut self.terms, distinct.formula())?;
             self.f_ax_archive.insert(distinct);
             let mut expanded = WrappedFormula::wt_formula_alloc(diseq_form);
@@ -2376,7 +2376,8 @@ fn find_formula_by_derivation_ref(
     set: &FormulaSet,
     parent: FormulaDerivationRef,
 ) -> Option<&WrappedFormula> {
-    set.iter().find(|formula| formula.ident() == parent.ident())
+    set.iter()
+        .find(|formula| parent.matches(formula.ident(), formula.entry_id()))
 }
 
 fn clause_literals_match(left: &Clause, right: &Clause) -> bool {
@@ -2961,6 +2962,32 @@ mod tests {
                 .proof_formula_by_derivation_ref(formula_ref)
                 .map(WrappedFormula::ident),
             Some(formula_ref.ident())
+        );
+    }
+
+    #[test]
+    fn proof_state_formula_parent_lookup_distinguishes_flat_copy_sources() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = wrapped_formula(&mut state, "formula_parent_original");
+        let copy = original.flat_copy();
+        assert_eq!(original.ident(), copy.ident());
+        let original_ref = original.derivation_ref();
+        let copy_ref = copy.derivation_ref();
+
+        state.f_ax_archive_mut().insert(original);
+        state.f_ax_archive_mut().insert(copy);
+
+        assert_eq!(
+            state
+                .proof_formula_by_derivation_ref(original_ref)
+                .map(WrappedFormula::entry_id),
+            Some(original_ref.source())
+        );
+        assert_eq!(
+            state
+                .proof_formula_by_derivation_ref(copy_ref)
+                .map(WrappedFormula::entry_id),
+            Some(copy_ref.source())
         );
     }
 
@@ -3770,6 +3797,7 @@ mod tests {
             WrappedFormula::wt_formula_alloc(distinct_formula(bank, &[a, b]))
         };
         let first_ident = first.ident();
+        let first_ref = first.derivation_ref();
         let middle = wrapped_formula(&mut state, "distinct_middle");
         let middle_ident = middle.ident();
         let second = {
@@ -3780,6 +3808,7 @@ mod tests {
             WrappedFormula::wt_formula_alloc(distinct_formula(bank, &[a, b, c]))
         };
         let second_ident = second.ident();
+        let second_ref = second.derivation_ref();
 
         state.f_axioms_mut().insert(first);
         state.f_axioms_mut().insert(middle);
@@ -3788,13 +3817,7 @@ mod tests {
         let result = state.process_distinct().unwrap();
 
         assert_eq!(result.distinct_formulas_processed, 2);
-        assert_eq!(
-            result.expanded_formula_sources,
-            vec![
-                FormulaDerivationRef::new(second_ident),
-                FormulaDerivationRef::new(first_ident),
-            ]
-        );
+        assert_eq!(result.expanded_formula_sources, vec![second_ref, first_ref]);
         assert_eq!(
             result.formula_derivation_ops,
             vec![DC_EXPAND_DISTINCT, DC_EXPAND_DISTINCT]
@@ -3816,7 +3839,7 @@ mod tests {
             active[1].derivation_entries(),
             &[
                 DerivationEntry::Operation(DC_EXPAND_DISTINCT),
-                DerivationEntry::FormulaParent(FormulaDerivationRef::new(second_ident)),
+                DerivationEntry::FormulaParent(second_ref),
             ]
         );
         assert_eq!(
@@ -3828,7 +3851,7 @@ mod tests {
             active[2].derivation_entries(),
             &[
                 DerivationEntry::Operation(DC_EXPAND_DISTINCT),
-                DerivationEntry::FormulaParent(FormulaDerivationRef::new(first_ident)),
+                DerivationEntry::FormulaParent(first_ref),
             ]
         );
         assert_eq!(

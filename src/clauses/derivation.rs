@@ -1,7 +1,7 @@
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::terms::termtypes::RewriteDemodulator;
-use std::fmt::Write as _;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -214,17 +214,37 @@ impl From<&Clause> for ClauseDerivationRef {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FormulaDerivationRef {
     ident: i64,
+    source: u64,
 }
 
 impl FormulaDerivationRef {
     #[must_use]
     pub const fn new(ident: i64) -> Self {
-        Self { ident }
+        Self { ident, source: 0 }
+    }
+
+    #[must_use]
+    pub const fn new_with_source(ident: i64, source: u64) -> Self {
+        Self { ident, source }
     }
 
     #[must_use]
     pub const fn ident(self) -> i64 {
         self.ident
+    }
+
+    #[must_use]
+    pub const fn source(self) -> u64 {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn matches(self, ident: i64, source: u64) -> bool {
+        if self.source == 0 {
+            self.ident == ident
+        } else {
+            self.source == source
+        }
     }
 }
 
@@ -757,7 +777,7 @@ fn deriv_stack_pcl_string_internal(
             continue;
         };
         match *op {
-            DC_CNF_QUOTE => {}
+            DC_CNF_QUOTE | DC_FOF_QUOTE => {}
             DC_CNF_ADD_ARG => {
                 extra_cnf_args.push(derivation_clause_arg(entries, start + 1));
             }
@@ -797,7 +817,7 @@ fn deriv_stack_pcl_string_internal(
             write_ac_axiom_idents(&mut rendered, entries, start, ac_axioms);
         }
         match *op {
-            DC_CNF_QUOTE => {}
+            DC_CNF_QUOTE | DC_FOF_QUOTE => {}
             op if op_code(op) == DO_INTRO_DEF => {}
             _ => rendered.push(')'),
         }
@@ -819,7 +839,7 @@ fn deriv_stack_pcl_string_internal(
 /// Rust stack entry shape.
 #[must_use]
 pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
-    deriv_stack_tstp_string_internal(derivation, None)
+    deriv_stack_tstp_string_internal(derivation, None, None)
 }
 
 /// Returns the C `DerivationStackTSTPPrint` expression with signature-owned AC
@@ -835,12 +855,22 @@ pub fn deriv_stack_tstp_string_with_ac_axioms(
     derivation: Option<&PStack<DerivationEntry>>,
     ac_axioms: &[ClauseDerivationRef],
 ) -> Option<String> {
-    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms))
+    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), None)
+}
+
+#[must_use]
+pub fn deriv_stack_tstp_string_with_formula_ids(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+    formula_ids: &BTreeMap<i64, String>,
+) -> Option<String> {
+    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), Some(formula_ids))
 }
 
 fn deriv_stack_tstp_string_internal(
     derivation: Option<&PStack<DerivationEntry>>,
     ac_axioms: Option<&[ClauseDerivationRef]>,
+    formula_ids: Option<&BTreeMap<i64, String>>,
 ) -> Option<String> {
     let derivation = derivation?;
     let entries = derivation.as_slice();
@@ -853,7 +883,7 @@ fn deriv_stack_tstp_string_internal(
             continue;
         };
         match *op {
-            DC_CNF_QUOTE => {}
+            DC_CNF_QUOTE | DC_FOF_QUOTE => {}
             DC_CNF_ADD_ARG => {
                 extra_cnf_args.push(derivation_clause_arg(entries, start + 1));
             }
@@ -884,12 +914,17 @@ fn deriv_stack_tstp_string_internal(
             if start != 0 {
                 rendered.push_str(", ");
             }
-            write_derivation_parent_ref(&mut rendered, derivation_parent_arg(entries, start + 1));
+            write_derivation_parent_ref(
+                &mut rendered,
+                derivation_parent_arg(entries, start + 1),
+                formula_ids,
+            );
             if op_has_parent_arg2(*op) {
                 rendered.push_str(", ");
                 write_derivation_parent_ref(
                     &mut rendered,
                     derivation_parent_arg(entries, start + 2),
+                    formula_ids,
                 );
             }
         }
@@ -901,7 +936,7 @@ fn deriv_stack_tstp_string_internal(
             write_ac_axiom_refs(&mut rendered, entries, start, ac_axioms);
         }
         match *op {
-            DC_CNF_QUOTE => {}
+            DC_CNF_QUOTE | DC_FOF_QUOTE => {}
             op if op_code(op) == DO_INTRO_DEF => {}
             op => {
                 if let Some(theory) = derivation_op_theory(op) {
@@ -1068,10 +1103,20 @@ fn write_derivation_formula_ident(output: &mut String, parent: FormulaDerivation
     write!(output, "{}", parent.ident()).expect("writing to String cannot fail");
 }
 
-fn write_derivation_parent_ref(output: &mut String, parent: DerivationParentRef) {
+fn write_derivation_parent_ref(
+    output: &mut String,
+    parent: DerivationParentRef,
+    formula_ids: Option<&BTreeMap<i64, String>>,
+) {
     match parent {
         DerivationParentRef::Clause(parent) => write_derivation_clause_ref(output, parent),
-        DerivationParentRef::Formula(parent) => write_derivation_formula_ref(output, parent),
+        DerivationParentRef::Formula(parent) => {
+            if let Some(identifier) = formula_ids.and_then(|ids| ids.get(&parent.ident())) {
+                output.push_str(identifier);
+            } else {
+                write_derivation_formula_ref(output, parent);
+            }
+        }
         DerivationParentRef::Demodulator(demodulator) => {
             write_derivation_clause_ref(
                 output,
@@ -1378,34 +1423,36 @@ mod tests {
         deriv_stack_extract_opt_parents, deriv_stack_extract_parents,
         deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
-        deriv_stack_tstp_string_with_ac_axioms, derivation_entries, formula_dummy_quote_parent_ref,
-        get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry,
-        DerivationParentRef, FormulaDerivationRef, ProofObjectType, ProofOutput, ARG1_CNF,
-        ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION,
-        DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC,
-        DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS,
-        DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES,
-        DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
-        DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
-        DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE,
-        DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
-        DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM, DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN,
-        DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR,
-        DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES, DO_ADD_CNF_ARG, DO_ANNO_QUESTION,
-        DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST, DO_CONDENSE, DO_CONTEXT_SR,
-        DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE, DO_DYNAMIC_CNF,
-        DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS, DO_EVAL_GC,
-        DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE, DO_FNNF,
-        DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM, DO_LIFT_ITE,
-        DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP, DO_NORMALIZE,
-        DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM, DO_PRUNE_ARG,
-        DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD, DO_SKOLEMIZE,
-        DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD, DO_VAR_RENAME,
+        deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids,
+        derivation_entries, formula_dummy_quote_parent_ref, get_is_ho, op_code, op_is_generating,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
+        ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM,
+        ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX,
+        DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR,
+        DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS, DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF,
+        DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES, DC_EQ_TO_EQ, DC_EVAL_ANSWERS,
+        DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM,
+        DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE, DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP,
+        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM,
+        DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN, DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE,
+        DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR, DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES,
+        DO_ADD_CNF_ARG, DO_ANNO_QUESTION, DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST,
+        DO_CONDENSE, DO_CONTEXT_SR, DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE,
+        DO_DYNAMIC_CNF, DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS,
+        DO_EVAL_GC, DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE,
+        DO_FNNF, DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM,
+        DO_LIFT_ITE, DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP,
+        DO_NORMALIZE, DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM,
+        DO_PRUNE_ARG, DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD,
+        DO_SKOLEMIZE, DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD,
+        DO_VAR_RENAME,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::termtypes::RewriteDemodulator;
+    use std::collections::BTreeMap;
 
     #[test]
     fn proof_output_discriminants_match_c_enum() {
@@ -1940,6 +1987,31 @@ mod tests {
             Some(
                 "inference(er,[status(thm)],[inference(evalgc,[status(thm)],[c_0_101]), c_0_102])"
             )
+        );
+    }
+
+    #[test]
+    fn deriv_stack_renderers_treat_formula_quote_as_direct_parent() {
+        let parent = FormulaDerivationRef::new_with_source(17, 42);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_FOF_QUOTE));
+        derivation.push(DerivationEntry::FormulaParent(parent));
+        derivation.push(DerivationEntry::Operation(DC_FOF_SIMPLIFY));
+
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&derivation)).as_deref(),
+            Some("fof_simplification(17)")
+        );
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&derivation)).as_deref(),
+            Some("inference(fof_simplification,[status(thm)],[c_0_17])")
+        );
+
+        let formula_ids = BTreeMap::from([(17, "input_formula".to_owned())]);
+        assert_eq!(
+            deriv_stack_tstp_string_with_formula_ids(Some(&derivation), &[], &formula_ids)
+                .as_deref(),
+            Some("inference(fof_simplification,[status(thm)],[input_formula])")
         );
     }
 
