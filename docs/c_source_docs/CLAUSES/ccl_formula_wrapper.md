@@ -122,7 +122,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for cross-record variable-name state on 2026-07-09.
 
 Source files reviewed: `CLAUSES/ccl_formula_wrapper.h`, `CLAUSES/ccl_formula_wrapper.c`.
 
@@ -144,10 +144,12 @@ Source files reviewed: `CLAUSES/ccl_formula_wrapper.h`, `CLAUSES/ccl_formula_wra
 - The executable bridge now mirrors `WFormulaTSTPParse`'s type-declaration wrapper on the supported formula-owner surfaces: a type declaration mutates the signature and owns a skipped `$true` formula, so declaration-only files can still count as formula owners, `--print-formulas` can print the placeholder wrapper, and app-encoded output can print declarations.
 - The executable bridge now parses supported TSTP type declarations and formula bodies under the wrapper's problem type, so `thf(...)` bodies get the same higher-order type-checking context as C `WFormulaTSTPParse`, accept bare arrow-typed term equalities such as `f = g`, preserve C's global first-order/higher-order mixing rejection across records, route direct top-level FOF/TFF/TCF/THF `$distinct(...)` proof/CNF/print bodies plus direct and fully parenthesized top-level FOF/TFF `$distinct(...)` app-encode bodies through represented formula owners before proof-state expansion, and mark parser-created formula owners with C's `CPInitial|CPInputFormula` property pair before any later C-shaped expansion pass drops wrapper metadata.
 - Formula TSTP proof-documentation now applies C's default input-name policy to represented source-backed wrappers while retaining the assigned numeric id for derivation references. Parser coverage beyond the represented owner paths, exact free/delete side effects, and process-global output/input policy remain pending.
+- `WFormulaParse` clears external variable-name bindings only when `ClausesHaveDisjointVariables` is enabled. With the default local-clause policy, each parsed clause clears and rebuilds the shared map but a following formula reuses it. The executable, batch, and `enormalizer` formula paths preserve that cross-record state, including the variable permutation visible in `ALL_RULES.p`.
 
 ### Change Later
 
 - C `WFormulaGetId` combines the mutable `FormulasKeepInputNames` global with one reusable static 32-byte result buffer for generated ids, making the helper non-reentrant and thread-hostile. Rust keeps input-name policy explicit in general renderers, applies C's default `true` policy at formula proof-document call sites, and returns owned strings; retain that separation after compatibility rather than recreating the global/static-buffer API.
+- C's default parser state is asymmetric: `ClauseParse` clears external variable names when `ClausesHaveLocalVariables` is true, while `WFormulaParse` does not. Formula variable codes can therefore depend on the preceding clause's source-name encounter order and alter later term ordering/search. Rust preserves this for drop-in compatibility; a cleaned parser should make record-local versus shared variable-name scope explicit instead of coupling formulas to the previous record.
 - C `WFormulaPrint` dispatches through the process-global `OutputFormat`, and the LOP case emits a warning before intentionally falling through to TPTP output. Rust uses an explicit staged print-format argument; executable integration must decide where to reproduce the warning and global dispatch.
 - C `WFormClauseToClause` allocates a fresh `Clause` from the formula payload, copies wrapper properties and source info, but does not preserve the wrapper id as the printed clause id. Rust mirrors that staged behavior; decide during proof-state integration whether clause/formula conversion should preserve a stable wrapper handle separately from generated clause ids.
 - C `WFormulaOfClause` closes the encoded clause into a fresh formula wrapper but does not copy clause properties or source info. Rust mirrors that metadata drop; a later proof-document owner should decide whether compatibility output needs separate parent metadata rather than overloading the new wrapper.

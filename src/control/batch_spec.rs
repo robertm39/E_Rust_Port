@@ -1966,7 +1966,6 @@ fn parse_batch_tstp_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<ParsedBatchFormula, Diagnostic> {
-    bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
     let start_line = usize_to_i64_c(scanner.current_token().line());
     let start_column = usize_to_i64_c(scanner.current_token().column());
@@ -3341,6 +3340,46 @@ mod tests {
         .unwrap();
 
         assert!(!bank.signature().typed_symbols());
+    }
+
+    #[test]
+    fn load_problem_from_file_reuses_formula_variable_name_map_like_c() {
+        let source = test_path("batch-load-formula-variable-map.p");
+        fs::write(
+            &source,
+            "fof(first, axiom, ?[X3,X4,X1,X2]:p(X3,X4,X1,X2)).\n\
+             fof(second, axiom, ?[X1,X2,X3,X4,X5]:q(X1,X2,X3,X4,X5)).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+        let second = problem
+            .formulas
+            .iter()
+            .find(|formula| formula.info().and_then(ClauseInfo::name) == Some("second"))
+            .unwrap();
+        let rendered = second
+            .tstp_string(&mut bank, true, true, ProblemType::FirstOrder, true)
+            .unwrap();
+
+        assert!(
+            rendered.contains("?[X3, X4, X1, X2, X5]:(q(X3,X4,X1,X2,X5))"),
+            "{rendered}"
+        );
     }
 
     #[test]

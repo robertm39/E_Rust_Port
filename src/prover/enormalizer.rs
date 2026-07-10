@@ -805,7 +805,6 @@ fn parse_old_tptp_wrapped_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<FormulaTarget, Diagnostic> {
-    bank.vars().clear_ext_names();
     set_problem_type(ProblemType::FirstOrder)?;
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
@@ -839,7 +838,6 @@ fn parse_tstp_wrapped_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<FormulaTarget, Diagnostic> {
-    bank.vars().clear_ext_names();
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
@@ -1936,6 +1934,50 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("utf8");
         assert!(rendered.contains("fof(form1, axiom, "));
         assert!(rendered.contains("p(a)"));
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn tstp_formula_targets_reuse_external_name_map_like_c() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("formula_variable_map_rules");
+        let formula_path = temp_path("formula_variable_map_targets");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(
+            &formula_path,
+            "fof(first, axiom, ?[X3,X4,X1,X2]:p(X3,X4,X1,X2)).\n\
+             fof(second, axiom, ?[X1,X2,X3,X4,X5]:q(X1,X2,X3,X4,X5)).\n",
+        )
+        .expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--tstp-out",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("normalizer run");
+
+        let rendered = String::from_utf8(stdout).expect("utf8");
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert!(
+            rendered.contains("?[X3, X4, X1, X2, X5]:(q(X3,X4,X1,X2,X5))"),
+            "{rendered}"
+        );
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);

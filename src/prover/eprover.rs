@@ -10562,8 +10562,6 @@ fn parse_simple_tstp_app_encode_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Option<ParsedAppEncodeFormula>, Diagnostic> {
-    bank.vars().clear_ext_names();
-
     let formula_kind = scanner.current_token().literal();
     let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
     set_problem_type(formula_problem_type)?;
@@ -10987,8 +10985,6 @@ fn parse_tptp_app_encode_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<ParsedAppEncodeFormula, Diagnostic> {
-    bank.vars().clear_ext_names();
-
     scanner.accept_id("input_formula")?;
     set_problem_type(ProblemType::FirstOrder)?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -11028,7 +11024,6 @@ fn parse_simple_tstp_formula_clause(
     formula_preprocessing: FormulaPreprocessing,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
-    bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
@@ -11510,7 +11505,6 @@ fn parse_simple_tptp_formula_clause(
     formula_preprocessing: FormulaPreprocessing,
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
-    bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
@@ -19190,6 +19184,37 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("%-- (person > $o * person) > $o."));
         assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_reuses_last_clause_variable_name_map_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-clause-formula-variable-map");
+        std::fs::write(
+            &path,
+            "cnf(permutation, axiom, (X3!=X4|X1!=X2)).\n\
+             fof(conj, axiom, ?[X1,X2,X3,X4,X5]:r(X1,X2,X3,X4,X5)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(
+            printed.contains("?[X3:$i, X4:$i, X1:$i, X2:$i, X5:$i]"),
+            "{printed}"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -31190,6 +31215,42 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             stderr,
             &["fof(ite_arg, axiom", "fof(ite_eq, axiom", "$ite"],
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_reuses_last_clause_variable_name_map_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-clause-formula-variable-map");
+        std::fs::write(
+            &path,
+            "cnf(permutation, axiom, (X3!=X4|X1!=X2)).\n\
+             fof(conj, axiom, ?[X1,X2,X3,X4,X5]:r(X1,X2,X3,X4,X5)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(
+            printed.contains("?[X3, X4, X1, X2, X5]:(r(X3,X4,X1,X2,X5))"),
+            "{printed}"
+        );
+        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
