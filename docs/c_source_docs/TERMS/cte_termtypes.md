@@ -221,7 +221,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for zero-suffix rewrite normalization on 2026-07-09.
 
 Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 
@@ -240,10 +240,12 @@ Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 ### Compatibility Notes
 
 - `TermDeref` expands a bound applied free variable without decrementing `DEREF_ONCE`; callers use `DEREF_LIMIT`/`CONVERT_DEREF` to avoid following bindings in the prefix copied from the applied-variable head. Rust mirrors the expansion shape and the unconsumed one-step deref rule in the global term helper, while term-bank insertion paths keep their explicit prefix conversion.
+- `MakeRewrittenTerm` calls `LambdaNormalizeDB` even when `remaining_orig` is zero. Simultaneous paramodulation relies on this to beta-normalize the dereferenced replacement before `TBInsertNoProps`; Rust exposes the equivalent helper within the crate rather than replacing the call with direct term-bank insertion.
 
 ### Change Later
 
 - `applied_var_deref` stores expanded applied-variable terms in the source term's `binding_cache`, records the binding that made the cache fresh, inserts the expansion through the owning term bank, and marks the cached term with `TPIsDerefedAppVar`. Rust currently performs no-cache expansion for the global helper and separate bank-local expansion where callers already have a `TermBank`; add owner-bank metadata and cache invalidation before treating repeated LFHO dereference performance or cache-aware GC behavior as C-compatible.
+- `MakeRewrittenTerm` combines prefix splicing, property/type propagation, term-bank ownership, and beta-normalization, including in the nominally no-splice zero case. Preserve that bundle for compatibility, but consider splitting it into explicit construction and normalization operations after all callers have parity tests.
 
 ### Porting Focus
 

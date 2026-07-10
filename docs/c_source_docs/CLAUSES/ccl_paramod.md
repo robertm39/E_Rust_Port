@@ -116,7 +116,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for Rust indexed simultaneous/super-simultaneous and non-equational predicate paramodulation slices on 2026-06-26, and indexed plus unindexed first-order-shaped higher-order construction on 2026-07-03.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for Rust indexed simultaneous/super-simultaneous and non-equational predicate paramodulation slices on 2026-06-26, indexed plus unindexed first-order-shaped higher-order construction on 2026-07-03, and indexed disjoint-working-clause parity on 2026-07-09.
 
 Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 
@@ -139,6 +139,7 @@ Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 - The indexed C path performs the fingerprint lookup first, then runs real unification/order gates for each candidate occurrence before iterating the stored positions and constructing clauses through `ClauseParamodConstruct`. Rust mirrors the first-order term-level gate so fingerprint false positives do not reach compact-position construction, and mirrors the higher-order indexed path by enumerating CSUs after lookup and rechecking source/target admissibility under each active binding.
 - `ParamodOverlapNonEqLiterals` makes positive predicate literals participate in the same source-side cursor as equations. For a non-oriented predicate literal such as `p(a) = $true`, C enumerates both the predicate side and the `$true` side; the `$true` candidate is normally discarded later by failed unification. Rust should preserve this while matching C candidate order, even though a later explicit predicate-resolution path could skip the dead side.
 - For non-equational predicate sources, `ClausePosFirst/NextParamodInto` narrows target enumeration to maximal negative left sides. The C helper signals end by returning `NULL`; Rust cursor wrappers must preserve that terminal state and must not restart from the first literal after advancing past the end.
+- `ClauseSimParamodConstruct` and `ClauseSuperSimParamodConstruct` dereference the target subterm and source replacement under the caller-owned unifier, then pass the replacement through `MakeRewrittenTerm(..., 0)` before term-bank insertion. The zero-suffix call still beta-normalizes, so direct insertion of the dereferenced source side is not equivalent for LFHO terms. Rust now reuses its `make_rewritten_term` helper for this construction path.
 
 ### Porting Focus
 
@@ -158,5 +159,6 @@ Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 - Indexed paramodulation carries `pminfo->subst_is_ho` into `DPSetIsHO(DCParamod/DCSimParamod)`, but the unindexed `ComputeClauseClauseParamodulants` wrapper does not propagate a higher-order binding flag on its ordinary derivation entries. Rust preserves that distinction for compatibility; after proof-output parity is broader, decide whether unindexed higher-order bindings should be tagged uniformly or left as C behavior.
 - `ClausePlainParamodConstruct`, `ClauseSimParamodConstruct`, and `ClauseSuperSimParamodConstruct` assume a successful caller-owned unifier is already active, then allocate a fresh temporary `Subst` only for normalized copying and fresh-variable tracking. Rust mirrors this split for indexed CSU construction with an explicit active `Substitution`; a future constructor could take a typed checked-overlap descriptor instead of relying on this ambient lifetime.
 - Indexed `ClausePlainParamodConstruct` does not set `EPFromClauseLit` on copied source literals or `EPIsPMIntoLit` on the generated literal, unlike the unindexed ordered constructor. Rust preserves that indexed/plain distinction for compatibility; after selection and proof-output parity tests are broader, decide whether this is intentional strategy behavior or an accidental C omission.
+- Simultaneous construction depends on a term-rewrite helper whose name suggests prefix splicing, but `MakeRewrittenTerm(..., 0)` also performs beta-normalization. Keep this hidden side effect for compatibility; a later API should name normalization explicitly or separate replacement construction from normalization so callers cannot accidentally bypass it.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

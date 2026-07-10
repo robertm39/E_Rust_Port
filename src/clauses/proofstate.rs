@@ -130,6 +130,7 @@ pub struct ProofStateStatistics {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RawFormulaFeatures {
+    pub has_formula_input: bool,
     pub sentence_no: i64,
     pub term_size: i64,
     pub lowered_clause_no: i64,
@@ -146,6 +147,7 @@ pub struct RawFormulaFeatures {
 
 impl RawFormulaFeatures {
     pub fn add(&mut self, other: Self) {
+        self.has_formula_input |= other.has_formula_input;
         self.sentence_no += other.sentence_no;
         self.term_size += other.term_size;
         self.lowered_clause_no += other.lowered_clause_no;

@@ -89,7 +89,8 @@ Source files reviewed: `HEURISTICS/che_rawspecfeatures.h`, `HEURISTICS/che_rawsp
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `RawSpecFeaturesCompute` combines clause-set cardinality, clause standard weight, clause conjecture/hypothesis counts, and signature symbol counts with formula-set cardinality/weight/counts, formula-set-only order, and active/archive formula definition statistics. C intentionally leaves `order` and `conj_order` at `1` for clause-only states even if clause terms are higher-order; Rust preserves that raw-spec compatibility surface while now honoring owned formula sets..
+- `RawSpecFeaturesCompute` combines clause-set cardinality, clause standard weight, clause conjecture/hypothesis counts, and signature symbol counts with formula-set cardinality/weight/counts, formula-set-only order, and active/archive formula definition statistics. C intentionally leaves `order` and `conj_order` at `1` for clause-only states even if clause terms are higher-order; Rust preserves that raw-spec compatibility surface while honoring owned formula sets.
+- C measures each current clause or formula owner exactly once, including the `$true` formula wrappers used for type declarations. Rust parser metadata therefore adjusts this vector only when a formula had to be represented by lowered clauses; represented formula owners are measured directly from the formula set.
 
 ### Porting Focus
 
@@ -100,5 +101,6 @@ Source files reviewed: `HEURISTICS/che_rawspecfeatures.h`, `HEURISTICS/che_rawsp
 ### Change Later
 
 - Once drop-in compatibility is secured, decide whether a cleaned classifier should expose clause-level higher-order order separately from the C raw-spec vector.
+- Raw classification uses hard threshold buckets that feed directly into preprocessing-schedule selection, so a one-unit weight change at a boundary can select a substantially different prover configuration. A future strategy interface could retain the compatibility class while also exposing continuous feature values or explicit tie handling for less brittle schedule selection.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

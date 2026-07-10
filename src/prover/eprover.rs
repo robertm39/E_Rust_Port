@@ -6882,7 +6882,7 @@ fn apply_gsine_clause_filter(
 
 fn apply_lambda_defines_filter(state: &mut crate::clauses::proofstate::ProofState) -> i64 {
     let original_axioms = state.axiom_count();
-    let has_raw_formula_input = state.raw_formula_features().sentence_no != 0;
+    let has_raw_formula_input = state.raw_formula_features().has_formula_input;
     if !has_raw_formula_input && state.f_axioms().is_empty() {
         state.axioms_mut().clear();
         state.f_axioms_mut().clear();
@@ -11102,7 +11102,7 @@ fn parse_simple_tstp_formula_clause(
     let raw_formula_features = if owner_routing.should_lower_clauses {
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses)
     } else {
-        raw_formula_features
+        represented_formula_input_features()
     };
     let owner_formula = if owner_routing.keep_represented_owner {
         owner_formula
@@ -11256,8 +11256,6 @@ fn parse_represented_tstp_formula_clause_body(
         });
     }
 
-    let raw_formula_features =
-        represented_raw_formula_features(&formula, role_types.raw_formula_type, bank);
     let mut owner_formula = represented_formula_owner(
         formula,
         role_types.raw_formula_type | CP_INPUT_FORMULA,
@@ -11289,7 +11287,7 @@ fn parse_represented_tstp_formula_clause_body(
         owner_formula: Some(owner_formula),
         clauses: Vec::new(),
         formula_conjecture_seen: role_types.formula_conjecture_seen,
-        raw_formula_features,
+        raw_formula_features: represented_formula_input_features(),
         problem_type: parsed_problem_type,
     })
 }
@@ -11319,30 +11317,9 @@ fn represented_formula_owner(
     wrapped
 }
 
-fn represented_raw_formula_features(
-    formula: &Term,
-    formula_type: FormulaProperties,
-    bank: &TermBank,
-) -> RawFormulaFeatures {
-    let wrapped = WrappedFormula::wt_formula_alloc(formula.clone());
-    let order = i32_from_usize_saturating(wrapped.conjecture_order(bank.signature())).max(1);
-    let (conjecture_count, hypothesis_count, conj_order) = if formula_type.is_conjecture() {
-        (1, 0, order)
-    } else if formula_type.is_hypothesis() {
-        (0, 1, order)
-    } else {
-        (0, 0, 0)
-    };
-
+fn represented_formula_input_features() -> RawFormulaFeatures {
     RawFormulaFeatures {
-        sentence_no: 1,
-        term_size: wrapped.standard_weight(),
-        conjecture_count,
-        hypothesis_count,
-        order,
-        conj_order,
-        num_lambdas: wrapped.count_non_top_level_lambdas(bank.signature()),
-        app_var_lits: wrapped.has_app_var_literal(bank),
+        has_formula_input: true,
         ..RawFormulaFeatures::default()
     }
 }
@@ -11565,7 +11542,7 @@ fn parse_simple_tptp_formula_clause(
     let raw_formula_features = if owner_routing.should_lower_clauses {
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses)
     } else {
-        raw_formula_features
+        represented_formula_input_features()
     };
     let owner_formula = if owner_routing.keep_represented_owner {
         owner_formula
@@ -11602,8 +11579,6 @@ fn parse_represented_tptp_formula_clause_body(
     formula_owner_handling: InputFormulaOwnerHandling,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     let formula = bank.parse_tformula_tptp(scanner)?;
-    let raw_formula_features =
-        represented_raw_formula_features(&formula, role_types.raw_formula_type, bank);
     let mut owner_formula = represented_formula_owner(
         formula,
         role_types.owner_formula_type | CP_INPUT_FORMULA,
@@ -11633,7 +11608,7 @@ fn parse_represented_tptp_formula_clause_body(
         owner_formula: Some(owner_formula),
         clauses: Vec::new(),
         formula_conjecture_seen: role_types.formula_conjecture_seen,
-        raw_formula_features,
+        raw_formula_features: represented_formula_input_features(),
         problem_type,
     })
 }
@@ -11702,6 +11677,7 @@ fn simple_fof_raw_formula_features(
     };
 
     RawFormulaFeatures {
+        has_formula_input: true,
         sentence_no: 1,
         term_size: simple_fof_formulas_standard_weight(formulas, bank),
         conjecture_count,

@@ -23,12 +23,12 @@ use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
 use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
-use crate::terms::replace::tb_term_pos_replace;
+use crate::terms::replace::{make_rewritten_term, tb_term_pos_replace};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termpos::TermPos;
-use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
+use crate::terms::termtypes::{term_deref, DerefType, Term, TP_POTENTIAL_PARAMOD};
 use crate::terms::termvars::VarBank;
 use std::{collections::BTreeMap, fmt};
 
@@ -1080,6 +1080,9 @@ fn compute_indexed_sources_from_clause_entry_csu(
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
+    let into_clause = into_pos
+        .clause()
+        .expect("indexed target position must be backed by its working clause");
     for source_cpos in source_entry.positions() {
         let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
         ensure_indexed_paramodulation_ordering_supported(ocb, &source_pos, into_pos, pm_type)?;
@@ -1095,14 +1098,14 @@ fn compute_indexed_sources_from_clause_entry_csu(
             into_term.set_prop(TP_POTENTIAL_PARAMOD);
             into_term
         });
-        let freshvars = fresh_var_bank_for_clauses(bank, source_entry.clause(), parent_alias);
+        let freshvars = fresh_var_bank_for_clauses(bank, source_entry.clause(), into_clause);
         let paramodulant = indexed_paramod_construct_with_subst(
             bank,
             ocb,
             &source_pos,
             into_pos,
             source_entry.clause(),
-            parent_alias,
+            into_clause,
             &freshvars,
             subst,
             effective_pm_type,
@@ -2182,7 +2185,13 @@ fn clause_ordered_sim_paramod_active_subst(
             .literals()
             .subst_norm_except(None, subst, freshvars);
 
-        let rhs_instance = bank.insert_no_props(from_other, DerefType::Always)?;
+        let mut into_deref = DerefType::Always;
+        let into_term_instance = term_deref(into_term, &mut into_deref);
+        let mut rhs_deref = DerefType::Always;
+        let from_other_instance = term_deref(from_other, &mut rhs_deref);
+        let rewritten_rhs =
+            make_rewritten_term(bank, &into_term_instance, &from_other_instance, 0)?;
+        let rhs_instance = bank.insert_no_props(&rewritten_rhs, DerefType::Always)?;
         let mut into_copy = match replacement {
             SimParamodReplacement::SharedTarget => {
                 into_clause
@@ -3740,6 +3749,81 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
         );
+    }
+
+    #[test]
+    fn indexed_single_replaces_applied_head_in_disjoint_selected_copy() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Single);
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let binary_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                    individual.clone(),
+                ]));
+        let f_code = bank
+            .signature_mut()
+            .insert_id("pm_idx_single_applied_f", 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, binary_type.clone())
+            .unwrap();
+        let f = Term::const_cell_alloc(f_code);
+        f.set_type(Some(binary_type));
+        let f = bank.insert(&f, DerefType::Never).unwrap();
+        let a = typed_const(&mut bank, "pm_idx_single_applied_a");
+        let source_var = typed_var(&bank, -2_460);
+        let source_left = apply_terms(&mut bank, &f, &[a, source_var]).unwrap();
+        let source_right = typed_const(&mut bank, "pm_idx_single_applied_d");
+
+        let target_head = typed_arrow_var(&mut bank, -2_462);
+        let target_var = typed_var(&bank, -2_464);
+        let target_applied =
+            apply_terms(&mut bank, &target_head, std::slice::from_ref(&target_var)).unwrap();
+        let wrapper_code = typed_unary_code(&mut bank, "pm_idx_single_applied_wrapper");
+        let target_left = typed_unary(&mut bank, wrapper_code, &target_applied);
+        let target_right = typed_const(&mut bank, "pm_idx_single_applied_rhs");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let target_for_paramod = target.copy_disjoint(&mut bank).unwrap();
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP7", "FP7", 0);
+        indices.insert_clause(&mut source, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &target_for_paramod,
+            &target,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Simultaneous,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one applied-head simultaneous paramodulant");
+        assert_eq!(stored.literal_number(), 1);
+        let expected_left = typed_unary(&mut bank, wrapper_code, &source_right);
+        assert_eq!(stored.literals().as_slice()[0].left(), &expected_left);
+        assert_eq!(stored.literals().as_slice()[0].right(), &target_right);
     }
 
     #[test]

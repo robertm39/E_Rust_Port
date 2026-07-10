@@ -175,7 +175,7 @@ pub fn tb_term_pos_replace(
     bank.insert_no_props(&replacement, deref)
 }
 
-fn make_rewritten_term(
+pub(crate) fn make_rewritten_term(
     bank: &mut TermBank,
     orig: &Term,
     new: &Term,

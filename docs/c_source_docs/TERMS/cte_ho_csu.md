@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for `SingleUnif` queue-pop sequencing on 2026-07-09.
 
 Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 
@@ -136,4 +136,5 @@ Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 - `BUILD_CONSTR(c, s)` does not mask `s` to the low two state bits, so an invalid state value can also change the decoded counter. Rust preserves the macro shape for compatibility; a cleaned CSU API should make state construction typed and reject out-of-range states once reference behavior is locked down.
 - `NextCSUElement` comments say the iterator is destroyed after it returns false, but the function only backtracks the substitution; callers still have to call `CSUIterDestroy` to release queues/stacks. Rust keeps false-result backtracking separate from explicit `destroy`, but a cleaned public API should make the lifecycle unambiguous.
 - The C global stores a pointer, so later mutation of the same `HeuristicParmsCell` would be observable by CSU enumeration. Rust intentionally stores a snapshot; revisit this if mutable post-init heuristic parameters become part of the Rust proof-search lifecycle.
+- `NextCSUElement` passes two side-effecting `PQueueGetLastP(iter->constraints)` calls as arguments to one `SubstMguComplete` call in first-order/`SingleUnif` mode. C does not specify function-argument evaluation order, so compilers may reverse which popped constraint becomes the first MGU operand; unifiability is symmetric, but binding orientation and allocation order need not be. Rust sequences the pops explicitly. A cleaned C implementation should do the same once reference traces establish the intended operand order.
 <!-- END MANUAL REVIEW: c_source_docs -->

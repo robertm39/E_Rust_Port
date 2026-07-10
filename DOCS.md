@@ -24,7 +24,7 @@ The original C implementation in `eprover/` is documented under [`docs/c_source_
 
 When porting new code or reviewing already-ported code, document C implementation details that may make sense to change after drop-in compatibility is secured. This includes accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, confusing API boundaries, ignored parameters, counter overflows, and performance tradeoffs. Put these notes in the relevant C-source page's manual-review `Change Later` section, or in a linked status/design doc when the issue spans multiple source units.
 
-Retroactive audit status as of 2026-07-07: the existing C-source manual-review pages have been checked against this rule with `check_change_later_notes.py`, `generate_c_source_docs.py --check`, `check_regeneration_preserves_manual.py`, and `check_markdown_links.py`. Continue applying the rule to newly ported code and to any stale `pending` or `remaining` status notes discovered during later reviews.
+Retroactive audit status as of 2026-07-09: the existing C-source manual-review pages have been checked against this rule with `check_change_later_notes.py`, `generate_c_source_docs.py --check`, `check_regeneration_preserves_manual.py`, and `check_markdown_links.py`; the indexed-paramodulation review also removed stale default-index wiring and fresh-variable-helper notes. Continue applying the rule to newly ported code and to any stale `pending` or `remaining` status notes discovered during later reviews.
 
 Start here:
 
