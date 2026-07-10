@@ -47,6 +47,7 @@ pub static BWRW_MATCH_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct PlainRewriteTrace {
     sos_rewritten: bool,
+    subst: Substitution,
 }
 
 /// Rewrites a clause with local rules extracted from that same clause.
@@ -240,28 +241,48 @@ pub fn rewrite_with_clause_set_plain(
     prefer_general: bool,
     restricted_rw: bool,
 ) -> Result<Term, Diagnostic> {
+    let mut subst = Substitution::new();
+    rewrite_with_clause_set_plain_with_subst(
+        bank,
+        ocb,
+        term,
+        date,
+        demodulators,
+        prefer_general,
+        restricted_rw,
+        &mut subst,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C rewrite descriptors own a reusable substitution stack"
+)]
+fn rewrite_with_clause_set_plain_with_subst(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    date: SysDate,
+    demodulators: &ClauseSet,
+    prefer_general: bool,
+    restricted_rw: bool,
+    subst: &mut Substitution,
+) -> Result<Term, Diagnostic> {
     assert!(!term.is_free_var(), "free variables are not rewritten");
     assert!(
         !term.is_top_rewritten(),
         "top-level rewrite expects no existing top rewrite link"
     );
+    debug_assert!(subst.is_empty(), "rewrite substitution must be backtracked");
 
     REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
     demodulators.record_demod_index_search_init(term, date, prefer_general);
 
-    let mut subst = Substitution::new();
     let found = if demodulators.demod_index_search_may_have_match() {
-        match find_plain_demodulator(
-            ocb,
-            bank,
-            term,
-            date,
-            demodulators,
-            &mut subst,
-            restricted_rw,
-        ) {
+        match find_plain_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw) {
             Ok(found) => found,
             Err(error) => {
+                subst.backtrack();
                 demodulators.record_demod_index_search_exit();
                 return Err(error);
             }
@@ -271,12 +292,14 @@ pub fn rewrite_with_clause_set_plain(
     };
     demodulators.record_demod_index_search_exit();
     let Some(found) = found else {
+        debug_assert!(subst.is_empty(), "failed rewrite must backtrack bindings");
         return Ok(term.clone());
     };
 
     REWRITE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-    let replacement = bank.insert_instantiated(found.replacement)?;
+    let replacement = bank.insert_instantiated(found.replacement);
     subst.backtrack();
+    let replacement = replacement?;
 
     if replacement == *term {
         return Ok(term.clone());
@@ -324,6 +347,33 @@ pub fn rewrite_with_clause_set_list_plain(
     prefer_general: bool,
     restricted_rw: bool,
 ) -> Result<Term, Diagnostic> {
+    let mut subst = Substitution::new();
+    rewrite_with_clause_set_list_plain_with_subst(
+        bank,
+        ocb,
+        term,
+        demodulators,
+        level,
+        prefer_general,
+        restricted_rw,
+        &mut subst,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C rewrite descriptors own a reusable substitution stack"
+)]
+fn rewrite_with_clause_set_list_plain_with_subst(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    restricted_rw: bool,
+    subst: &mut Substitution,
+) -> Result<Term, Diagnostic> {
     let level_count = rewrite_level_count(level);
     assert!(level_count != 0, "rewrite level must be active");
     assert!(
@@ -344,7 +394,7 @@ pub fn rewrite_with_clause_set_list_plain(
                 .nf_date(date_level)
                 .is_earlier_than(demodulator_set.date())
         {
-            result = rewrite_with_clause_set_plain(
+            result = rewrite_with_clause_set_plain_with_subst(
                 bank,
                 ocb,
                 term,
@@ -352,6 +402,7 @@ pub fn rewrite_with_clause_set_list_plain(
                 demodulator_set,
                 prefer_general,
                 restricted_rw,
+                subst,
             )?;
             if result != *term {
                 break;
@@ -465,7 +516,7 @@ fn term_li_normalform_plain_with_date(
             let (new_term, sos_rewritten) = if current.is_top_rewritten() {
                 term_follow_top_rw_chain(&current, follow_restricted)
             } else {
-                let _ = rewrite_with_clause_set_list_plain(
+                let _ = rewrite_with_clause_set_list_plain_with_subst(
                     bank,
                     ocb,
                     &current,
@@ -473,6 +524,7 @@ fn term_li_normalform_plain_with_date(
                     level,
                     prefer_general,
                     follow_restricted,
+                    &mut trace.subst,
                 )?;
                 term_follow_top_rw_chain(&current, follow_restricted)
             };
@@ -1064,9 +1116,8 @@ fn find_indexed_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
-    let clauses_by_id = first_demodulator_clause_by_id(demodulators);
     while let Some(candidate) = demodulators.demod_index_search_next_candidate_side() {
-        let Some(&clause) = clauses_by_id.get(&candidate.clause_id) else {
+        let Some(clause) = demodulators.find_indexed_by_id(candidate.clause_id) else {
             continue;
         };
         let Some(match_) = try_demodulator_clause_side(
@@ -1085,14 +1136,6 @@ fn find_indexed_demodulator<'a>(
         return Ok(Some(match_));
     }
     Ok(None)
-}
-
-fn first_demodulator_clause_by_id(demodulators: &ClauseSet) -> BTreeMap<i64, &Clause> {
-    let mut clauses_by_id = BTreeMap::new();
-    for clause in demodulators.iter().filter(|clause| clause.is_demodulator()) {
-        clauses_by_id.entry(clause.ident()).or_insert(clause);
-    }
-    clauses_by_id
 }
 
 fn find_set_order_demodulator<'a>(

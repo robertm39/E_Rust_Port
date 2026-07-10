@@ -102,6 +102,7 @@ Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 ### Change Later
 
 - `TermTopCompare` switches from a first-order type-pointer equality assertion to higher-order type-pointer ordering through the process-global `problemType`. Rust preserves that assertion boundary and activates the parsed problem dialect before proof-search term indexing, but a cleaned term-bank API should pass the problem type explicitly into top-cell comparison instead of relying on parser-global residue.
+- C embeds `lson`/`rson` index links directly in each `TermCell` and uses a stack-local dummy `TermCell` to assemble both sides during top-down splaying. Rust preserves the intrusive tree shape without heap-allocating the dummy header; a future stable term arena should consider store-owned bucket links so logical term cells are not coupled to one index topology.
 
 ### Porting Focus
 

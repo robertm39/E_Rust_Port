@@ -170,57 +170,70 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
 }
 
 fn splay_term_tree(mut tree: Term, key: &Term) -> Term {
-    let header = Term::default_cell_alloc();
-    let mut left = header.clone();
-    let mut right = header.clone();
+    let mut left_root = None;
+    let mut left_tail: Option<Term> = None;
+    let mut right_root = None;
+    let mut right_tail: Option<Term> = None;
 
     loop {
         let cmp = term_top_compare(key, &tree);
         match cmp.cmp(&0) {
             Ordering::Less => {
-                let Some(mut next) = tree.left_son() else {
+                let Some(mut next) = tree.take_left_son() else {
                     break;
                 };
                 if term_top_compare(key, &next) < 0 {
                     let tmp = next;
-                    tree.set_left_son(tmp.right_son());
+                    tree.set_left_son(tmp.take_right_son());
                     tmp.set_right_son(Some(tree));
                     tree = tmp;
-                    let Some(left_child) = tree.left_son() else {
+                    let Some(left_child) = tree.take_left_son() else {
                         break;
                     };
                     next = left_child;
                 }
-                right.set_left_son(Some(tree.clone()));
-                right = tree;
+                if let Some(tail) = right_tail.as_ref() {
+                    tail.set_left_son(Some(tree.clone()));
+                } else {
+                    right_root = Some(tree.clone());
+                }
+                right_tail = Some(tree);
                 tree = next;
             }
             Ordering::Greater => {
-                let Some(mut next) = tree.right_son() else {
+                let Some(mut next) = tree.take_right_son() else {
                     break;
                 };
                 if term_top_compare(key, &next) > 0 {
                     let tmp = next;
-                    tree.set_right_son(tmp.left_son());
+                    tree.set_right_son(tmp.take_left_son());
                     tmp.set_left_son(Some(tree));
                     tree = tmp;
-                    let Some(right_child) = tree.right_son() else {
+                    let Some(right_child) = tree.take_right_son() else {
                         break;
                     };
                     next = right_child;
                 }
-                left.set_right_son(Some(tree.clone()));
-                left = tree;
+                if let Some(tail) = left_tail.as_ref() {
+                    tail.set_right_son(Some(tree.clone()));
+                } else {
+                    left_root = Some(tree.clone());
+                }
+                left_tail = Some(tree);
                 tree = next;
             }
             Ordering::Equal => break,
         }
     }
 
-    left.set_right_son(tree.left_son());
-    right.set_left_son(tree.right_son());
-    tree.set_left_son(header.right_son());
-    tree.set_right_son(header.left_son());
+    if let Some(left_tail) = left_tail {
+        left_tail.set_right_son(tree.take_left_son());
+        tree.set_left_son(left_root);
+    }
+    if let Some(right_tail) = right_tail {
+        right_tail.set_left_son(tree.take_right_son());
+        tree.set_right_son(right_root);
+    }
     tree
 }
 

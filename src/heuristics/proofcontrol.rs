@@ -2087,6 +2087,10 @@ pub fn proof_state_forward_modify_clause_with_docs(
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible ForwardModifyClause staging keeps mutation order and phase timers visible"
+)]
 fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -2096,6 +2100,9 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     problem_type: ProblemType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::ForwardModifyTimer,
+    );
     let prefer_general = control.heuristic_parms().prefer_general;
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let local_rw = control.heuristic_parms().local_rw;
@@ -2116,27 +2123,32 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
         forward_modify_check_higher_order_ordering(higher_order, ocb, clause, &demodulators)?;
         loop {
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
-            let steps = match doc_context.as_mut() {
-                Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
-                    output,
-                    session,
-                    terms,
-                    ocb,
-                    clause,
-                    &demodulators,
-                    level,
-                    prefer_general,
-                    lambda_demod,
-                )?,
-                None => clause_compute_li_normalform_plain(
-                    terms,
-                    ocb,
-                    clause,
-                    &demodulators,
-                    level,
-                    prefer_general,
-                    lambda_demod,
-                )?,
+            let steps = {
+                let _timer = crate::basics::perf_counters::start(
+                    crate::basics::perf_counters::PerfCounter::ForwardRewriteTimer,
+                );
+                match doc_context.as_mut() {
+                    Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
+                        output,
+                        session,
+                        terms,
+                        ocb,
+                        clause,
+                        &demodulators,
+                        level,
+                        prefer_general,
+                        lambda_demod,
+                    )?,
+                    None => clause_compute_li_normalform_plain(
+                        terms,
+                        ocb,
+                        clause,
+                        &demodulators,
+                        level,
+                        prefer_general,
+                        lambda_demod,
+                    )?,
+                }
             };
             rw_steps += steps;
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
@@ -2164,9 +2176,17 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             }
 
-            clause.orient_literals_with_bank(ocb, terms)?;
+            {
+                let _timer = crate::basics::perf_counters::start(
+                    crate::basics::perf_counters::PerfCounter::OrientTimer,
+                );
+                clause.orient_literals_with_bank(ocb, terms)?;
+            }
 
             if forward_modify_condense(terms, clause, condense_clause, &mut doc_context)? {
+                let _timer = crate::basics::perf_counters::start(
+                    crate::basics::perf_counters::PerfCounter::OrientTimer,
+                );
                 clause.orient_literals_with_bank(ocb, terms)?;
             }
 
@@ -2179,19 +2199,24 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             }
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
 
-            forward_modify_positive_simplify_reflect(
-                terms,
-                processed_sets.pos_eqns,
-                clause,
-                strong_unit_forward_subsumption,
-                &mut doc_context,
-            )?;
-            forward_modify_negative_simplify_reflect(
-                terms,
-                processed_sets.neg_units,
-                clause,
-                &mut doc_context,
-            )?;
+            {
+                let _timer = crate::basics::perf_counters::start(
+                    crate::basics::perf_counters::PerfCounter::SimplifyReflectTimer,
+                );
+                forward_modify_positive_simplify_reflect(
+                    terms,
+                    processed_sets.pos_eqns,
+                    clause,
+                    strong_unit_forward_subsumption,
+                    &mut doc_context,
+                )?;
+                forward_modify_negative_simplify_reflect(
+                    terms,
+                    processed_sets.neg_units,
+                    clause,
+                    &mut doc_context,
+                )?;
+            }
             if clause.query_prop(CP_LIMITED_RW) == limited_rw {
                 break false;
             }
@@ -2950,6 +2975,22 @@ impl ParentLivenessSnapshot {
         snapshot
     }
 
+    fn from_selection_state(state: &ProofState) -> Self {
+        let mut snapshot = Self::default();
+        snapshot.collect_set(state.axioms());
+        snapshot.collect_set(state.ax_archive());
+        snapshot.collect_set(state.processed_pos_rules());
+        snapshot.collect_set(state.processed_pos_eqns());
+        snapshot.collect_set(state.processed_neg_units());
+        snapshot.collect_set(state.processed_non_units());
+        snapshot.collect_set(state.archive());
+        snapshot.collect_set(state.definition_store());
+        if let Some(watchlist) = state.watchlist() {
+            snapshot.collect_set(watchlist);
+        }
+        snapshot
+    }
+
     fn collect_set(&mut self, set: &ClauseSet) {
         for clause in set.iter() {
             let parent = ClauseDerivationRef::from(clause);
@@ -3094,10 +3135,23 @@ pub fn proof_state_cleanup_unprocessed_clauses(
     control: &mut ProofControl,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
     let current_storage = proof_state_storage_estimate(state);
-    let parent_liveness = ParentLivenessSnapshot::from_state(state);
-    proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |parent| {
-        parent_liveness.parent_is_dead(parent)
-    })
+    let back_simplified = state
+        .statistics()
+        .backward_subsumed_count
+        .saturating_add(state.statistics().backward_rewritten_count);
+    let orphan_delta = back_simplified.saturating_sub(state.statistics().filter_orphans_base);
+    let needs_parent_liveness =
+        unsigned_delta_exceeds_limit(orphan_delta, control.heuristic_parms().filter_orphans_limit)
+            || current_storage > control.heuristic_parms().delete_bad_limit;
+
+    if needs_parent_liveness {
+        let parent_liveness = ParentLivenessSnapshot::from_state(state);
+        proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |parent| {
+            parent_liveness.parent_is_dead(parent)
+        })
+    } else {
+        proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |_| false)
+    }
 }
 
 /// Applies C `ProofStateFilterUnprocessed` to the state-owned unprocessed set.
@@ -3370,6 +3424,9 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<Option<Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::InsertNewTimer,
+    );
     proof_state_record_tmp_store_generated_snapshot(state);
 
     while let Some(mut clause) = state.tmp_store_mut().extract_first() {
@@ -3783,7 +3840,12 @@ pub fn proof_state_select_unprocessed_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let parent_liveness = ParentLivenessSnapshot::from_state(state);
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SelectionTimer,
+    );
+    // At the HCB boundary, generated children wait in tmp/eval/unprocessed;
+    // inference parents already live in source, processed, or archive owners.
+    let parent_liveness = ParentLivenessSnapshot::from_selection_state(state);
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -6248,6 +6310,9 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     indices: Option<&GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::GenerateTimer,
+    );
     state.terms().vars().set_v_counts_to_used();
     let _ = compute_ho_inferences(state, control, clause, problem_type, indices)?;
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
@@ -12292,6 +12357,32 @@ mod tests {
                 4_118, 0
             )))
         );
+    }
+
+    #[test]
+    fn selection_parent_liveness_scans_only_stable_parent_owners() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut live_parent = Clause::empty();
+        live_parent.set_ident(4_120);
+        let live_ref = ClauseDerivationRef::from(&live_parent);
+        state.processed_non_units_mut().insert(live_parent);
+
+        let mut dead_parent = Clause::empty();
+        dead_parent.set_ident(4_121);
+        dead_parent.set_prop(CP_IS_DEAD);
+        let dead_ref = ClauseDerivationRef::from(&dead_parent);
+        state.archive_mut().insert(dead_parent);
+
+        let mut waiting_child = Clause::empty();
+        waiting_child.set_ident(4_122);
+        let waiting_ref = ClauseDerivationRef::from(&waiting_child);
+        state.unprocessed_mut().insert(waiting_child);
+
+        let snapshot = ParentLivenessSnapshot::from_selection_state(&state);
+
+        assert!(!snapshot.parent_is_dead(DerivationParentRef::Clause(live_ref)));
+        assert!(snapshot.parent_is_dead(DerivationParentRef::Clause(dead_ref)));
+        assert!(snapshot.parent_is_dead(DerivationParentRef::Clause(waiting_ref)));
     }
 
     #[test]

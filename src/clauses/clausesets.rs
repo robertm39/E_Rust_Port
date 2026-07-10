@@ -105,6 +105,7 @@ pub struct ClauseSet {
     date: SysDate,
     identifier: String,
     demod_index: Option<PdTree>,
+    indexed_clause_positions: BTreeMap<i64, usize>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
     eval_no: usize,
@@ -128,6 +129,7 @@ impl ClauseSet {
             date,
             identifier: String::new(),
             demod_index: None,
+            indexed_clause_positions: BTreeMap::new(),
             fv_anchor: None,
             eval_indices: Vec::new(),
             eval_no: 0,
@@ -177,6 +179,7 @@ impl ClauseSet {
     pub fn init_demod_index(&mut self) {
         if self.demod_index.is_none() {
             self.demod_index = Some(PdTree::new());
+            self.rebuild_indexed_clause_positions();
         }
     }
 
@@ -646,6 +649,11 @@ impl ClauseSet {
             &mut self.next_eval_object,
             &mut clause,
         );
+        if self.demod_index.is_some() {
+            self.indexed_clause_positions
+                .entry(clause.ident())
+                .or_insert(self.clauses.len());
+        }
         self.clauses.push_back(clause);
     }
 
@@ -747,6 +755,18 @@ impl ClauseSet {
     #[must_use]
     pub fn find_by_id(&self, ident: i64) -> Option<&Clause> {
         self.clauses.iter().find(|clause| clause.ident() == ident)
+    }
+
+    #[must_use]
+    pub(crate) fn find_indexed_by_id(&self, ident: i64) -> Option<&Clause> {
+        let position = *self.indexed_clause_positions.get(&ident)?;
+        self.clauses.get(position)
+    }
+
+    #[must_use]
+    pub(crate) fn find_indexed_position_by_id(&self, ident: i64) -> Option<(usize, &Clause)> {
+        let position = *self.indexed_clause_positions.get(&ident)?;
+        self.clauses.get(position).map(|clause| (position, clause))
     }
 
     #[must_use]
@@ -854,6 +874,7 @@ impl ClauseSet {
         self.clauses
             .make_contiguous()
             .sort_unstable_by(|left, right| compare(left, right));
+        self.rebuild_indexed_clause_positions();
     }
 
     pub fn sort_literals_by<F>(&mut self, mut compare: F)
@@ -1397,6 +1418,7 @@ impl ClauseSet {
             clause.del_prop(CP_IS_S_INDEXED);
         }
         self.literals -= usize_to_i64(clause.literal_number());
+        self.rebuild_indexed_clause_positions();
         Some(clause)
     }
 
@@ -1422,6 +1444,18 @@ impl ClauseSet {
         self.clauses
             .iter()
             .all(|clause| !clause.is_demodulator() || clause.query_prop(CP_IS_D_INDEXED))
+    }
+
+    fn rebuild_indexed_clause_positions(&mut self) {
+        self.indexed_clause_positions.clear();
+        if self.demod_index.is_none() {
+            return;
+        }
+        for (position, clause) in self.clauses.iter().enumerate() {
+            self.indexed_clause_positions
+                .entry(clause.ident())
+                .or_insert(position);
+        }
     }
 
     pub(crate) fn recompute_literals(&mut self) {
@@ -2188,6 +2222,43 @@ mod tests {
         assert_eq!(set.demod_index().unwrap().term_count(), 0);
         assert!(set.demod_index_storage_estimate() < indexed_storage);
         assert!(set.demod_index_storage_estimate() > 0);
+    }
+
+    #[test]
+    fn indexed_clause_lookup_tracks_first_duplicate_after_removal() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "indexed_lookup_a");
+        let b = typed_const(&mut bank, "indexed_lookup_b");
+        let c = typed_const(&mut bank, "indexed_lookup_c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second = clause_from(vec![literal(&mut bank, &a, &c, true)]);
+        first.set_ident(7_001);
+        second.set_ident(7_001);
+        let first_generation = first.derivation_generation();
+        let second_generation = second.derivation_generation();
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(first, &bank);
+        set.indexed_insert_clause_owned(second, &bank);
+
+        assert_eq!(
+            set.find_indexed_by_id(7_001)
+                .map(Clause::derivation_generation),
+            Some(first_generation)
+        );
+        assert_eq!(
+            set.find_indexed_position_by_id(7_001)
+                .map(|(position, clause)| (position, clause.derivation_generation())),
+            Some((0, first_generation))
+        );
+
+        let extracted = set.extract_first().expect("first duplicate is present");
+        assert_eq!(extracted.derivation_generation(), first_generation);
+        assert_eq!(
+            set.find_indexed_position_by_id(7_001)
+                .map(|(position, clause)| (position, clause.derivation_generation())),
+            Some((0, second_generation))
+        );
     }
 
     #[test]

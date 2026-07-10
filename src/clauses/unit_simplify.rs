@@ -13,7 +13,6 @@ use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
-use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,9 +329,8 @@ fn find_indexed_top_simplifying_unit<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
-    let clauses_by_id = first_clause_by_id(units);
     while let Some(candidate) = units.demod_index_search_next_candidate_side() {
-        let Some(&clause) = clauses_by_id.get(&candidate.clause_id) else {
+        let Some(clause) = units.find_indexed_by_id(candidate.clause_id) else {
             continue;
         };
         let Some(literal) = unit_literal(clause) else {
@@ -409,9 +407,8 @@ fn find_indexed_top_simplifying_unit_index(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<usize> {
-    let clauses_by_id = first_clause_index_by_id(units);
     while let Some(candidate) = units.demod_index_search_next_candidate_side() {
-        let Some(&(index, clause)) = clauses_by_id.get(&candidate.clause_id) else {
+        let Some((index, clause)) = units.find_indexed_position_by_id(candidate.clause_id) else {
             continue;
         };
         let Some(literal) = unit_literal(clause) else {
@@ -460,24 +457,6 @@ fn find_top_simplifying_unit_index(
     };
     units.record_demod_index_search_exit();
     result
-}
-
-fn first_clause_by_id(units: &ClauseSet) -> BTreeMap<i64, &Clause> {
-    let mut clauses_by_id = BTreeMap::new();
-    for clause in units.iter() {
-        clauses_by_id.entry(clause.ident()).or_insert(clause);
-    }
-    clauses_by_id
-}
-
-fn first_clause_index_by_id(units: &ClauseSet) -> BTreeMap<i64, (usize, &Clause)> {
-    let mut clauses_by_id = BTreeMap::new();
-    for (index, clause) in units.iter().enumerate() {
-        clauses_by_id
-            .entry(clause.ident())
-            .or_insert((index, clause));
-    }
-    clauses_by_id
 }
 
 fn find_simplifying_unit_index(
