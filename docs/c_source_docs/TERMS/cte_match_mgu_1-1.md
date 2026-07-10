@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order `SubstMguComplete` porting boundaries and applied-variable dereference coverage on 2026-07-04.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching, `SubstMguComplete` porting boundaries, and applied-variable dereference coverage on 2026-07-10.
 
 Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 
@@ -118,6 +118,7 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - `OccurCheck`, `SubstComputeMgu`, and `VerifyMatch` reach applied free-variable expansion through ordinary dereference/equality helpers. Rust now has regression coverage that the first-order match/MGU boundary follows bound applied free-variable heads instead of treating that as an unported path.
 - `MEASURE_UNIFICATION` owns process-global `UnifAttempts`/`UnifSuccesses` counters around `SubstComputeMgu` and `SubstComputeMguHO`. Rust maps the first-order `SubstComputeMgu` side to the non-default `measure-unification` Cargo feature and exposes the same executable statistics lines over those counters.
 - In higher-order problem mode, `SubstMguComplete` eta-reduces both inputs, calls `SubstComputeMguHO`, and falls back to the higher-order pattern MGU when both original inputs are non-first-order patterns. Rust now ports that bank-aware complete-MGU dispatch for CSU single-mode callers by taking the owning `TermBank` explicitly, preserving C's same-head different-arity failure behavior instead of falling into the first-order assertion path.
+- In higher-order problem mode, `SubstMatchComplete` eta-reduces both inputs, calls the directed `SubstComputeMatchHO`, and falls back to `SubstComputeMatchPattern` when both unreduced inputs are non-first-order patterns. Rust now ports that bank-aware dispatch, including application-variable prefix construction, exact complete-match checking, diagnostic-safe substitution rollback, and use by forward/backward demodulation and predicate-gate validation where a mutable owner bank is available.
 
 ### Porting Focus
 
@@ -128,9 +129,10 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 ### Change Later
 
 - `SubstComputeMguHO` reports leftover-argument information through `UnificationResult`, while `SubstMguComplete` collapses that to a boolean after checking no arguments remain. A cleaned API should expose the argument-prefix result type directly at callers that need HO constraints, rather than threading a C-style integer result plus a separate `CheckHOUnificationConstraints` hook.
+- `SubstComputeMatchHO` is documented as matching a prefix and returns an `int`, but the current implementation initializes the successful result to zero and changes it only to `MATCH_FAILED`; no positive remainder is produced. Either restore an explicit prefix-result path or make this a boolean complete matcher after compatibility consumers no longer depend on the historical signature.
 - The higher-order pattern fallback is guarded by `TermIsNonFOPattern` checks on the unreduced original inputs after the first HO MGU attempt fails. Preserve that order for compatibility until trace tests prove eta-reduced pattern detection is equivalent.
 - The C first-order helpers inherit LFHO `TermDeref` binding-cache refreshes when applied-variable dereferencing is active. Rust currently matches the expansion shape through no-cache term handles; add owner-bank/cache behavior only after profiling or trace tests show the cache side effects matter.
-- C terms can recover their owning bank through `TermGetBank`, so `SubstMguComplete` can remain a three-argument macro/function while secretly reaching eta-reduction, type-bank sharing, and app-variable prefix construction. Rust currently exposes a bank-aware wrapper for the HO branch; after compatibility is secured, prefer explicit proof/unification-session context over C-style owner-bank recovery.
+- C terms can recover their owning bank through `TermGetBank`, so `SubstMatchComplete` and `SubstMguComplete` can remain three-argument functions while secretly reaching eta-reduction, type-bank sharing, and app-variable prefix construction. Rust exposes bank-aware wrappers for those HO branches; after compatibility is secured, prefer explicit proof/unification-session context over C-style owner-bank recovery.
 - C uses signed `long` globals for `UnifAttempts` and `UnifSuccesses`; Rust uses feature-gated atomic signed counters so tests and future threaded callers can read them safely. Revisit the exact overflow and reset story only if compatibility diagnostics depend on very long-running process-global counter behavior.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

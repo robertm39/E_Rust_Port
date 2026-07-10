@@ -21,7 +21,7 @@ use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::match_mgu::subst_match_complete;
+use crate::terms::match_mgu::subst_match_complete_with_bank;
 use crate::terms::replace::{
     make_rewritten_term, term_add_rw_link, term_follow_top_rw_chain, RwResultType,
 };
@@ -1247,7 +1247,7 @@ fn try_left_demodulator_side<'a>(
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     let backtrack = subst.len();
-    if subst_match_complete(eqn.left(), term, subst)
+    if subst_match_complete_with_bank(bank, eqn.left(), term, subst)?
         && (eqn.is_oriented() || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
         && (!restricted_rw || !subst.is_renaming())
     {
@@ -1273,7 +1273,7 @@ fn try_right_demodulator_side<'a>(
     }
 
     let backtrack = subst.len();
-    if subst_match_complete(eqn.right(), term, subst)
+    if subst_match_complete_with_bank(bank, eqn.right(), term, subst)?
         && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)?
     {
         return Ok(Some(PlainDemodulatorMatch {
@@ -1361,7 +1361,7 @@ fn term_find_rw_clauses_indexed<'idx>(
     let mut count = 0;
 
     BWRW_MATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-    if subst_match_complete(left, occurrence.term(), &mut subst) {
+    if subst_match_complete_with_bank(bank, left, occurrence.term(), &mut subst)? {
         BWRW_MATCH_SUCCESSES.fetch_add(1, Ordering::Relaxed);
         if oriented || instance_is_rule(ocb, bank, left, right, &mut subst)? {
             let result = if !oriented || !subst.is_renaming() {
@@ -1517,7 +1517,7 @@ fn term_is_top_rewritable(
     let mut result = RwResultType::NotRewritable;
 
     BWRW_MATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-    if subst_match_complete(eqn.left(), term, &mut subst) {
+    if subst_match_complete_with_bank(bank, eqn.left(), term, &mut subst)? {
         BWRW_MATCH_SUCCESSES.fetch_add(1, Ordering::Relaxed);
         if eqn.is_oriented() || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), &mut subst)? {
             result = if !eqn.is_oriented() || !subst.is_renaming() {
@@ -1546,7 +1546,7 @@ fn term_is_top_rewritable(
         && !eqn.is_oriented()
     {
         BWRW_MATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-        if subst_match_complete(eqn.right(), term, &mut subst) {
+        if subst_match_complete_with_bank(bank, eqn.right(), term, &mut subst)? {
             BWRW_MATCH_SUCCESSES.fetch_add(1, Ordering::Relaxed);
             if instance_is_rule(ocb, bank, eqn.right(), eqn.left(), &mut subst)? {
                 term.set_prop(TP_IS_REWRITABLE | TP_IS_RREWRITABLE);
@@ -2217,6 +2217,52 @@ mod tests {
 
         assert_eq!(backward_result, RwResultType::AlwaysRewritable);
         assert_eq!(f_b.rw_replace_field(), Some(expected));
+    }
+
+    #[test]
+    fn higher_order_root_rewrite_matches_applied_variable_patterns() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let argument = typed_const(&mut bank, "rw_ho_match_argument");
+        let replacement = typed_const(&mut bank, "rw_ho_match_replacement");
+        let flex_application =
+            apply_terms(&mut bank, &flex, std::slice::from_ref(&argument)).unwrap();
+        let rigid_application = typed_unary(&mut bank, "rw_ho_match_rigid", &argument);
+        let matcher = typed_unary(&mut bank, "rw_ho_match_outer", &flex_application);
+        let target = typed_unary(&mut bank, "rw_ho_match_outer", &rigid_application);
+
+        let mut demod_lit = eqn(&mut bank, &matcher, &replacement, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &target,
+            SysDate::creation_time(),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, replacement);
+        assert_eq!(target.rw_replace_field(), Some(replacement));
+        assert!(target.is_top_rewritten());
+        assert!(flex.binding().is_none());
     }
 
     #[test]

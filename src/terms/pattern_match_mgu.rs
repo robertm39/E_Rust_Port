@@ -5,17 +5,272 @@ use crate::basics::pqueue::PQueue;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
     apply_terms, close_with_db_var, close_with_type_prefix, fresh_var_with_args,
-    lambda_eta_reduce_db, shift_db, unfold_lambda, whnf_deref,
+    lambda_eta_expand_db, lambda_eta_reduce_db, lambda_normalize_db, shift_db, unfold_lambda,
+    whnf_deref,
 };
 use crate::terms::match_mgu::{occur_check, OracleUnifResult};
 use crate::terms::simpletypes::{get_ret_type, type_get_max_arity, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_array_no_duplicates, term_is_db_closed, term_is_ground};
-use crate::terms::termtypes::Term;
+use crate::terms::termfunc::{
+    term_array_no_duplicates, term_is_db_closed, term_is_ground, term_standard_weight,
+};
+use crate::terms::termtypes::{term_deref, DerefType, Term, DEFAULT_VWEIGHT};
 use std::collections::BTreeMap;
 
 type DbVarMap = BTreeMap<FunCode, Term>;
+
+/// C `SubstComputeMatchPattern`.
+///
+/// # Errors
+///
+/// Returns diagnostics from eta expansion, lambda normalization, DB-variable
+/// remapping, lambda closure, or term-bank insertion.
+///
+/// # Panics
+///
+/// Panics on malformed lambda/application cells or missing type metadata,
+/// matching the C implementation's internal assertions.
+pub fn subst_compute_match_pattern(
+    bank: &mut TermBank,
+    matcher: &Term,
+    to_match: &Term,
+    subst: &mut Substitution,
+) -> Result<OracleUnifResult, Diagnostic> {
+    if matcher.type_() != to_match.type_() || !matcher.is_pattern() || !to_match.is_pattern() {
+        return Ok(OracleUnifResult::NotUnifiable);
+    }
+
+    let backtrack = subst.len();
+    let result = subst_compute_match_pattern_inner(bank, matcher, to_match, subst);
+    if !matches!(result, Ok(OracleUnifResult::Unifiable)) {
+        subst.backtrack_to_pos(backtrack);
+    }
+    result
+}
+
+fn subst_compute_match_pattern_inner(
+    bank: &mut TermBank,
+    matcher: &Term,
+    to_match: &Term,
+    subst: &mut Substitution,
+) -> Result<OracleUnifResult, Diagnostic> {
+    let matcher = lambda_eta_expand_db(bank, matcher)?;
+    let to_match = lambda_eta_expand_db(bank, to_match)?;
+    let mut jobs = Vec::new();
+    push_match_pair(&mut jobs, matcher.clone(), to_match.clone());
+    let mut result = OracleUnifResult::Unifiable;
+    let mut matcher_weight = term_standard_weight(&matcher);
+    let to_match_weight = term_standard_weight(&to_match);
+
+    while let Some((mut matcher, mut to_match)) = pop_match_pair(&mut jobs) {
+        if result != OracleUnifResult::Unifiable {
+            break;
+        }
+        (matcher, to_match) = prune_lambda_prefix(bank, matcher, to_match)?;
+
+        if term_is_ground(&matcher) && term_is_ground(&to_match) {
+            let normalized_matcher = lambda_normalize_db(bank, &matcher)?;
+            let normalized_target = lambda_normalize_db(bank, &to_match)?;
+            if normalized_matcher != normalized_target {
+                result = OracleUnifResult::NotUnifiable;
+                break;
+            }
+        }
+        if matcher_weight > to_match_weight {
+            result = OracleUnifResult::NotUnifiable;
+            break;
+        }
+
+        if matcher.is_top_level_free_var() {
+            let Some(normalized_matcher) = normalize_pattern_app_var(bank, &matcher)? else {
+                result = OracleUnifResult::NotInFragment;
+                break;
+            };
+            let matcher_head = free_var_head(&normalized_matcher);
+            if matcher_head.binding().is_some() {
+                let mut deref = DerefType::Once;
+                let dereferenced = term_deref(&normalized_matcher, &mut deref);
+                let normalized_binding = lambda_normalize_db(bank, &dereferenced)?;
+                let normalized_target = lambda_normalize_db(bank, &to_match)?;
+                if normalized_binding != normalized_target {
+                    result = OracleUnifResult::NotUnifiable;
+                }
+            } else {
+                result = match_pattern_var(bank, subst, &normalized_matcher, &to_match)?;
+            }
+
+            matcher_weight += term_standard_weight(&to_match) - DEFAULT_VWEIGHT;
+            if matcher_weight > to_match_weight {
+                result = OracleUnifResult::NotUnifiable;
+            }
+        } else if matcher.is_top_level_db_var() {
+            result = match_pattern_db_pair(&mut jobs, &matcher, &to_match);
+        } else if matcher.f_code() == to_match.f_code() {
+            if bank.signature().is_polymorphic(matcher.f_code())
+                && matcher.arity() != 0
+                && required_arg(&matcher, 0).type_() != required_arg(&to_match, 0).type_()
+            {
+                result = OracleUnifResult::NotUnifiable;
+                continue;
+            }
+            assert_eq!(matcher.arity(), to_match.arity());
+            for index in (0..matcher.arity()).rev() {
+                push_match_pair(
+                    &mut jobs,
+                    required_arg(&matcher, index),
+                    required_arg(&to_match, index),
+                );
+            }
+        } else {
+            result = OracleUnifResult::NotUnifiable;
+        }
+    }
+
+    Ok(result)
+}
+
+fn match_pattern_db_pair(
+    jobs: &mut Vec<Term>,
+    matcher: &Term,
+    to_match: &Term,
+) -> OracleUnifResult {
+    if matcher.is_db_var() {
+        return if to_match.is_db_var() && matcher.f_code() == to_match.f_code() {
+            OracleUnifResult::Unifiable
+        } else {
+            OracleUnifResult::NotUnifiable
+        };
+    }
+
+    if !to_match.is_applied_db_var()
+        || required_arg(matcher, 0) != required_arg(to_match, 0)
+        || matcher.arity() != to_match.arity()
+    {
+        return OracleUnifResult::NotUnifiable;
+    }
+    for index in (1..matcher.arity()).rev() {
+        push_match_pair(
+            jobs,
+            required_arg(matcher, index),
+            required_arg(to_match, index),
+        );
+    }
+    OracleUnifResult::Unifiable
+}
+
+fn match_pattern_var(
+    bank: &mut TermBank,
+    subst: &mut Substitution,
+    matcher: &Term,
+    to_match: &Term,
+) -> Result<OracleUnifResult, Diagnostic> {
+    assert!(matcher.is_top_level_free_var());
+    if matcher.is_free_var() {
+        return if term_is_db_closed(to_match) {
+            subst.add_binding(matcher, to_match);
+            Ok(OracleUnifResult::Unifiable)
+        } else {
+            Ok(OracleUnifResult::NotUnifiable)
+        };
+    }
+
+    let db_map = db_var_map(bank, matcher);
+    let mut result = OracleUnifResult::Unifiable;
+    let Some(remapped) = remap_pattern_variables(bank, &db_map, to_match, 0, &mut result)? else {
+        return Ok(result);
+    };
+    let binding = close_with_type_prefix(bank, &visible_arg_types(matcher), &remapped)?;
+    subst.add_binding(&free_var_head(matcher), &binding);
+    Ok(result)
+}
+
+fn remap_pattern_variables(
+    bank: &mut TermBank,
+    db_map: &DbVarMap,
+    term: &Term,
+    depth: FunCode,
+    result: &mut OracleUnifResult,
+) -> Result<Option<Term>, Diagnostic> {
+    if !term.has_db_subterm() {
+        return Ok(Some(term.clone()));
+    }
+
+    let term = if term.is_applied_free_var() {
+        let Some(normalized) = normalize_pattern_app_var(bank, term)? else {
+            *result = OracleUnifResult::NotInFragment;
+            return Ok(None);
+        };
+        normalized
+    } else {
+        term.clone()
+    };
+
+    if term.is_lambda() {
+        let mut binders = Vec::new();
+        let matrix = unfold_lambda(&term, &mut binders);
+        let next_depth =
+            depth + FunCode::try_from(binders.len()).expect("lambda prefix length fits in FunCode");
+        let Some(mut remapped) =
+            remap_pattern_variables(bank, db_map, &matrix, next_depth, result)?
+        else {
+            return Ok(None);
+        };
+        if remapped == matrix {
+            return Ok(Some(term));
+        }
+        while let Some(binder) = binders.pop() {
+            let binder_type = binder.type_().expect("lambda binder must have a type");
+            remapped = close_with_db_var(bank, &binder_type, &remapped)?;
+        }
+        return Ok(Some(remapped));
+    }
+
+    if term.is_db_var() {
+        if term.f_code() < depth {
+            return Ok(Some(term));
+        }
+        let Some(replacement) = db_map.get(&(term.f_code() - depth)) else {
+            *result = OracleUnifResult::NotUnifiable;
+            return Ok(None);
+        };
+        let replacement_type = replacement
+            .type_()
+            .expect("DB replacement variable must have a type");
+        return Ok(Some(
+            bank.request_db_var(&replacement_type, replacement.f_code() + depth),
+        ));
+    }
+
+    let copy = Term::top_copy_without_args(&term);
+    let mut changed = false;
+    for index in 0..term.arity() {
+        let old_arg = required_arg(&term, index);
+        let Some(new_arg) = remap_pattern_variables(bank, db_map, &old_arg, depth, result)? else {
+            return Ok(None);
+        };
+        changed |= old_arg != new_arg;
+        copy.set_argument(index, new_arg);
+    }
+    if changed {
+        bank.term_top_insert(copy).map(Some)
+    } else {
+        Ok(Some(term))
+    }
+}
+
+fn push_match_pair(jobs: &mut Vec<Term>, matcher: Term, to_match: Term) {
+    jobs.push(matcher);
+    jobs.push(to_match);
+}
+
+fn pop_match_pair(jobs: &mut Vec<Term>) -> Option<(Term, Term)> {
+    let to_match = jobs.pop()?;
+    let matcher = jobs
+        .pop()
+        .expect("pattern-match stack stores complete pairs");
+    Some((matcher, to_match))
+}
 
 /// C `SubstComputeMguPattern`.
 ///
@@ -593,7 +848,7 @@ fn required_arg(term: &Term, index: usize) -> Term {
 
 #[cfg(test)]
 mod tests {
-    use super::subst_compute_mgu_pattern;
+    use super::{subst_compute_match_pattern, subst_compute_mgu_pattern};
     use crate::terms::lambda::apply_terms;
     use crate::terms::match_mgu::OracleUnifResult;
     use crate::terms::signature::Signature;
@@ -711,5 +966,42 @@ mod tests {
         assert!(right_head
             .binding()
             .is_some_and(|binding| binding.is_lambda()));
+    }
+
+    #[test]
+    fn pattern_match_binds_only_the_directed_applied_variable() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let flex_type = shared_unary_type(&mut bank, &type_);
+        let flex = bank.vars().get_fresh_var(&flex_type);
+        let db0 = bank.request_db_var(&type_, 0);
+        let matcher = apply_terms(&mut bank, &flex, std::slice::from_ref(&db0)).unwrap();
+        let target = typed_unary(&mut bank, "pattern_match_target", &db0);
+        let mut subst = Substitution::new();
+
+        let result = subst_compute_match_pattern(&mut bank, &matcher, &target, &mut subst).unwrap();
+
+        assert_eq!(result, OracleUnifResult::Unifiable);
+        assert_eq!(subst.bindings(), std::slice::from_ref(&flex));
+        assert!(flex.binding().is_some_and(|binding| binding.is_lambda()));
+    }
+
+    #[test]
+    fn pattern_match_backtracks_when_target_uses_unmapped_db_variable() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let flex_type = shared_unary_type(&mut bank, &type_);
+        let flex = bank.vars().get_fresh_var(&flex_type);
+        let db0 = bank.request_db_var(&type_, 0);
+        let db1 = bank.request_db_var(&type_, 1);
+        let matcher = apply_terms(&mut bank, &flex, std::slice::from_ref(&db0)).unwrap();
+        let target = typed_unary(&mut bank, "pattern_match_unmapped", &db1);
+        let mut subst = Substitution::new();
+
+        let result = subst_compute_match_pattern(&mut bank, &matcher, &target, &mut subst).unwrap();
+
+        assert_eq!(result, OracleUnifResult::NotUnifiable);
+        assert!(subst.is_empty());
+        assert!(flex.binding().is_none());
     }
 }

@@ -122,7 +122,7 @@ Source files reviewed: `BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`.
 
 ### Compatibility Notes
 
-- C stores `problemType` as process-global state and parser paths set it as first-order or higher-order syntax is observed. Rust now sets the same global for supported first-order executable parsing so lower-level ordering, indexing, and inference helpers see C-shaped state during a run.
+- C stores `problemType` as process-global state and parser paths set it as first-order or higher-order syntax is observed. Rust sets the same global for supported executable parsing so lower-level ordering, indexing, matching, and inference helpers see C-shaped state during a run; the production Rust cell uses a read-cheap atomic discriminant because complete matching consults it in demodulation hot paths.
 - `StrDistance`, `StringStartsWith`, and `StringIndex` operate on C strings, so embedded NUL bytes terminate comparisons. Rust preserves this for the public simple-string helpers while keeping sentinel-array stopping for `StringIndex`/`StringArrayCardinality`.
 
 ### Change Later

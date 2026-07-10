@@ -2,6 +2,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::cmp::Ordering;
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub const MAX_INDENT_SPACES: usize = 72;
@@ -101,7 +103,7 @@ impl RandState {
 }
 
 #[cfg(not(test))]
-static PROBLEM_TYPE: OnceLock<Mutex<ProblemType>> = OnceLock::new();
+static PROBLEM_TYPE: AtomicI32 = AtomicI32::new(ProblemType::NotInitialized as i32);
 #[cfg(test)]
 thread_local! {
     static TEST_PROBLEM_TYPE: RefCell<ProblemType> =
@@ -109,11 +111,6 @@ thread_local! {
 }
 static GLOBAL_JKISS_STATE: OnceLock<Mutex<RandState>> = OnceLock::new();
 static JKISS_SEED_SHADOW: OnceLock<Mutex<RandState>> = OnceLock::new();
-
-#[cfg(not(test))]
-fn problem_type_cell() -> &'static Mutex<ProblemType> {
-    PROBLEM_TYPE.get_or_init(|| Mutex::new(ProblemType::NotInitialized))
-}
 
 fn global_jkiss_state() -> &'static Mutex<RandState> {
     GLOBAL_JKISS_STATE.get_or_init(|| Mutex::new(RandState::default()))
@@ -261,13 +258,27 @@ fn c_strings_equal(left: &str, right: &str) -> bool {
 #[must_use]
 #[cfg(not(test))]
 pub fn problem_type() -> ProblemType {
-    *lock_or_recover(problem_type_cell())
+    match PROBLEM_TYPE.load(AtomicOrdering::Relaxed) {
+        -1 => ProblemType::NotInitialized,
+        0 => ProblemType::FirstOrder,
+        1 => ProblemType::HigherOrder,
+        value => unreachable!("invalid stored problem type {value}"),
+    }
 }
 
 #[cfg(not(test))]
 pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
-    let mut current = lock_or_recover(problem_type_cell());
-    set_problem_type_value(&mut current, problem_type)
+    let desired = problem_type as i32;
+    match PROBLEM_TYPE.compare_exchange(
+        ProblemType::NotInitialized as i32,
+        desired,
+        AtomicOrdering::Relaxed,
+        AtomicOrdering::Relaxed,
+    ) {
+        Ok(_) => Ok(()),
+        Err(current) if current == desired => Ok(()),
+        Err(_) => Err(problem_type_conflict_diagnostic()),
+    }
 }
 
 #[cfg(test)]
@@ -284,6 +295,7 @@ pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
     })
 }
 
+#[cfg(test)]
 fn set_problem_type_value(
     current: &mut ProblemType,
     problem_type: ProblemType,
@@ -292,16 +304,20 @@ fn set_problem_type_value(
         *current = problem_type;
         Ok(())
     } else {
-        Err(Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            "Mixing of first order and higher order syntax is not allowed.",
-        ))
+        Err(problem_type_conflict_diagnostic())
     }
+}
+
+fn problem_type_conflict_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        "Mixing of first order and higher order syntax is not allowed.",
+    )
 }
 
 #[cfg(not(test))]
 pub fn reset_problem_type() {
-    *lock_or_recover(problem_type_cell()) = ProblemType::NotInitialized;
+    PROBLEM_TYPE.store(ProblemType::NotInitialized as i32, AtomicOrdering::Relaxed);
 }
 
 #[cfg(test)]

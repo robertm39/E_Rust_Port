@@ -5,7 +5,9 @@ use crate::basics::error::Diagnostic;
 use crate::basics::pqueue::PQueue;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::lambda::{lambda_eta_reduce_db, whnf_deref};
-use crate::terms::pattern_match_mgu::{prune_lambda_prefix, subst_compute_mgu_pattern};
+use crate::terms::pattern_match_mgu::{
+    prune_lambda_prefix, subst_compute_match_pattern, subst_compute_mgu_pattern,
+};
 use crate::terms::signature::{SIG_ITE_CODE, SIG_LET_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{type_drop_first_arg, Type};
 use crate::terms::subst::Substitution;
@@ -13,7 +15,9 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
     term_is_db_closed, term_standard_weight, term_struct_equal_deref, term_struct_prefix_equal,
 };
-use crate::terms::termtypes::{term_deref, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS};
+use crate::terms::termtypes::{
+    term_deref, term_is_prefix, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS,
+};
 
 #[cfg(feature = "measure-unification")]
 static UNIFICATION_ATTEMPTS: AtomicI64 = AtomicI64::new(0);
@@ -258,6 +262,205 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
 /// Panics under the same conditions as [`subst_compute_match`].
 pub fn subst_match_complete(pattern: &Term, target: &Term, subst: &mut Substitution) -> bool {
     subst_compute_match(pattern, target, subst)
+}
+
+/// C `SubstMatchComplete`, with the owning term bank passed explicitly for the
+/// LFHO branch that C obtains through `TermGetBank`.
+///
+/// # Errors
+///
+/// Returns diagnostics from eta reduction, prefix binding construction, or
+/// the higher-order pattern-matching fallback.
+///
+/// # Panics
+///
+/// Panics on malformed higher-order terms or missing type metadata, matching
+/// the C implementation's internal assertions.
+pub fn subst_match_complete_with_bank(
+    bank: &mut TermBank,
+    pattern: &Term,
+    target: &Term,
+    subst: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder {
+        return Ok(subst_compute_match(pattern, target, subst));
+    }
+
+    let backtrack = subst.len();
+    let reduced_pattern = lambda_eta_reduce_db(bank, pattern)?;
+    let reduced_target = lambda_eta_reduce_db(bank, target)?;
+    let mut result = subst_compute_match_ho(bank, &reduced_pattern, &reduced_target, subst)?;
+
+    if result != 0 && pattern.is_non_fo_pattern() && target.is_non_fo_pattern() {
+        subst.backtrack_to_pos(backtrack);
+        result = if subst_compute_match_pattern(bank, pattern, target, subst)?
+            == OracleUnifResult::Unifiable
+        {
+            0
+        } else {
+            MATCH_FAILED
+        };
+        if result != 0 {
+            subst.backtrack_to_pos(backtrack);
+        }
+    }
+
+    Ok(result == 0)
+}
+
+/// C `SubstComputeMatchHO`.
+///
+/// Returns `MATCH_FAILED` on failure and the number of unmatched target
+/// arguments on success. The current C algorithm returns zero for complete
+/// successful matches, but retaining the integer result preserves its API.
+///
+/// # Errors
+///
+/// Returns diagnostics from lambda-prefix preparation or application-variable
+/// binding construction.
+///
+/// # Panics
+///
+/// Panics on malformed higher-order applications, missing type metadata, or
+/// an internal negative result other than `MATCH_FAILED`, matching C's
+/// assertion-based contract.
+pub fn subst_compute_match_ho(
+    bank: &mut TermBank,
+    matcher: &Term,
+    to_match: &Term,
+    subst: &mut Substitution,
+) -> Result<i32, Diagnostic> {
+    let _timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::MguTimer);
+    let backtrack = subst.len();
+    match subst_compute_match_ho_inner(bank, matcher, to_match, subst) {
+        Ok(MATCH_FAILED) => {
+            subst.backtrack_to_pos(backtrack);
+            Ok(MATCH_FAILED)
+        }
+        Ok(result) => {
+            let remaining = usize::try_from(result)
+                .expect("successful higher-order match has a nonnegative remainder");
+            debug_assert!(term_struct_prefix_equal(
+                matcher,
+                to_match,
+                DerefType::Once,
+                DerefType::Never,
+                remaining,
+            ));
+            Ok(result)
+        }
+        Err(error) => {
+            subst.backtrack_to_pos(backtrack);
+            Err(error)
+        }
+    }
+}
+
+fn subst_compute_match_ho_inner(
+    bank: &mut TermBank,
+    matcher: &Term,
+    to_match: &Term,
+    subst: &mut Substitution,
+) -> Result<i32, Diagnostic> {
+    let mut matcher_weight = term_standard_weight(matcher);
+    let to_match_weight = term_standard_weight(to_match);
+    if matcher_weight > to_match_weight || matcher.type_() != to_match.type_() {
+        return Ok(MATCH_FAILED);
+    }
+
+    let mut jobs = Vec::new();
+    push_lifo_pair(&mut jobs, matcher.clone(), to_match.clone());
+    let mut result = 0;
+
+    while let Some((mut matcher, mut to_match)) = pop_lifo_pair(&mut jobs) {
+        (matcher, to_match) = prune_lambda_prefix(bank, matcher, to_match)?;
+        let start_index;
+
+        if matcher.is_top_level_free_var() {
+            let variable = if matcher.is_applied_free_var() {
+                required_arg(&matcher, 0)
+            } else {
+                matcher.clone()
+            };
+
+            if let Some(binding) = variable.binding() {
+                if binding.is_lambda() || !term_is_prefix(Some(&binding), &to_match) {
+                    result = MATCH_FAILED;
+                    break;
+                }
+                start_index = binding.arg_num();
+                matcher_weight += term_standard_weight(&binding) - DEFAULT_VWEIGHT;
+                if matcher_weight > to_match_weight {
+                    result = MATCH_FAILED;
+                    break;
+                }
+                assert_eq!(
+                    start_index + matcher.arg_num(),
+                    to_match.arg_num(),
+                    "bound HO matcher prefix must consume the target"
+                );
+            } else {
+                let Some(args_eaten) = partially_match_var(bank, &variable, &to_match, false)
+                else {
+                    result = MATCH_FAILED;
+                    break;
+                };
+                subst.bind_app_var(
+                    &variable,
+                    &to_match,
+                    args_eaten,
+                    bank,
+                    ProblemType::HigherOrder,
+                )?;
+                start_index = args_eaten;
+                let binding = variable
+                    .binding()
+                    .expect("successful application-variable binding is installed");
+                matcher_weight += term_standard_weight(&binding) - DEFAULT_VWEIGHT;
+                if matcher_weight > to_match_weight {
+                    result = MATCH_FAILED;
+                    break;
+                }
+                assert_eq!(
+                    args_eaten + matcher.arg_num(),
+                    to_match.arg_num(),
+                    "HO matcher must consume all target arguments"
+                );
+            }
+        } else {
+            if matcher.is_db_var() != to_match.is_db_var()
+                || matcher.is_applied_db_var() != to_match.is_applied_db_var()
+                || matcher.arity() != to_match.arity()
+            {
+                result = MATCH_FAILED;
+                break;
+            }
+            if matcher.f_code() != to_match.f_code()
+                || (!matcher.is_top_level_db_var()
+                    && bank.signature().is_polymorphic(matcher.f_code())
+                    && matcher.arity() != 0
+                    && required_arg(&matcher, 0).type_() != required_arg(&to_match, 0).type_())
+            {
+                result = MATCH_FAILED;
+                break;
+            }
+            assert_eq!(matcher.arg_num(), to_match.arg_num());
+            start_index = 0;
+        }
+
+        let matcher_offset = usize::from(matcher.is_applied_free_var());
+        let target_offset = start_index + usize::from(to_match.is_applied_free_var());
+        for index in 0..matcher.arity().saturating_sub(matcher_offset) {
+            push_lifo_pair(
+                &mut jobs,
+                required_arg(&matcher, index + matcher_offset),
+                required_arg(&to_match, index + target_offset),
+            );
+        }
+    }
+
+    Ok(result)
 }
 
 /// First-order complete-MGU wrapper matching the non-LFHO C macro.
@@ -583,17 +786,21 @@ fn required_arg(term: &Term, index: usize) -> Term {
 #[cfg(test)]
 mod tests {
     use super::{
-        occur_check, subst_compute_match, subst_compute_mgu, subst_match_complete,
-        subst_mgu_complete, unif_failed, verify_match, OracleUnifResult, UnifTermSide, UNIF_FAILED,
-        UNIF_SUCC,
+        occur_check, subst_compute_match, subst_compute_match_ho, subst_compute_mgu,
+        subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete, unif_failed,
+        verify_match, OracleUnifResult, UnifTermSide, MATCH_FAILED, UNIF_FAILED, UNIF_SUCC,
     };
     #[cfg(feature = "measure-unification")]
     use super::{unification_attempts, unification_successes};
-    use crate::terms::signature::SIG_PHONY_APP_CODE;
-    use crate::terms::simpletypes::Type;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
+    use crate::terms::lambda::apply_terms;
+    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::subst::Substitution;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{Term, TP_PRED_POS};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn typed_var(code: i64, type_: &Type) -> Term {
         let var = Term::const_cell_alloc(code);
@@ -798,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_wrappers_use_first_order_paths_for_now() {
+    fn unbanked_complete_wrappers_use_first_order_paths() {
         let type_ = TypeBank::new().i_type();
         let x = typed_var(-2, &type_);
         let a = typed_const(10, &type_);
@@ -807,6 +1014,128 @@ mod tests {
         assert!(subst_match_complete(&x, &a, &mut subst));
         subst.backtrack();
         assert!(subst_mgu_complete(&x, &a, &mut subst));
+    }
+
+    #[test]
+    fn complete_match_with_bank_dispatches_to_higher_order_application_matching() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        let mut bank = TermBank::new(signature).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let db0 = bank.request_db_var(&individual, 0);
+        let matcher = apply_terms(&mut bank, &flex, std::slice::from_ref(&db0)).unwrap();
+        let rigid_code = bank.signature_mut().insert_id("match_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, unary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let target = apply_terms(&mut bank, &rigid, std::slice::from_ref(&db0)).unwrap();
+        let mut subst = Substitution::new();
+
+        assert!(!subst_compute_match(&matcher, &target, &mut subst));
+        assert_eq!(
+            subst_compute_match_ho(&mut bank, &matcher, &target, &mut subst).unwrap(),
+            0
+        );
+        assert_eq!(flex.binding(), Some(rigid.clone()));
+        subst.backtrack();
+
+        assert!(subst_match_complete_with_bank(&mut bank, &matcher, &target, &mut subst).unwrap());
+        assert_eq!(flex.binding(), Some(rigid));
+    }
+
+    #[test]
+    fn complete_match_with_bank_falls_back_to_pattern_matching() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        let mut bank = TermBank::new(signature).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let db0 = bank.request_db_var(&individual, 0);
+        let matcher_body = apply_terms(&mut bank, &flex, std::slice::from_ref(&db0)).unwrap();
+        let matcher = crate::terms::lambda::close_with_type_prefix(
+            &mut bank,
+            std::slice::from_ref(&individual),
+            &matcher_body,
+        )
+        .unwrap();
+        let target = crate::terms::lambda::close_with_type_prefix(
+            &mut bank,
+            std::slice::from_ref(&individual),
+            &db0,
+        )
+        .unwrap();
+        let mut subst = Substitution::new();
+
+        assert!(matcher.is_non_fo_pattern());
+        assert!(target.is_non_fo_pattern());
+        assert!(subst_match_complete_with_bank(&mut bank, &matcher, &target, &mut subst).unwrap());
+        assert!(flex.binding().is_some_and(|binding| binding.is_lambda()));
+    }
+
+    #[test]
+    fn higher_order_match_backtracks_failed_prefix_binding() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        let mut bank = TermBank::new(signature).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let variable = bank.vars().get_fresh_var(&individual);
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let h_code = bank
+            .signature_mut()
+            .insert_id("match_ho_backtrack_h", 0, false);
+        bank.signature_mut()
+            .declare_final_type(h_code, binary)
+            .unwrap();
+        let h = bank.create_const_term(h_code).unwrap();
+        let mut constant = |name: &str| {
+            let code = bank.signature_mut().insert_id(name, 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, individual.clone())
+                .unwrap();
+            bank.create_const_term(code).unwrap()
+        };
+        let a = constant("match_ho_backtrack_a");
+        let b = constant("match_ho_backtrack_b");
+        let c = constant("match_ho_backtrack_c");
+        let matcher = apply_terms(&mut bank, &h, &[variable.clone(), a]).unwrap();
+        let target = apply_terms(&mut bank, &h, &[b, c]).unwrap();
+        let mut subst = Substitution::new();
+
+        assert_eq!(
+            subst_compute_match_ho(&mut bank, &matcher, &target, &mut subst).unwrap(),
+            MATCH_FAILED
+        );
+        assert!(subst.is_empty());
+        assert!(variable.binding().is_none());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::clauses::picosat::PicoSat;
 use crate::clauses::satinterface::{picosat_error_to_diagnostic, SatClauseSet};
 use crate::clauses::tautologies::{clause_is_tautology, clause_is_tautology_real};
 use crate::terms::functypes::FunCode;
-use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
+use crate::terms::match_mgu::{subst_match_complete_with_bank, subst_mgu_complete};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, Term};
@@ -680,7 +680,8 @@ fn check_unsat_and_tauto(
             return Ok(());
         };
         let sym_term = clause.literals().as_slice()[sym_index].left().clone();
-        let matched = subst_match_complete(&sym_term, fresh_lit.left(), &mut subst);
+        let matched =
+            subst_match_complete_with_bank(bank, &sym_term, fresh_lit.left(), &mut subst)?;
         debug_assert!(
             matched,
             "potential-gate predicate patterns should match the fresh pivot"

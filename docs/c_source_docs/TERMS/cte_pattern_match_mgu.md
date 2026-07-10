@@ -89,7 +89,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for directed higher-order pattern matching on 2026-07-10.
 
 Source files reviewed: `TERMS/cte_pattern_match_mgu.h`, `TERMS/cte_pattern_match_mgu.c`.
 
@@ -113,10 +113,13 @@ Source files reviewed: `TERMS/cte_pattern_match_mgu.h`, `TERMS/cte_pattern_match
 
 - Rust now ports the shared `FreshVarWArgs` helper as `fresh_var_with_args` in `src/terms/lambda.rs`. It derives the fresh head type from the supplied argument term types and requested return type, inserts the fresh head through the term bank, and uses the C-shaped `ApplyTerms` path for non-empty arguments.
 - Rust now ports `SubstComputeMguPattern` as `subst_compute_mgu_pattern` in `src/terms/pattern_match_mgu.rs`, including DB-argument remapping, flex-rigid, flex-flex same/different-head cases, C-shaped job scheduling, `WHNF_deref`, lambda-prefix pruning, eta-reduced pattern-app-variable normalization, substitution backtracking on `NOT_UNIFIABLE`/`NOT_IN_FRAGMENT`, and VarBank used-count preparation before helper-variable allocation.
+- Rust now ports `SubstComputeMatchPattern` as `subst_compute_match_pattern`, including eta expansion, directed matcher-only bindings, DB-variable remapping under lambda depth, ground-term normalization checks, polymorphic rigid-symbol checks, weight cutoffs, and rollback on failure or diagnostics. The bank-aware complete-match wrapper uses it as C's fallback after directed higher-order matching fails on two non-first-order patterns.
 
 ### Change Later
 
 - `FreshVarWArgs` is implemented in the pattern-match MGU unit but is also used by higher-order binding constructors. Rust centralizes the helper with lambda application utilities; after full higher-order unification is ported, consider whether the C header/source boundary should be reflected as a dedicated higher-order construction module instead of keeping this cross-unit dependency.
 - `TermArrayNoDuplicates` copies and sorts the argument array but then compares adjacent entries in the original array, so only originally adjacent duplicates are rejected. Rust mirrors that behavior through the existing `term_array_no_duplicates` helper for pattern-app-variable normalization; revisit this after reference traces decide whether non-adjacent duplicate DB arguments must stay accepted.
 - `flex_flex_same` requests DB variables using `TypeGetMaxArity(var->type) - i - 1` for one-based argument index `i`, which can underflow the C helper's nonnegative DB-index precondition for unary same-head applications. Rust preserves the signed arithmetic and lets the existing DB-var assertion catch negative indexes; a cleaned pattern-unification API should make the intended index mapping explicit.
+- `match_var` calls `remap_variables` once to test whether remapping succeeds, then discards that returned term and recomputes the identical remap as the argument to `CloseWithTypePrefix`. Rust reuses the first remapped term; C can remove the duplicate traversal and term-bank work after compatibility/performance traces confirm that no incidental sharing or allocation order is observed.
+- The `SubstComputeMatchPattern` function comment lists no side effects even though successful matching installs substitution bindings. Update the C contract to state that bindings are added on success and backtracked on failure, matching the behavior already described for the ordinary matcher.
 <!-- END MANUAL REVIEW: c_source_docs -->
