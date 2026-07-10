@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
@@ -21,7 +22,9 @@ use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_match_complete;
-use crate::terms::replace::{term_add_rw_link, term_follow_top_rw_chain, RwResultType};
+use crate::terms::replace::{
+    make_rewritten_term, term_add_rw_link, term_follow_top_rw_chain, RwResultType,
+};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_has_unbound_variables, term_is_db_closed};
@@ -297,7 +300,16 @@ fn rewrite_with_clause_set_plain_with_subst(
     };
 
     REWRITE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-    let replacement = bank.insert_instantiated(found.replacement);
+    let active_problem_type = problem_type();
+    let replacement = bank
+        .insert_instantiated_for_problem(found.replacement, active_problem_type)
+        .and_then(|replacement| {
+            if active_problem_type == ProblemType::HigherOrder {
+                make_rewritten_term(bank, term, &replacement, 0)
+            } else {
+                Ok(replacement)
+            }
+        });
     subst.backtrack();
     let replacement = replacement?;
 
@@ -1569,7 +1581,14 @@ fn add_top_rewrite_link_if_needed(
         return Ok(true);
     }
 
-    let replacement = bank.insert_instantiated(replacement_pattern)?;
+    let active_problem_type = problem_type();
+    let replacement =
+        bank.insert_instantiated_for_problem(replacement_pattern, active_problem_type)?;
+    let replacement = if active_problem_type == ProblemType::HigherOrder {
+        make_rewritten_term(bank, term, &replacement, 0)?
+    } else {
+        replacement
+    };
     if replacement == *term {
         term.del_prop(TP_IS_REWRITABLE | TP_IS_RREWRITABLE);
         Ok(false)
@@ -1719,12 +1738,12 @@ mod tests {
         clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
         clause_local_rw, clause_set_compute_li_normalform_plain, eqn_has_rw_side,
         eqn_li_normalform_plain, find_rewritable_clauses, find_rewritable_clauses_indexed,
-        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
-        term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
-        REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
+        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain, term_is_top_rewritable,
+        term_li_normalform_plain, RwResultType, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES,
+        REWRITE_ATTEMPTS, REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -1744,6 +1763,7 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::idx_fp::index_fp1_create;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
@@ -1751,6 +1771,7 @@ mod tests {
         DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
     };
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, MutexGuard};
 
@@ -2127,6 +2148,75 @@ mod tests {
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn higher_order_root_rewrite_beta_normalizes_instantiated_rhs() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let k_code = bank
+            .signature_mut()
+            .insert_id("rw_ho_root_beta_k", 1, false);
+        bank.signature_mut()
+            .declare_final_type(k_code, unary)
+            .unwrap();
+        let k = bank.create_const_term(k_code).unwrap();
+        let a = typed_const(&mut bank, "rw_ho_root_beta_a");
+        let b = typed_const(&mut bank, "rw_ho_root_beta_b");
+        let x = typed_var(&bank, -2);
+        let f_x = typed_unary(&mut bank, "rw_ho_root_beta_f", &x);
+        let f_a = typed_unary(&mut bank, "rw_ho_root_beta_f", &a);
+        let f_b = typed_unary(&mut bank, "rw_ho_root_beta_f", &b);
+        let db0 = bank.request_db_var(&individual, 0);
+        let matrix = apply_terms(&mut bank, &k, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &matrix).unwrap();
+        let beta_redex = apply_terms(&mut bank, &lambda, std::slice::from_ref(&b)).unwrap();
+        let expected = apply_terms(&mut bank, &k, std::slice::from_ref(&b)).unwrap();
+        assert!(beta_redex.is_beta_reducible());
+
+        let mut demod_lit = eqn(&mut bank, &f_x, &beta_redex, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_a,
+            SysDate::creation_time(),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, expected);
+        assert!(!rewritten.is_beta_reducible());
+        assert_eq!(f_a.rw_replace_field(), Some(expected.clone()));
+
+        let backward_result = term_is_top_rewritable(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            demods.iter().next().unwrap(),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(backward_result, RwResultType::AlwaysRewritable);
+        assert_eq!(f_b.rw_replace_field(), Some(expected));
     }
 
     #[test]
