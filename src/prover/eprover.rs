@@ -7903,6 +7903,7 @@ fn write_proof_object_list_graph(
 ) -> Result<(), EProverError> {
     let mut formula_bank = bank.clone();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
+    let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
     let items = proof_object_list_display_items(graph);
     let formula_ids = items
         .iter()
@@ -7927,6 +7928,7 @@ fn write_proof_object_list_graph(
                     is_root,
                     proof_problem_type,
                     &formula_ids,
+                    &ac_axioms,
                 )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
@@ -7937,6 +7939,7 @@ fn write_proof_object_list_graph(
                     &formula,
                     proof_problem_type,
                     &formula_ids,
+                    &ac_axioms,
                 )?;
             }
         }
@@ -7988,6 +7991,17 @@ fn proof_object_list_display_items(
                     .or_insert(display_id);
             }
         }
+    }
+    for (parent, index) in &graph.clause_aliases {
+        fallback_clause_display_ids
+            .entry(*parent)
+            .or_insert_with(|| {
+                proof_object_display_id_for_node(
+                    graph,
+                    ProofObjectGraphNode::Clause(*index),
+                    &display_ids_by_ordinal,
+                )
+            });
     }
 
     display_order
@@ -8051,6 +8065,34 @@ fn proof_object_display_ids_by_ordinal(
         }
     }
     display_ids_by_ordinal
+}
+
+fn proof_object_display_ac_axioms(
+    graph: &ProofObjectGraph<'_>,
+    ac_axioms: &[ClauseDerivationRef],
+) -> Vec<ClauseDerivationRef> {
+    let display_order = proof_object_list_display_order(graph);
+    let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
+    ac_axioms
+        .iter()
+        .copied()
+        .map(|parent| {
+            let parent_index = graph.clause_aliases.get(&parent).copied().or_else(|| {
+                graph
+                    .clauses
+                    .iter()
+                    .position(|clause| ClauseDerivationRef::from(*clause) == parent)
+            });
+            let ident = parent_index.map_or(parent.ident(), |index| {
+                proof_object_display_id_for_node(
+                    graph,
+                    ProofObjectGraphNode::Clause(index),
+                    &display_ids_by_ordinal,
+                )
+            });
+            ClauseDerivationRef::new(ident, parent.source())
+        })
+        .collect()
 }
 
 fn proof_object_first_display_id(graph: &ProofObjectGraph<'_>) -> i64 {
@@ -8302,8 +8344,10 @@ fn remap_demodulator_for_display(
     display_ids_by_ordinal: &[i64],
     fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> Option<DerivationEntry> {
-    demodulator_clause_refs(demodulator)
-        .into_iter()
+    let parent_refs = demodulator_clause_refs(demodulator);
+    parent_refs
+        .iter()
+        .copied()
         .find_map(|parent| {
             proof_object_display_clause_parent_ident_if_known(
                 graph,
@@ -8312,6 +8356,26 @@ fn remap_demodulator_for_display(
                 display_ids_by_ordinal,
                 fallback_clause_display_ids,
             )
+        })
+        .or_else(|| {
+            proof_object_list_mixed_edges(graph)
+                .iter()
+                .find_map(|edge| match edge.parent {
+                    ProofObjectGraphNode::Clause(parent_index)
+                        if edge.child == child
+                            && parent_index < graph.clauses.len()
+                            && parent_refs.iter().any(|parent| {
+                                parent.ident() == graph.clauses[parent_index].ident()
+                            }) =>
+                    {
+                        Some(proof_object_display_id_for_node(
+                            graph,
+                            edge.parent,
+                            display_ids_by_ordinal,
+                        ))
+                    }
+                    ProofObjectGraphNode::Clause(_) | ProofObjectGraphNode::Formula(_) => None,
+                })
         })
         .map(|ident| DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, 0)))
 }
@@ -8340,6 +8404,13 @@ fn proof_object_display_clause_parent_ident_if_known(
     display_ids_by_ordinal: &[i64],
     fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> Option<i64> {
+    if let Some(parent_index) = graph.clause_aliases.get(&parent).copied() {
+        return Some(proof_object_display_id_for_node(
+            graph,
+            ProofObjectGraphNode::Clause(parent_index),
+            display_ids_by_ordinal,
+        ));
+    }
     proof_object_list_mixed_edges(graph)
         .iter()
         .find(|edge| {
@@ -8520,9 +8591,14 @@ fn write_saturation_proof_object_clause(
         is_root,
         proof_problem_type,
         &BTreeMap::new(),
+        bank.signature().ac_axioms(),
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Proof rendering keeps clause, formula-id, and AC-parent display contexts explicit"
+)]
 fn write_saturation_proof_object_clause_with_formula_ids(
     output: &mut impl Write,
     config: &EProverConfig,
@@ -8531,6 +8607,7 @@ fn write_saturation_proof_object_clause_with_formula_ids(
     is_root: bool,
     proof_problem_type: ProblemType,
     formula_ids: &BTreeMap<i64, String>,
+    ac_axioms: &[ClauseDerivationRef],
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
@@ -8538,10 +8615,9 @@ fn write_saturation_proof_object_clause_with_formula_ids(
         DocOutputFormat::Pcl => {
             write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
                 .map_err(proof_doc_write_error)?;
-            if let Some(derivation) = deriv_stack_pcl_string_with_ac_axioms(
-                clause.derivation(),
-                bank.signature().ac_axioms(),
-            ) {
+            if let Some(derivation) =
+                deriv_stack_pcl_string_with_ac_axioms(clause.derivation(), ac_axioms)
+            {
                 rendered.push_str(&derivation);
             } else {
                 rendered.push_str(&source_info_pcl_string(clause.info()));
@@ -8568,7 +8644,7 @@ fn write_saturation_proof_object_clause_with_formula_ids(
             )?;
             if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
                 clause.derivation(),
-                bank.signature().ac_axioms(),
+                ac_axioms,
                 formula_ids,
             ) {
                 rendered.push_str(", ");
@@ -8601,6 +8677,7 @@ fn write_saturation_proof_object_formula_with_formula_ids(
     formula: &WrappedFormula,
     proof_problem_type: ProblemType,
     formula_ids: &BTreeMap<i64, String>,
+    ac_axioms: &[ClauseDerivationRef],
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
@@ -8620,10 +8697,9 @@ fn write_saturation_proof_object_formula_with_formula_ids(
                 pcl_step_print_options(config),
             )
             .map_err(proof_doc_write_error)?;
-            if let Some(derivation) = deriv_stack_pcl_string_with_ac_axioms(
-                formula.derivation(),
-                bank.signature().ac_axioms(),
-            ) {
+            if let Some(derivation) =
+                deriv_stack_pcl_string_with_ac_axioms(formula.derivation(), ac_axioms)
+            {
                 rendered.push_str(&derivation);
             } else {
                 rendered.push_str(&source_info_pcl_string(formula.info()));
@@ -8643,7 +8719,7 @@ fn write_saturation_proof_object_formula_with_formula_ids(
             )?);
             if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
                 formula.derivation(),
-                bank.signature().ac_axioms(),
+                ac_axioms,
                 formula_ids,
             ) {
                 rendered.push_str(", ");
@@ -8686,6 +8762,7 @@ fn write_proof_object_dot(
     let mut formula_bank = bank.clone();
     let display_order = proof_object_list_display_order(graph);
     let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
+    let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
     for item in proof_object_list_display_items(graph) {
         if axiom_open && proof_object_display_item_has_derivation(&item) {
             output.write_all(b"   }\n")?;
@@ -8700,6 +8777,7 @@ fn write_proof_object_dot(
                     &clause,
                     clause.ident(),
                     proof_problem_type,
+                    &ac_axioms,
                 )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
@@ -8737,6 +8815,7 @@ fn write_proof_object_dot_clause(
     clause: &Clause,
     node_id: i64,
     proof_problem_type: ProblemType,
+    ac_axioms: &[ClauseDerivationRef],
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
         let proof_problem_type = proof_output_problem_type(proof_problem_type);
@@ -8750,10 +8829,9 @@ fn write_proof_object_dot_clause(
             proof_problem_type,
             config.encoding.print_types,
         )?;
-        if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
-            clause.derivation(),
-            bank.signature().ac_axioms(),
-        ) {
+        if let Some(derivation) =
+            deriv_stack_tstp_string_with_ac_axioms(clause.derivation(), ac_axioms)
+        {
             rendered.push_str(",\n");
             rendered.push_str(&derivation);
         } else {
@@ -15298,22 +15376,22 @@ mod tests {
         parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
         parse_schedule_worker_args, parse_simple_tstp_app_encode_formula,
         preprocessing_config_debug_line, problem_input_scanner_with_stdin, process_options,
-        proof_control_from_config, proof_object_list_display_clauses,
-        proof_object_list_display_items, proof_search_global_indices, proof_success_object_roots,
-        proof_success_status, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        runtime_picosat_library_from_env, schedule_heuristic_selection, schedule_worker_run_args,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
-        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
-        ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
-        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        proof_control_from_config, proof_object_display_ac_axioms,
+        proof_object_list_display_clauses, proof_object_list_display_items,
+        proof_search_global_indices, proof_success_object_roots, proof_success_status,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
+        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
+        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
+        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, ParsedAppEncodeFormula,
+        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
+        ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
+        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
+        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
         LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
         PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
@@ -15368,6 +15446,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{RewriteLevel, Term};
     use crate::test_support::global_state_lock;
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::fmt::Write as _;
     use std::io::{self, Write as _};
@@ -28835,7 +28914,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains("proof-object-success-pcl"));
         assert!(printed.contains("     1 : :[--equal(a, a)] : fof_simplification(0)\n"));
         assert!(printed.contains("     2 : :[--equal(a, a)] : 1\n"));
-        assert!(printed.contains("     3 : :[] : 2 : 'proof'\n"));
+        assert!(printed.contains("     3 : :[] : cn(2) : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -29022,7 +29101,9 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
             "cnf(c_0_1, axiom, ($false), inference(fof_simplification,[status(thm)],[c_0_0])).\n"
         ));
         assert!(printed.contains("cnf(c_0_2, axiom, ($false), c_0_1).\n"));
-        assert!(printed.contains("cnf(c_0_3, axiom, ($false), c_0_2, ['proof']).\n"));
+        assert!(printed.contains(
+            "cnf(c_0_3, axiom, ($false), inference(cn,[status(thm)],[c_0_2]), ['proof']).\n"
+        ));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -29111,6 +29192,55 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_all_rules_proof_records_ac_resolution_ancestry() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--silent",
+                "--cpu-limit=60",
+                "--memory-limit=2048",
+                "--detsort-rw",
+                "--detsort-new",
+                "--proof-object=1",
+                "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% SZS status Theorem\n"), "{printed}");
+        assert!(
+            printed.contains(
+                "cnf(c_0_27, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_22, c_0_23])]))."
+            ),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "cnf(c_0_33, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_27, c_0_28]), c_0_29]), c_0_29]), c_0_30, c_0_31, c_0_29]))."
+            ),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "cnf(c_0_36, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_35]), ['proof'])."
+            ),
+            "{printed}"
+        );
+        assert!(!printed.contains("c_0_922337"), "{printed}");
+        assert!(!printed.contains("c_0_-"), "{printed}");
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     }
 
     #[test]
@@ -29229,6 +29359,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&clause],
             formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: vec![ProofObjectGraphMixedEdge {
                 parent: ProofObjectGraphNode::Formula(0),
@@ -29273,6 +29404,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: Vec::new(),
             formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: Vec::new(),
             root_indices: Vec::new(),
@@ -29312,6 +29444,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&clause],
             formulas: Vec::new(),
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: Vec::new(),
             root_indices: vec![0],
@@ -29397,13 +29530,13 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Proof object total steps             : 4\n"));
-        assert!(printed.contains("% Proof object clause steps            : 2\n"));
+        assert!(printed.contains("% Proof object total steps             : 5\n"));
+        assert!(printed.contains("% Proof object clause steps            : 3\n"));
         assert!(printed.contains("% Proof object formula steps           : 2\n"));
         assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
         assert!(printed.contains("% Proof object initial formulas used   : 1\n"));
         assert!(printed.contains("% Proof object generating inferences   : 0\n"));
-        assert!(printed.contains("% Proof object simplifying inferences  : 0\n"));
+        assert!(printed.contains("% Proof object simplifying inferences  : 1\n"));
         assert!(!printed.contains("SZS output start CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -29655,6 +29788,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&parent, &child],
             formulas: Vec::new(),
+            clause_aliases: BTreeMap::new(),
             edges: vec![ProofObjectGraphEdge {
                 parent_index: 0,
                 child_index: 1,
@@ -29695,6 +29829,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&first_parent, &second_parent, &child],
             formulas: Vec::new(),
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: vec![
                 ProofObjectGraphMixedEdge {
@@ -29746,6 +29881,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&clause],
             formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: vec![ProofObjectGraphMixedEdge {
                 parent: ProofObjectGraphNode::Formula(0),
@@ -29790,6 +29926,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&clause],
             formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: vec![ProofObjectGraphMixedEdge {
                 parent: ProofObjectGraphNode::Formula(0),
@@ -29847,6 +29984,64 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
+    fn proof_object_list_graph_remaps_signature_ac_axiom_ids() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut first_parent = parse_lop_test_clause(&mut bank, "p(a).", 31);
+        first_parent.set_csscpa_source(3);
+        let mut second_parent = parse_lop_test_clause(&mut bank, "q(a).", 32);
+        second_parent.set_csscpa_source(4);
+        let first_ref = ClauseDerivationRef::from(&first_parent);
+        let second_ref = ClauseDerivationRef::from(&second_parent);
+        bank.signature_mut().push_ac_axiom(first_ref);
+        bank.signature_mut().push_ac_axiom(second_ref);
+        let mut root = Clause::empty();
+        root.set_ident(33);
+        root.set_csscpa_source(5);
+        clause_push_ac_res_derivation(&mut root, 2);
+        let graph = ProofObjectGraph {
+            clauses: vec![&first_parent, &second_parent, &root],
+            formulas: Vec::new(),
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: vec![
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(0),
+                    child: ProofObjectGraphNode::Clause(2),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(1),
+                    child: ProofObjectGraphNode::Clause(2),
+                },
+            ],
+            root_indices: vec![2],
+            formula_root_indices: Vec::new(),
+        };
+
+        assert_eq!(
+            proof_object_display_ac_axioms(&graph, bank.signature().ac_axioms()),
+            vec![
+                ClauseDerivationRef::new(1, 3),
+                ClauseDerivationRef::new(0, 4),
+            ]
+        );
+
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+        write_proof_object_list_graph(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains("inference(ar,[status(thm)],[, c_0_1, c_0_0])"),
+            "{printed}"
+        );
+        assert!(!printed.contains("c_0_31") && !printed.contains("c_0_32"));
+    }
+
+    #[test]
     fn proof_object_list_graph_uses_higher_order_tstp_wrappers() {
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
         let mut formula =
@@ -29859,6 +30054,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let graph = ProofObjectGraph {
             clauses: vec![&clause],
             formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
             edges: Vec::new(),
             mixed_edges: vec![ProofObjectGraphMixedEdge {
                 parent: ProofObjectGraphNode::Formula(0),

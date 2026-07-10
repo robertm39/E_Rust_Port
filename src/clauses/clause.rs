@@ -37,9 +37,10 @@ use crate::terms::termweightext::TermWeightExtension;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering as AtomicOrdering};
 
 static GLOBAL_CLAUSE_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
+static GLOBAL_DERIVATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClauseParseOptions {
@@ -59,6 +60,7 @@ impl Default for ClauseParseOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clause {
     ident: i64,
+    derivation_generation: u64,
     date: SysDate,
     literals: EqnList,
     neg_lit_no: usize,
@@ -78,6 +80,7 @@ impl Clause {
     pub fn empty() -> Self {
         Self {
             ident: 0,
+            derivation_generation: 0,
             date: SysDate::creation_time(),
             literals: EqnList::new(),
             neg_lit_no: 0,
@@ -121,6 +124,27 @@ impl Clause {
 
     pub const fn set_ident(&mut self, ident: i64) {
         self.ident = ident;
+    }
+
+    #[must_use]
+    pub const fn derivation_generation(&self) -> u64 {
+        self.derivation_generation
+    }
+
+    /// Assigns a fresh process-local proof identity to this clause object.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the process exhausts all `u64` generations.
+    pub fn refresh_derivation_generation(&mut self) {
+        let previous = GLOBAL_DERIVATION_GENERATION
+            .fetch_update(
+                AtomicOrdering::Relaxed,
+                AtomicOrdering::Relaxed,
+                |generation| generation.checked_add(1),
+            )
+            .unwrap_or_else(|_| panic!("clause derivation generation overflowed"));
+        self.derivation_generation = previous + 1;
     }
 
     #[must_use]
@@ -1216,6 +1240,7 @@ impl Clause {
     fn copy_with_literals(&self, literals: EqnList) -> Self {
         let mut copy = Self {
             ident: self.ident,
+            derivation_generation: self.derivation_generation,
             date: self.date,
             literals,
             neg_lit_no: self.neg_lit_no,

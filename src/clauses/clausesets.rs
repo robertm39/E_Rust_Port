@@ -751,9 +751,9 @@ impl ClauseSet {
 
     #[must_use]
     pub fn find_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
-        self.clauses.iter().find(|clause| {
-            clause.ident() == parent.ident() && clause.query_csscpa_source() == parent.source()
-        })
+        self.clauses
+            .iter()
+            .find(|clause| ClauseDerivationRef::from(*clause) == parent)
     }
 
     #[must_use]
@@ -761,9 +761,9 @@ impl ClauseSet {
         &mut self,
         parent: ClauseDerivationRef,
     ) -> Option<&mut Clause> {
-        self.clauses.iter_mut().find(|clause| {
-            clause.ident() == parent.ident() && clause.query_csscpa_source() == parent.source()
-        })
+        self.clauses
+            .iter_mut()
+            .find(|clause| ClauseDerivationRef::from(&**clause) == parent)
     }
 
     pub fn find_by_id_mut(&mut self, ident: i64) -> Option<&mut Clause> {

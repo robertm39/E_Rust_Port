@@ -15,9 +15,10 @@ use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
-    clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
-    clause_set_recognize_choice, tformula_clause_encode, tformula_conjunctive_nf3,
-    tformula_fcode_alloc, tformula_is_quantified_nl, tformula_to_cnf,
+    clause_remove_ac_resolved_with_docs, clause_remove_superfluous_literals,
+    clause_resolve_flex_clause, clause_set_delete_orphans_with, clause_set_recognize_choice,
+    tformula_clause_encode, tformula_conjunctive_nf3, tformula_fcode_alloc,
+    tformula_is_quantified_nl, tformula_to_cnf,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
@@ -1114,6 +1115,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
 
         for source in ordered_axioms {
             let mut new = source.copy_to_bank(state.terms_mut())?;
+            new.refresh_derivation_generation();
             new.set_prop(CP_INITIAL);
             let watchlist_outcome = proof_state_check_watchlist_maybe_output(
                 state,
@@ -1620,7 +1622,19 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
             }
         }
         if control.ac_handling_active() {
-            let _removed_ac = clause_remove_ac_resolved(&mut handle, state.terms());
+            match doc_context.as_mut() {
+                Some((output, session)) => {
+                    clause_remove_ac_resolved_with_docs(
+                        output,
+                        session,
+                        &mut handle,
+                        state.terms(),
+                    )?;
+                }
+                None => {
+                    clause_remove_ac_resolved(&mut handle, state.terms());
+                }
+            }
         }
         handle.set_weight(handle.standard_weight());
         {
@@ -2143,7 +2157,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             }
 
             if ac_handling_active {
-                let _ = clause_remove_ac_resolved(clause, terms);
+                forward_modify_remove_ac_resolved(terms, clause, &mut doc_context)?;
             }
 
             if local_rw && clause_local_rw(ocb, terms, clause)? {
@@ -2265,6 +2279,22 @@ fn forward_modify_condense<W: fmt::Write>(
         Some((output, session)) => condense_with_docs(output, session, clause, terms),
         None => condense(clause, terms),
     }
+}
+
+fn forward_modify_remove_ac_resolved<W: fmt::Write>(
+    terms: &TermBank,
+    clause: &mut Clause,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<(), Diagnostic> {
+    match doc_context.as_mut() {
+        Some((output, session)) => {
+            clause_remove_ac_resolved_with_docs(output, session, clause, terms)?;
+        }
+        None => {
+            clause_remove_ac_resolved(clause, terms);
+        }
+    }
+    Ok(())
 }
 
 fn forward_modify_positive_simplify_reflect<W: fmt::Write>(
@@ -8484,6 +8514,7 @@ fn proof_state_archive_simplified_clause(
     mut clause: Clause,
 ) -> Result<Clause, Diagnostic> {
     let mut requeued = clause.flat_copy(state.terms_mut())?;
+    requeued.refresh_derivation_generation();
     clause_push_derivation(&mut requeued, DC_CNF_QUOTE, Some(&clause), None);
     clause.set_prop(CP_IS_DEAD);
     state.archive_mut().insert(clause);
@@ -9331,10 +9362,10 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP,
-        DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LOCAL_REWRITE, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR,
-        DC_POS_EXT, DC_PRIM_ENUM, DC_SR, DC_TRIGGER,
+        DC_AC_RES, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+        DC_EXT_SUP, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LOCAL_REWRITE, DC_NEG_EXT, DC_NORMALIZE,
+        DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR, DC_TRIGGER,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -9363,7 +9394,7 @@ mod tests {
     use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
+    use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
@@ -11315,6 +11346,68 @@ mod tests {
         assert!(!clause.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
         assert_eq!(session.id_source.current_ident(), 1);
         assert_eq!(rendered, "     1 : : : rw(4085,4084)\n");
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_records_ac_resolution() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_forward_ac_f");
+            terms
+                .signature_mut()
+                .set_func_prop(f_code, FP_ASSOCIATIVE | FP_COMMUTATIVE);
+            terms
+                .signature_mut()
+                .push_ac_axiom(ClauseDerivationRef::new(70, 0));
+            terms
+                .signature_mut()
+                .push_ac_axiom(ClauseDerivationRef::new(71, 0));
+            let first = typed_const(terms, "pc_forward_ac_a");
+            let second = typed_const(terms, "pc_forward_ac_b");
+            let left = typed_binary_with_code(terms, f_code, &first, &second);
+            let right = typed_binary_with_code(terms, f_code, &second, &first);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &left, &right, false,
+            )]));
+            clause.set_ident(4_088);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.set_ac_handling_active(true);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert!(clause.is_empty());
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_AC_RES),
+                DerivationEntry::NumericArg(2),
+            ]
+        );
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(ar,[status(thm)],[c_0_4088,c_0_70,c_0_71])).\n"
+        );
     }
 
     #[test]

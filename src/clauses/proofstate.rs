@@ -396,6 +396,7 @@ pub struct ProofObjectGraphMixedEdge {
 pub struct ProofObjectGraph<'a> {
     pub clauses: Vec<&'a Clause>,
     pub formulas: Vec<&'a WrappedFormula>,
+    pub clause_aliases: BTreeMap<ClauseDerivationRef, usize>,
     pub edges: Vec<ProofObjectGraphEdge>,
     pub mixed_edges: Vec<ProofObjectGraphMixedEdge>,
     pub root_indices: Vec<usize>,
@@ -1029,9 +1030,7 @@ impl ProofState {
 
     #[must_use]
     pub fn proof_clause_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
-        self.proof_clause_sets()
-            .into_iter()
-            .find_map(|set| find_by_derivation_ref_or_sourceless_id(set, parent))
+        find_by_derivation_ref_or_sourceless_id(&self.proof_clause_sets(), parent)
     }
 
     #[must_use]
@@ -1049,9 +1048,7 @@ impl ProofState {
         &self,
         parent: ClauseDerivationRef,
     ) -> Option<&Clause> {
-        self.proof_quote_source_clause_sets()
-            .into_iter()
-            .find_map(|set| find_by_derivation_ref_or_sourceless_id(set, parent))
+        find_by_derivation_ref_or_sourceless_id(&self.proof_quote_source_clause_sets(), parent)
     }
 
     #[must_use]
@@ -1397,6 +1394,10 @@ impl ProofState {
                 &mut pending_edges,
                 ac_axioms,
             );
+            graph
+                .clause_aliases
+                .entry(ClauseDerivationRef::from(root))
+                .or_insert(root_index);
             if !graph.root_indices.contains(&root_index) {
                 graph.root_indices.push(root_index);
             }
@@ -1427,6 +1428,12 @@ impl ProofState {
                             &mut pending_edges,
                             ac_axioms,
                         );
+                        if let DerivationParentRef::Clause(parent_ref) = edge.parent {
+                            graph
+                                .clause_aliases
+                                .entry(parent_ref)
+                                .or_insert(parent_index);
+                        }
                         let parent = ProofObjectGraphNode::Clause(parent_index);
                         graph
                             .mixed_edges
@@ -1541,6 +1548,10 @@ impl ProofState {
         let index = graph.clauses.len();
         visited.push((key, index));
         graph.clauses.push(clause);
+        graph
+            .clause_aliases
+            .entry(ClauseDerivationRef::from(clause))
+            .or_insert(index);
         pending_edges.extend(
             proof_object_parent_edges(clause.derivation(), ac_axioms)
                 .into_iter()
@@ -2359,17 +2370,19 @@ impl ProofState {
     }
 }
 
-fn find_by_derivation_ref_or_sourceless_id(
-    set: &ClauseSet,
+fn find_by_derivation_ref_or_sourceless_id<'a>(
+    sets: &[&'a ClauseSet],
     parent: ClauseDerivationRef,
-) -> Option<&Clause> {
-    set.find_by_derivation_ref(parent).or_else(|| {
-        if parent.source() == 0 {
-            set.find_by_id(parent.ident())
-        } else {
-            None
-        }
-    })
+) -> Option<&'a Clause> {
+    sets.iter()
+        .find_map(|set| set.find_by_derivation_ref(parent))
+        .or_else(|| {
+            if parent.source() == 0 && parent.generation() == 0 {
+                sets.iter().find_map(|set| set.find_by_id(parent.ident()))
+            } else {
+                None
+            }
+        })
 }
 
 fn find_formula_by_derivation_ref(
@@ -3178,6 +3191,57 @@ mod tests {
                 simplifying_inference_count: 0,
             }
         );
+    }
+
+    #[test]
+    fn proof_clause_lookup_distinguishes_requeued_generation_from_archive() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let archived = simple_clause(&mut state, "proof_generation_archived", 20_049);
+        let archived_ref = ClauseDerivationRef::from(&archived);
+        let mut requeued = archived.clone();
+        requeued.refresh_derivation_generation();
+        let requeued_ref = ClauseDerivationRef::from(&requeued);
+
+        state.archive_mut().insert(archived);
+        state.processed_neg_units_mut().insert(requeued);
+
+        assert_ne!(archived_ref, requeued_ref);
+        assert_eq!(
+            state
+                .proof_clause_by_derivation_ref(archived_ref)
+                .map(ClauseDerivationRef::from),
+            Some(archived_ref)
+        );
+        assert_eq!(
+            state
+                .proof_clause_by_derivation_ref(requeued_ref)
+                .map(ClauseDerivationRef::from),
+            Some(requeued_ref)
+        );
+    }
+
+    #[test]
+    fn proof_clause_lookup_checks_all_exact_refs_before_legacy_id_fallback() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let current = simple_clause(&mut state, "proof_generation_current", 20_054);
+        let current_ref = ClauseDerivationRef::from(&current);
+        let mut archived_copy = current.clone();
+        archived_copy.refresh_derivation_generation();
+
+        state.ax_archive_mut().insert(archived_copy);
+        state.axioms_mut().insert(current);
+
+        let expected = state.axioms().find_by_derivation_ref(current_ref).unwrap();
+        assert!(std::ptr::eq(
+            state.proof_clause_by_derivation_ref(current_ref).unwrap(),
+            expected
+        ));
+        assert!(std::ptr::eq(
+            state
+                .proof_quote_source_by_derivation_ref(current_ref)
+                .unwrap(),
+            expected
+        ));
     }
 
     #[test]

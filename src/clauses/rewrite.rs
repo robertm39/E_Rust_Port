@@ -1589,7 +1589,7 @@ fn rewrite_demodulator_handle(clause: &Clause) -> RewriteDemodulator {
             .unwrap_or(usize::MAX)
             .saturating_add(1)
     };
-    RewriteDemodulator::new(id.max(1))
+    RewriteDemodulator::new_with_generation(id.max(1), clause.derivation_generation())
 }
 
 fn collect_local_rw_system(bank: &TermBank, clause: &Clause) -> LocalRwSystem {

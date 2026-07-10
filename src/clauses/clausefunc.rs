@@ -10,11 +10,11 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_derivation, clause_push_formula_derivation, op_has_cnf_arg1, op_has_cnf_arg2,
-    op_is_generating, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-    FormulaDerivationRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS, DC_ELIMINATE_BVAR,
-    DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
-    DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
+    clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
+    op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating, ClauseDerivationRef, DerivationEntry,
+    DerivationParentRef, FormulaDerivationRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS,
+    DC_ELIMINATE_BVAR, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC,
+    DC_NORMALIZE, DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
 use crate::clauses::eqn::{
     eqn_fof_parse, eqn_write_app_encode, eqn_write_app_encode_with_type_suffixes, eqn_write_fof,
@@ -24,7 +24,10 @@ use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
-use crate::clauses::inferencedoc::{FormulaDocView, ProofDocSession, ProofDocWriteResult};
+use crate::clauses::inferencedoc::{
+    ClauseModificationEvidence, ClauseModificationInference, FormulaDocView, ProofDocSession,
+    ProofDocWriteResult,
+};
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_start_token, FunCode};
 use crate::terms::lambda::{
@@ -338,6 +341,7 @@ pub fn clause_archive(
     bank: &mut TermBank,
 ) -> Result<Clause, Diagnostic> {
     let mut new_clause = clause.flat_copy(bank)?;
+    new_clause.refresh_derivation_generation();
     clause_push_derivation(&mut new_clause, DC_CNF_QUOTE, Some(&clause), None);
     archive.insert(clause);
     Ok(new_clause)
@@ -349,6 +353,7 @@ pub fn clause_archive_copy(
     bank: &mut TermBank,
 ) -> Result<ClauseDerivationRef, Diagnostic> {
     let mut archived = clause.flat_copy(bank)?;
+    archived.refresh_derivation_generation();
     archived.set_info(clause.take_info());
     archived.set_derivation(clause.take_derivation());
     let archived_ref = ClauseDerivationRef::from(&archived);
@@ -520,6 +525,47 @@ pub fn clause_set_canonize(set: &mut ClauseSet, bank: &TermBank) {
 }
 
 pub fn clause_remove_ac_resolved(clause: &mut Clause, bank: &TermBank) -> usize {
+    let removed = clause_remove_ac_resolved_core(clause, bank);
+    if removed != 0 {
+        clause_push_ac_res_derivation(clause, bank.signature().ac_axioms().len());
+    }
+    removed
+}
+
+/// Removes AC-trivial negative literals and mirrors C proof documentation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-document rendering fails.
+pub fn clause_remove_ac_resolved_with_docs<W: fmt::Write>(
+    output: &mut W,
+    session: &mut ProofDocSession,
+    clause: &mut Clause,
+    bank: &TermBank,
+) -> Result<usize, Diagnostic> {
+    let removed = clause_remove_ac_resolved_core(clause, bank);
+    if removed != 0 {
+        let ac_axiom_ids = bank
+            .signature()
+            .ac_axioms()
+            .iter()
+            .copied()
+            .map(ClauseDerivationRef::ident)
+            .collect::<Vec<_>>();
+        session.doc_clause_modification_with_evidence(
+            output,
+            bank,
+            clause,
+            ClauseModificationInference::AcResolution,
+            ClauseModificationEvidence::ac_resolution(&ac_axiom_ids),
+            None,
+        )?;
+        clause_push_ac_res_derivation(clause, ac_axiom_ids.len());
+    }
+    Ok(removed)
+}
+
+fn clause_remove_ac_resolved_core(clause: &mut Clause, bank: &TermBank) -> usize {
     if clause.negative_literal_count() == 0 {
         return 0;
     }
@@ -6722,9 +6768,10 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        FormulaDerivationRef, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS,
-        DC_ELIMINATE_BVAR, DC_FLEX_RESOLVE, DC_FNNF, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
-        DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
+        FormulaDerivationRef, DC_AC_RES, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        DC_DIST_DISJUNCTIONS, DC_ELIMINATE_BVAR, DC_FLEX_RESOLVE, DC_FNNF, DC_FOOL_UNROLL,
+        DC_INV_REC, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE,
+        DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
     };
     use crate::clauses::eqn::{eqn_app_encode_string, Eqn};
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
@@ -7013,6 +7060,10 @@ mod tests {
             Some(&[DerivationEntry::Operation(DC_CNF_EVAL_GC)][..])
         );
         assert!(quoted.info().is_none());
+        assert_ne!(
+            quoted.derivation_generation(),
+            archived.derivation_generation()
+        );
         assert_eq!(
             quoted.derivation().map(PStack::as_slice),
             Some(
@@ -7040,9 +7091,16 @@ mod tests {
         let mut archive = ClauseSet::new();
         let archived_ref = clause_archive_copy(&mut archive, &mut clause, &mut bank).unwrap();
 
-        assert_eq!(archived_ref, ClauseDerivationRef::new(61, 5));
+        assert_eq!(archived_ref.ident(), 61);
+        assert_eq!(archived_ref.source(), 5);
+        assert_ne!(archived_ref.generation(), 0);
         assert_eq!(archive.members(), 1);
         let archived = archive.find_by_id(61).unwrap();
+        assert_eq!(ClauseDerivationRef::from(archived), archived_ref);
+        assert_ne!(
+            archived.derivation_generation(),
+            clause.derivation_generation()
+        );
         assert_eq!(archived.info().and_then(ClauseInfo::name), Some("active"));
         assert_eq!(
             archived.derivation().map(PStack::as_slice),
@@ -7054,7 +7112,7 @@ mod tests {
             Some(
                 &[
                     DerivationEntry::Operation(DC_CNF_QUOTE),
-                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(61, 5)),
+                    DerivationEntry::ClauseParent(archived_ref),
                 ][..]
             )
         );
@@ -7412,6 +7470,13 @@ mod tests {
         assert_eq!(clause.weight(), 0);
         assert!(!clause.query_prop(CP_INITIAL));
         assert!(!clause.query_prop(CP_LIMITED_RW));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_AC_RES),
+                DerivationEntry::NumericArg(0),
+            ]
+        );
     }
 
     #[test]

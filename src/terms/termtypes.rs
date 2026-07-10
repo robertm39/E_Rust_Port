@@ -6,6 +6,7 @@ use crate::terms::signature::{
 };
 use crate::terms::simpletypes::{sort_is_interpreted, Type};
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroUsize;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 use std::rc::Rc;
 
@@ -162,7 +163,10 @@ pub enum RewriteLevel {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RewriteDemodulator(usize);
+pub struct RewriteDemodulator {
+    id: NonZeroUsize,
+    generation: u64,
+}
 
 impl RewriteDemodulator {
     /// Creates an opaque rewrite-demodulator handle.
@@ -173,16 +177,29 @@ impl RewriteDemodulator {
     /// represented by `None` in Rust.
     #[must_use]
     pub fn new(id: usize) -> Self {
-        assert!(
-            id != 0,
-            "rewrite demodulator id zero is represented by None"
-        );
-        Self(id)
+        Self::new_with_generation(id, 0)
+    }
+
+    /// Creates a rewrite-demodulator handle with an opaque clause generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is zero.
+    #[must_use]
+    pub fn new_with_generation(id: usize, generation: u64) -> Self {
+        let id = NonZeroUsize::new(id)
+            .unwrap_or_else(|| panic!("rewrite demodulator id zero is represented by None"));
+        Self { id, generation }
     }
 
     #[must_use]
     pub const fn id(self) -> usize {
-        self.0
+        self.id.get()
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
     }
 }
 

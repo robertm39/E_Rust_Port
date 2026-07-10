@@ -186,12 +186,26 @@ pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
 pub struct ClauseDerivationRef {
     ident: i64,
     source: u64,
+    generation: u64,
 }
 
 impl ClauseDerivationRef {
     #[must_use]
     pub const fn new(ident: i64, source: u64) -> Self {
-        Self { ident, source }
+        Self {
+            ident,
+            source,
+            generation: 0,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_with_generation(ident: i64, source: u64, generation: u64) -> Self {
+        Self {
+            ident,
+            source,
+            generation,
+        }
     }
 
     #[must_use]
@@ -203,11 +217,20 @@ impl ClauseDerivationRef {
     pub const fn source(self) -> u64 {
         self.source
     }
+
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
 }
 
 impl From<&Clause> for ClauseDerivationRef {
     fn from(clause: &Clause) -> Self {
-        Self::new(clause.ident(), clause.query_csscpa_source())
+        Self::new_with_generation(
+            clause.ident(),
+            clause.query_csscpa_source(),
+            clause.derivation_generation(),
+        )
     }
 }
 
@@ -1024,13 +1047,20 @@ fn derivation_subexpression_starts(entries: &[DerivationEntry]) -> Vec<usize> {
 #[must_use]
 pub fn demodulator_clause_refs(demodulator: RewriteDemodulator) -> Vec<ClauseDerivationRef> {
     let id = demodulator.id();
+    let generation = demodulator.generation();
     let mut refs = Vec::with_capacity(2);
     if let Ok(ident) = i64::try_from(id) {
-        refs.push(ClauseDerivationRef::new(ident, 0));
+        refs.push(ClauseDerivationRef::new_with_generation(
+            ident, 0, generation,
+        ));
     }
     if let Ok(id) = i128::try_from(id) {
         if let Ok(negative_ident) = i64::try_from(1_i128 - id) {
-            refs.push(ClauseDerivationRef::new(negative_ident, 0));
+            refs.push(ClauseDerivationRef::new_with_generation(
+                negative_ident,
+                0,
+                generation,
+            ));
         }
     }
     refs
@@ -1419,9 +1449,9 @@ mod tests {
         clause_deriv_find_first, clause_dummy_fof_quote_parent_ref, clause_dummy_quote_parent_ref,
         clause_is_dummy_fof_quote, clause_is_dummy_quote, clause_is_eval_gc,
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
-        clause_push_numeric_derivation, deriv_stack_count_search_inferences,
-        deriv_stack_extract_opt_parents, deriv_stack_extract_parents,
-        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
+        clause_push_numeric_derivation, demodulator_clause_refs,
+        deriv_stack_count_search_inferences, deriv_stack_extract_opt_parents,
+        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
         deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids,
         derivation_entries, formula_dummy_quote_parent_ref, get_is_ho, op_code, op_is_generating,
@@ -1488,6 +1518,19 @@ mod tests {
         assert_eq!(ARG2_CNF, 4096);
         assert_eq!(ARG2_NUM, 8192);
         assert_eq!(ARG_IS_HO, 16384);
+    }
+
+    #[test]
+    fn demodulator_clause_refs_preserve_generation() {
+        let demodulator = RewriteDemodulator::new_with_generation(99, 42);
+
+        assert_eq!(
+            demodulator_clause_refs(demodulator),
+            vec![
+                ClauseDerivationRef::new_with_generation(99, 0, 42),
+                ClauseDerivationRef::new_with_generation(-98, 0, 42),
+            ]
+        );
     }
 
     #[test]
