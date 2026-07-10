@@ -646,14 +646,28 @@ where
         term: &Term,
         collect: &mut Vec<Option<&'b ObjTree<T>>>,
     ) -> usize {
+        self.find_unifiable_with_signature(term, self.sig, collect)
+    }
+
+    /// Finds unifiable leaves using a caller-provided live signature.
+    ///
+    /// Proof search may add generated symbols after an index was constructed.
+    /// Discrimination-tree traversal needs their current arities, so callers
+    /// with a mutable term-bank owner must use its live signature here.
+    pub fn find_unifiable_with_signature<'b>(
+        &'b self,
+        term: &Term,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'b ObjTree<T>>>,
+    ) -> usize {
         let _timer = crate::basics::perf_counters::start(
             crate::basics::perf_counters::PerfCounter::IndexUnifTimer,
         );
         let key = (self.fp_fun)(term);
         if self.discrimination_tree {
-            self.index.find_dt_unifiable(&key, self.sig, collect)
+            self.index.find_dt_unifiable(&key, sig, collect)
         } else {
-            self.index.find_unifiable(&key, self.sig, collect)
+            self.index.find_unifiable(&key, sig, collect)
         }
     }
 
@@ -662,14 +676,24 @@ where
         term: &Term,
         collect: &mut Vec<Option<&'b ObjTree<T>>>,
     ) -> usize {
+        self.find_matchable_with_signature(term, self.sig, collect)
+    }
+
+    /// Finds matchable leaves using a caller-provided live signature.
+    pub fn find_matchable_with_signature<'b>(
+        &'b self,
+        term: &Term,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'b ObjTree<T>>>,
+    ) -> usize {
         let _timer = crate::basics::perf_counters::start(
             crate::basics::perf_counters::PerfCounter::IndexMatchTimer,
         );
         let key = (self.fp_fun)(term);
         if self.discrimination_tree {
-            self.index.find_dt_matchable(&key, self.sig, collect)
+            self.index.find_dt_matchable(&key, sig, collect)
         } else {
-            self.index.find_matchable(&key, self.sig, collect)
+            self.index.find_matchable(&key, sig, collect)
         }
     }
 
@@ -903,6 +927,28 @@ mod tests {
         let mut concrete_match = Vec::new();
         assert_eq!(index.find_matchable(&exact, &mut concrete_match), 1);
         assert_eq!(payload_values(&concrete_match), vec![1]);
+    }
+
+    #[test]
+    fn discrimination_tree_can_query_symbols_added_after_index_creation() {
+        let mut data = test_signature();
+        let index_signature = data.sig.clone();
+        let generated = data.sig.insert_id_for_problem(
+            "generated_after_index_init",
+            1,
+            false,
+            ProblemType::FirstOrder,
+        );
+        let generated_term = term(generated, &[leaf(data.a)]);
+        let mut index = FPIndex::new(index_dt_create, &index_signature);
+        index.insert(&generated_term).store_payload(7);
+
+        let mut unifiable = Vec::new();
+        assert_eq!(
+            index.find_unifiable_with_signature(&generated_term, &data.sig, &mut unifiable),
+            1
+        );
+        assert_eq!(payload_values(&unifiable), vec![7]);
     }
 
     #[test]

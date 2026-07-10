@@ -26,6 +26,7 @@ use crate::terms::match_mgu::{
     subst_mgu_complete_with_bank, term_has_higher_order_unification_surface,
 };
 use crate::terms::replace::{make_rewritten_term, tb_term_pos_replace};
+use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
@@ -594,7 +595,7 @@ fn compute_from_position_into_index(
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
-    for occurrence in unifiable_occurrences(index, overlap_term) {
+    for occurrence in unifiable_occurrences(index, overlap_term, bank.signature()) {
         paramod_count += compute_from_position_into_occurrence(
             bank,
             ocb,
@@ -736,7 +737,7 @@ fn compute_indexed_sources_into_position(
 
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
-    for occurrence in unifiable_occurrences(from_index, overlap_term) {
+    for occurrence in unifiable_occurrences(from_index, overlap_term, bank.signature()) {
         for from_clause_pos in occurrence.position_clauses().entries() {
             if from_clause_pos.clause_key() == parent_key {
                 continue;
@@ -1009,7 +1010,7 @@ fn compute_indexed_sources_into_position_csu(
 
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
-    for occurrence in unifiable_occurrences(from_index, overlap_term) {
+    for occurrence in unifiable_occurrences(from_index, overlap_term, bank.signature()) {
         ensure_higher_order_paramodulation_ordering_supported(
             ocb,
             &[overlap_term, occurrence.term()],
@@ -1538,9 +1539,10 @@ const fn paramodulation_type_requests_simultaneous(pm_type: ParamodulationType) 
 fn unifiable_occurrences<'index>(
     index: &'index OverlapIndex<'_>,
     term: &Term,
+    signature: &Signature,
 ) -> Vec<&'index SubtermOcc> {
     let mut occurrences = Vec::new();
-    let _ = index.find_unifiable_occurrences(term, &mut occurrences);
+    let _ = index.find_unifiable_occurrences_with_signature(term, signature, &mut occurrences);
     occurrences
 }
 

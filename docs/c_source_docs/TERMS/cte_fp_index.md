@@ -174,6 +174,7 @@ Source files reviewed: `TERMS/cte_fp_index.h`, `TERMS/cte_fp_index.c`.
 - `FPIndexPrintDot` connects payload boxes only for structural leaves collected by `FPIndexCollectLeaves`, while `FPIndexDistribPrint`/`FPIndexPrint` visit every node with a payload. Preserve that split for compatibility, but consider a clearer diagnostic renderer after the clause/subterm payload printers are integrated.
 - `FPIndexDistribPrint` computes `entries/leaves` directly, so an empty index is an unguarded floating-point division. A cleaned wrapper should handle empty indexes explicitly once callers are known.
 - `FPIndexDistribDataPrint` treats a null index as an all-zero distribution, while `FPIndexPrint` and `FPIndexPrintDot` dereference the index. Keep that nullable diagnostic behavior localized instead of making every fingerprint-index printer nullable by default.
+- C stores a live `Sig_p` in every fingerprint index and discrimination-tree candidate traversal reads symbol arities through it, including for symbols generated after index construction. Rust's caller-owned proof-search bridge still uses a cloned signature as a lifetime anchor, but operational indexed-paramodulation queries now pass the live term-bank signature explicitly. Replace the clone with a shared proof-session signature owner when global indexes become state-owned; do not regress to snapshot-based DT arity lookup.
 
 ### Porting Focus
 

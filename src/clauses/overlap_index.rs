@@ -89,6 +89,23 @@ impl<'sig> OverlapIndex<'sig> {
         result.len() - start
     }
 
+    /// Finds unifiable occurrences using a caller-provided live signature.
+    pub fn find_unifiable_occurrences_with_signature<'idx>(
+        &'idx self,
+        term: &Term,
+        signature: &Signature,
+        result: &mut Vec<&'idx SubtermOcc>,
+    ) -> usize {
+        let start = result.len();
+        let mut leaves = Vec::new();
+        self.index
+            .find_unifiable_with_signature(term, signature, &mut leaves);
+        for payload in leaves.into_iter().rev().flatten() {
+            result.extend(payload.iter());
+        }
+        result.len() - start
+    }
+
     #[must_use]
     pub fn collect_leaves<'idx>(&'idx self, result: &mut Vec<&'idx FPTree<SubtermOcc>>) -> usize {
         self.index.collect_leaves(result)
