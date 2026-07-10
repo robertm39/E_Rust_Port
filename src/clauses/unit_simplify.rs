@@ -8,8 +8,8 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::pdtrees::{PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
-use crate::clauses::subsumption::eqn_topsubsumes_termpair;
-use crate::terms::match_mgu::subst_match_complete;
+use crate::clauses::subsumption::{eqn_topsubsumes_termpair, eqn_topsubsumes_termpair_with_bank};
+use crate::terms::match_mgu::{subst_match_complete, subst_match_complete_with_bank};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -82,6 +82,36 @@ pub fn find_signed_top_simplifying_unit<'set>(
     find_top_simplifying_unit_with_sign(units, left, right, Some(sign))
 }
 
+/// Bank-aware C `FindTopSimplifyingUnit` for higher-order complete matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn find_top_simplifying_unit_with_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    find_top_simplifying_unit_with_sign_and_bank(bank, units, left, right, None)
+}
+
+/// Bank-aware C `FindSignedTopSimplifyingUnit` for higher-order complete
+/// matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn find_signed_top_simplifying_unit_with_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: bool,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    find_top_simplifying_unit_with_sign_and_bank(bank, units, left, right, Some(sign))
+}
+
 #[must_use]
 /// # Panics
 ///
@@ -137,6 +167,77 @@ pub fn find_simplifying_unit<'set>(
         }
     }
     None
+}
+
+/// Bank-aware C `FindSimplifyingUnit` for higher-order complete matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if matching nonvariable terms report an arity but do not expose
+/// initialized arguments. This is an internal term-bank invariant.
+pub fn find_simplifying_unit_with_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive_only: bool,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    if positive_only {
+        if let Some(result) =
+            find_signed_top_simplifying_unit_with_bank(bank, units, left, right, true)?
+        {
+            return Ok(Some(result));
+        }
+    } else if let Some(result) = find_top_simplifying_unit_with_bank(bank, units, left, right)? {
+        return Ok(Some(result));
+    }
+
+    let mut current_left = left.clone();
+    let mut current_right = right.clone();
+    while !current_left.is_top_level_free_var()
+        && !current_right.is_top_level_free_var()
+        && !current_left.is_lambda()
+        && !current_right.is_lambda()
+        && current_left.f_code() == current_right.f_code()
+        && current_left.arity() != 0
+    {
+        debug_assert_ne!(current_left, current_right);
+        let mut differing_pair = None;
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                if differing_pair.is_some() {
+                    return Ok(None);
+                }
+                differing_pair = Some((next_left, next_right));
+            }
+        }
+
+        let Some((next_left, next_right)) = differing_pair else {
+            return Ok(None);
+        };
+        current_left = next_left;
+        current_right = next_right;
+        if let Some(result) = find_signed_top_simplifying_unit_with_bank(
+            bank,
+            units,
+            &current_left,
+            &current_right,
+            true,
+        )? {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
 }
 
 /// Simplifies `clause` with a unit set, matching C
@@ -323,6 +424,27 @@ fn find_top_simplifying_unit_with_sign<'set>(
     result
 }
 
+fn find_top_simplifying_unit_with_sign_and_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
+    let result = if units.demod_index_search_may_have_match() {
+        if units.demod_index_search_uses_compact_candidates() {
+            find_indexed_top_simplifying_unit_with_bank(bank, units, left, right, sign)
+        } else {
+            find_plain_top_simplifying_unit_with_bank(bank, units, left, right, sign)
+        }
+    } else {
+        Ok(None)
+    };
+    units.record_demod_index_search_exit();
+    result
+}
+
 fn find_indexed_top_simplifying_unit<'set>(
     units: &'set ClauseSet,
     left: &Term,
@@ -349,6 +471,35 @@ fn find_indexed_top_simplifying_unit<'set>(
     None
 }
 
+fn find_indexed_top_simplifying_unit_with_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    while let Some(candidate) = units.demod_index_search_next_candidate_side() {
+        let Some(clause) = units.find_indexed_by_id(candidate.clause_id) else {
+            continue;
+        };
+        let Some(literal) = unit_literal(clause) else {
+            continue;
+        };
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            continue;
+        }
+        if unit_literal_occurrence_matches_top_pair_with_bank(
+            bank, candidate, literal, left, right,
+        )? {
+            return Ok(Some(SimplifyingUnit {
+                clause,
+                literal_index: 0,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 fn find_plain_top_simplifying_unit<'set>(
     units: &'set ClauseSet,
     left: &Term,
@@ -365,6 +516,30 @@ fn find_plain_top_simplifying_unit<'set>(
             literal_index: 0,
         })
     })
+}
+
+fn find_plain_top_simplifying_unit_with_bank<'set>(
+    bank: &mut TermBank,
+    units: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    sign: Option<bool>,
+) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
+    for clause in units.iter() {
+        let Some(literal) = unit_literal(clause) else {
+            continue;
+        };
+        if sign.is_some_and(|required| literal.is_positive() != required) {
+            continue;
+        }
+        if eqn_topsubsumes_termpair_with_bank(bank, literal, left, right)? {
+            return Ok(Some(SimplifyingUnit {
+                clause,
+                literal_index: 0,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 fn unit_literal_occurrence_matches_top_pair(
@@ -388,6 +563,51 @@ fn unit_literal_occurrence_matches_top_pair(
     }
 }
 
+fn unit_literal_occurrence_matches_top_pair_with_bank(
+    bank: &mut TermBank,
+    occurrence: PdtIndexedOccurrence,
+    literal: &Eqn,
+    left: &Term,
+    right: &Term,
+) -> Result<bool, Diagnostic> {
+    match occurrence.side {
+        EqnSide::NoSide => Ok(false),
+        EqnSide::LeftSide => unit_literal_side_matches_top_pair_with_bank(
+            bank,
+            literal.left(),
+            literal.right(),
+            left,
+            right,
+        ),
+        EqnSide::RightSide => unit_literal_side_matches_top_pair_with_bank(
+            bank,
+            literal.right(),
+            literal.left(),
+            left,
+            right,
+        ),
+        EqnSide::BothSides => {
+            if unit_literal_side_matches_top_pair_with_bank(
+                bank,
+                literal.left(),
+                literal.right(),
+                left,
+                right,
+            )? {
+                Ok(true)
+            } else {
+                unit_literal_side_matches_top_pair_with_bank(
+                    bank,
+                    literal.right(),
+                    literal.left(),
+                    left,
+                    right,
+                )
+            }
+        }
+    }
+}
+
 fn unit_literal_side_matches_top_pair(
     indexed_side: &Term,
     other_side: &Term,
@@ -397,6 +617,23 @@ fn unit_literal_side_matches_top_pair(
     let mut subst = Substitution::new();
     let result = subst_match_complete(indexed_side, left, &mut subst)
         && subst_match_complete(other_side, right, &mut subst);
+    subst.backtrack();
+    result
+}
+
+fn unit_literal_side_matches_top_pair_with_bank(
+    bank: &mut TermBank,
+    indexed_side: &Term,
+    other_side: &Term,
+    left: &Term,
+    right: &Term,
+) -> Result<bool, Diagnostic> {
+    let mut subst = Substitution::new();
+    let result = match subst_match_complete_with_bank(bank, indexed_side, left, &mut subst) {
+        Ok(true) => subst_match_complete_with_bank(bank, other_side, right, &mut subst),
+        Ok(false) => Ok(false),
+        Err(error) => Err(error),
+    };
     subst.backtrack();
     result
 }
@@ -523,9 +760,9 @@ mod tests {
     use super::{
         clause_simplify_with_unit_set, clause_simplify_with_unit_set_with_docs,
         find_signed_top_simplifying_unit, find_simplifying_unit, find_top_simplifying_unit,
-        trans_unit_simplify_string, UnitSimplifyType,
+        find_top_simplifying_unit_with_bank, trans_unit_simplify_string, UnitSimplifyType,
     };
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROTECTED, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
@@ -534,11 +771,13 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::pdtrees::PdtTraversalOrder;
+    use crate::terms::lambda::apply_terms;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -652,6 +891,44 @@ mod tests {
             Some(PdtTraversalOrder::variables_first())
         );
         assert!(!set.demod_index_search_active());
+    }
+
+    #[test]
+    fn banked_top_lookup_matches_higher_order_applied_variables() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let argument = typed_const(&mut bank, "unit_ho_argument");
+        let other_side = typed_const(&mut bank, "unit_ho_other_side");
+        let flex_application =
+            apply_terms(&mut bank, &flex, std::slice::from_ref(&argument)).unwrap();
+        let rigid_code = bank.signature_mut().insert_id("unit_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, unary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let rigid_application =
+            apply_terms(&mut bank, &rigid, std::slice::from_ref(&argument)).unwrap();
+        let matcher = typed_unary(&mut bank, "unit_ho_outer", &flex_application);
+        let target = typed_unary(&mut bank, "unit_ho_outer", &rigid_application);
+        let unit = clause_from(vec![literal(&mut bank, &matcher, &other_side, true)]);
+        let set = ClauseSet::from_clauses([unit]);
+
+        assert!(find_top_simplifying_unit(&set, &target, &other_side).is_none());
+        let found =
+            find_top_simplifying_unit_with_bank(&mut bank, &set, &target, &other_side).unwrap();
+
+        assert!(found.is_some());
+        assert!(flex.binding().is_none());
     }
 
     #[test]

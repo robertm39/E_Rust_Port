@@ -3,7 +3,7 @@ use crate::clauses::clause::Clause;
 use crate::clauses::derivation::{clause_push_derivation, DC_CONDENSE};
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
-    clause_is_subsume_ordered, clause_subsume_order_sort_lits, clause_subsumes_clause,
+    clause_is_subsume_ordered, clause_subsume_order_sort_lits, clause_subsumes_clause_with_bank,
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -63,7 +63,7 @@ fn try_condensation(
     candidate.set_weight(candidate.standard_weight());
     clause_subsume_order_sort_lits(&mut candidate, bank);
 
-    if clause_subsumes_clause(&candidate, clause, bank) {
+    if clause_subsumes_clause_with_bank(&candidate, clause, bank)? {
         clause.replace_literals(candidate.into_literals());
         clause.set_weight(clause.standard_weight());
         return Ok(true);

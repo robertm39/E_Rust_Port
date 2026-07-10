@@ -9,7 +9,8 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
-    clause_set_find_subsumed_clauses, clause_subsume_order_sort_lits, clause_subsumes_clause,
+    clause_set_find_subsumed_clauses, clause_set_find_subsumed_clauses_with_bank,
+    clause_subsume_order_sort_lits, clause_subsumes_clause, clause_subsumes_clause_with_bank,
 };
 use crate::terms::termbanks::TermBank;
 use std::fmt;
@@ -46,6 +47,36 @@ pub fn clause_contextual_simplify_reflect_with_docs(
     bank: &TermBank,
 ) -> Result<usize, Diagnostic> {
     clause_contextual_simplify_reflect_impl(set, clause, bank, Some((output, session)))
+}
+
+/// Bank-aware C `ClauseContextualSimplifyReflect` for higher-order complete
+/// matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_contextual_simplify_reflect_with_bank(
+    set: &ClauseSet,
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<usize, Diagnostic> {
+    clause_contextual_simplify_reflect_with_bank_impl::<String>(set, clause, bank, None)
+}
+
+/// Bank-aware contextual simplify-reflect with represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching, normalization, or proof
+/// rendering.
+pub fn clause_contextual_simplify_reflect_with_docs_and_bank(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<usize, Diagnostic> {
+    clause_contextual_simplify_reflect_with_bank_impl(set, clause, bank, Some((output, session)))
 }
 
 fn clause_contextual_simplify_reflect_impl<W: fmt::Write>(
@@ -97,6 +128,63 @@ fn clause_contextual_simplify_reflect_impl<W: fmt::Write>(
     Ok(result)
 }
 
+fn clause_contextual_simplify_reflect_with_bank_impl<W: fmt::Write>(
+    set: &ClauseSet,
+    clause: &mut Clause,
+    bank: &mut TermBank,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<usize, Diagnostic> {
+    let mut result = 0;
+    let mut literal_stack = literal_stack(clause);
+    clause.set_weight(clause.standard_weight());
+
+    while let Some(literal) = literal_stack.pop() {
+        let flipped = flipped_literal(&literal);
+        if !flip_literal_sign(clause, &literal) {
+            continue;
+        }
+        clause_subsume_order_sort_lits(clause, bank);
+
+        let subsumer = match clause_set_subsumes_context_clause_with_bank(set, clause, bank) {
+            Ok(subsumer) => subsumer,
+            Err(error) => {
+                let restored = flip_literal_sign(clause, &flipped);
+                debug_assert!(restored, "flipped literal must be restored after an error");
+                return Err(error);
+            }
+        };
+        if let Some(subsumer) = subsumer {
+            if subsumer.is_sos() {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            let removed = remove_literal(clause, &flipped);
+            debug_assert!(
+                removed.is_some(),
+                "flipped literal must still be present after subsumption"
+            );
+            debug_assert_eq!(clause.weight(), clause.standard_weight());
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    &mut **output,
+                    bank,
+                    clause,
+                    ClauseModificationInference::ContextSimplifyReflect,
+                    Some(subsumer),
+                    None,
+                )?;
+            }
+            result += 1;
+            clause_push_derivation(clause, DC_CONTEXT_SR, Some(subsumer), None);
+        } else {
+            let restored = flip_literal_sign(clause, &flipped);
+            debug_assert!(restored, "flipped literal must be restored if kept");
+        }
+    }
+
+    Ok(result)
+}
+
 /// Pushes clauses that C `ClauseSetFindContextSRClauses` would find.
 ///
 /// A target clause may be pushed more than once when different flipped literals
@@ -130,6 +218,45 @@ pub fn clause_set_find_context_sr_clauses<'set>(
     usize_to_i64(result.len() - old_len)
 }
 
+/// Bank-aware C `ClauseSetFindContextSRClauses`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if the query clause has a stale cached weight.
+pub fn clause_set_find_context_sr_clauses_with_bank<'set>(
+    set: &'set ClauseSet,
+    clause: &mut Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let old_len = result.len();
+    let mut literal_stack = literal_stack(clause);
+    assert_eq!(clause.weight(), clause.standard_weight());
+
+    while let Some(literal) = literal_stack.pop() {
+        let flipped = flipped_literal(&literal);
+        if !flip_literal_sign(clause, &literal) {
+            continue;
+        }
+        clause_subsume_order_sort_lits(clause, bank);
+        let lookup = clause_set_find_subsumed_clauses_with_bank(set, clause, result, bank);
+        let restored = flip_literal_sign(clause, &flipped);
+        debug_assert!(restored, "flipped literal must be restored after lookup");
+        if let Err(error) = lookup {
+            while result.len() > old_len {
+                let _ = result.pop();
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(usize_to_i64(result.len() - old_len))
+}
+
 fn clause_set_subsumes_context_clause<'set>(
     set: &'set ClauseSet,
     clause: &Clause,
@@ -137,6 +264,19 @@ fn clause_set_subsumes_context_clause<'set>(
 ) -> Option<&'set Clause> {
     set.iter()
         .find(|candidate| clause_subsumes_clause(candidate, clause, bank))
+}
+
+fn clause_set_subsumes_context_clause_with_bank<'set>(
+    set: &'set ClauseSet,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    for candidate in set.iter() {
+        if clause_subsumes_clause_with_bank(candidate, clause, bank)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 fn literal_stack(clause: &Clause) -> Vec<Eqn> {
@@ -183,11 +323,11 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_docs,
-        clause_set_find_context_sr_clauses,
+        clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_bank,
+        clause_contextual_simplify_reflect_with_docs, clause_set_find_context_sr_clauses,
     };
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
@@ -196,10 +336,13 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
+    use crate::terms::lambda::apply_terms;
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -222,6 +365,29 @@ mod tests {
 
     fn predicate_literal(bank: &mut TermBank, atom: &Term, positive: bool) -> Eqn {
         Eqn::alloc(atom.clone(), bank.true_term().clone(), bank, positive).unwrap()
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, argument: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_.clone()]))
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(type_));
+        term.set_argument(0, argument.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn clause_from(literals: Vec<Eqn>) -> Clause {
@@ -272,6 +438,59 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(10, 0)),
             ]
         );
+    }
+
+    #[test]
+    fn banked_contextual_simplify_reflect_matches_applied_variables() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let argument = typed_const(&mut bank, "context_ho_argument");
+        let rhs = typed_const(&mut bank, "context_ho_rhs");
+        let rigid_code = bank.signature_mut().insert_id("context_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, unary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let flex_application =
+            apply_terms(&mut bank, &flex, std::slice::from_ref(&argument)).unwrap();
+        let rigid_application =
+            apply_terms(&mut bank, &rigid, std::slice::from_ref(&argument)).unwrap();
+        let pattern = typed_unary(&mut bank, "context_ho_outer", &flex_application);
+        let target_term = typed_unary(&mut bank, "context_ho_outer", &rigid_application);
+        let subsumer = prepare(
+            clause_from(vec![
+                Eqn::alloc(pattern, rhs.clone(), &mut bank, false).unwrap()
+            ]),
+            &bank,
+            40,
+        );
+        let set = ClauseSet::from_clauses([subsumer]);
+        let target = clause_from(vec![Eqn::alloc(target_term, rhs, &mut bank, true).unwrap()]);
+
+        let mut legacy_target = target.clone();
+        assert_eq!(
+            clause_contextual_simplify_reflect(&set, &mut legacy_target, &bank),
+            0
+        );
+
+        let mut banked_target = target;
+        assert_eq!(
+            clause_contextual_simplify_reflect_with_bank(&set, &mut banked_target, &mut bank)
+                .unwrap(),
+            1
+        );
+        assert!(banked_target.is_empty());
+        assert!(flex.binding().is_none());
     }
 
     #[test]

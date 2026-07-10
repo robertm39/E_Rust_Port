@@ -12,7 +12,9 @@ use crate::orderings::cto_orderings::{to_compare, to_compare_with_bank};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
-use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
+use crate::terms::match_mgu::{
+    subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete,
+};
 use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::{type_is_predicate, Type};
 use crate::terms::subst::Substitution;
@@ -79,6 +81,26 @@ fn subsume_term_pair_directed(
         result = subst_match_complete(pattern_right, target_right, subst);
     }
     if !result {
+        subst.backtrack_to_pos(backtrack);
+    }
+    result
+}
+
+fn subsume_term_pair_directed_with_bank(
+    bank: &mut TermBank,
+    pattern_left: &Term,
+    pattern_right: &Term,
+    target_left: &Term,
+    target_right: &Term,
+    subst: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    let backtrack = subst.len();
+    let result = match subst_match_complete_with_bank(bank, pattern_left, target_left, subst) {
+        Ok(true) => subst_match_complete_with_bank(bank, pattern_right, target_right, subst),
+        Ok(false) => Ok(false),
+        Err(error) => Err(error),
+    };
+    if !matches!(result, Ok(true)) {
         subst.backtrack_to_pos(backtrack);
     }
     result
@@ -1792,6 +1814,29 @@ impl Eqn {
         )
     }
 
+    /// Bank-aware C `EqnSubsumeDirected` for higher-order complete matching.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from eta reduction or higher-order binding
+    /// construction. The substitution is restored to its entry state on an
+    /// error or an ordinary failed match.
+    pub fn subsume_directed_with_bank(
+        &self,
+        subsumed: &Self,
+        subst: &mut Substitution,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        subsume_term_pair_directed_with_bank(
+            bank,
+            &self.lterm,
+            &self.rterm,
+            &subsumed.lterm,
+            &subsumed.rterm,
+            subst,
+        )
+    }
+
     pub fn subsume(&self, subsumed: &Self, subst: &mut Substitution) -> bool {
         if self.is_oriented() && !subsumed.is_oriented() {
             return false;
@@ -1805,6 +1850,35 @@ impl Eqn {
             &self.lterm,
             &subsumed.lterm,
             &subsumed.rterm,
+            subst,
+        )
+    }
+
+    /// Bank-aware C `EqnSubsume` for higher-order complete matching.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from eta reduction or higher-order binding
+    /// construction. Failed directions leave the substitution unchanged.
+    pub fn subsume_with_bank(
+        &self,
+        subsumed: &Self,
+        subst: &mut Substitution,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        if self.is_oriented() && !subsumed.is_oriented() {
+            return Ok(false);
+        }
+        let result = self.subsume_directed_with_bank(subsumed, subst, bank)?;
+        if result || self.is_oriented() {
+            return Ok(result);
+        }
+        subsume_term_pair_directed_with_bank(
+            bank,
+            &self.lterm,
+            &self.rterm,
+            &subsumed.rterm,
+            &subsumed.lterm,
             subst,
         )
     }

@@ -24,8 +24,9 @@ use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
 use crate::clauses::context_sr::{
-    clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_docs,
-    clause_set_find_context_sr_clauses,
+    clause_contextual_simplify_reflect_with_bank,
+    clause_contextual_simplify_reflect_with_docs_and_bank,
+    clause_set_find_context_sr_clauses_with_bank,
 };
 use crate::clauses::derivation::{
     clause_push_derivation, clause_push_formula_derivation, derivation_entries,
@@ -78,13 +79,15 @@ use crate::clauses::splitting::{
     clause_split, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod, SplitDefinitionStore,
 };
 use crate::clauses::subsumption::{
-    clause_negative_simplify_reflect, clause_negative_simplify_reflect_with_docs,
-    clause_positive_simplify_reflect_with_strong,
-    clause_positive_simplify_reflect_with_strong_and_docs,
-    clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
-    clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
-    eqn_topsubsumes_termpair, unit_clause_set_subsumes_clause,
-    unit_clause_set_subsumes_clause_with_strong,
+    clause_negative_simplify_reflect_with_bank,
+    clause_negative_simplify_reflect_with_docs_and_bank,
+    clause_positive_simplify_reflect_with_strong_and_bank,
+    clause_positive_simplify_reflect_with_strong_and_docs_and_bank,
+    clause_set_find_first_subsumed_clause_with_index_and_bank,
+    clause_set_find_subsumed_clauses_with_index_and_bank, clause_set_subsumes_clause_with_index,
+    clause_set_subsumes_clause_with_index_and_bank, clause_subsume_order_sort_lits,
+    eqn_topsubsumes_termpair_with_bank, unit_clause_set_subsumes_clause,
+    unit_clause_set_subsumes_clause_with_bank, unit_clause_set_subsumes_clause_with_strong,
 };
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::tautologies::clause_is_tautology;
@@ -1347,12 +1350,12 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     clause.set_weight(clause.standard_weight());
 
     if static_watchlist {
-        let subsumed = clause_set_find_first_subsumed_clause_with_index(
+        let subsumed = clause_set_find_first_subsumed_clause_with_index_and_bank(
             watchlist,
             watchlist.fv_anchor(),
             clause,
             terms,
-        );
+        )?;
         if subsumed.is_some() {
             clause.set_prop(CP_SUBSUMES_WATCH);
             return Ok(ProofStateWatchlistOutcome {
@@ -1663,19 +1666,19 @@ fn remove_watchlist_subsumed<W: fmt::Write>(
     watchlist: &mut ClauseSet,
     archive: &mut ClauseSet,
     subsumer: &Clause,
-    terms: &TermBank,
+    terms: &mut TermBank,
     lambda_demod: bool,
     mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut stack = PStack::new();
-    let expected_removed = clause_set_find_subsumed_clauses_with_index(
+    let expected_removed = clause_set_find_subsumed_clauses_with_index_and_bank(
         watchlist,
         watchlist.fv_anchor(),
         subsumer,
         &mut stack,
         terms,
-    );
+    )?;
     let ids = stack
         .as_slice()
         .iter()
@@ -2323,7 +2326,7 @@ fn forward_modify_remove_ac_resolved<W: fmt::Write>(
 }
 
 fn forward_modify_positive_simplify_reflect<W: fmt::Write>(
-    terms: &TermBank,
+    terms: &mut TermBank,
     units: &ClauseSet,
     clause: &mut Clause,
     strong_unit_forward_subsumption: bool,
@@ -2334,7 +2337,7 @@ fn forward_modify_positive_simplify_reflect<W: fmt::Write>(
     }
     match doc_context.as_mut() {
         Some((output, session)) => {
-            let _ = clause_positive_simplify_reflect_with_strong_and_docs(
+            let _ = clause_positive_simplify_reflect_with_strong_and_docs_and_bank(
                 output,
                 session,
                 terms,
@@ -2344,18 +2347,19 @@ fn forward_modify_positive_simplify_reflect<W: fmt::Write>(
             )?;
         }
         None => {
-            let _ = clause_positive_simplify_reflect_with_strong(
+            let _ = clause_positive_simplify_reflect_with_strong_and_bank(
+                terms,
                 units,
                 clause,
                 strong_unit_forward_subsumption,
-            );
+            )?;
         }
     }
     Ok(())
 }
 
 fn forward_modify_negative_simplify_reflect<W: fmt::Write>(
-    terms: &TermBank,
+    terms: &mut TermBank,
     units: &ClauseSet,
     clause: &mut Clause,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
@@ -2365,11 +2369,12 @@ fn forward_modify_negative_simplify_reflect<W: fmt::Write>(
     }
     match doc_context.as_mut() {
         Some((output, session)) => {
-            let _ =
-                clause_negative_simplify_reflect_with_docs(output, session, terms, units, clause)?;
+            let _ = clause_negative_simplify_reflect_with_docs_and_bank(
+                output, session, terms, units, clause,
+            )?;
         }
         None => {
-            let _ = clause_negative_simplify_reflect(units, clause);
+            let _ = clause_negative_simplify_reflect_with_bank(terms, units, clause)?;
         }
     }
     Ok(())
@@ -2436,14 +2441,71 @@ pub fn proof_state_forward_subsumption_with_strong(
     ))
 }
 
+/// Bank-aware C `ForwardSubsumption` for proof-search paths that may contain
+/// higher-order clauses.
+///
+/// # Errors
+///
+/// Returns diagnostics from complete higher-order matching or normalization.
+pub fn proof_state_forward_subsumption_with_bank(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    non_unit_subsumption: bool,
+    strong_unit_forward_subsumption: bool,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    clause.set_weight(clause.standard_weight());
+    let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+
+    let mut subsumer_found = false;
+    if clause.positive_literal_count() != 0 {
+        subsumer_found = unit_clause_set_subsumes_clause_with_bank(
+            terms,
+            processed_sets.pos_eqns,
+            clause,
+            strong_unit_forward_subsumption,
+        )?
+        .is_some();
+    }
+    if !subsumer_found && clause.negative_literal_count() != 0 {
+        subsumer_found = unit_clause_set_subsumes_clause_with_bank(
+            terms,
+            processed_sets.neg_units,
+            clause,
+            false,
+        )?
+        .is_some();
+    }
+    if !subsumer_found && clause.literal_number() > 1 && non_unit_subsumption {
+        clause_subsume_order_sort_lits(clause, terms);
+        subsumer_found = clause_set_subsumes_clause_with_index_and_bank(
+            processed_sets.non_units,
+            processed_sets.non_units.fv_anchor(),
+            clause,
+            terms,
+        )?
+        .is_some();
+    }
+
+    if subsumer_found {
+        counts.subsumed += 1;
+        return Ok(None);
+    }
+
+    Ok(Some(fv_index_pack_clause(
+        clause.clone(),
+        processed_sets.non_units.fv_anchor(),
+    )))
+}
+
 fn proof_state_forward_subsumption_with_control(
-    state: &ProofState,
+    state: &mut ProofState,
     control: &ProofControl,
     clause: &mut Clause,
     counts: &mut ForwardContractCounts,
     non_unit_subsumption: bool,
-) -> Option<FvPackedClause> {
-    proof_state_forward_subsumption_with_strong(
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    proof_state_forward_subsumption_with_bank(
         state,
         clause,
         counts,
@@ -2537,18 +2599,16 @@ fn proof_state_contextual_simplify_reflect_maybe_docs<W: fmt::Write>(
 ) -> Result<usize, Diagnostic> {
     let (terms, processed_sets) = state.terms_and_processed_sets_mut();
     match doc_context.as_mut() {
-        Some((output, session)) => clause_contextual_simplify_reflect_with_docs(
+        Some((output, session)) => clause_contextual_simplify_reflect_with_docs_and_bank(
             output,
             session,
             processed_sets.non_units,
             clause,
             terms,
         ),
-        None => Ok(clause_contextual_simplify_reflect(
-            processed_sets.non_units,
-            clause,
-            terms,
-        )),
+        None => {
+            clause_contextual_simplify_reflect_with_bank(processed_sets.non_units, clause, terms)
+        }
     }
 }
 
@@ -2625,7 +2685,7 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
             clause,
             counts,
             options.non_unit_subsumption,
-        )
+        )?
         .is_none()
         {
             return Ok(None);
@@ -3318,17 +3378,17 @@ fn proof_state_aggressive_forward_subsumed(
     state: &mut ProofState,
     control: &ProofControl,
     clause: &mut Clause,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     if !control.heuristic_parms().forward_subsumption_aggressive {
-        return false;
+        return Ok(false);
     }
 
     let mut counts = ForwardContractCounts::default();
     let subsumed =
-        proof_state_forward_subsumption_with_control(state, control, clause, &mut counts, true)
+        proof_state_forward_subsumption_with_control(state, control, clause, &mut counts, true)?
             .is_none();
     state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
-    subsumed
+    Ok(subsumed)
 }
 
 fn proof_state_clause_er_normalize_var_maybe_docs<W: fmt::Write>(
@@ -3477,7 +3537,7 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
             return Ok(Some(clause));
         }
 
-        if proof_state_aggressive_forward_subsumed(state, control, &mut clause) {
+        if proof_state_aggressive_forward_subsumed(state, control, &mut clause)? {
             continue;
         }
 
@@ -8299,8 +8359,9 @@ fn remove_subsumed_ids_from_slot<W: fmt::Write>(
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     let ids = {
-        let set = processed_set_by_slot(state, slot);
-        subsumed_ids_in_set(set, subsumer, state.terms())
+        let (terms, sets) = state.terms_and_processed_sets_mut();
+        let set = processed_set_from_bundle(&sets, slot);
+        subsumed_ids_in_set(set, subsumer, terms)?
     };
     let mut removed = 0;
     for id in ids.into_iter().rev() {
@@ -8338,20 +8399,24 @@ fn remove_subsumed_ids_from_slot<W: fmt::Write>(
     Ok(removed)
 }
 
-fn subsumed_ids_in_set(set: &ClauseSet, subsumer: &Clause, terms: &TermBank) -> Vec<i64> {
+fn subsumed_ids_in_set(
+    set: &ClauseSet,
+    subsumer: &Clause,
+    terms: &mut TermBank,
+) -> Result<Vec<i64>, Diagnostic> {
     let mut matched_clauses = PStack::new();
-    let _ = clause_set_find_subsumed_clauses_with_index(
+    let _ = clause_set_find_subsumed_clauses_with_index_and_bank(
         set,
         set.fv_anchor(),
         subsumer,
         &mut matched_clauses,
         terms,
-    );
-    matched_clauses
+    )?;
+    Ok(matched_clauses
         .as_slice()
         .iter()
         .map(|clause| clause.ident())
-        .collect()
+        .collect())
 }
 
 fn proof_state_eliminate_unit_simplified_clauses<W: fmt::Write>(
@@ -8412,16 +8477,24 @@ fn move_unit_simplified_from_slot<W: fmt::Write>(
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     let ids = {
-        let set = processed_set_by_slot(state, slot);
-        set.iter()
-            .filter(|clause| clause_unit_simplify_test(clause, simplifier))
-            .map(Clause::ident)
-            .collect::<Vec<_>>()
+        let (terms, sets) = state.terms_and_processed_sets_mut();
+        let set = processed_set_from_bundle(&sets, slot);
+        let mut ids = Vec::new();
+        for clause in set.iter() {
+            if clause_unit_simplify_test(clause, simplifier, terms)? {
+                ids.push(clause.ident());
+            }
+        }
+        ids
     };
     move_simplified_ids_from_slot(state, slot, ids, indices, lambda_demod, doc_context)
 }
 
-fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
+fn clause_unit_simplify_test(
+    clause: &Clause,
+    simplifier: &Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
     debug_assert!(simplifier.is_unit());
     let simplifier_literal = simplifier
         .literals()
@@ -8432,13 +8505,22 @@ fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
 
     let simplifier_positive = simplifier_literal.is_positive();
     if simplifier_positive == clause.is_positive() {
-        return false;
+        return Ok(false);
     }
 
-    clause.literals().as_slice().iter().any(|literal| {
-        simplifier_positive != literal.is_positive()
-            && eqn_topsubsumes_termpair(simplifier_literal, literal.left(), literal.right())
-    })
+    for literal in clause.literals().as_slice() {
+        if simplifier_positive != literal.is_positive()
+            && eqn_topsubsumes_termpair_with_bank(
+                bank,
+                simplifier_literal,
+                literal.left(),
+                literal.right(),
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn proof_state_eliminate_context_sr_clauses<W: fmt::Write>(
@@ -8454,13 +8536,14 @@ fn proof_state_eliminate_context_sr_clauses<W: fmt::Write>(
     }
 
     let ids = {
+        let (terms, processed_sets) = state.terms_and_processed_sets_mut();
         let mut clauses = PStack::new();
-        let count = clause_set_find_context_sr_clauses(
-            state.processed_non_units(),
+        let count = clause_set_find_context_sr_clauses_with_bank(
+            processed_sets.non_units,
             &mut simplifier.clone(),
             &mut clauses,
-            state.terms(),
-        );
+            terms,
+        )?;
         if count == 0 {
             Vec::new()
         } else {
@@ -9385,8 +9468,9 @@ mod tests {
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
         proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
         proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
+        proof_state_forward_subsumption_with_bank, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
+        proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -11832,6 +11916,61 @@ mod tests {
 
         assert!(packed.is_none());
         assert_eq!(counts.subsumed, 1);
+    }
+
+    #[test]
+    fn proof_state_banked_forward_subsumption_matches_higher_order_unit() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (subsumer, mut clause, flex) = {
+            let terms = state.terms_mut();
+            let individual = terms.signature().type_bank().default_type();
+            let unary = terms
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![individual.clone(), individual]));
+            let flex = terms.vars().get_fresh_var(&unary);
+            let argument = typed_const(terms, "pc_ho_subsumption_argument");
+            let rhs = typed_const(terms, "pc_ho_subsumption_rhs");
+            let rigid = typed_arrow_const(terms, "pc_ho_subsumption_rigid", 1);
+            let flex_application =
+                apply_terms(terms, &flex, std::slice::from_ref(&argument)).unwrap();
+            let rigid_application =
+                apply_terms(terms, &rigid, std::slice::from_ref(&argument)).unwrap();
+            let matcher = typed_unary(terms, "pc_ho_subsumption_outer", &flex_application);
+            let target = typed_unary(terms, "pc_ho_subsumption_outer", &rigid_application);
+            let subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &matcher, &rhs, true,
+            )]));
+            let clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &target, &rhs, true)]));
+            (subsumer, clause, flex)
+        };
+        state.processed_pos_eqns_mut().insert(subsumer);
+
+        let mut legacy_counts = ForwardContractCounts::default();
+        assert!(proof_state_forward_subsumption(
+            &state,
+            &mut clause.clone(),
+            &mut legacy_counts,
+            false,
+        )
+        .is_some());
+
+        let mut counts = ForwardContractCounts::default();
+        let packed = proof_state_forward_subsumption_with_bank(
+            &mut state,
+            &mut clause,
+            &mut counts,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert!(packed.is_none());
+        assert_eq!(counts.subsumed, 1);
+        assert!(flex.binding().is_none());
     }
 
     #[test]

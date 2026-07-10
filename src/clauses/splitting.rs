@@ -15,7 +15,8 @@ use crate::clauses::eqn_props::{EP_IS_POSITIVE, EP_IS_SPLIT_LIT};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::subsumption::{
-    clause_set_find_variant_clause_indexed, clause_subsume_order_sort_lits, clause_subsumes_clause,
+    clause_set_find_variant_clause_indexed_with_bank, clause_subsume_order_sort_lits,
+    clause_subsumes_clause_with_bank,
 };
 use crate::terms::signature::FP_CL_SPLIT_DEF;
 use crate::terms::simpletypes::alloc_arrow_type;
@@ -711,7 +712,7 @@ fn get_or_create_definition(
     def_clause.set_weight(def_clause.standard_weight());
     clause_subsume_order_sort_lits(&mut def_clause, bank);
 
-    if let Some(variant_id) = find_definition_variant(store.clauses, &def_clause, bank) {
+    if let Some(variant_id) = find_definition_variant(store.clauses, &def_clause, bank)? {
         let pred = store.predicates.get(&variant_id).copied().ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::OTHER_ERROR,
@@ -797,18 +798,26 @@ fn archive_fresh_split_formula_definition(
     Ok(Some(parent))
 }
 
-fn find_definition_variant(store: &ClauseSet, query: &Clause, bank: &TermBank) -> Option<i64> {
+fn find_definition_variant(
+    store: &ClauseSet,
+    query: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<i64>, Diagnostic> {
     if let Some(anchor) = store.fv_anchor() {
-        return clause_set_find_variant_clause_indexed(anchor, query, bank).map(Clause::ident);
+        return Ok(
+            clause_set_find_variant_clause_indexed_with_bank(anchor, query, bank)?
+                .map(Clause::ident),
+        );
     }
 
-    store
-        .iter()
-        .find(|candidate| {
-            clause_subsumes_clause(candidate, query, bank)
-                && clause_subsumes_clause(query, candidate, bank)
-        })
-        .map(Clause::ident)
+    for candidate in store.iter() {
+        if clause_subsumes_clause_with_bank(candidate, query, bank)?
+            && clause_subsumes_clause_with_bank(query, candidate, bank)?
+        {
+            return Ok(Some(candidate.ident()));
+        }
+    }
+    Ok(None)
 }
 
 fn initialize_permute_stack(size: usize) -> Vec<usize> {

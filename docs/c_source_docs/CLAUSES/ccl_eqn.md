@@ -311,7 +311,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order equation subsumption on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 
@@ -342,11 +342,13 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - `compare_poseqn_negeqn` labels one mixed positive/negative lesser branch as `Buggy, changed by StS` and uses a broad disjunction over both equation sides. Rust preserves the implementation; defer cleanup until maximal-literal and proof-search comparisons can show the change is unobservable.
 - `EqnTermExtWeight` always applies `max_term_multiplier` to the left term, and applies it to the right term only when the literal is not oriented. `LiteralTermExtWeight` then applies the maximal-literal multiplier before the positive-equation multiplier. Rust preserves this order; later heuristic APIs may want names that make the left-side-as-potentially-maximal convention explicit.
 - `EqnSplitModStandardWeight` checks the full `EPIsSplitLit|EPIsPositive` property mask before using the left head symbol's special weight; it does not call `EqnIsSplitLit`, so merely marking the predicate symbol with `FPClSplitDef` is not enough. The checked C snapshot references `SigGetSpecialWeight` only from this macro and does not define it elsewhere, so later cleanup should decide whether the special weight belongs to signature state, ordering-control state, or a caller-supplied policy.
+- `EqnSubsumeDirected` and `EqnSubsume` now have explicit mutable-bank Rust variants that preserve branch-local substitution rollback while dispatching to complete higher-order matching; recursive clause subsumption uses those variants in proof-search paths.
 
 ### Change Later
 
 - `EqnMap`'s left-side-only orientation/maximality invalidation can leave metadata untouched after a right-side-only rewrite. Keep this while matching C traces; after drop-in compatibility is stable, consider making any side replacement clear ordering metadata or splitting literal side mutation from truth/polarity normalization.
 - C equations carry their owner bank implicitly, so `EqnOrient`, `EqnCompare`, and `LiteralCompare` can reach owner-bank normalization through `TOCompare` without changing signatures. Rust currently keeps explicit immutable-bank and mutable-bank comparison variants; collapse that split only after term-owner metadata or proof-state ownership can provide the C context without hidden global coupling.
+- The same implicit owner-bank coupling applies to `EqnSubsumeDirected`/`EqnSubsume`: apparently read-only matching can eta-normalize and construct shared higher-order bindings. A cleaned C interface should make that mutable context explicit rather than depending on `TermGetBank` below the equation API.
 
 ### Porting Focus
 

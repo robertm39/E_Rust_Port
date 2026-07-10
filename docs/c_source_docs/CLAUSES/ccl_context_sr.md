@@ -67,7 +67,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 
@@ -82,6 +82,7 @@ Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 - `ClauseContextualSimplifyReflect` first snapshots the clause literals into a stack, sets the cached weight to `ClauseStandardWeight`, then pops literals in stack order. For each literal it flips the sign, sorts by subsumption order, and removes the flipped literal only if the modified clause is subsumed by the set.
 - When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and records `DCContextSR` with a compact subsumer reference; an opt-in documenting helper now emits represented `DocClauseModification(inf_context_simplify_reflect, subsumer)` steps for proof-control callers with a `ProofDocSession`.
 - `ClauseSetFindContextSRClauses` flips and sorts the query for each literal and pushes every subsumed set clause, including duplicate pushes for the same clause if multiple flipped literals work.
+- Rust now exposes mutable-bank contextual simplify-reflect and subsumed-clause discovery variants, and proof control uses them so forward and backward contextual contraction reaches C's complete higher-order matcher.
 
 ### Change Later
 

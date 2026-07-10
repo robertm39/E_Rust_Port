@@ -10,9 +10,10 @@ use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndex, FvIndexAnchor};
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::unit_simplify::{
-    find_signed_top_simplifying_unit, find_simplifying_unit, SimplifyingUnit,
+    find_signed_top_simplifying_unit, find_signed_top_simplifying_unit_with_bank,
+    find_simplifying_unit, find_simplifying_unit_with_bank, SimplifyingUnit,
 };
-use crate::terms::match_mgu::subst_match_complete;
+use crate::terms::match_mgu::{subst_match_complete, subst_match_complete_with_bank};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -47,13 +48,39 @@ pub fn unit_clause_clause_subsumption_calls() -> i64 {
 #[must_use]
 pub fn eqn_topsubsumes_termpair(eqn: &Eqn, left: &Term, right: &Term) -> bool {
     let mut subst = Substitution::new();
-    let result = (subst_match_complete(eqn.left(), left, &mut subst)
-        && subst_match_complete(eqn.right(), right, &mut subst))
-        || {
-            subst.backtrack();
-            subst_match_complete(eqn.left(), right, &mut subst)
-                && subst_match_complete(eqn.right(), left, &mut subst)
-        };
+    let result = if subst_match_complete(eqn.left(), left, &mut subst) {
+        subst_match_complete(eqn.right(), right, &mut subst)
+    } else {
+        subst_match_complete(eqn.left(), right, &mut subst)
+            && subst_match_complete(eqn.right(), left, &mut subst)
+    };
+    subst.backtrack();
+    result
+}
+
+/// Bank-aware top-level equation subsumption using C `SubstMatchComplete` in
+/// higher-order mode.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization. All
+/// temporary bindings are removed before returning.
+pub fn eqn_topsubsumes_termpair_with_bank(
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    left: &Term,
+    right: &Term,
+) -> Result<bool, Diagnostic> {
+    let mut subst = Substitution::new();
+    let result = match subst_match_complete_with_bank(bank, eqn.left(), left, &mut subst) {
+        Ok(true) => subst_match_complete_with_bank(bank, eqn.right(), right, &mut subst),
+        Ok(false) => match subst_match_complete_with_bank(bank, eqn.left(), right, &mut subst) {
+            Ok(true) => subst_match_complete_with_bank(bank, eqn.right(), left, &mut subst),
+            Ok(false) => Ok(false),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
     subst.backtrack();
     result
 }
@@ -110,6 +137,65 @@ pub fn eqn_subsumes_termpair(eqn: &Eqn, left: &Term, right: &Term) -> bool {
     }
 }
 
+/// Bank-aware C `eqn_subsumes_termpair` descent.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if equal-headed non-phony terms have different arities, matching the
+/// non-LFHO C assertion.
+pub fn eqn_subsumes_termpair_with_bank(
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    left: &Term,
+    right: &Term,
+) -> Result<bool, Diagnostic> {
+    let mut current_left = left.clone();
+    let mut current_right = right.clone();
+
+    loop {
+        if eqn_topsubsumes_termpair_with_bank(bank, eqn, &current_left, &current_right)? {
+            return Ok(true);
+        }
+        if current_left.is_phony_app()
+            || current_right.is_phony_app()
+            || current_left.f_code() != current_right.f_code()
+            || current_left.arity() == 0
+        {
+            return Ok(false);
+        }
+        assert_eq!(
+            current_left.arity(),
+            current_right.arity(),
+            "non-LFHO subsumption descent expects equal arities"
+        );
+
+        let mut differing_pair = None;
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                if differing_pair.is_some() {
+                    return Ok(false);
+                }
+                differing_pair = Some((next_left, next_right));
+            }
+        }
+        let Some((next_left, next_right)) = differing_pair else {
+            return Ok(true);
+        };
+        current_left = next_left;
+        current_right = next_right;
+    }
+}
+
 #[must_use]
 pub fn literal_subsumes_clause(literal: &Eqn, clause: &Clause) -> bool {
     clause.literals().as_slice().iter().any(|candidate| {
@@ -121,6 +207,41 @@ pub fn literal_subsumes_clause(literal: &Eqn, clause: &Clause) -> bool {
                 && eqn_topsubsumes_termpair(literal, candidate.left(), candidate.right())
         }
     })
+}
+
+/// Bank-aware unit-literal subsumption over a clause.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn literal_subsumes_clause_with_bank(
+    bank: &mut TermBank,
+    literal: &Eqn,
+    clause: &Clause,
+) -> Result<bool, Diagnostic> {
+    for candidate in clause.literals().as_slice() {
+        let matches = if literal.is_positive() {
+            candidate.is_positive()
+                && eqn_subsumes_termpair_with_bank(
+                    bank,
+                    literal,
+                    candidate.left(),
+                    candidate.right(),
+                )?
+        } else {
+            candidate.is_negative()
+                && eqn_topsubsumes_termpair_with_bank(
+                    bank,
+                    literal,
+                    candidate.left(),
+                    candidate.right(),
+                )?
+        };
+        if matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Returns whether a unit clause subsumes `clause`.
@@ -138,6 +259,29 @@ pub fn unit_clause_subsumes_clause(unit: &Clause, clause: &Clause) -> bool {
     );
     UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS.fetch_add(1, Ordering::SeqCst);
     literal_subsumes_clause(&unit.literals().as_slice()[0], clause)
+}
+
+/// Bank-aware C `UnitClauseSubsumesClause`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `unit` does not contain exactly one literal.
+pub fn unit_clause_subsumes_clause_with_bank(
+    bank: &mut TermBank,
+    unit: &Clause,
+    clause: &Clause,
+) -> Result<bool, Diagnostic> {
+    assert_eq!(
+        unit.literal_number(),
+        1,
+        "unit subsumption requires one literal"
+    );
+    UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS.fetch_add(1, Ordering::SeqCst);
+    literal_subsumes_clause_with_bank(bank, &unit.literals().as_slice()[0], clause)
 }
 
 /// Returns a unit clause from `set` that subsumes one literal of `clause`.
@@ -174,6 +318,51 @@ pub fn unit_clause_set_subsumes_clause_with_strong<'set>(
             find_negative_top_unit_simplifier_plain(set, literal.left(), literal.right())
         }
     })
+}
+
+/// Bank-aware unit-clause-set subsumption using complete higher-order
+/// matching where required.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn unit_clause_set_subsumes_clause_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    clause: &Clause,
+    strong_unit_forward_subsumption: bool,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    for literal in clause.literals().as_slice() {
+        let result = if literal.is_positive() {
+            if strong_unit_forward_subsumption {
+                find_strong_unit_simplifier_plain_with_bank(
+                    bank,
+                    set,
+                    literal.left(),
+                    literal.right(),
+                    true,
+                )?
+            } else {
+                find_positive_unit_simplifier_plain_with_bank(
+                    bank,
+                    set,
+                    literal.left(),
+                    literal.right(),
+                )?
+            }
+        } else {
+            find_negative_top_unit_simplifier_plain_with_bank(
+                bank,
+                set,
+                literal.left(),
+                literal.right(),
+            )?
+        };
+        if result.is_some() {
+            return Ok(result);
+        }
+    }
+    Ok(None)
 }
 
 /// Returns the first clause at or after `start_index` subsumed by a unit clause.
@@ -296,6 +485,101 @@ pub fn clause_positive_simplify_reflect_with_strong_and_docs(
     Ok(clause.is_empty())
 }
 
+/// Bank-aware positive simplify-reflect for higher-order complete matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_positive_simplify_reflect_with_strong_and_bank(
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+) -> Result<bool, Diagnostic> {
+    clause_positive_simplify_reflect_with_bank_impl::<String>(
+        bank,
+        set,
+        clause,
+        strong_unit_forward_subsumption,
+        None,
+    )
+}
+
+/// Bank-aware positive simplify-reflect with represented proof documentation.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching, normalization, or proof
+/// rendering.
+pub fn clause_positive_simplify_reflect_with_strong_and_docs_and_bank(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+) -> Result<bool, Diagnostic> {
+    clause_positive_simplify_reflect_with_bank_impl(
+        bank,
+        set,
+        clause,
+        strong_unit_forward_subsumption,
+        Some((output, session)),
+    )
+}
+
+fn clause_positive_simplify_reflect_with_bank_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_positive() {
+                None
+            } else if strong_unit_forward_subsumption {
+                find_strong_unit_simplifier_with_bank(
+                    bank,
+                    set,
+                    literal.left(),
+                    literal.right(),
+                    true,
+                )?
+                .map(|simplifier| (simplifier.is_sos(), simplifier))
+            } else {
+                find_positive_unit_simplifier_with_bank(bank, set, literal.left(), literal.right())?
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
+            }
+        };
+
+        if let Some((simplifier_sos, simplifier)) = simplifier {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    &mut **output,
+                    bank,
+                    clause,
+                    ClauseModificationInference::SimplifyReflect,
+                    Some(simplifier),
+                    None,
+                )?;
+            }
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
+        } else {
+            index += 1;
+        }
+    }
+    Ok(clause.is_empty())
+}
+
 /// Removes positive literals simplified by negative unit clauses in `set`.
 ///
 /// This plain-set path preserves the C mutation semantics but uses linear
@@ -375,6 +659,82 @@ pub fn clause_negative_simplify_reflect_with_docs(
     Ok(clause.is_empty())
 }
 
+/// Bank-aware negative simplify-reflect for higher-order complete matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_negative_simplify_reflect_with_bank(
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+) -> Result<bool, Diagnostic> {
+    clause_negative_simplify_reflect_with_bank_impl::<String>(bank, set, clause, None)
+}
+
+/// Bank-aware negative simplify-reflect with represented proof documentation.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching, normalization, or proof
+/// rendering.
+pub fn clause_negative_simplify_reflect_with_docs_and_bank(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+) -> Result<bool, Diagnostic> {
+    clause_negative_simplify_reflect_with_bank_impl(bank, set, clause, Some((output, session)))
+}
+
+fn clause_negative_simplify_reflect_with_bank_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_negative() {
+                None
+            } else {
+                find_negative_top_unit_simplifier_with_bank(
+                    bank,
+                    set,
+                    literal.left(),
+                    literal.right(),
+                )?
+                .map(|simplifier| (simplifier.is_sos(), simplifier))
+            }
+        };
+
+        if let Some((simplifier_sos, simplifier)) = simplifier {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    &mut **output,
+                    bank,
+                    clause,
+                    ClauseModificationInference::SimplifyReflect,
+                    Some(simplifier),
+                    None,
+                )?;
+            }
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
+        } else {
+            index += 1;
+        }
+    }
+    Ok(clause.is_empty())
+}
+
 pub fn clause_subsume_order_sort_lits(clause: &mut Clause, bank: &TermBank) {
     clause.sort_literals_by(|left, right| {
         i64::from(left.subsume_inverse_refined_compare(right, bank))
@@ -439,6 +799,66 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
     result
 }
 
+/// Bank-aware C `ClauseSubsumesClause` using complete higher-order matching.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if either clause is not subsumption ordered or has a stale cached
+/// standard weight, matching the C preconditions.
+pub fn clause_subsumes_clause_with_bank(
+    subsumer: &Clause,
+    sub_candidate: &Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SubsumeTimer,
+    );
+    assert!(clause_is_subsume_ordered(subsumer, bank));
+    assert!(clause_is_subsume_ordered(sub_candidate, bank));
+    assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
+    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+
+    if subsumer.is_empty() {
+        return Ok(true);
+    }
+    if subsumer.is_unit() {
+        return unit_clause_subsumes_clause_with_bank(bank, subsumer, sub_candidate);
+    }
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS.fetch_add(1, Ordering::SeqCst);
+    if subsumer.positive_literal_count() > sub_candidate.positive_literal_count()
+        || subsumer.negative_literal_count() > sub_candidate.negative_literal_count()
+        || subsumer.weight() > sub_candidate.weight()
+    {
+        return Ok(false);
+    }
+    if (sub_candidate.positive_literal_count() >= 3 || sub_candidate.negative_literal_count() >= 3)
+        && !check_subsumption_possibility_with_bank(subsumer, sub_candidate, bank)?
+    {
+        return Ok(false);
+    }
+
+    let mut subst = Substitution::new();
+    let mut picked = vec![false; sub_candidate.literal_number()];
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC.fetch_add(1, Ordering::SeqCst);
+    let result = eqn_list_rec_subsume_with_bank(
+        subsumer.literals().as_slice(),
+        sub_candidate.literals().as_slice(),
+        &mut subst,
+        &mut picked,
+        bank,
+    );
+    subst.backtrack();
+    let result = result?;
+    if result {
+        CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(result)
+}
+
 /// Returns the first clause in `set` that subsumes `sub_candidate`.
 ///
 /// This is the plain clause-set path used by `ClauseSetSubsumesClause` when no
@@ -465,6 +885,37 @@ pub fn clause_set_subsumes_clause<'set>(
     assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
     set.iter()
         .find(|candidate| clause_subsumes_clause(candidate, sub_candidate, bank))
+}
+
+/// Bank-aware plain clause-set subsumer lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if the candidate is unit, is not subsumption ordered, or has a stale
+/// cached weight, matching C's plain-set preconditions.
+pub fn clause_set_subsumes_clause_with_bank<'set>(
+    set: &'set ClauseSet,
+    sub_candidate: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    assert!(
+        sub_candidate.literal_number() > 1,
+        "plain ClauseSetSubsumesClause expects a non-unit candidate"
+    );
+    assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
+    for candidate in set.iter() {
+        if clause_subsumes_clause_with_bank(candidate, sub_candidate, bank)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 /// Returns the first clause at or after `start_index` subsumed by `subsumer`.
@@ -520,6 +971,35 @@ pub fn clause_set_find_subsumed_clauses<'set>(
     usize_to_i64(result.len() - old_len)
 }
 
+/// Bank-aware plain lookup of all clauses subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if the subsumer or a checked candidate is not subsumption ordered or
+/// has a stale cached weight.
+pub fn clause_set_find_subsumed_clauses_with_bank<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    let old_len = result.len();
+    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    for candidate in set.iter() {
+        if clause_subsumes_clause_with_bank(subsumer, candidate, bank)? {
+            result.push(candidate);
+        }
+    }
+    Ok(usize_to_i64(result.len() - old_len))
+}
+
 /// Returns the first clause in `set` subsumed by `subsumer`.
 ///
 /// # Panics
@@ -536,6 +1016,33 @@ pub fn clause_set_find_first_subsumed_clause<'set>(
         crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
     );
     clause_set_find_subsumed_clause(set, 0, subsumer, bank)
+}
+
+/// Bank-aware plain lookup of the first clause subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if the subsumer or a checked candidate is not subsumption ordered or
+/// has a stale cached weight.
+pub fn clause_set_find_first_subsumed_clause_with_bank<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    for candidate in set.iter() {
+        if clause_subsumes_clause_with_bank(subsumer, candidate, bank)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 /// Returns the first clause that subsumes `sub_candidate`, using `index` when
@@ -571,6 +1078,36 @@ pub fn clause_set_subsumes_clause_with_index<'set>(
     fv_index_subsumes_packed_clause(index.index(), &packed_candidate, bank)
 }
 
+/// Bank-aware indexed/plain clause-set subsumer lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if the candidate is unit, is not subsumption ordered, or has a stale
+/// cached weight.
+pub fn clause_set_subsumes_clause_with_index_and_bank<'set>(
+    set: &'set ClauseSet,
+    index: Option<&'set FvIndexAnchor>,
+    sub_candidate: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    assert!(
+        sub_candidate.literal_number() > 1,
+        "ClauseSetSubsumesClause expects a non-unit candidate"
+    );
+    let Some(index) = index else {
+        return clause_set_subsumes_clause_with_bank(set, sub_candidate, bank);
+    };
+    let packed_candidate = fv_index_pack_clause(sub_candidate.clone(), Some(index));
+    fv_index_subsumes_packed_clause_with_bank(index.index(), &packed_candidate, bank)
+}
+
 /// Pushes every clause subsumed by `subsumer`, using `index` when one is
 /// available and otherwise scanning `set`.
 ///
@@ -597,6 +1134,28 @@ pub fn clause_set_find_subsumed_clauses_with_index<'set>(
     };
     let packed_subsumer = fv_index_pack_clause(subsumer.clone(), Some(index));
     fv_index_find_subsumed_clauses(index.index(), &packed_subsumer, result, bank)
+}
+
+/// Bank-aware indexed/plain lookup of all clauses subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_find_subsumed_clauses_with_index_and_bank<'set>(
+    set: &'set ClauseSet,
+    index: Option<&'set FvIndexAnchor>,
+    subsumer: &Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    let Some(index) = index else {
+        return clause_set_find_subsumed_clauses_with_bank(set, subsumer, result, bank);
+    };
+    let packed_subsumer = fv_index_pack_clause(subsumer.clone(), Some(index));
+    fv_index_find_subsumed_clauses_with_bank(index.index(), &packed_subsumer, result, bank)
 }
 
 /// Returns the first clause subsumed by `subsumer`, using `index` when one is
@@ -626,6 +1185,27 @@ pub fn clause_set_find_first_subsumed_clause_with_index<'set>(
     fv_index_find_first_subsumed_clause(index.index(), &packed_subsumer, bank)
 }
 
+/// Bank-aware indexed/plain lookup of the first clause subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_find_first_subsumed_clause_with_index_and_bank<'set>(
+    set: &'set ClauseSet,
+    index: Option<&'set FvIndexAnchor>,
+    subsumer: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
+    );
+    let Some(index) = index else {
+        return clause_set_find_first_subsumed_clause_with_bank(set, subsumer, bank);
+    };
+    let packed_subsumer = fv_index_pack_clause(subsumer.clone(), Some(index));
+    fv_index_find_first_subsumed_clause_with_bank(index.index(), &packed_subsumer, bank)
+}
+
 /// Returns the first indexed clause that is a variant of `clause`.
 ///
 /// This is the packed-query wrapper for C's `ClauseSetFindVariantClause`; the C
@@ -643,6 +1223,20 @@ pub fn clause_set_find_variant_clause_indexed<'index>(
 ) -> Option<&'index Clause> {
     let packed_clause = fv_index_pack_clause(clause.clone(), Some(index));
     fv_index_find_variant_clause(index.index(), &packed_clause, bank)
+}
+
+/// Bank-aware indexed variant lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_find_variant_clause_indexed_with_bank<'index>(
+    index: &'index FvIndexAnchor,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    let packed_clause = fv_index_pack_clause(clause.clone(), Some(index));
+    fv_index_find_variant_clause_with_bank(index.index(), &packed_clause, bank)
 }
 
 /// Returns the first indexed clause that subsumes `sub_candidate`.
@@ -672,6 +1266,40 @@ pub fn fv_index_subsumes_packed_clause<'index>(
         sub_candidate.clause().standard_weight()
     );
     fv_index_subsumes_clause_rec(index, vector.as_slice(), 0, sub_candidate.clause(), bank)
+}
+
+/// Bank-aware FV-index subsumer lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `sub_candidate` is unpacked or if it or a checked indexed clause
+/// violates subsumption-order or cached-weight preconditions.
+pub fn fv_index_subsumes_packed_clause_with_bank<'index>(
+    index: &'index FvIndex,
+    sub_candidate: &FvPackedClause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
+    let vector = sub_candidate
+        .vector()
+        .expect("FV-index subsumption requires a packed frequency vector");
+    assert_eq!(
+        sub_candidate.clause().weight(),
+        sub_candidate.clause().standard_weight()
+    );
+    fv_index_subsumes_clause_rec_with_bank(
+        index,
+        vector.as_slice(),
+        0,
+        sub_candidate.clause(),
+        bank,
+    )
 }
 
 /// Pushes every indexed clause subsumed by `subsumer` onto `result`.
@@ -712,6 +1340,44 @@ pub fn fv_index_find_subsumed_clauses<'index>(
     usize_to_i64(result.len() - old_len)
 }
 
+/// Bank-aware FV-index lookup of all clauses subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `subsumer` is unpacked or if it or a checked indexed clause
+/// violates subsumption-order or cached-weight preconditions.
+pub fn fv_index_find_subsumed_clauses_with_bank<'index>(
+    index: &'index FvIndex,
+    subsumer: &FvPackedClause,
+    result: &mut PStack<&'index Clause>,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
+    let old_len = result.len();
+    let vector = subsumer
+        .vector()
+        .expect("FV-index subsumed-clause lookup requires a packed frequency vector");
+    assert_eq!(
+        subsumer.clause().weight(),
+        subsumer.clause().standard_weight()
+    );
+    fv_index_find_subsumed_clauses_rec_with_bank(
+        index,
+        vector.as_slice(),
+        0,
+        subsumer.clause(),
+        result,
+        bank,
+    )?;
+    Ok(usize_to_i64(result.len() - old_len))
+}
+
 /// Returns the first indexed clause subsumed by `subsumer`.
 ///
 /// # Panics
@@ -738,6 +1404,40 @@ pub fn fv_index_find_first_subsumed_clause<'index>(
     fv_index_find_first_subsumed_clause_rec(index, vector.as_slice(), 0, subsumer.clause(), bank)
 }
 
+/// Bank-aware FV-index lookup of the first clause subsumed by `subsumer`.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `subsumer` is unpacked or if it or a checked indexed clause
+/// violates subsumption-order or cached-weight preconditions.
+pub fn fv_index_find_first_subsumed_clause_with_bank<'index>(
+    index: &'index FvIndex,
+    subsumer: &FvPackedClause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
+    let vector = subsumer
+        .vector()
+        .expect("FV-index first-subsumed lookup requires a packed frequency vector");
+    assert_eq!(
+        subsumer.clause().weight(),
+        subsumer.clause().standard_weight()
+    );
+    fv_index_find_first_subsumed_clause_rec_with_bank(
+        index,
+        vector.as_slice(),
+        0,
+        subsumer.clause(),
+        bank,
+    )
+}
+
 /// Returns the first indexed clause that is a variant of `clause`.
 ///
 /// # Panics
@@ -761,6 +1461,31 @@ pub fn fv_index_find_variant_clause<'index>(
     fv_index_find_variant_clause_rec(index, vector.as_slice(), 0, clause.clause(), bank)
 }
 
+/// Bank-aware FV-index variant lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `clause` is unpacked or if it or a checked indexed clause
+/// violates subsumption-order or cached-weight preconditions.
+pub fn fv_index_find_variant_clause_with_bank<'index>(
+    index: &'index FvIndex,
+    clause: &FvPackedClause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    let _timer = crate::basics::perf_counters::start(
+        crate::basics::perf_counters::PerfCounter::FvIndexTimer,
+    );
+    let vector = clause
+        .vector()
+        .expect("FV-index variant lookup requires a packed frequency vector");
+    assert_eq!(clause.clause().weight(), clause.clause().standard_weight());
+    fv_index_find_variant_clause_rec_with_bank(index, vector.as_slice(), 0, clause.clause(), bank)
+}
+
 fn check_subsumption_possibility(
     subsumer: &Clause,
     sub_candidate: &Clause,
@@ -771,6 +1496,19 @@ fn check_subsumption_possibility(
         .as_slice()
         .iter()
         .all(|literal| find_spec_literal(literal, sub_candidate.literals().as_slice(), bank))
+}
+
+fn check_subsumption_possibility_with_bank(
+    subsumer: &Clause,
+    sub_candidate: &Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    for literal in subsumer.literals().as_slice() {
+        if !find_spec_literal_with_bank(literal, sub_candidate.literals().as_slice(), bank)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn find_spec_literal(literal: &Eqn, candidates: &[Eqn], bank: &TermBank) -> bool {
@@ -793,6 +1531,32 @@ fn find_spec_literal(literal: &Eqn, candidates: &[Eqn], bank: &TermBank) -> bool
         subst.backtrack();
     }
     false
+}
+
+fn find_spec_literal_with_bank(
+    literal: &Eqn,
+    candidates: &[Eqn],
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    let mut subst = Substitution::new();
+    for candidate in candidates {
+        let cmp = literal.subsume_q_order_compare(candidate, bank);
+        if cmp > 0 {
+            return Ok(false);
+        }
+        if cmp < 0 {
+            continue;
+        }
+        if literal.standard_weight() > candidate.standard_weight() {
+            return Ok(false);
+        }
+        let result = literal_matches_with_subst_with_bank(literal, candidate, &mut subst, bank);
+        subst.backtrack();
+        if result? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn eqn_list_rec_subsume(
@@ -837,8 +1601,75 @@ fn eqn_list_rec_subsume(
     false
 }
 
+fn eqn_list_rec_subsume_with_bank(
+    subsum_list: &[Eqn],
+    sub_cand_list: &[Eqn],
+    subst: &mut Substitution,
+    picked: &mut [bool],
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    let Some((literal, remaining)) = subsum_list.split_first() else {
+        return Ok(true);
+    };
+
+    for (index, candidate) in sub_cand_list.iter().enumerate() {
+        if picked[index] {
+            continue;
+        }
+        let cmp = candidate.subsume_q_order_compare(literal, bank);
+        if cmp < 0 {
+            return Ok(false);
+        }
+        if cmp > 0 {
+            continue;
+        }
+        if candidate.standard_weight() < literal.standard_weight() {
+            return Ok(false);
+        }
+        if literal.is_oriented() && !candidate.is_oriented() {
+            continue;
+        }
+
+        picked[index] = true;
+        let state = subst.len();
+        let matches = literal_matches_with_subst_with_bank(literal, candidate, subst, bank);
+        match matches {
+            Ok(true) => {
+                match eqn_list_rec_subsume_with_bank(remaining, sub_cand_list, subst, picked, bank)
+                {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {}
+                    Err(error) => {
+                        subst.backtrack_to_pos(state);
+                        picked[index] = false;
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                subst.backtrack_to_pos(state);
+                picked[index] = false;
+                return Err(error);
+            }
+        }
+        subst.backtrack_to_pos(state);
+        picked[index] = false;
+    }
+    Ok(false)
+}
+
 fn literal_matches_with_subst(pattern: &Eqn, candidate: &Eqn, subst: &mut Substitution) -> bool {
     pattern.subsume(candidate, subst)
+}
+
+fn literal_matches_with_subst_with_bank(
+    pattern: &Eqn,
+    candidate: &Eqn,
+    subst: &mut Substitution,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    pattern.subsume_with_bank(candidate, subst, bank)
 }
 
 fn fv_index_subsumes_clause_rec<'index>(
@@ -869,6 +1700,42 @@ fn fv_index_subsumes_clause_rec<'index>(
         }
     }
     None
+}
+
+fn fv_index_subsumes_clause_rec_with_bank<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    if feature == vector.len() {
+        for candidate in index.clauses().values() {
+            if clause_subsumes_clause_with_bank(candidate, clause, bank)? {
+                return Ok(Some(candidate));
+            }
+        }
+        return Ok(None);
+    }
+
+    for successor in index
+        .successors()
+        .range(..=vector[feature])
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            if let Some(result) = fv_index_subsumes_clause_rec_with_bank(
+                successor,
+                vector,
+                feature + 1,
+                clause,
+                bank,
+            )? {
+                return Ok(Some(result));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn fv_index_find_subsumed_clauses_rec<'index>(
@@ -906,6 +1773,42 @@ fn fv_index_find_subsumed_clauses_rec<'index>(
     }
 }
 
+fn fv_index_find_subsumed_clauses_rec_with_bank<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    subsumer: &Clause,
+    result: &mut PStack<&'index Clause>,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    if feature == vector.len() {
+        for candidate in index.clauses().values() {
+            if clause_subsumes_clause_with_bank(subsumer, candidate, bank)? {
+                result.push(candidate);
+            }
+        }
+        return Ok(());
+    }
+
+    for successor in index
+        .successors()
+        .range(vector[feature]..)
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            fv_index_find_subsumed_clauses_rec_with_bank(
+                successor,
+                vector,
+                feature + 1,
+                subsumer,
+                result,
+                bank,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn fv_index_find_first_subsumed_clause_rec<'index>(
     index: &'index FvIndex,
     vector: &[i64],
@@ -940,6 +1843,42 @@ fn fv_index_find_first_subsumed_clause_rec<'index>(
     None
 }
 
+fn fv_index_find_first_subsumed_clause_rec_with_bank<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    subsumer: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    if feature == vector.len() {
+        for candidate in index.clauses().values() {
+            if clause_subsumes_clause_with_bank(subsumer, candidate, bank)? {
+                return Ok(Some(candidate));
+            }
+        }
+        return Ok(None);
+    }
+
+    for successor in index
+        .successors()
+        .range(vector[feature]..)
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            if let Some(result) = fv_index_find_first_subsumed_clause_rec_with_bank(
+                successor,
+                vector,
+                feature + 1,
+                subsumer,
+                bank,
+            )? {
+                return Ok(Some(result));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn fv_index_find_variant_clause_rec<'index>(
     index: &'index FvIndex,
     vector: &[i64],
@@ -961,6 +1900,33 @@ fn fv_index_find_variant_clause_rec<'index>(
     fv_index_find_variant_clause_rec(successor, vector, feature + 1, clause, bank)
 }
 
+fn fv_index_find_variant_clause_rec_with_bank<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'index Clause>, Diagnostic> {
+    if feature == vector.len() {
+        for candidate in index.clauses().values() {
+            if clause_subsumes_clause_with_bank(candidate, clause, bank)?
+                && clause_subsumes_clause_with_bank(clause, candidate, bank)?
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        return Ok(None);
+    }
+
+    let Some(successor) = index.successors().get(&vector[feature]) else {
+        return Ok(None);
+    };
+    if successor.clause_count() == 0 {
+        return Ok(None);
+    }
+    fv_index_find_variant_clause_rec_with_bank(successor, vector, feature + 1, clause, bank)
+}
+
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -971,6 +1937,15 @@ fn find_positive_unit_simplifier<'set>(
     right: &Term,
 ) -> Option<&'set Clause> {
     find_simplifying_unit(set, left, right, true).map(SimplifyingUnit::clause)
+}
+
+fn find_positive_unit_simplifier_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    Ok(find_simplifying_unit_with_bank(bank, set, left, right, true)?.map(SimplifyingUnit::clause))
 }
 
 fn find_positive_unit_simplifier_plain<'set>(
@@ -989,6 +1964,26 @@ fn find_positive_unit_simplifier_plain<'set>(
                     && eqn_subsumes_termpair(literal, left, right)
             })
     })
+}
+
+fn find_positive_unit_simplifier_plain_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    for candidate in set.iter() {
+        let Some(literal) = candidate.literals().as_slice().first() else {
+            continue;
+        };
+        if candidate.is_unit()
+            && literal.is_positive()
+            && eqn_subsumes_termpair_with_bank(bank, literal, left, right)?
+        {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 fn find_strong_unit_simplifier<'set>(
@@ -1035,6 +2030,54 @@ fn find_strong_unit_simplifier<'set>(
         }
     }
     None
+}
+
+fn find_strong_unit_simplifier_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let mut stack = vec![(left.clone(), right.clone())];
+    while let Some((current_left, current_right)) = stack.pop() {
+        if let Some(result) =
+            find_top_unit_simplifier_with_bank(bank, set, &current_left, &current_right, positive)?
+        {
+            return Ok(Some(result));
+        }
+        if current_left.is_applied_free_var()
+            || current_right.is_applied_free_var()
+            || current_left.is_lambda()
+            || current_right.is_lambda()
+            || current_left.f_code() != current_right.f_code()
+            || current_left.arity() == 0
+        {
+            break;
+        }
+        assert_eq!(
+            current_left.arity(),
+            current_right.arity(),
+            "strong unit subsumption descent expects equal arities"
+        );
+        assert_eq!(
+            current_left.type_(),
+            current_right.type_(),
+            "strong unit subsumption descent expects equal types"
+        );
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                stack.push((next_left, next_right));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn find_strong_unit_simplifier_plain<'set>(
@@ -1084,6 +2127,58 @@ fn find_strong_unit_simplifier_plain<'set>(
     None
 }
 
+fn find_strong_unit_simplifier_plain_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let mut stack = vec![(left.clone(), right.clone())];
+    while let Some((current_left, current_right)) = stack.pop() {
+        if let Some(result) = find_top_unit_simplifier_plain_with_bank(
+            bank,
+            set,
+            &current_left,
+            &current_right,
+            positive,
+        )? {
+            return Ok(Some(result));
+        }
+        if current_left.is_applied_free_var()
+            || current_right.is_applied_free_var()
+            || current_left.is_lambda()
+            || current_right.is_lambda()
+            || current_left.f_code() != current_right.f_code()
+            || current_left.arity() == 0
+        {
+            break;
+        }
+        assert_eq!(
+            current_left.arity(),
+            current_right.arity(),
+            "strong unit subsumption descent expects equal arities"
+        );
+        assert_eq!(
+            current_left.type_(),
+            current_right.type_(),
+            "strong unit subsumption descent expects equal types"
+        );
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                stack.push((next_left, next_right));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn find_top_unit_simplifier<'set>(
     set: &'set ClauseSet,
     left: &Term,
@@ -1091,6 +2186,19 @@ fn find_top_unit_simplifier<'set>(
     positive: bool,
 ) -> Option<&'set Clause> {
     find_signed_top_simplifying_unit(set, left, right, positive).map(SimplifyingUnit::clause)
+}
+
+fn find_top_unit_simplifier_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    Ok(
+        find_signed_top_simplifying_unit_with_bank(bank, set, left, right, positive)?
+            .map(SimplifyingUnit::clause),
+    )
 }
 
 fn find_top_unit_simplifier_plain<'set>(
@@ -1112,6 +2220,27 @@ fn find_top_unit_simplifier_plain<'set>(
     })
 }
 
+fn find_top_unit_simplifier_plain_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    for candidate in set.iter() {
+        let Some(literal) = candidate.literals().as_slice().first() else {
+            continue;
+        };
+        if candidate.is_unit()
+            && literal.is_positive() == positive
+            && eqn_topsubsumes_termpair_with_bank(bank, literal, left, right)?
+        {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
 fn find_negative_top_unit_simplifier<'set>(
     set: &'set ClauseSet,
     left: &Term,
@@ -1120,12 +2249,30 @@ fn find_negative_top_unit_simplifier<'set>(
     find_top_unit_simplifier(set, left, right, false)
 }
 
+fn find_negative_top_unit_simplifier_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    find_top_unit_simplifier_with_bank(bank, set, left, right, false)
+}
+
 fn find_negative_top_unit_simplifier_plain<'set>(
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
 ) -> Option<&'set Clause> {
     find_top_unit_simplifier_plain(set, left, right, false)
+}
+
+fn find_negative_top_unit_simplifier_plain_with_bank<'set>(
+    bank: &mut TermBank,
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    find_top_unit_simplifier_plain_with_bank(bank, set, left, right, false)
 }
 
 #[cfg(test)]
@@ -1141,14 +2288,15 @@ mod tests {
         clause_set_find_subsumed_clauses_with_index, clause_set_find_unit_subsumed_clause,
         clause_set_find_variant_clause_indexed, clause_set_subsumes_clause,
         clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
-        clause_subsumes_clause, eqn_subsumes_termpair, eqn_topsubsumes_termpair,
+        clause_subsumes_clause, clause_subsumes_clause_with_bank, eqn_subsumes_termpair,
+        eqn_topsubsumes_termpair, eqn_topsubsumes_termpair_with_bank,
         fv_index_find_first_subsumed_clause, fv_index_find_subsumed_clauses,
         fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
         unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
         unit_clause_set_subsumes_clause_with_strong, unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
@@ -1159,11 +2307,13 @@ mod tests {
     use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::pdtrees::PdtTraversalOrder;
+    use crate::terms::lambda::apply_terms;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -1277,6 +2427,20 @@ mod tests {
     }
 
     #[test]
+    fn top_subsumption_preserves_c_swapped_retry_guard() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let first = typed_const(&mut bank, "top_retry_first");
+        let second = typed_const(&mut bank, "top_retry_second");
+        let unit_lit = literal(&mut bank, &variable, &first, true);
+
+        assert!(!eqn_topsubsumes_termpair(&unit_lit, &first, &second));
+        assert!(
+            !eqn_topsubsumes_termpair_with_bank(&mut bank, &unit_lit, &first, &second).unwrap()
+        );
+    }
+
+    #[test]
     fn clause_subsumption_uses_shared_substitution_and_strict_literal_picking() {
         let mut bank = test_bank();
         let variable = typed_var(&bank, -10);
@@ -1309,6 +2473,50 @@ mod tests {
         assert!(clause_clause_subsumption_calls() >= calls_before + 2);
         assert!(clause_clause_subsumption_calls_rec() >= rec_before + 2);
         assert!(clause_clause_subsumption_successes() > successes_before);
+    }
+
+    #[test]
+    fn banked_clause_subsumption_shares_higher_order_applied_variable_binding() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let argument = typed_const(&mut bank, "subsume_ho_argument");
+        let first_rhs = typed_const(&mut bank, "subsume_ho_first_rhs");
+        let second_rhs = typed_const(&mut bank, "subsume_ho_second_rhs");
+        let flex_application =
+            apply_terms(&mut bank, &flex, std::slice::from_ref(&argument)).unwrap();
+        let rigid_code = bank.signature_mut().insert_id("subsume_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, unary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let rigid_application =
+            apply_terms(&mut bank, &rigid, std::slice::from_ref(&argument)).unwrap();
+        let outer_flex = typed_unary(&mut bank, "subsume_ho_outer", &flex_application);
+        let outer_rigid = typed_unary(&mut bank, "subsume_ho_outer", &rigid_application);
+        let mut subsumer = clause_from(vec![
+            literal(&mut bank, &outer_flex, &first_rhs, true),
+            literal(&mut bank, &flex_application, &second_rhs, true),
+        ]);
+        let mut candidate = clause_from(vec![
+            literal(&mut bank, &outer_rigid, &first_rhs, true),
+            literal(&mut bank, &rigid_application, &second_rhs, true),
+        ]);
+        prepare(&mut subsumer, &bank);
+        prepare(&mut candidate, &bank);
+
+        assert!(!clause_subsumes_clause(&subsumer, &candidate, &bank));
+        assert!(clause_subsumes_clause_with_bank(&subsumer, &candidate, &mut bank).unwrap());
+        assert!(flex.binding().is_none());
     }
 
     #[test]

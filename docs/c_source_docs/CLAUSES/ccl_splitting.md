@@ -92,7 +92,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order definition-variant matching on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 
@@ -110,7 +110,7 @@ Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 ### Rust Port Status Notes
 
 - Rust now ports the `ClauseSplit` and `ClauseSplitGeneral` paths for represented clauses: literal partitioning by shared variables, `SplitGroundNone`/`SplitGroundOne`/`SplitGroundFull` ground handling, split-literal detection through the C `EPIsSplitLit` marker plus the generated split-predicate flag in proof-search split guards, fresh arity-zero and split-variable-parameterized predicate generation, creation of definition clauses plus the residual negative split-literal clause, increasing-cardinality split-variable search, and C-style split-count reporting.
-- Non-fresh arity-zero splitting now uses the proof-state definition store to reuse variant definition predicates, reuse represented formula parents, archive new reusable definition formulas, and suppress duplicate definition clauses, matching the reusable `GetDefinitions(fresh=false)` behavior. Parameterized `ClauseSplitGeneral` attempts still create fresh definitions, as in C.
+- Non-fresh arity-zero splitting now uses the proof-state definition store to reuse variant definition predicates, reuse represented formula parents, archive new reusable definition formulas, and suppress duplicate definition clauses, matching the reusable `GetDefinitions(fresh=false)` behavior. Definition lookup uses mutable-bank bidirectional subsumption so higher-order variants receive complete matching. Parameterized `ClauseSplitGeneral` attempts still create fresh definitions, as in C.
 - Rust also ports the `ClauseSetSplitClauses` and `ClauseSetSplitClausesGeneral` extraction/insertion loops, including C-style return counts when non-fresh definition reuse suppresses duplicate definition clauses. Arity-zero fresh and reusable non-fresh split-definition formula archives are represented for proof-state splitting, and the proof-control split branches now emit opt-in `DocIntroSplitDef`, `DocIntroSplitDefRest`, and `DocClauseApplyDefs` output from those represented parents before queuing split children.
 
 ### Change Later

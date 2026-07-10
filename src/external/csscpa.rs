@@ -4,8 +4,9 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_parse, Clause};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::subsumption::{
-    clause_set_subsumes_clause, clause_subsume_order_sort_lits, clause_subsumes_clause,
-    unit_clause_set_subsumes_clause, unit_clause_subsumes_clause,
+    clause_set_subsumes_clause_with_bank, clause_subsume_order_sort_lits,
+    clause_subsumes_clause_with_bank, unit_clause_set_subsumes_clause_with_bank,
+    unit_clause_subsumes_clause_with_bank,
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::basicparser::parse_float;
@@ -254,7 +255,7 @@ impl CsscpaState {
 
         if status != CsscpaClauseStatus::Rejected {
             prepare_clause_for_subsumption(&mut clause, &self.terms);
-            if let Some(handle_id) = self.subsuming_clause_id(&clause) {
+            if let Some(handle_id) = self.subsuming_clause_id(&clause)? {
                 status = CsscpaClauseStatus::Rejected;
                 if output_level_is_enabled(output_level) {
                     let _ = writeln!(
@@ -267,7 +268,7 @@ impl CsscpaState {
         }
 
         if status != CsscpaClauseStatus::Rejected {
-            let subsumed = self.collect_subsumed(&clause);
+            let subsumed = self.collect_subsumed(&clause)?;
             let sub_weight = subsumed.iter().map(|entry| entry.weight).sum::<i64>();
             let accepted_source = clause.query_csscpa_source();
             let improves = i64_to_f32(sub_weight - clause.weight())
@@ -413,40 +414,64 @@ impl CsscpaState {
         clause_is_tautology(&mut work_bank, clause)
     }
 
-    fn subsuming_clause_id(&self, clause: &Clause) -> Option<i64> {
+    fn subsuming_clause_id(&mut self, clause: &Clause) -> Result<Option<i64>, Diagnostic> {
+        let Self {
+            terms,
+            pos_units,
+            neg_units,
+            non_units,
+            ..
+        } = self;
         if clause.positive_literal_count() != 0 {
-            if let Some(handle) = unit_clause_set_subsumes_clause(&self.pos_units, clause) {
-                return Some(handle.ident());
+            if let Some(handle) =
+                unit_clause_set_subsumes_clause_with_bank(terms, pos_units, clause, false)?
+            {
+                return Ok(Some(handle.ident()));
             }
         }
         if clause.negative_literal_count() != 0 {
-            if let Some(handle) = unit_clause_set_subsumes_clause(&self.neg_units, clause) {
-                return Some(handle.ident());
+            if let Some(handle) =
+                unit_clause_set_subsumes_clause_with_bank(terms, neg_units, clause, false)?
+            {
+                return Ok(Some(handle.ident()));
             }
         }
         if clause.literal_number() > 1 {
-            if let Some(handle) = clause_set_subsumes_clause(&self.non_units, clause, &self.terms) {
-                return Some(handle.ident());
+            if let Some(handle) = clause_set_subsumes_clause_with_bank(non_units, clause, terms)? {
+                return Ok(Some(handle.ident()));
             }
         }
-        None
+        Ok(None)
     }
 
-    fn collect_subsumed(&self, clause: &Clause) -> Vec<SubsumedClause> {
+    fn collect_subsumed(&mut self, clause: &Clause) -> Result<Vec<SubsumedClause>, Diagnostic> {
+        let Self {
+            terms,
+            pos_units,
+            neg_units,
+            non_units,
+            ..
+        } = self;
         let mut result = Vec::new();
         if clause.is_unit() && clause.is_positive() {
-            collect_unit_subsumed(&mut result, ClauseBucket::Positive, &self.pos_units, clause);
+            collect_unit_subsumed(
+                &mut result,
+                ClauseBucket::Positive,
+                pos_units,
+                clause,
+                terms,
+            )?;
         } else if clause.is_unit() {
-            collect_unit_subsumed(&mut result, ClauseBucket::Negative, &self.neg_units, clause);
+            collect_unit_subsumed(
+                &mut result,
+                ClauseBucket::Negative,
+                neg_units,
+                clause,
+                terms,
+            )?;
         }
-        collect_clause_subsumed(
-            &mut result,
-            ClauseBucket::NonUnit,
-            &self.non_units,
-            clause,
-            &self.terms,
-        );
-        result
+        collect_clause_subsumed(&mut result, ClauseBucket::NonUnit, non_units, clause, terms)?;
+        Ok(result)
     }
 
     fn find_unit_contradiction(&self, clause: &Clause) -> Option<&Clause> {
@@ -521,16 +546,18 @@ fn collect_unit_subsumed(
     bucket: ClauseBucket,
     set: &ClauseSet,
     clause: &Clause,
-) {
-    result.extend(
-        set.iter()
-            .filter(|candidate| unit_clause_subsumes_clause(clause, candidate))
-            .map(|candidate| SubsumedClause {
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    for candidate in set.iter() {
+        if unit_clause_subsumes_clause_with_bank(bank, clause, candidate)? {
+            result.push(SubsumedClause {
                 bucket,
                 ident: candidate.ident(),
                 weight: candidate.weight(),
-            }),
-    );
+            });
+        }
+    }
+    Ok(())
 }
 
 fn collect_clause_subsumed(
@@ -538,23 +565,23 @@ fn collect_clause_subsumed(
     bucket: ClauseBucket,
     set: &ClauseSet,
     clause: &Clause,
-    bank: &TermBank,
-) {
-    result.extend(
-        set.iter()
-            .filter(|candidate| {
-                if clause.is_unit() {
-                    unit_clause_subsumes_clause(clause, candidate)
-                } else {
-                    clause_subsumes_clause(clause, candidate, bank)
-                }
-            })
-            .map(|candidate| SubsumedClause {
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    for candidate in set.iter() {
+        let subsumed = if clause.is_unit() {
+            unit_clause_subsumes_clause_with_bank(bank, clause, candidate)?
+        } else {
+            clause_subsumes_clause_with_bank(clause, candidate, bank)?
+        };
+        if subsumed {
+            result.push(SubsumedClause {
                 bucket,
                 ident: candidate.ident(),
                 weight: candidate.weight(),
-            }),
-    );
+            });
+        }
+    }
+    Ok(())
 }
 
 fn literals_unify(left: &crate::clauses::eqn::Eqn, right: &crate::clauses::eqn::Eqn) -> bool {
