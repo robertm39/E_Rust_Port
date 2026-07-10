@@ -17,8 +17,7 @@ use crate::clauses::clausefunc::{
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
     clause_remove_ac_resolved_with_docs, clause_remove_superfluous_literals,
     clause_resolve_flex_clause, clause_set_delete_orphans_with, clause_set_recognize_choice,
-    tformula_clause_encode, tformula_conjunctive_nf3, tformula_fcode_alloc,
-    tformula_is_quantified_nl, tformula_to_cnf,
+    tformula_fcode_alloc, tformula_is_quantified_nl,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
@@ -151,6 +150,7 @@ pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "100000,1.0,1.0,Flat,IndexIdentity,100000,-20,20,-2,-1,0,2)\n",
 );
 
+const IMMEDIATE_CLAUSIFICATION_RENAMING_LIMIT: i64 = 24;
 const IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT: i64 = 100;
 
 pub const DEFAULT_HEURISTICS: &str = concat!(
@@ -3767,25 +3767,33 @@ fn proof_state_immediate_clausification(
 ) -> Result<(), Diagnostic> {
     state.terms().vars().set_v_counts_to_used();
 
-    let formula = tformula_clause_encode(state.terms_mut(), &clause, ProblemType::HigherOrder)?;
-    let cnf = tformula_conjunctive_nf3(
+    let wrapped = WrappedFormula::of_clause(state.terms_mut(), &clause, ProblemType::HigherOrder)?;
+    let mut work_set = FormulaSet::new();
+    work_set.insert(wrapped);
+    let mut formula_archive = FormulaSet::new();
+
+    if fool_unroll {
+        work_set.unroll_fool(state.terms_mut())?;
+    }
+    work_set.simplify(state.terms_mut())?;
+    work_set.introduce_defs(
+        &mut formula_archive,
         state.terms_mut(),
-        &formula,
-        IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT,
-        fool_unroll,
+        IMMEDIATE_CLAUSIFICATION_RENAMING_LIMIT,
     )?;
-    let fresh_vars = state.fresh_vars().clone();
+
     let mut results = ClauseSet::new();
-    let source = FormulaDerivationRef::new(clause.ident());
-    tformula_to_cnf(
-        state.terms_mut(),
-        cnf.formula(),
-        clause.query_tptp_type(),
-        &mut results,
-        &fresh_vars,
-        source,
-        ProblemType::HigherOrder,
-    )?;
+    let fresh_vars = state.fresh_vars().clone();
+    while let Some(mut formula) = work_set.extract_first() {
+        formula.cnf2_into(
+            state.terms_mut(),
+            &mut results,
+            &fresh_vars,
+            IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT,
+            fool_unroll,
+            ProblemType::HigherOrder,
+        )?;
+    }
 
     while let Some(mut result) = results.extract_first() {
         lambda_normalize_clause_terms(state.terms_mut(), &mut result)?;
@@ -9472,9 +9480,10 @@ mod tests {
         proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
         proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
-        proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
-        proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
+        proof_state_generate_new_clauses_with_global_indices_and_docs,
+        proof_state_immediate_clausification, proof_state_init, proof_state_init_ac_handling,
+        proof_state_init_ac_handling_with_output, proof_state_init_global_indices,
+        proof_state_init_indexing, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_init_with_output,
         proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
         proof_state_insert_new_clauses_with_output, proof_state_insert_processed_clause,
@@ -9543,7 +9552,9 @@ mod tests {
     use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IGNORE_PROPS};
+    use crate::terms::signature::{
+        Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_DEF_PRED, FP_IGNORE_PROPS,
+    };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
@@ -13533,8 +13544,62 @@ mod tests {
         assert!(state.eval_store().is_empty());
         assert!(state.unprocessed().is_empty());
         assert!(state.archive().find_by_id(4_085).is_some());
-        assert_eq!(state.statistics().generated_count, 1);
-        assert_eq!(state.statistics().generated_lit_count, 1);
+        assert_eq!(state.statistics().generated_count, 2);
+        assert_eq!(state.statistics().generated_lit_count, 4);
+    }
+
+    #[test]
+    fn proof_state_immediate_clausification_introduces_expensive_definition() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let eqn_code = terms.signature_mut().get_eqn_code(true);
+            let and_code = terms.signature().and_code();
+            let or_code = terms.signature().or_code();
+            let mut atoms = Vec::new();
+            for index in 0..10 {
+                let left = typed_const(terms, &format!("immediate_def_left_{index}"));
+                let right = typed_const(terms, &format!("immediate_def_right_{index}"));
+                atoms.push(bool_binary_with_code(terms, eqn_code, &left, &right));
+            }
+            let mut conjunctions = Vec::new();
+            let mut atoms = atoms.into_iter();
+            while let Some(left) = atoms.next() {
+                let right = atoms.next().expect("fixture has an even atom count");
+                conjunctions.push(bool_binary_with_code(terms, and_code, &left, &right));
+            }
+            let mut expensive = conjunctions.remove(0);
+            for conjunction in conjunctions {
+                expensive = bool_binary_with_code(terms, or_code, &expensive, &conjunction);
+            }
+            let tail_left = typed_const(terms, "immediate_def_tail_left");
+            let tail_right = typed_const(terms, "immediate_def_tail_right");
+            let tail = bool_binary_with_code(terms, eqn_code, &tail_left, &tail_right);
+            let formula = bool_binary_with_code(terms, or_code, &expensive, &tail);
+            let truth = terms.true_term().clone();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &formula, &truth, true,
+            )]));
+            clause.set_ident(4_086);
+            clause
+        };
+        assert!(clause.literals().as_slice()[0].is_clausifiable(state.terms()));
+        let symbol_count_before = state.terms().signature().f_count();
+
+        proof_state_immediate_clausification(&mut state, clause, false)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let signature = state.terms().signature();
+        assert!((symbol_count_before + 1..=signature.f_count())
+            .any(|f_code| signature.query_prop(f_code, FP_DEF_PRED)));
+        assert!(!state.tmp_store().is_empty());
+        for generated in state.tmp_store().iter() {
+            assert!(derivation_contains_operation(generated, DC_DYNAMIC_CNF));
+            assert!(derivation_contains_parent(generated, 4_086));
+        }
+        assert!(state.archive().find_by_id(4_086).is_some());
     }
 
     #[test]
