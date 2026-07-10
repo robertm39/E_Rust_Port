@@ -2275,11 +2275,13 @@ fn fresh_var_bank_for_clauses(bank: &TermBank, first: &Clause, second: &Clause) 
     let mut variables: BTreeMap<usize, Term> = BTreeMap::new();
     let _ = first.collect_variables(&mut variables);
     let _ = second.collect_variables(&mut variables);
-    VarBank::fresh_normalization_bank(
+    let freshvars = VarBank::fresh_normalization_bank(
         bank.signature().type_bank(),
         bank.vars(),
         variables.values(),
-    )
+    );
+    freshvars.reset_v_counts();
+    freshvars
 }
 
 fn from_side_allows_paramod(bank: &TermBank, position: &ClausePos) -> bool {
@@ -2619,8 +2621,8 @@ mod tests {
         clause_ordered_paramod, clause_ordered_sim_paramod, clause_ordered_super_sim_paramod,
         compute_all_paramodulants, compute_all_paramodulants_indexed,
         compute_all_paramodulants_with_docs, compute_clause_clause_paramodulants,
-        effective_paramodulation_type, paramod_from_side_positions, paramod_into_positions,
-        paramodulation_pair_positions, ParamodulationType,
+        effective_paramodulation_type, fresh_var_bank_for_clauses, paramod_from_side_positions,
+        paramod_into_positions, paramodulation_pair_positions, ParamodulationType,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2769,6 +2771,36 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    #[test]
+    fn paramodulation_fresh_variables_restart_at_canonical_codes() {
+        let mut bank = test_bank();
+        let canonical = typed_var(&bank, -2);
+        let source_var = typed_var(&bank, -40);
+        let target_var = typed_var(&bank, -42);
+        let a = typed_const(&mut bank, "pm_canonical_a");
+        let source = Clause::alloc(EqnList::from_vec(vec![lit(
+            &mut bank,
+            &source_var,
+            &a,
+            true,
+        )]));
+        let target = Clause::alloc(EqnList::from_vec(vec![lit(
+            &mut bank,
+            &target_var,
+            &a,
+            true,
+        )]));
+
+        let freshvars = fresh_var_bank_for_clauses(&bank, &source, &target);
+        let normalized = freshvars.get_fresh_var(
+            &canonical
+                .type_()
+                .expect("canonical variable must retain its type"),
+        );
+
+        assert_eq!(normalized.f_code(), canonical.f_code());
     }
 
     fn unary_predicate_code(bank: &mut TermBank, name: &str) -> i64 {

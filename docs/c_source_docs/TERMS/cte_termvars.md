@@ -129,7 +129,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for inference canonicalization and rewrite-cache coupling on 2026-07-09.
 
 Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 
@@ -147,6 +147,7 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 ### Compatibility Notes
 
 - `VarBankCollectVars` prints `VarBankCollectVars()...` and `...VarBankCollectVars()` directly to stdout around its collection loop, and that loop scans `i < max_var`, so a variable stored exactly at `max_var` is skipped. Rust preserves the loop-bound quirk in `VarBank::collect_vars` and exposes `collect_vars_with_output` for the C progress text while keeping the ordinary helper output-free.
+- Paired proof-state variable banks contain distinct variable cells with synchronized f-codes and types. Inference constructors reset the shadow bank's per-sort counters, bind source variables to its low canonical codes, and only then insert instantiated terms into the live term bank. This makes variable-counter state observable through shared term identity and rewrite-link caching.
 
 ### Porting Focus
 
@@ -157,7 +158,7 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 ### Change Later
 
 - C's `VarBankPushEnv`/`VarBankPopEnv` stack restores old external-name bindings only when `VarBankExtNameAssertAllocSort` shadows a name with a different type; same-type quantifier shadowing is handled later by the full formula variable-renaming pipeline rather than by the raw variable bank. Rust keeps the C-shaped assert-allocation helpers, but the temporary executable FOF/TFF bridge uses declaration-specific scoped allocation so same-name quantified variables cannot create self-referential Skolem bindings before the real `TFormula` owner exists.
-- C inference wrappers receive a reusable `freshvars` bank paired with the live term-bank variables. Rust now has a shared `VarBank::fresh_normalization_bank` helper that copies live variable f-codes/types and advances temporary-bank counters for short-lived generation helpers, but proof-state-owned reuse remains the compatibility target once inference wrappers can borrow the state owner directly.
+- C inference wrappers receive a reusable `freshvars` bank paired with the live term-bank variables, and individual inference families choose whether to reset or consume its counters. Rust uses short-lived normalization banks and mirrors the paramodulation reset, but proof-state-owned reuse remains the compatibility target once inference wrappers can borrow the state owner directly. A later API should encode reset policy in the operation type instead of relying on ambient mutable counter state.
 - `VarBankCollectVars` couples variable collection to debug progress output. Keep the output-aware wrapper for compatibility callers, but prefer the quiet collection helper for ordinary Rust code after drop-in behavior is secured.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
