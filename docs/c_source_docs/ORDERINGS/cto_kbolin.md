@@ -116,7 +116,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first-order linear/slow-comparator discrepancy on 2026-07-09.
 
 Source files reviewed: `ORDERINGS/cto_kbolin.h`, `ORDERINGS/cto_kbolin.c`.
 
@@ -130,7 +130,6 @@ Source files reviewed: `ORDERINGS/cto_kbolin.h`, `ORDERINGS/cto_kbolin.c`.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - This unit is the active `KBO6` path used by the ordering dispatcher, distinct from the classic first-order `cto_kbo` implementation. Do not treat a classic KBO port as covering default KBO6 behavior.
 - `KBO6Compare` mutates balance fields in the OCB (`wb`, `pos_bal`, `neg_bal`, `max_var`, `vb`, and LFHO variable-map state) and resets them at comparison entry. It does not reliably clear them at return, and the debug-only `kbo6cmp` assertion can leave a second trace in those fields.
-- First-order `kbolincmp` can return the initialized `to_equal` for distinct non-variable heads with equal weight when `OCBFunCompare` is neither greater nor lesser. The slower `kbo6cmp` check has an explicit distinct-head `to_uncomparable` branch, so matrix/equivalence precedence variants need reference tests before cleanup.
 - `kbolincmp_ho` uses the ordinary numeric variable-balance walkers for LFHO terms, not the higher-order fluid-variable map used by the Lambda-order branch. That means DB variables, DB lambdas, and phony applications contribute through ordinary function weights; Rust mirrors this for the currently ported visible LFHO surface subset with ordinary deref propagation, no-cache bound applied-variable expansion, and comparison-local weak-head beta dereferencing for `DEREF_ALWAYS`.
 - The source mixes first-order, lambda, and LFHO comparison branches behind compile-time conditions. A cleaned Rust API should make the problem-type/HO-order dispatch explicit after the compatibility behavior is covered.
 - C dispatches `PROBLEM_HO` `KBO6Compare` calls by `ocb->ho_order_kind`: `LFHO_ORDER` uses `kbolincmp_ho`, while `LAMBDA_ORDER` inserts instantiated dereferenced terms into the owner bank, beta-normalizes, eta-reduces, special-cases `$true`, and then runs `kbolincmp_lambda_driver`. Rust now dispatches LFHO explicitly, ports the Lambda-order no-bank subset for terms whose exposed dereferenced shape has no lambda surface after local weak-head beta reduction of simple DB-lambda applications, and adds a bank-backed Lambda-order entry point that performs instantiated insertion plus beta/eta normalization for callers that can provide the live `TermBank`.
@@ -140,6 +139,7 @@ Source files reviewed: `ORDERINGS/cto_kbolin.h`, `ORDERINGS/cto_kbolin.c`.
 
 ### Change Later
 
+- First-order `kbolincmp`, which is the production `KBO6Compare` path, can return its initialized `to_equal` for distinct non-variable heads with equal weight when `OCBFunCompare` is neither greater nor lesser. The disabled slow `kbo6cmp` checker instead returns `to_uncomparable`, so a non-`ENABLE_LFHO` debug build can assert on the production result for partial/equivalence precedence variants. Rust preserves the production result; C should eventually make the intended ordering semantics and checker agree.
 - C `kbolincmp_ho` calls `WHNF_deref` for `DEREF_ALWAYS`, and that helper obtains the owning term bank from term cells so weak-head reductions can be shared and cached. Rust's KBO6 path currently rebuilds weak-head-reduced LFHO surfaces locally for comparison because term cells do not store owner-bank metadata yet. Preserve this until compatibility is covered; later, a shared owner-bank/cached WHNF boundary may be needed for performance and exact cache/GC behavior.
 - The C higher-order branch is selected by global `problemType` and `ocb->ho_order_kind`, not by inspecting whether the compared terms visibly contain higher-order surfaces. Rust now mirrors that dispatch for KBO6 and uses explicit capability checks only for no-bank callers or higher-order ordering branches that still lack the needed normalization surface; revisit those guards once all ordering-dependent callers can supply the right bank context.
 - C `kbolincmp_lambda` couples ordering comparison to owner-bank insertion, beta-normalization, and eta-reduction. Rust now has both a bank-backed comparator that mirrors that preparation and a legacy no-bank comparator that handles first-order/DB-variable/application shapes plus locally reducible DB-lambda applications without owner-bank normalization; later, the cleaned API may want an explicit normalized-term preparation step instead of two comparator entry points.

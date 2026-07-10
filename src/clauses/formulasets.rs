@@ -2,8 +2,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
-    clause_print_lop_format_string, clause_print_tptp_format_string, clause_print_tstp_core_string,
-    clause_tstp_string, Clause,
+    clause_pcl_string, clause_print_lop_format_string, clause_print_tptp_format_string,
+    clause_print_tstp_core_string, clause_tstp_string, Clause,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM,
@@ -125,6 +125,12 @@ impl FormulaTstpPrintOptions {
 pub struct FormulaProofDocRenderOptions {
     pub full_terms: bool,
     pub problem_type: ProblemType,
+}
+
+struct FormulaProofDocRenderings {
+    formula: String,
+    clause_pcl: Option<String>,
+    clause_tstp: Option<String>,
 }
 
 impl FormulaProofDocRenderOptions {
@@ -1173,12 +1179,12 @@ fn doc_introduced_definition<W: fmt::Write>(
 ) -> Result<(), Diagnostic> {
     if let Some(context) = doc_context.as_mut() {
         let (write_result, new_ident, new_properties) = {
-            let rendered = formula.proof_doc_formula_body_string(
+            let renderings = formula.proof_doc_renderings(
                 bank,
                 context.render_options.full_terms,
                 context.render_options.problem_type,
             )?;
-            let mut view = formula.proof_doc_view(&rendered);
+            let mut view = formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_creation(
                 context.output,
                 &mut view,
@@ -1204,18 +1210,18 @@ fn doc_split_equiv_definition<W: fmt::Write>(
 ) -> Result<(), Diagnostic> {
     if let Some(context) = doc_context.as_mut() {
         let (write_result, new_ident, new_properties) = {
-            let parent_rendered = neutral_formula.proof_doc_formula_body_string(
+            let parent_renderings = neutral_formula.proof_doc_renderings(
                 bank,
                 context.render_options.full_terms,
                 context.render_options.problem_type,
             )?;
-            let parent_view = neutral_formula.proof_doc_view(&parent_rendered);
-            let rendered = split_formula.proof_doc_formula_body_string(
+            let parent_view = neutral_formula.proof_doc_view_from_renderings(&parent_renderings);
+            let renderings = split_formula.proof_doc_renderings(
                 bank,
                 context.render_options.full_terms,
                 context.render_options.problem_type,
             )?;
-            let mut view = split_formula.proof_doc_view(&rendered);
+            let mut view = split_formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_creation(
                 context.output,
                 &mut view,
@@ -1245,12 +1251,12 @@ fn doc_applied_definitions<W: fmt::Write>(
                 .iter()
                 .map(|definition| definition.ident())
                 .collect::<Vec<_>>();
-            let rendered = formula.proof_doc_formula_body_string(
+            let renderings = formula.proof_doc_renderings(
                 bank,
                 context.render_options.full_terms,
                 context.render_options.problem_type,
             )?;
-            let mut view = formula.proof_doc_view(&rendered);
+            let mut view = formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_intro_defs(
                 context.output,
                 &mut view,
@@ -1344,12 +1350,12 @@ fn rewrite_formulas_with_def_symbols<W: fmt::Write>(
             formula.set_formula(rewritten);
             if let Some(context) = doc_context.as_mut() {
                 let (write_result, new_ident, new_properties) = {
-                    let rendered = formula.proof_doc_formula_body_string(
+                    let renderings = formula.proof_doc_renderings(
                         bank,
                         context.render_options.full_terms,
                         context.render_options.problem_type,
                     )?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = context.session.doc_formula_modification(
                         context.output,
                         &mut view,
@@ -2163,6 +2169,45 @@ impl WrappedFormula {
         }
     }
 
+    fn proof_doc_renderings(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<FormulaProofDocRenderings, Diagnostic> {
+        let formula = self.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
+        let (clause_pcl, clause_tstp) = if self.is_clause {
+            let clause = self.form_clause_to_clause(bank)?;
+            (
+                Some(clause_pcl_string(bank, &clause, full_terms)),
+                Some(clause_print_tstp_core_string(
+                    bank, &clause, full_terms, false,
+                )),
+            )
+        } else {
+            (None, None)
+        };
+        Ok(FormulaProofDocRenderings {
+            formula,
+            clause_pcl,
+            clause_tstp,
+        })
+    }
+
+    fn proof_doc_view_from_renderings<'a>(
+        &'a self,
+        renderings: &'a FormulaProofDocRenderings,
+    ) -> FormulaDocView<'a> {
+        let mut view = self.proof_doc_view(&renderings.formula);
+        if let (Some(pcl), Some(tstp)) = (
+            renderings.clause_pcl.as_deref(),
+            renderings.clause_tstp.as_deref(),
+        ) {
+            view = view.with_clause_renderings(pcl, tstp);
+        }
+        view
+    }
+
     #[must_use]
     pub fn proof_doc_view<'a>(&'a self, rendered_formula: &'a str) -> FormulaDocView<'a> {
         let view = FormulaDocView::new(self.ident(), self.properties(), rendered_formula)
@@ -2326,12 +2371,12 @@ impl WrappedFormula {
             self.set_formula(phase.formula().clone());
             if let Some(inference) = cnf_phase_formula_inference(phase.op()) {
                 let (write_result, new_ident, new_properties) = {
-                    let rendered = self.proof_doc_formula_body_string(
+                    let renderings = self.proof_doc_renderings(
                         bank,
                         doc.render_options.full_terms,
                         doc.render_options.problem_type,
                     )?;
-                    let mut view = self.proof_doc_view(&rendered);
+                    let mut view = self.proof_doc_view_from_renderings(&renderings);
                     let write_result = doc.session.doc_formula_modification(
                         &mut *doc.output,
                         &mut view,
@@ -2349,12 +2394,12 @@ impl WrappedFormula {
         self.set_formula(cnf_result.formula().clone());
 
         let source = FormulaDerivationRef::new(self.ident);
-        let parent_rendered = self.proof_doc_formula_body_string(
+        let parent_renderings = self.proof_doc_renderings(
             bank,
             doc.render_options.full_terms,
             doc.render_options.problem_type,
         )?;
-        let parent_view = self.proof_doc_view(&parent_rendered);
+        let parent_view = self.proof_doc_view_from_renderings(&parent_renderings);
         let clause_doc_result = tformula_to_cnf_with_docs(
             TFormulaToCnfDocContext::new(&mut *doc.output, &mut *doc.session, &parent_view),
             bank,
@@ -2769,9 +2814,9 @@ impl FormulaSet {
     ) -> Result<FormulaSetDocInitialResult, Diagnostic> {
         let mut result = FormulaSetDocInitialResult::default();
         for formula in &mut self.formulas {
-            let rendered = formula.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
+            let renderings = formula.proof_doc_renderings(bank, full_terms, problem_type)?;
             let (write_result, new_ident) = {
-                let mut view = formula.proof_doc_view(&rendered);
+                let mut view = formula.proof_doc_view_from_renderings(&renderings);
                 let write_result = session.doc_formula_creation(
                     output,
                     &mut view,
@@ -3025,9 +3070,9 @@ impl FormulaSet {
                 result.simplify.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let rendered =
-                        formula.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let renderings =
+                        formula.proof_doc_renderings(bank, full_terms, problem_type)?;
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
                         &mut view,
@@ -3132,12 +3177,12 @@ impl FormulaSet {
                     .push(DC_ANNO_QUESTION);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let rendered = formula.proof_doc_formula_body_string(
+                    let renderings = formula.proof_doc_renderings(
                         bank,
                         render_options.full_terms,
                         render_options.problem_type,
                     )?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
                         &mut view,
@@ -3166,12 +3211,12 @@ impl FormulaSet {
                     .push(DC_NEGATE_CONJECTURE);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let rendered = formula.proof_doc_formula_body_string(
+                    let renderings = formula.proof_doc_renderings(
                         bank,
                         render_options.full_terms,
                         render_options.problem_type,
                     )?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
                         &mut view,
@@ -3302,12 +3347,12 @@ impl FormulaSet {
                     .push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let rendered = formula.proof_doc_formula_body_string(
+                    let renderings = formula.proof_doc_renderings(
                         bank,
                         render_options.full_terms,
                         render_options.problem_type,
                     )?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
                         &mut view,
@@ -3675,12 +3720,12 @@ impl FormulaSet {
                     .push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let rendered = formula.proof_doc_formula_body_string(
+                    let renderings = formula.proof_doc_renderings(
                         bank,
                         render_options.full_terms,
                         render_options.problem_type,
                     )?;
-                    let mut view = formula.proof_doc_view(&rendered);
+                    let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
                         &mut view,

@@ -63,11 +63,53 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn auto_mode_classifies_cnf_inputs_as_pre_cnf_formula_owners() {
+    let path = write_problem(
+        "auto-mixed-owner-class",
+        "cnf(identity, axiom, (i(X1)=i(X2))).\n\
+         cnf(comm_f, axiom, (f(X1,X2)=f(X2,X1))).\n\
+         cnf(comm_g, axiom, (g(X1,X2)=g(X2,X1))).\n\
+         cnf(ass_f, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3)))).\n\
+         cnf(p_holds, axiom, (p(X1))).\n\
+         cnf(consts1, axiom, (a=b|c=a|e=a)).\n\
+         cnf(consts2, axiom, (a=b|c=a|e!=a)).\n\
+         cnf(split_or_condense, axiom, (c=b|X3!=X4|X1!=X2|d!=c)).\n\
+         fof(guarded_eq, axiom, ((d=c|d=c)<=>h(i(e))=h(i(a)))).\n\
+         fof(conj, conjecture, (?[X1,X2,X3,X4,X5]:((k(a,b)=k(X1,X1)&f(f(g(X4,X5),X3),f(X2,X1))=f(f(X1,X2),f(X3,g(X4,X5))))))&![X6]:p(X6)).\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        .arg("--auto")
+        .arg("--cnf")
+        .arg("--silent")
+        .arg("--tstp-in")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("% Preprocessing class: FSMSSMSSSSSNFFN.\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("% Configuration: G-E--_208_C18_F1_SE_CS_SOS_SP_PS_S5PRR_RG_S04AN\n"));
+    assert!(stderr.is_empty(), "{stderr}");
+
+    std::fs::remove_file(path).unwrap();
+}
+
 fn write_false_problem(name: &str) -> std::path::PathBuf {
+    write_problem(name, "cnf(a, axiom, ($false)).\n")
+}
+
+fn write_problem(name: &str, contents: &str) -> std::path::PathBuf {
     let path = std::env::current_dir()
         .unwrap()
         .join("target")
         .join(format!("eprover-{name}-{}.p", std::process::id()));
-    std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+    std::fs::write(&path, contents).unwrap();
     path
 }

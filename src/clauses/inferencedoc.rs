@@ -234,6 +234,8 @@ pub struct FormulaDocView<'a> {
     ident: i64,
     properties: FormulaProperties,
     rendered_formula: &'a str,
+    rendered_clause_pcl: Option<&'a str>,
+    rendered_clause_tstp: Option<&'a str>,
     info: Option<&'a ClauseInfo>,
     is_untyped: bool,
 }
@@ -245,6 +247,8 @@ impl<'a> FormulaDocView<'a> {
             ident,
             properties,
             rendered_formula,
+            rendered_clause_pcl: None,
+            rendered_clause_tstp: None,
             info: None,
             is_untyped: true,
         }
@@ -263,6 +267,13 @@ impl<'a> FormulaDocView<'a> {
     }
 
     #[must_use]
+    pub const fn with_clause_renderings(mut self, pcl: &'a str, tstp: &'a str) -> Self {
+        self.rendered_clause_pcl = Some(pcl);
+        self.rendered_clause_tstp = Some(tstp);
+        self
+    }
+
+    #[must_use]
     pub const fn ident(&self) -> i64 {
         self.ident
     }
@@ -274,6 +285,27 @@ impl<'a> FormulaDocView<'a> {
     #[must_use]
     pub const fn rendered_formula(&self) -> &'a str {
         self.rendered_formula
+    }
+
+    #[must_use]
+    pub const fn rendered_pcl(&self) -> &'a str {
+        match self.rendered_clause_pcl {
+            Some(rendered) => rendered,
+            None => self.rendered_formula,
+        }
+    }
+
+    #[must_use]
+    pub const fn rendered_tstp(&self) -> &'a str {
+        match self.rendered_clause_tstp {
+            Some(rendered) => rendered,
+            None => self.rendered_formula,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_clause(&self) -> bool {
+        self.rendered_clause_tstp.is_some()
     }
 
     #[must_use]
@@ -1534,7 +1566,7 @@ impl ProofDocSession {
                     output,
                     formula.ident(),
                     formula.query_tptp_type(),
-                    (self.pcl_shell_level < 2).then_some(formula.rendered_formula()),
+                    (self.pcl_shell_level < 2).then_some(formula.rendered_pcl()),
                     self.step_options,
                 )
                 .map_err(doc_write_error)?;
@@ -1551,7 +1583,7 @@ impl ProofDocSession {
                     output,
                     formula.ident(),
                     formula.query_tptp_type(),
-                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_pcl()),
                     self.step_options,
                 )
                 .map_err(doc_write_error)?;
@@ -1569,7 +1601,7 @@ impl ProofDocSession {
                     output,
                     formula.ident(),
                     formula.query_tptp_type(),
-                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_pcl()),
                     self.step_options,
                 )
                 .map_err(doc_write_error)?;
@@ -1651,7 +1683,7 @@ impl ProofDocSession {
             output,
             formula.ident(),
             formula.query_tptp_type(),
-            (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+            (self.pcl_shell_level < 1).then_some(formula.rendered_pcl()),
             self.step_options,
         )
         .map_err(doc_write_error)?;
@@ -1731,6 +1763,10 @@ fn formula_tstp_identifier(formula: &FormulaDocView<'_>) -> String {
 fn formula_tstp_kind(formula: &FormulaDocView<'_>, problem_type: ProblemType) -> &'static str {
     if problem_type == ProblemType::HigherOrder {
         "thf"
+    } else if formula.is_clause() && formula.is_untyped() {
+        "cnf"
+    } else if formula.is_clause() {
+        "tcf"
     } else if formula.is_untyped() {
         "fof"
     } else {
@@ -1761,7 +1797,7 @@ fn write_tstp_formula_start(
         formula_tstp_kind(formula, problem_type),
         formula_tstp_identifier(formula),
         formula_tstp_role(formula),
-        formula.rendered_formula()
+        formula.rendered_tstp()
     )
 }
 
