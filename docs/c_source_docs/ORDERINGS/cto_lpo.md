@@ -138,6 +138,7 @@ Source files reviewed: `ORDERINGS/cto_lpo.h`, `ORDERINGS/cto_lpo.c`.
 
 - Standard LPO uses a file-static `recursion_depth` counter plus the process-global `LPORecursionDepthLimit`, making the C comparison helper non-reentrant. Rust keeps the global limit but makes current depth comparison-local; retain that cleanup unless reference tests show observable dependence on the C static state.
 - Standard LPO, LPO copy wrappers, and context-term LPO4 are separate algorithms with different higher-order assumptions. Once every ordering call site passes explicit problem-type and term-bank context, replace the current compatibility guards with a clearer API that makes standard first-order LPO and LFHO-capable LPO4 distinct choices.
+- C's LPO4 implementation does not inspect `ocb->ho_order_kind`; `--ho-order-kind=lambda` therefore still selects the same context-term LPO4 behavior, even though that option changes KBO6 dispatch. Rust preserves this in forward modification and paramodulation. A cleaned option model should either scope the setting to KBO6 or reject combinations where it has no effect.
 - The `ENABLE_LFHO` LPO4 path mixes owner-bank lookup, WHNF preparation, beta/eta normalization, and applied-variable instantiation into comparison recursion. Rust now covers the public mutable-bank normalization subset; revisit C's cache-backed owner-bank behavior and legacy no-bank callers before treating higher-order LPO4 as complete or optimizing the normalization path.
 
 ### Porting Focus

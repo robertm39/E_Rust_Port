@@ -2242,7 +2242,7 @@ fn forward_modify_check_higher_order_ordering(
         return Ok(());
     }
 
-    if ocb.ordering_type == TermOrdering::Lpo4 && ocb.ho_order_kind == HoOrderKind::LfhoOrder {
+    if ocb.ordering_type == TermOrdering::Lpo4 {
         return Ok(());
     }
 
@@ -11295,7 +11295,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_lpo4_surface_runs() {
+    fn proof_state_forward_modify_clause_higher_order_lpo4_ignores_kbo_ho_order_kind() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -11317,7 +11317,7 @@ mod tests {
             TermOrdering::Lpo4,
             true,
             state.terms().signature(),
-            HoOrderKind::LfhoOrder,
+            HoOrderKind::LambdaOrder,
         ));
 
         let trivial = proof_state_forward_modify_clause_impl::<String>(

@@ -637,7 +637,7 @@ fn compute_from_position_into_occurrence(
     }
 
     let mut paramod_count = 0;
-    ensure_higher_order_paramodulation_terms_subset(ocb, &[occurrence.term()], || {
+    ensure_higher_order_paramodulation_ordering_supported(ocb, &[occurrence.term()], || {
         higher_order_paramod_diagnostic_for_type(pm_type)
     })?;
     let Some(effective_pm_type) =
@@ -743,9 +743,11 @@ fn compute_indexed_sources_into_position(
             }
             for from_cpos in from_clause_pos.positions() {
                 let from_pos = unpack_clause_pos(*from_cpos, from_clause_pos.clause().clone());
-                ensure_higher_order_paramodulation_terms_subset(ocb, &[occurrence.term()], || {
-                    higher_order_paramod_diagnostic_for_type(pm_type)
-                })?;
+                ensure_higher_order_paramodulation_ordering_supported(
+                    ocb,
+                    &[occurrence.term()],
+                    || higher_order_paramod_diagnostic_for_type(pm_type),
+                )?;
                 let Some(effective_pm_type) = indexed_effective_paramodulation_type(
                     bank,
                     ocb,
@@ -1464,7 +1466,7 @@ fn indexed_effective_paramodulation_type(
     let from_other = from_pos
         .get_other_side()
         .expect("indexed source position must select an opposite side");
-    ensure_higher_order_paramodulation_terms_subset(
+    ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[&from_term, &from_other, overlap_term],
         || higher_order_paramod_diagnostic_for_type(pm_type),
@@ -1542,24 +1544,6 @@ fn unifiable_occurrences<'index>(
     occurrences
 }
 
-fn ensure_higher_order_paramodulation_terms_subset(
-    ocb: &OrderControlBlock,
-    terms: &[&Term],
-    diagnostic: impl Fn() -> Diagnostic,
-) -> Result<(), Diagnostic> {
-    if problem_type() != ProblemType::HigherOrder {
-        return Ok(());
-    }
-    if ocb.ordering_type != TermOrdering::Kbo6
-        && terms
-            .iter()
-            .any(|term| term_has_higher_order_unification_surface(term))
-    {
-        return Err(diagnostic());
-    }
-    Ok(())
-}
-
 fn ensure_higher_order_paramodulation_ordering_supported(
     ocb: &OrderControlBlock,
     terms: &[&Term],
@@ -1568,7 +1552,7 @@ fn ensure_higher_order_paramodulation_ordering_supported(
     if problem_type() != ProblemType::HigherOrder {
         return Ok(());
     }
-    if ocb.ordering_type != TermOrdering::Kbo6
+    if !matches!(ocb.ordering_type, TermOrdering::Kbo6 | TermOrdering::Lpo4)
         && terms
             .iter()
             .any(|term| term_has_higher_order_unification_surface(term))
@@ -1589,14 +1573,14 @@ fn higher_order_paramod_diagnostic_for_type(pm_type: ParamodulationType) -> Diag
 fn higher_order_paramod_diagnostic() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::OTHER_ERROR,
-        "higher-order paramodulation constraints are not ported yet",
+        "selected term ordering does not support this higher-order paramodulation surface",
     )
 }
 
 fn higher_order_sim_paramod_diagnostic() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::OTHER_ERROR,
-        "higher-order simultaneous paramodulation constraints are not ported yet",
+        "selected term ordering does not support this higher-order simultaneous paramodulation surface",
     )
 }
 
@@ -1608,8 +1592,8 @@ fn higher_order_sim_paramod_diagnostic() -> Diagnostic {
 ///
 /// # Errors
 ///
-/// Returns diagnostics for higher-order paramodulation constraints or term-bank
-/// insertion failures.
+/// Returns diagnostics when the selected ordering cannot handle the overlap's
+/// higher-order surface, or when term-bank insertion fails.
 ///
 /// # Panics
 ///
@@ -1654,7 +1638,7 @@ pub fn compute_overlap(
     let rep_side = from
         .get_other_side()
         .expect("paramodulation source position must select an opposite side");
-    ensure_higher_order_paramodulation_terms_subset(
+    ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[&max_side, &rep_side, into, &sub_into],
         higher_order_paramod_diagnostic,
@@ -1755,7 +1739,7 @@ pub fn eqn_ordered_paramod(
     let rside = into
         .get_other_side()
         .expect("paramodulation target position must select an opposite side");
-    ensure_higher_order_paramodulation_terms_subset(
+    ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[&rside],
         higher_order_paramod_diagnostic,
@@ -1888,7 +1872,7 @@ pub fn clause_ordered_paramod(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from unported higher-order constraints,
+/// Returns diagnostics from unsupported higher-order ordering surfaces,
 /// substitution-normalized copying, or term-bank insertion.
 ///
 /// # Panics
@@ -1913,7 +1897,7 @@ pub fn clause_ordered_sim_paramod(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from unported higher-order constraints,
+/// Returns diagnostics from unsupported higher-order ordering surfaces,
 /// substitution-normalized copying, or term-bank insertion.
 ///
 /// # Panics
@@ -1989,7 +1973,7 @@ fn clause_ordered_sim_paramod_variant(
     let into_other = into
         .get_other_side()
         .expect("simultaneous paramodulation target position must select an opposite side");
-    ensure_higher_order_paramodulation_terms_subset(
+    ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[&from_term, &from_other, &into_term, &into_side, &into_other],
         higher_order_sim_paramod_diagnostic,
@@ -3279,6 +3263,15 @@ mod tests {
 
     #[test]
     fn compute_clause_clause_paramodulants_higher_order_unifies_actual_surface_overlap() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::Kbo6);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_lpo4_unifies_actual_surface_overlap() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::Lpo4);
+    }
+
+    fn assert_higher_order_surface_overlap_paramodulates(ordering: TermOrdering) {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
@@ -3311,7 +3304,8 @@ mod tests {
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
-        let mut ocb = kbo6_ocb(&bank);
+        let mut ocb =
+            OrderControlBlock::alloc(ordering, true, bank.signature(), HoOrderKind::LfhoOrder);
         let mut store = ClauseSet::new();
 
         let count = compute_clause_clause_paramodulants(
@@ -3830,6 +3824,15 @@ mod tests {
 
     #[test]
     fn indexed_single_replaces_applied_head_in_disjoint_selected_copy() {
+        assert_indexed_single_replaces_applied_head(TermOrdering::Kbo6);
+    }
+
+    #[test]
+    fn indexed_single_lpo4_replaces_applied_head_in_disjoint_selected_copy() {
+        assert_indexed_single_replaces_applied_head(TermOrdering::Lpo4);
+    }
+
+    fn assert_indexed_single_replaces_applied_head(ordering: TermOrdering) {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         init_unif_limits_for_test(UnifMode::Single);
@@ -3876,7 +3879,8 @@ mod tests {
         indices.insert_clause(&mut source, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
-        let mut ocb = kbo6_ocb(&bank);
+        let mut ocb =
+            OrderControlBlock::alloc(ordering, true, bank.signature(), HoOrderKind::LfhoOrder);
         let mut store = ClauseSet::new();
 
         let count = compute_all_paramodulants_indexed(
