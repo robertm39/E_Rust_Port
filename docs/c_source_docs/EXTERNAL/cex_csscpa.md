@@ -85,7 +85,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching on 2026-07-10.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching and unification on 2026-07-10.
 
 Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 
@@ -104,7 +104,7 @@ Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 ### Rust Port Notes
 
 - `src/external/csscpa.rs` ports the `ClauseStatusType` discriminants/string rendering, CSSCPA state counters and three clause buckets, state-line rendering, and the core `CSSCPAProcessClause` forced/check acceptance path over the current Rust clause-set and mutable-bank complete subsumption APIs.
-- The current Rust slice covers tautology rejection, mutable-bank unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, unit contradiction detection, mutable-bank subsumed-clause removal, CSSCPA source propagation, and numeric `OutputLevel`-style trace text, including C's distinction between truthy `if(OutputLevel)` traces and the `OUTPRINT(1)` unit-contradiction banner. The subsumption paths now reach complete higher-order matching; contradiction unification still uses the retained unbanked MGU path.
+- The current Rust slice covers tautology rejection, mutable-bank unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, bank-aware complete-MGU unit contradiction detection, mutable-bank subsumed-clause removal, CSSCPA source propagation, and numeric `OutputLevel`-style trace text, including C's distinction between truthy `if(OutputLevel)` traces and the `OUTPRINT(1)` unit-contradiction banner.
 - `CSSCPALoop` command parsing is represented as an explicit Rust loop result that preserves numeric `output_level`, `state:`, the exact buffering-plea token sequence, `accept`/`check`, optional `from` source validation, optional `improve(weight_delta, average_delta)`, current scanner-format clause parsing, and process-clause dispatch. The standalone `CSSCPA_filter` wrapper now uses this loop.
 
 ### Change Later

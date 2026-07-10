@@ -11,9 +11,7 @@ use crate::clauses::subsumption::{
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
-use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::signature::Signature;
-use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
 use std::fmt::Write as _;
@@ -280,7 +278,7 @@ impl CsscpaState {
                             / i64_to_f64(self.clauses)));
             if improves {
                 status = CsscpaClauseStatus::Improved;
-            } else if clause.is_unit() && self.find_unit_contradiction(&clause).is_some() {
+            } else if clause.is_unit() && self.find_unit_contradiction(&clause)?.is_some() {
                 status = CsscpaClauseStatus::Contradicts;
                 if output_level_allows(output_level, 1) {
                     let _ = writeln!(trace, "{DEFAULT_COMCHAR_RAW} Unit contradiction found!");
@@ -474,22 +472,34 @@ impl CsscpaState {
         Ok(result)
     }
 
-    fn find_unit_contradiction(&self, clause: &Clause) -> Option<&Clause> {
+    fn find_unit_contradiction(&mut self, clause: &Clause) -> Result<Option<&Clause>, Diagnostic> {
         debug_assert!(clause.is_unit());
-        let literal = clause.literals().as_slice().first()?;
-        let set = if literal.is_positive() {
-            &self.neg_units
-        } else {
-            &self.pos_units
+        let Some(literal) = clause.literals().as_slice().first() else {
+            return Ok(None);
         };
-        set.iter().find(|candidate| {
+        let Self {
+            terms,
+            pos_units,
+            neg_units,
+            ..
+        } = self;
+        let set = if literal.is_positive() {
+            neg_units
+        } else {
+            pos_units
+        };
+        for candidate in set.iter() {
             debug_assert!(candidate.is_unit());
             let Some(candidate_literal) = candidate.literals().as_slice().first() else {
-                return false;
+                continue;
             };
-            literal.is_positive() != candidate.is_positive()
-                && literals_unify(literal, candidate_literal)
-        })
+            if literal.is_positive() != candidate.is_positive()
+                && literal.unify_p_with_bank(candidate_literal, terms)?
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
     }
 
     fn insert_clause(&mut self, clause: Clause) {
@@ -582,20 +592,6 @@ fn collect_clause_subsumed(
         }
     }
     Ok(())
-}
-
-fn literals_unify(left: &crate::clauses::eqn::Eqn, right: &crate::clauses::eqn::Eqn) -> bool {
-    let mut subst = Substitution::new();
-    let direct = subst_mgu_complete(left.left(), right.left(), &mut subst)
-        && subst_mgu_complete(left.right(), right.right(), &mut subst);
-    subst.backtrack();
-    if direct || (left.is_oriented() && right.is_oriented()) {
-        return direct;
-    }
-    let swapped = subst_mgu_complete(left.right(), right.left(), &mut subst)
-        && subst_mgu_complete(left.left(), right.right(), &mut subst);
-    subst.backtrack();
-    swapped
 }
 
 fn usize_to_i64(value: usize) -> i64 {
@@ -728,9 +724,30 @@ fn f64_to_f32(value: f64) -> f32 {
 mod tests {
     use super::{csscpa_loop, CsscpaClauseStatus, CsscpaState};
     use crate::basics::error::ErrorCode;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::{clause_parse, Clause};
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::terms::lambda::apply_terms;
+    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap();
+        ProblemTypeReset
+    }
 
     fn parse_clause(state: &mut CsscpaState, source: &str) -> Clause {
         let mut scanner = Scanner::from_user_string(source, false).expect("scanner allocation");
@@ -739,6 +756,15 @@ mod tests {
         }
         clause_parse(&mut scanner, state.terms_mut(), ProblemType::FirstOrder)
             .expect("CSSCPA test clause parses")
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.create_const_term(f_code).unwrap()
     }
 
     #[test]
@@ -847,6 +873,70 @@ mod tests {
         assert!(result.trace().contains("% CSSCPAState: contradicts"));
         let trace_len = result.trace().len();
         assert_eq!(result.trace_flush_offsets(), &[trace_len, trace_len]);
+    }
+
+    #[test]
+    fn unit_contradiction_uses_banked_higher_order_mgu() {
+        let _global_state = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let (negative, positive, function) = {
+            let bank = state.terms_mut();
+            let individual = bank.signature().type_bank().default_type();
+            let unary = bank
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                ]));
+            let binary = bank
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                    individual,
+                ]));
+            let function = bank.vars().get_fresh_var(&unary);
+            let prefix = typed_const(bank, "csscpa_ho_prefix");
+            let suffix = typed_const(bank, "csscpa_ho_suffix");
+            let rhs = typed_const(bank, "csscpa_ho_rhs");
+            let rigid_code = bank.signature_mut().insert_id("csscpa_ho_rigid", 0, false);
+            bank.signature_mut()
+                .declare_final_type(rigid_code, binary)
+                .unwrap();
+            let rigid = bank.create_const_term(rigid_code).unwrap();
+            let flex_application =
+                apply_terms(bank, &function, std::slice::from_ref(&suffix)).unwrap();
+            let rigid_application = apply_terms(bank, &rigid, &[prefix, suffix]).unwrap();
+            let negative = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+                rigid_application,
+                rhs.clone(),
+                bank,
+                false,
+            )
+            .unwrap()]));
+            let positive = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+                flex_application,
+                rhs,
+                bank,
+                true,
+            )
+            .unwrap()]));
+            (negative, positive, function)
+        };
+
+        assert!(state
+            .process_clause(negative, true, 0.0, 0.0)
+            .expect("negative higher-order unit accepted"));
+        let result = state
+            .process_clause_with_trace(positive, false, 1.0, 1.0, 1)
+            .expect("higher-order contradiction check succeeds");
+
+        assert_eq!(result.status(), CsscpaClauseStatus::Contradicts);
+        assert!(result.accepted());
+        assert!(function.binding().is_none());
     }
 
     #[test]

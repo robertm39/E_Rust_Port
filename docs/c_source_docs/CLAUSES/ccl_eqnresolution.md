@@ -72,7 +72,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware higher-order single-MGU resolution on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution.c`.
 
@@ -87,7 +87,7 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 
 ### Rust Port Status Notes
 
-- Rust now ports the single-result `ComputeEqRes` MGU path used by destructive equality resolution, including higher-order problem-mode arrow-variable bindings and `SubstHasHOBinding` propagation to higher-order `DCDesEqRes`.
+- Rust now ports the single-result `ComputeEqRes` MGU path used by destructive equality resolution through bank-aware `SubstMguComplete`, including higher-order arrow-variable and applied-variable rigid-prefix bindings plus `SubstHasHOBinding` propagation to higher-order `DCDesEqRes`.
 - Rust now ports `ComputeAllEqnResolvents` generation over the higher-order CSU iterator in higher-order mode, including C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, `EqnListLambdaNormalize` before false-literal and duplicate cleanup, negative-literal iteration with an explicit maximal-literal filter, C stack-pop insertion order, aggregate `subst_is_ho` propagation to higher-order `DCEqRes`, proof-state-owned `freshvars` reuse for proof-control generation, and insertion into a caller-owned clause set.
 - The all-resolvent wrapper and destructive variable-normalization wrapper expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
 - Proof-control destructive equality-resolution normalization now also routes the proof-state-owned `freshvars` bank through the helper path. Broader C trace coverage for multi-CSU equality-resolution order/performance remains pending.

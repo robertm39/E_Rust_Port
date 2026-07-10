@@ -10,7 +10,7 @@ use crate::clauses::picosat::PicoSat;
 use crate::clauses::satinterface::{picosat_error_to_diagnostic, SatClauseSet};
 use crate::clauses::tautologies::{clause_is_tautology, clause_is_tautology_real};
 use crate::terms::functypes::FunCode;
-use crate::terms::match_mgu::{subst_match_complete_with_bank, subst_mgu_complete};
+use crate::terms::match_mgu::{subst_match_complete_with_bank, subst_mgu_complete_with_bank};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, Term};
@@ -984,7 +984,12 @@ fn build_neq_resolvent(
     };
 
     let mut subst = Substitution::new();
-    if !subst_mgu_complete(negative_literal.left(), positive_literal.left(), &mut subst) {
+    if !subst_mgu_complete_with_bank(
+        bank,
+        negative_literal.left(),
+        positive_literal.left(),
+        &mut subst,
+    )? {
         subst.delete();
         return Ok(None);
     }
@@ -1028,8 +1033,12 @@ fn build_eq_resolvent(
         || unique_distinct_vars(negative_literal.left())
     {
         let mut subst = Substitution::new();
-        let unified =
-            subst_mgu_complete(positive_literal.left(), negative_literal.left(), &mut subst);
+        let unified = subst_mgu_complete_with_bank(
+            bank,
+            positive_literal.left(),
+            negative_literal.left(),
+            &mut subst,
+        )?;
         debug_assert!(
             unified,
             "distinct-variable predicate pivot should always unify"

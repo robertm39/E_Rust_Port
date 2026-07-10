@@ -40,7 +40,7 @@ fn try_condensation(
     };
 
     let mut subst = Substitution::new();
-    if !first.literal_unify_one_way(&mut second, &mut subst, false) {
+    if !first.literal_unify_one_way_with_bank(&mut second, &mut subst, false, bank)? {
         return Ok(false);
     }
 

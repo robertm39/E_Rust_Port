@@ -14,6 +14,7 @@ use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{
     subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete,
+    subst_mgu_complete_with_bank,
 };
 use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::{type_is_predicate, Type};
@@ -120,6 +121,29 @@ fn unify_term_pair_directed(
         subst.backtrack_to_pos(backtrack);
     }
     result
+}
+
+fn unify_term_pair_directed_with_bank(
+    bank: &mut TermBank,
+    source_terms: [&Term; 2],
+    target_terms: [&Term; 2],
+    subst: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    let backtrack = subst.len();
+    for index in 0..2 {
+        match subst_mgu_complete_with_bank(bank, source_terms[index], target_terms[index], subst) {
+            Ok(true) => {}
+            Ok(false) => {
+                subst.backtrack_to_pos(backtrack);
+                return Ok(false);
+            }
+            Err(error) => {
+                subst.backtrack_to_pos(backtrack);
+                return Err(error);
+            }
+        }
+    }
+    Ok(true)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -1905,6 +1929,27 @@ impl Eqn {
         )
     }
 
+    /// Bank-aware C `EqnUnifyDirected` using complete higher-order unification.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order normalization or binding
+    /// construction. Failure and errors restore the substitution to its entry
+    /// state.
+    pub fn unify_directed_with_bank(
+        &self,
+        other: &Self,
+        subst: &mut Substitution,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        unify_term_pair_directed_with_bank(
+            bank,
+            [&self.lterm, &self.rterm],
+            [&other.lterm, &other.rterm],
+            subst,
+        )
+    }
+
     pub fn unify(&self, other: &Self, subst: &mut Substitution) -> bool {
         let result = self.unify_directed(other, subst);
         if result || (self.is_oriented() && other.is_oriented()) {
@@ -1917,10 +1962,48 @@ impl Eqn {
         )
     }
 
+    /// Bank-aware C `EqnUnify` with the same oriented-equation and swapped-side
+    /// retry branches as C.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order normalization or binding
+    /// construction. Failed directions leave the substitution unchanged.
+    pub fn unify_with_bank(
+        &self,
+        other: &Self,
+        subst: &mut Substitution,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        let result = self.unify_directed_with_bank(other, subst, bank)?;
+        if result || (self.is_oriented() && other.is_oriented()) {
+            return Ok(result);
+        }
+        unify_term_pair_directed_with_bank(
+            bank,
+            [&self.rterm, &self.lterm],
+            [&other.lterm, &other.rterm],
+            subst,
+        )
+    }
+
     #[must_use]
     pub fn unify_p(&self, other: &Self) -> bool {
         let mut subst = Substitution::new();
         let result = self.unify(other, &mut subst);
+        subst.backtrack();
+        result
+    }
+
+    /// Bank-aware side-effect-free equation unifiability test.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order normalization or binding
+    /// construction. All temporary bindings are removed before return.
+    pub fn unify_p_with_bank(&self, other: &Self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let mut subst = Substitution::new();
+        let result = self.unify_with_bank(other, &mut subst, bank);
         subst.backtrack();
         result
     }
@@ -1938,6 +2021,32 @@ impl Eqn {
             other.swap_sides();
         }
         let result = self.unify_directed(other, subst);
+        if swapped {
+            other.swap_sides();
+        }
+        result
+    }
+
+    /// Bank-aware C `LiteralUnifyOneWay`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order normalization or binding
+    /// construction. The temporary side swap is restored before return.
+    pub fn literal_unify_one_way_with_bank(
+        &self,
+        other: &mut Self,
+        subst: &mut Substitution,
+        swapped: bool,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        if self.is_positive() != other.is_positive() {
+            return Ok(false);
+        }
+        if swapped {
+            other.swap_sides();
+        }
+        let result = self.unify_directed_with_bank(other, subst, bank);
         if swapped {
             other.swap_sides();
         }

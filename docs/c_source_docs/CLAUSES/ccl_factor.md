@@ -80,7 +80,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware higher-order unification on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 
@@ -97,7 +97,7 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 ### Rust Port Status
 
 - `src/clauses/factor.rs` ports first-order ordered factor candidate enumeration (`ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`) and single ordered-factor construction (`ComputeOrderedFactor`).
-- The port preserves C's pair ordering, second-literal side retry, caller-owned `freshvars` reset, bank-backed post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- The port preserves C's pair ordering, second-literal side retry, caller-owned `freshvars` reset, bank-aware complete-MGU equation unification, bank-backed post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - `src/clauses/factor.rs` also ports equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and `ComputeEqualityFactor` for both first-order complete-MGU candidates and higher-order CSU enumeration through the shared `CsuIterator`.
 - The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, caller-owned `freshvars` reuse without an equality-factor-local reset, bank-backed `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, lambda normalization after condition insertion, resolved/duplicate cleanup, and multi-CSU result-stack shape.
 - The all-factor wrappers now attach `DCOrderedFactor` / ordinary or higher-order `DCEqFactor` derivation entries with the source clause reference and expose opt-in represented `DocClauseCreationDefault(..., inf_factor/inf_efactor, ...)` output.

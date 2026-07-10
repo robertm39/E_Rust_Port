@@ -68,7 +68,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware destructive equality resolution on 2026-07-10.
 
 Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c`.
 
@@ -82,7 +82,7 @@ Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c
 
 ### Rust Port Status Notes
 
-- Rust now ports `ClauseERNormalizeVar` for the first-order destructive equality-resolution path used by generated-clause insertion and selected-clause replacement: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, emits represented `DocClauseModificationDefault(..., inf_eres, clause)` output for opt-in proof-documentation callers, and returns the inference count so the caller can requeue the mutated clause.
+- Rust now ports `ClauseERNormalizeVar` for the bank-aware single-MGU destructive equality-resolution path used by generated-clause insertion and selected-clause replacement: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, emits represented `DocClauseModificationDefault(..., inf_eres, clause)` output for opt-in proof-documentation callers, and returns the inference count so the caller can requeue the mutated clause.
 - Rust now ports the `ComputeAllEqnResolvents` insertion wrapper: it skips clauses with no negative literals or `CPNoGeneration`, iterates candidate negative literals through the explicit maximal-literal filter, inserts generated resolvents into a caller-owned clause set, copies proof depth/size, TPTP type, and SOS state, and returns the generated count.
 - Higher-order problem mode now uses the ported CSU iterator for all-resolvent equality resolution, including aggregate `subst_is_ho` propagation to higher-order `DCEqRes` derivation entries, lambda normalization before cleanup, and C stack-pop insertion order.
 - Derivation pushes are ported for `DCEqRes` on generated resolvents and `DCDesEqRes` on destructive equality-resolution replacements, and both the all-resolvent creation and destructive-replacement modification proof-documentation branches are available through opt-in wrappers.

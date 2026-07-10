@@ -34,7 +34,7 @@ use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
     decode_formulas_for_cnf, flatten_apps, lambda_eta_reduce_db, post_cnf_encode_formulas,
 };
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::subst_mgu_complete_with_bank;
 use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::signature::{
     FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
@@ -6370,7 +6370,7 @@ pub fn clause_set_injectivity_is_defined(
         }
 
         let mut subst = Substitution::new();
-        let is_defined = unif_all_pairs(&mut pairs, &mut subst) && subst.is_renaming();
+        let is_defined = unif_all_pairs(&mut pairs, &mut subst, bank)? && subst.is_renaming();
         subst.delete();
         if is_defined {
             return Ok(true);
@@ -6695,7 +6695,11 @@ fn required_arg(term: &Term, index: usize) -> Term {
         .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
 }
 
-fn unif_all_pairs(pairs: &mut Vec<Term>, subst: &mut Substitution) -> bool {
+fn unif_all_pairs(
+    pairs: &mut Vec<Term>,
+    subst: &mut Substitution,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
     assert_eq!(pairs.len() % 2, 0);
     let pos = subst.len();
     let mut unifies = true;
@@ -6707,13 +6711,19 @@ fn unif_all_pairs(pairs: &mut Vec<Term>, subst: &mut Substitution) -> bool {
         let right = pairs
             .pop()
             .expect("even-sized unification pair stack has a right term");
-        unifies = subst_mgu_complete(&left, &right, subst);
+        match subst_mgu_complete_with_bank(bank, &left, &right, subst) {
+            Ok(result) => unifies = result,
+            Err(error) => {
+                subst.backtrack_to_pos(pos);
+                return Err(error);
+            }
+        }
     }
 
     if !unifies {
         subst.backtrack_to_pos(pos);
     }
-    unifies
+    Ok(unifies)
 }
 
 fn cmp_i64_to_order(value: i64) -> Ordering {

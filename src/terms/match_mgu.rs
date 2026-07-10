@@ -495,19 +495,22 @@ pub fn subst_mgu_complete_with_bank(
     }
 
     let backtrack = subst.len();
-    let reduced_t = lambda_eta_reduce_db(bank, t)?;
-    let reduced_s = lambda_eta_reduce_db(bank, s)?;
-    let mut result = subst_compute_mgu_ho(bank, &reduced_t, &reduced_s, subst)?;
+    let result = (|| {
+        let reduced_t = lambda_eta_reduce_db(bank, t)?;
+        let reduced_s = lambda_eta_reduce_db(bank, s)?;
+        let mut result = subst_compute_mgu_ho(bank, &reduced_t, &reduced_s, subst)?;
 
-    if !result && t.is_non_fo_pattern() && s.is_non_fo_pattern() {
-        subst.backtrack_to_pos(backtrack);
-        result = subst_compute_mgu_pattern(bank, t, s, subst)? == OracleUnifResult::Unifiable;
-        if !result {
+        if !result && t.is_non_fo_pattern() && s.is_non_fo_pattern() {
             subst.backtrack_to_pos(backtrack);
+            result = subst_compute_mgu_pattern(bank, t, s, subst)? == OracleUnifResult::Unifiable;
         }
-    }
+        Ok(result)
+    })();
 
-    Ok(result)
+    if !matches!(result, Ok(true)) {
+        subst.backtrack_to_pos(backtrack);
+    }
+    result
 }
 
 /// C `SubstComputeMguHO`.
@@ -787,8 +790,9 @@ fn required_arg(term: &Term, index: usize) -> Term {
 mod tests {
     use super::{
         occur_check, subst_compute_match, subst_compute_match_ho, subst_compute_mgu,
-        subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete, unif_failed,
-        verify_match, OracleUnifResult, UnifTermSide, MATCH_FAILED, UNIF_FAILED, UNIF_SUCC,
+        subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete,
+        subst_mgu_complete_with_bank, unif_failed, verify_match, OracleUnifResult, UnifTermSide,
+        MATCH_FAILED, UNIF_FAILED, UNIF_SUCC,
     };
     #[cfg(feature = "measure-unification")]
     use super::{unification_attempts, unification_successes};
@@ -1014,6 +1018,79 @@ mod tests {
         assert!(subst_match_complete(&x, &a, &mut subst));
         subst.backtrack();
         assert!(subst_mgu_complete(&x, &a, &mut subst));
+    }
+
+    #[test]
+    fn banked_complete_mgu_binds_applied_variable_to_rigid_prefix() {
+        let _global_state = global_state_lock();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        let mut bank = TermBank::new(signature).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex = bank.vars().get_fresh_var(&unary);
+        let prefix_code = bank.signature_mut().insert_id("mgu_ho_prefix", 0, false);
+        bank.signature_mut()
+            .declare_final_type(prefix_code, individual.clone())
+            .unwrap();
+        let prefix = bank.create_const_term(prefix_code).unwrap();
+        let suffix_code = bank.signature_mut().insert_id("mgu_ho_suffix", 0, false);
+        bank.signature_mut()
+            .declare_final_type(suffix_code, individual.clone())
+            .unwrap();
+        let suffix = bank.create_const_term(suffix_code).unwrap();
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual,
+            ]));
+        let rigid_code = bank.signature_mut().insert_id("mgu_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, binary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let applied = apply_terms(&mut bank, &flex, std::slice::from_ref(&suffix)).unwrap();
+        let target = apply_terms(&mut bank, &rigid, &[prefix.clone(), suffix.clone()]).unwrap();
+        let mut subst = Substitution::new();
+
+        assert!(!subst_mgu_complete(&applied, &target, &mut subst));
+        assert!(subst_mgu_complete_with_bank(&mut bank, &applied, &target, &mut subst).unwrap());
+        assert!(flex
+            .binding()
+            .is_some_and(|binding| binding.f_code() == rigid_code && binding.arity() == 1));
+        subst.backtrack();
+        assert!(flex.binding().is_none());
+
+        let mismatch_code = bank.signature_mut().insert_id("mgu_ho_mismatch", 0, false);
+        let mismatch_type = bank.signature().type_bank().default_type();
+        bank.signature_mut()
+            .declare_final_type(mismatch_code, mismatch_type)
+            .unwrap();
+        let mismatch = bank.create_const_term(mismatch_code).unwrap();
+        let mismatch_target = apply_terms(&mut bank, &rigid, &[prefix, mismatch]).unwrap();
+        let retained = bank
+            .vars()
+            .get_fresh_var(&bank.signature().type_bank().default_type());
+        subst.add_binding(&retained, &suffix);
+
+        assert!(
+            !subst_mgu_complete_with_bank(&mut bank, &applied, &mismatch_target, &mut subst)
+                .unwrap()
+        );
+        assert_eq!(subst.len(), 1);
+        assert_eq!(retained.binding(), Some(suffix));
+        assert!(flex.binding().is_none());
+        subst.backtrack();
     }
 
     #[test]

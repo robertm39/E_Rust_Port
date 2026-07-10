@@ -14,7 +14,7 @@ use crate::clauses::inferencedoc::{
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::subst_mgu_complete_with_bank;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
@@ -297,7 +297,7 @@ fn compute_ordered_factor_impl(
     if reset_freshvars {
         freshvars.reset_v_counts();
     }
-    if !first.unify_directed(&oriented_second, &mut subst) {
+    if !first.unify_directed_with_bank(&oriented_second, &mut subst, bank)? {
         return Ok(None);
     }
 
@@ -461,7 +461,7 @@ fn compute_equality_factor_mgu(
     }
 
     let mut subst = Substitution::new();
-    if !subst_mgu_complete(&input.max_term, &input.with_term, &mut subst) {
+    if !subst_mgu_complete_with_bank(bank, &input.max_term, &input.with_term, &mut subst)? {
         return Ok((None, false));
     }
 

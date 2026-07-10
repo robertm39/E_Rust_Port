@@ -6,7 +6,7 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::tautologies::clause_is_tautology_real;
 use crate::terms::functypes::FunCode;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::subst_mgu_complete_with_bank;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::DerefType;
@@ -273,7 +273,7 @@ fn check_blockedness(
     if has_eq {
         check_blockedness_eq(task, partner, fresh_clauses, bank, tmp_bank)
     } else {
-        Ok(check_blockedness_neq(task, partner, fresh_clauses, bank))
+        check_blockedness_neq(task, partner, fresh_clauses, bank)
     }
 }
 
@@ -281,13 +281,13 @@ fn check_blockedness_neq(
     task: &BceTask,
     partner: &Clause,
     fresh_clauses: &[Clause],
-    bank: &TermBank,
-) -> bool {
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
     let parent = &fresh_clauses[task.parent_index];
     let lit = &parent.literals().as_slice()[task.lit_index];
     debug_assert!(!lit.is_equ_lit(bank));
 
-    let (unifiable, nonunifiable) = split_partner_literals(lit, partner, bank);
+    let (unifiable, nonunifiable) = split_partner_literals(lit, partner, bank)?;
     let mut result = true;
     for index in 0..unifiable.len() {
         let mut processed = vec![index];
@@ -298,29 +298,40 @@ fn check_blockedness_neq(
             &unifiable,
             &nonunifiable,
             &mut processed,
-        );
+            bank,
+        )?;
         if !result {
             break;
         }
     }
 
-    result
+    Ok(result)
 }
 
 fn split_partner_literals(
     lit: &Eqn,
     partner: &Clause,
-    bank: &TermBank,
-) -> (Vec<usize>, Vec<usize>) {
+    bank: &mut TermBank,
+) -> Result<(Vec<usize>, Vec<usize>), Diagnostic> {
     let mut unifiable = Vec::new();
     let mut nonunifiable = Vec::new();
     let mut subst = Substitution::new();
 
     for (index, partner_lit) in partner.literals().as_slice().iter().enumerate() {
-        if lit.is_positive() != partner_lit.is_positive()
+        let unified = if lit.is_positive() != partner_lit.is_positive()
             && !partner_lit.is_equ_lit(bank)
-            && subst_mgu_complete(lit.left(), partner_lit.left(), &mut subst)
         {
+            match subst_mgu_complete_with_bank(bank, lit.left(), partner_lit.left(), &mut subst) {
+                Ok(unified) => unified,
+                Err(error) => {
+                    subst.backtrack();
+                    return Err(error);
+                }
+            }
+        } else {
+            false
+        };
+        if unified {
             unifiable.push(index);
             subst.backtrack();
         } else {
@@ -329,7 +340,7 @@ fn split_partner_literals(
     }
     subst.delete();
 
-    (unifiable, nonunifiable)
+    Ok((unifiable, nonunifiable))
 }
 
 fn check_l_resolvents_neq(
@@ -339,14 +350,22 @@ fn check_l_resolvents_neq(
     unifiable: &[usize],
     nonunifiable: &[usize],
     processed: &mut Vec<usize>,
-) -> bool {
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
     debug_assert!(!processed.is_empty());
     let lit = &parent.literals().as_slice()[lit_index];
     let partner_literals = partner.literals().as_slice();
     let mut subst = Substitution::new();
     let first_lit =
         &partner_literals[unifiable[*processed.last().expect("processed is non-empty")]];
-    let unified = subst_mgu_complete(lit.left(), first_lit.left(), &mut subst);
+    let unified = match subst_mgu_complete_with_bank(bank, lit.left(), first_lit.left(), &mut subst)
+    {
+        Ok(unified) => unified,
+        Err(error) => {
+            subst.backtrack();
+            return Err(error);
+        }
+    };
     debug_assert!(unified);
 
     let mut result = false;
@@ -389,9 +408,16 @@ fn check_l_resolvents_neq(
         let mut unifiable_group = true;
         for processed_index in processed.iter().skip(prev_try) {
             let other = &partner_literals[unifiable[*processed_index]];
-            if !subst_mgu_complete(lit.left(), other.left(), &mut subst) {
-                unifiable_group = false;
-                break;
+            match subst_mgu_complete_with_bank(bank, lit.left(), other.left(), &mut subst) {
+                Ok(true) => {}
+                Ok(false) => {
+                    unifiable_group = false;
+                    break;
+                }
+                Err(error) => {
+                    subst.backtrack();
+                    return Err(error);
+                }
             }
         }
 
@@ -402,7 +428,7 @@ fn check_l_resolvents_neq(
     }
 
     subst.delete();
-    result
+    Ok(result)
 }
 
 fn check_blockedness_eq(
@@ -485,17 +511,35 @@ fn bce_write_error(error: fmt::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        eliminate_blocked_clauses, eliminate_blocked_clauses_with_output, BceEliminationResult,
+        eliminate_blocked_clauses, eliminate_blocked_clauses_with_output, split_partner_literals,
+        BceEliminationResult,
     };
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::terms::lambda::apply_terms;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap();
+        ProblemTypeReset
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -605,6 +649,54 @@ mod tests {
         assert_eq!(result.eliminated_count, 0);
         assert_eq!(ids(&passive), vec![positive_id, negative_id]);
         assert!(archive.is_empty());
+    }
+
+    #[test]
+    fn bce_partner_split_uses_banked_higher_order_mgu() {
+        let _global_state = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let unary_predicate =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    bool_type.clone(),
+                ]));
+        let binary_predicate =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual,
+                    bool_type,
+                ]));
+        let function = bank.vars().get_fresh_var(&unary_predicate);
+        let prefix = object_const(&mut bank, "bce_ho_prefix");
+        let suffix = object_const(&mut bank, "bce_ho_suffix");
+        let rigid_code = bank.signature_mut().insert_id("bce_ho_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, binary_predicate)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let flex_application =
+            apply_terms(&mut bank, &function, std::slice::from_ref(&suffix)).unwrap();
+        let rigid_application = apply_terms(&mut bank, &rigid, &[prefix, suffix]).unwrap();
+        let literal = predicate_literal(&mut bank, &flex_application, true);
+        let partner = clause(vec![predicate_literal(
+            &mut bank,
+            &rigid_application,
+            false,
+        )]);
+
+        let (unifiable, nonunifiable) =
+            split_partner_literals(&literal, &partner, &mut bank).unwrap();
+
+        assert_eq!(unifiable, vec![0]);
+        assert!(nonunifiable.is_empty());
+        assert!(function.binding().is_none());
     }
 
     #[test]

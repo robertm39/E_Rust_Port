@@ -22,7 +22,9 @@ use crate::heuristics::to_params::TermOrdering;
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
-use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
+use crate::terms::match_mgu::{
+    subst_mgu_complete_with_bank, term_has_higher_order_unification_surface,
+};
 use crate::terms::replace::{make_rewritten_term, tb_term_pos_replace};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -1468,23 +1470,24 @@ fn indexed_effective_paramodulation_type(
         || higher_order_paramod_diagnostic_for_type(pm_type),
     )?;
     let mut subst = Substitution::new();
-    if !subst_mgu_complete(&from_term, overlap_term, &mut subst)
-        || (!from_literal.is_oriented()
-            && to_greater_with_bank(
-                ocb,
-                bank,
-                &from_other,
-                &from_term,
-                DerefType::Always,
-                DerefType::Always,
-            )?)
-    {
-        subst.backtrack();
-        return Ok(None);
-    }
-    let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
+    let result = (|| {
+        if !subst_mgu_complete_with_bank(bank, &from_term, overlap_term, &mut subst)?
+            || (!from_literal.is_oriented()
+                && to_greater_with_bank(
+                    ocb,
+                    bank,
+                    &from_other,
+                    &from_term,
+                    DerefType::Always,
+                    DerefType::Always,
+                )?)
+        {
+            return Ok(None);
+        }
+        effective_paramodulation_type(bank, ocb, from_pos, pm_type).map(Some)
+    })();
     subst.backtrack();
-    Ok(Some(effective))
+    result
 }
 
 fn clause_ordered_paramod_by_type(
@@ -1548,7 +1551,7 @@ fn ensure_higher_order_paramodulation_terms_subset(
         return Ok(());
     }
     if ocb.ordering_type != TermOrdering::Kbo6
-        || terms
+        && terms
             .iter()
             .any(|term| term_has_higher_order_unification_surface(term))
     {
@@ -1658,22 +1661,36 @@ pub fn compute_overlap(
     )?;
     let oldstate = subst.len();
 
-    if !subst_mgu_complete(&max_side, &sub_into, subst) {
+    let unified = match subst_mgu_complete_with_bank(bank, &max_side, &sub_into, subst) {
+        Ok(unified) => unified,
+        Err(error) => {
+            subst.backtrack_to_pos(oldstate);
+            return Err(error);
+        }
+    };
+    if !unified {
         subst.backtrack_to_pos(oldstate);
         return Ok(None);
     }
-    if !from_literal.is_oriented()
-        && to_greater_with_bank(
+    if !from_literal.is_oriented() {
+        let blocked = match to_greater_with_bank(
             ocb,
             bank,
             &rep_side,
             &max_side,
             DerefType::Always,
             DerefType::Always,
-        )?
-    {
-        subst.backtrack_to_pos(oldstate);
-        return Ok(None);
+        ) {
+            Ok(blocked) => blocked,
+            Err(error) => {
+                subst.backtrack_to_pos(oldstate);
+                return Err(error);
+            }
+        };
+        if blocked {
+            subst.backtrack_to_pos(oldstate);
+            return Ok(None);
+        }
     }
 
     subst.norm_term(into, freshvars);
@@ -2085,7 +2102,13 @@ fn clause_ordered_sim_paramod_with_subst(
     replacement: SimParamodReplacement,
 ) -> Result<Option<Clause>, Diagnostic> {
     let oldstate = subst.len();
-    let unified = subst_mgu_complete(from_term, into_term, subst);
+    let unified = match subst_mgu_complete_with_bank(bank, from_term, into_term, subst) {
+        Ok(unified) => unified,
+        Err(error) => {
+            subst.backtrack_to_pos(oldstate);
+            return Err(error);
+        }
+    };
     if !unified {
         subst.backtrack_to_pos(oldstate);
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
@@ -2624,7 +2647,6 @@ mod tests {
         effective_paramodulation_type, fresh_var_bank_for_clauses, paramod_from_side_positions,
         paramod_into_positions, paramodulation_pair_positions, ParamodulationType,
     };
-    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
@@ -3256,16 +3278,35 @@ mod tests {
     }
 
     #[test]
-    fn compute_clause_clause_paramodulants_higher_order_rejects_actual_surface_overlap() {
+    fn compute_clause_clause_paramodulants_higher_order_unifies_actual_surface_overlap() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
-        let predicate = unary_predicate_var(&mut bank, -2_402);
-        let arg = typed_const(&mut bank, "pm_ho_surface_arg");
-        let applied = apply_terms(&mut bank, &predicate, std::slice::from_ref(&arg)).unwrap();
-        let truth = bank.true_term().clone();
-        let mut source_literal = lit(&mut bank, &applied, &truth, true);
-        let mut target_literal = lit(&mut bank, &applied, &truth, true);
+        let function = typed_arrow_var(&mut bank, -2_402);
+        let prefix = typed_const(&mut bank, "pm_ho_surface_prefix");
+        let suffix = typed_const(&mut bank, "pm_ho_surface_suffix");
+        let individual = bank.signature().type_bank().default_type();
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual,
+            ]));
+        let rigid_code = bank
+            .signature_mut()
+            .insert_id("pm_ho_surface_rigid", 0, false);
+        bank.signature_mut()
+            .declare_final_type(rigid_code, binary)
+            .unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let applied = apply_terms(&mut bank, &function, std::slice::from_ref(&suffix)).unwrap();
+        let source_right = typed_const(&mut bank, "pm_ho_surface_source_right");
+        let target_left = apply_terms(&mut bank, &rigid, &[prefix, suffix]).unwrap();
+        let target_right = typed_const(&mut bank, "pm_ho_surface_target_right");
+        let mut source_literal = lit(&mut bank, &applied, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
         maximal_oriented(&mut source_literal);
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
@@ -3273,7 +3314,7 @@ mod tests {
         let mut ocb = kbo6_ocb(&bank);
         let mut store = ClauseSet::new();
 
-        let error = compute_clause_clause_paramodulants(
+        let count = compute_clause_clause_paramodulants(
             &mut bank,
             &mut ocb,
             &source,
@@ -3282,10 +3323,14 @@ mod tests {
             &mut store,
             ParamodulationType::Plain,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("higher-order paramodulation"));
+        assert_eq!(count, 1);
+        let generated = store.iter().next().expect("one higher-order paramodulant");
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.literals().as_slice()[0].left(), &source_right);
+        assert_eq!(generated.literals().as_slice()[0].right(), &target_right);
+        assert!(function.binding().is_none());
     }
 
     #[test]

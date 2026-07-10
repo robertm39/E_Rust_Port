@@ -9,7 +9,7 @@ use crate::clauses::inferencedoc::{
     ClauseCreationInference, ClauseCreationParents, ClauseModificationInference, ProofDocSession,
 };
 use crate::terms::ho_csu::CsuIterator;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::subst_mgu_complete_with_bank;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
@@ -55,7 +55,7 @@ fn compute_eq_res_with_ho_flag(
     }
     let literal = eq_res_literal(clause, literal_index);
     let mut subst = Substitution::new();
-    if !subst_mgu_complete(literal.left(), literal.right(), &mut subst) {
+    if !subst_mgu_complete_with_bank(bank, literal.left(), literal.right(), &mut subst)? {
         return Ok((None, false));
     }
 
@@ -978,6 +978,38 @@ mod tests {
             .expect("single ComputeEqRes MGU path accepts arrow-variable binding");
 
         assert!(resolvent.is_empty());
+    }
+
+    #[test]
+    fn compute_eq_res_higher_order_applied_variable_uses_rigid_prefix_mgu() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let function = typed_arrow_var(&mut bank, -2);
+        let prefix = typed_const(&mut bank, "er_ho_mgu_prefix");
+        let suffix = typed_const(&mut bank, "er_ho_mgu_suffix");
+        let individual = bank.signature().type_bank().default_type();
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual,
+            ]));
+        let rigid = typed_const_with_type(&mut bank, "er_ho_mgu_rigid", binary);
+        let applied = apply_terms(&mut bank, &function, std::slice::from_ref(&suffix)).unwrap();
+        let target = apply_terms(&mut bank, &rigid, &[prefix, suffix]).unwrap();
+        let mut diseq = lit(&mut bank, &applied, &target, false);
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![diseq]));
+
+        let resolvent = compute_eq_res(&mut bank, &clause, 0)
+            .unwrap()
+            .expect("banked ComputeEqRes binds the applied variable to the rigid prefix");
+
+        assert!(resolvent.is_empty());
+        assert!(function.binding().is_none());
     }
 
     #[test]

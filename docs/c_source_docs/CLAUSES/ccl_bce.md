@@ -81,7 +81,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware complete MGU on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 
@@ -97,7 +97,7 @@ Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 
 ### Rust Port Status Notes
 
-- `src/clauses/bce.rs` ports the clause-level blocked-clause elimination helper over the current Rust `ClauseSet` owner, including predicate occurrence maps with C's max-occurrence cutoff behavior, per-literal BCE tasks over disjoint parent copies, minimum-remaining-candidate task scheduling, blocker resumption after archive moves, non-equational L-resolvent checks through first-order MGU plus complementary-literal closure, equational same-head L-resolvent construction through generated argument disequalities, and the C-shaped `% BCE start` / `% BCE eliminated` output wrapper.
+- `src/clauses/bce.rs` ports the clause-level blocked-clause elimination helper over the current Rust `ClauseSet` owner, including predicate occurrence maps with C's max-occurrence cutoff behavior, per-literal BCE tasks over disjoint parent copies, minimum-remaining-candidate task scheduling, blocker resumption after archive moves, non-equational L-resolvent checks through bank-aware complete MGU plus complementary-literal closure, equational same-head L-resolvent construction through generated argument disequalities, and the C-shaped `% BCE start` / `% BCE eliminated` output wrapper.
 - Supported executable `--bce` preprocessing now calls the helper for first-order prune/proof-search clause-list paths after represented SInE/relevance pruning and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. It also covers represented FOF formula-origin clauses and supported first-order-shaped THF formula fragments after formula-owner CNF emits represented clauses. It moves eliminated clauses to the represented proof-state archive and writes progress through the executable stdout side channel.
 - Broader formula-owner preprocessing and pointer-stable proof-state handles remain pending integration points.
 
