@@ -48,6 +48,8 @@ The instrumented candidate run took 12.38 seconds and attributed only 0.114 seco
 
 Linear evaluation-object lookup is a real ownership gap, but it is not a material bottleneck on this parity workload after the parent-liveness fixes. A stable clause arena should be introduced only as part of the broader handle-ownership port, not as an isolated LUSK6 optimization.
 
+Follow-up: after shared-term weight caching reduced the surrounding workload, a matched rebuild A/B made the selection cost material. The hardened, bounded-compaction version is retained and measured in `experiments/2026-07-10-004-stable-clause-slots/`; this note remains the record of the earlier falsified configuration.
+
 ## Limits
 
 - The result applies to this proof-search workload; delete-bad-heavy schedules may spend more time resolving evaluation handles.
