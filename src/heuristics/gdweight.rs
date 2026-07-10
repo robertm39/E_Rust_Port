@@ -8,7 +8,7 @@ use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_is_ground, term_weight_compute};
+use crate::terms::termfunc::{term_is_ground, term_weight};
 use crate::terms::termtypes::{Term, TP_IS_CONJECTURE_TERM};
 
 pub const DEFAULT_POS_MULT: f64 = 1.0;
@@ -209,7 +209,7 @@ pub fn gd_term_weight(
         if goal_multiplier == 0.0 {
             return goal_const;
         }
-        let swapped_weight = term_weight_compute(term, fweight, vweight);
+        let swapped_weight = term_weight(term, fweight, vweight);
         return f64_to_i64(i64_to_f64(goal_const) + goal_multiplier * i64_to_f64(swapped_weight));
     }
 

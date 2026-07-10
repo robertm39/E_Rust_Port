@@ -9,7 +9,7 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_depth, term_weight_compute};
+use crate::terms::termfunc::{term_depth, term_weight};
 use crate::terms::termtypes::Term;
 use crate::terms::typebanks::TypeBank;
 use std::fs::File;
@@ -180,7 +180,7 @@ fn execute_termprops(
         let mut scanner = scanner_for_input(file, stdin)?;
         while !scanner.test_tok(TokenType::NO_TOKEN) {
             let term = bank.parse_term_with_distinct_checks(&mut scanner)?;
-            let size = term_weight_compute(&term, 1, 1);
+            let size = term_weight(&term, 1, 1);
             let depth = term_depth(&term);
             let symmetry = termprops_symmetry(&term);
             let commutativity = termprops_commutativity(&term);

@@ -206,7 +206,9 @@ mod tests {
     use crate::terms::signature::{Signature, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::Type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{Term, TP_IS_SHARED, TP_OP_FLAG};
+    use crate::terms::termtypes::{
+        Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_IS_SHARED, TP_OP_FLAG,
+    };
     use crate::terms::termvars::{is_alt_var, VarBank};
     use crate::terms::typebanks::TypeBank;
 
@@ -329,6 +331,8 @@ mod tests {
     fn typed_const(f_code: i64, type_: &Type) -> Term {
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(type_.clone()));
+        term.set_f_count(1);
+        term.set_weight(DEFAULT_FWEIGHT);
         term.set_prop(TP_IS_SHARED);
         term
     }
@@ -336,10 +340,17 @@ mod tests {
     fn shared_fun(f_code: i64, args: &[Term], type_: &Type) -> Term {
         let term = Term::top_alloc(f_code, args.len());
         term.set_type(Some(type_.clone()));
-        term.set_prop(TP_IS_SHARED);
         for (index, arg) in args.iter().enumerate() {
             term.set_argument(index, arg.clone());
         }
+        let v_count = args.iter().map(Term::v_count).sum();
+        let f_count = 1 + args.iter().map(Term::f_count).sum::<u32>();
+        term.set_v_count(v_count);
+        term.set_f_count(f_count);
+        term.set_weight(
+            i64::from(v_count) * DEFAULT_VWEIGHT + i64::from(f_count) * DEFAULT_FWEIGHT,
+        );
+        term.set_prop(TP_IS_SHARED);
         term
     }
 }

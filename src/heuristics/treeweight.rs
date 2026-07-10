@@ -13,7 +13,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_weight_compute;
+use crate::terms::termfunc::term_weight;
 use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
 use crate::terms::termtypes::Term;
 use crate::terms::termvars::VarBank;
@@ -433,8 +433,7 @@ fn ted_forest_distance(
 }
 
 fn term_node_count(term: &Term) -> usize {
-    usize::try_from(term_weight_compute(term, 1, 1))
-        .expect("tree-distance term node count fits usize")
+    usize::try_from(term_weight(term, 1, 1)).expect("tree-distance term node count fits usize")
 }
 
 fn min3(left: i64, middle: i64, right: i64) -> i64 {

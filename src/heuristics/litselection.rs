@@ -8,7 +8,7 @@ use crate::clauses::eqn_props::{
 };
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
+use crate::terms::termfunc::{term_standard_weight, term_weight};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 #[cfg(test)]
@@ -4083,10 +4083,10 @@ fn conditional_gate_blocks_selection(clause: &Clause, all_positive: bool) -> boo
 }
 
 fn positive_conditional_literal_blocks(literal: &Eqn) -> bool {
-    let mut weight = term_weight_compute(literal.left(), 0, VAR_FACTOR);
+    let mut weight = term_weight(literal.left(), 0, VAR_FACTOR);
     let mut standard_weight = term_standard_weight(literal.left());
     if literal.query_prop(EP_IS_EQU_LITERAL) {
-        weight += term_weight_compute(literal.right(), 0, VAR_FACTOR);
+        weight += term_weight(literal.right(), 0, VAR_FACTOR);
         standard_weight += term_standard_weight(literal.right());
     }
     standard_weight <= weight
@@ -4346,9 +4346,9 @@ fn find_non_ground_min11_infpos_no_x_type_literal(
 
     for (index, literal) in clause.literals().as_slice().iter().enumerate() {
         if literal.is_negative() && !literal.is_ground() && !literal.is_x_type_pred(bank) {
-            let mut weight = term_weight_compute(literal.left(), 1, 1);
+            let mut weight = term_weight(literal.left(), 1, 1);
             if !literal.is_oriented() {
-                weight += term_weight_compute(literal.right(), 1, 1);
+                weight += term_weight(literal.right(), 1, 1);
             }
             if weight < select_weight {
                 select_weight = weight;
@@ -5209,9 +5209,9 @@ fn find_min_infpos_negative_literal(
 }
 
 fn min_infpos_weight(literal: &Eqn, vweight: i64, fweight: i64) -> i64 {
-    let mut weight = term_weight_compute(literal.left(), vweight, fweight);
+    let mut weight = term_weight(literal.left(), vweight, fweight);
     if !literal.is_oriented() {
-        weight += term_weight_compute(literal.right(), vweight, fweight);
+        weight += term_weight(literal.right(), vweight, fweight);
     }
     weight
 }
@@ -5372,7 +5372,7 @@ mod tests {
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term, TP_IS_GROUND};
+    use crate::terms::termtypes::{DerefType, Term, TP_IS_GROUND, TP_IS_SHARED};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
     use std::collections::BTreeSet;
@@ -5536,6 +5536,13 @@ mod tests {
         bank.insert(&unary(f_code, arg), DerefType::Never).unwrap()
     }
 
+    fn unshared_copy(source: &Term) -> Term {
+        let copy = Term::top_copy(source);
+        copy.set_properties(source.properties());
+        copy.del_prop(TP_IS_SHARED);
+        copy
+    }
+
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
@@ -5552,7 +5559,7 @@ mod tests {
     }
 
     fn weighted_predicate_const_atom(bank: &mut TermBank, name: &str, weight: i64) -> Term {
-        let atom = predicate_const_atom(bank, name);
+        let atom = unshared_copy(&predicate_const_atom(bank, name));
         atom.set_weight(weight);
         atom
     }
@@ -5604,6 +5611,7 @@ mod tests {
     ) -> Term {
         let atom = weighted_predicate_unary_atom(bank, name, arg, weight);
         let shared = bank.insert(&atom, DerefType::Never).unwrap();
+        let shared = unshared_copy(&shared);
         shared.set_weight(weight);
         if !arg.query_prop(TP_IS_GROUND) {
             shared.del_prop(TP_IS_GROUND);
@@ -5620,6 +5628,7 @@ mod tests {
     ) -> Term {
         let atom = weighted_predicate_binary_atom(bank, name, left, right, weight);
         let shared = bank.insert(&atom, DerefType::Never).unwrap();
+        let shared = unshared_copy(&shared);
         shared.set_weight(weight);
         if !left.query_prop(TP_IS_GROUND) || !right.query_prop(TP_IS_GROUND) {
             shared.del_prop(TP_IS_GROUND);
@@ -6053,18 +6062,18 @@ mod tests {
 
     fn new_complex_ground_clause(bank: &mut TermBank) -> Clause {
         let pos = predicate_const_atom(bank, "new_complex_ground_pos");
-        let heavy = shared_const(bank, "new_complex_heavy");
-        let light = shared_const(bank, "new_complex_light");
+        let heavy = unshared_copy(&shared_const(bank, "new_complex_heavy"));
+        let light = unshared_copy(&shared_const(bank, "new_complex_light"));
         let right_a = shared_const(bank, "new_complex_right_a");
         let right_b = shared_const(bank, "new_complex_right_b");
+        heavy.set_weight(30);
+        light.set_weight(3);
 
         let mut clause = Clause::alloc(EqnList::from_vec(vec![
             predicate_literal(bank, &pos, true),
             literal(bank, &heavy, &right_a, false),
             literal(bank, &light, &right_b, false),
         ]));
-        clause.literals().as_slice()[1].left().set_weight(30);
-        clause.literals().as_slice()[2].left().set_weight(3);
         clause.set_prop(CP_IS_ORIENTED);
         clause
     }

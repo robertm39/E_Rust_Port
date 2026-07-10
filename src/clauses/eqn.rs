@@ -27,7 +27,7 @@ use crate::terms::termfunc::{
     term_collect_variables, term_compute_function_ranks, term_dag_weight, term_depth,
     term_fsum_weight, term_has_f_code, term_is_def_term, term_is_untyped, term_lex_compare,
     term_non_linear_weight, term_standard_weight, term_struct_equal_deref,
-    term_struct_weight_compare, term_sym_type_weight, term_weight_compute,
+    term_struct_weight_compare, term_sym_type_weight, term_weight,
 };
 use crate::terms::termtypes::{
     term_del_prop, term_del_prop_opt, term_deref, term_identity_cmp, term_set_prop,
@@ -1189,13 +1189,13 @@ impl Eqn {
         fweight: i64,
         app_var_mult: f64,
     ) -> f64 {
-        let mut result = i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight));
+        let mut result = i64_to_f64(term_weight(&self.rterm, vweight, fweight));
         if !self.is_oriented() {
             result *= max_multiplier;
         }
         result = apply_app_var_mult(result, &self.rterm, app_var_mult);
         result += apply_app_var_mult(
-            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)) * max_multiplier,
+            i64_to_f64(term_weight(&self.lterm, vweight, fweight)) * max_multiplier,
             &self.lterm,
             app_var_mult,
         );
@@ -1395,12 +1395,12 @@ impl Eqn {
     #[must_use]
     pub fn max_weight(&self, vweight: i64, fweight: i64, app_var_mult: f64) -> f64 {
         let left = apply_app_var_mult(
-            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)),
+            i64_to_f64(term_weight(&self.lterm, vweight, fweight)),
             &self.lterm,
             app_var_mult,
         );
         let right = apply_app_var_mult(
-            i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight)),
+            i64_to_f64(term_weight(&self.rterm, vweight, fweight)),
             &self.rterm,
             app_var_mult,
         );
@@ -1417,7 +1417,7 @@ impl Eqn {
         app_var_mult: f64,
     ) -> f64 {
         let mut result = if self.is_equ_lit(bank) {
-            let mut right = i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight));
+            let mut right = i64_to_f64(term_weight(&self.rterm, vweight, fweight));
             if !self.is_oriented() {
                 right *= max_multiplier;
             }
@@ -1427,7 +1427,7 @@ impl Eqn {
             0.0
         };
         result += apply_app_var_mult(
-            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)) * max_multiplier,
+            i64_to_f64(term_weight(&self.lterm, vweight, fweight)) * max_multiplier,
             &self.lterm,
             app_var_mult,
         );
@@ -1473,18 +1473,18 @@ impl Eqn {
 
     #[must_use]
     pub fn max_term_positions(&self) -> i64 {
-        let mut result = term_weight_compute(&self.lterm, 1, 1);
+        let mut result = term_weight(&self.lterm, 1, 1);
         if !self.is_oriented() {
-            result += term_weight_compute(&self.rterm, 1, 1);
+            result += term_weight(&self.rterm, 1, 1);
         }
         result
     }
 
     #[must_use]
     pub fn inference_positions(&self) -> i64 {
-        let mut result = term_weight_compute(&self.lterm, 0, 1);
+        let mut result = term_weight(&self.lterm, 0, 1);
         if self.is_oriented() {
-            result += term_weight_compute(&self.rterm, 0, 1);
+            result += term_weight(&self.rterm, 0, 1);
         }
         result
     }
@@ -3101,7 +3101,7 @@ mod tests {
         term.set_type(Some(bank.signature().type_bank().default_type()));
         term.set_argument(0, variable.clone());
         term.set_argument(1, arg.clone());
-        term
+        bank.insert_ignore_var(&term, DerefType::Never).unwrap()
     }
 
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {

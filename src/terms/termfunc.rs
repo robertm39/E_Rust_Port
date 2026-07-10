@@ -909,7 +909,7 @@ pub fn term_is_subterm_deref(
 
 #[must_use]
 pub fn term_weight_compute(term: &Term, vweight: i64, fweight: i64) -> i64 {
-    if term.is_free_var() {
+    if term.is_free_var() || is_normalized_pattern_app_var(term) {
         return vweight;
     }
 
@@ -925,14 +925,63 @@ pub fn term_weight_compute(term: &Term, vweight: i64, fweight: i64) -> i64 {
         .skip(usize::from(term.is_db_lambda()))
         .filter_map(|(_index, arg)| arg)
     {
-        result += term_weight_compute(&arg, vweight, fweight);
+        result += term_weight(&arg, vweight, fweight);
     }
     result
 }
 
+fn is_normalized_pattern_app_var(term: &Term) -> bool {
+    if !term.is_applied_free_var() {
+        return false;
+    }
+    if term.is_shared() {
+        return term.is_pattern();
+    }
+
+    let mut previous = None;
+    for index in 0..term.arity() {
+        let Some(arg) = term.argument(index) else {
+            return false;
+        };
+        if index != 0 && !arg.is_db_var() {
+            return false;
+        }
+        if previous.as_ref().is_some_and(|previous| previous == &arg) {
+            return false;
+        }
+        previous = Some(arg);
+    }
+    true
+}
+
+#[must_use]
+pub fn term_weight(term: &Term, vweight: i64, fweight: i64) -> i64 {
+    if term.is_shared() {
+        let weight = i64::from(term.v_count()) * vweight + i64::from(term.f_count()) * fweight;
+        debug_assert_eq!(
+            weight,
+            term_weight_compute(term, vweight, fweight),
+            "shared term counts must match their TermBank metadata"
+        );
+        weight
+    } else {
+        term_weight_compute(term, vweight, fweight)
+    }
+}
+
 #[must_use]
 pub fn term_standard_weight(term: &Term) -> i64 {
-    term_weight_compute(term, DEFAULT_VWEIGHT, DEFAULT_FWEIGHT)
+    if term.is_shared() {
+        let weight = term.weight();
+        debug_assert_eq!(
+            weight,
+            term_weight_compute(term, DEFAULT_VWEIGHT, DEFAULT_FWEIGHT),
+            "shared term weight must match its TermBank metadata"
+        );
+        weight
+    } else {
+        term_weight_compute(term, DEFAULT_VWEIGHT, DEFAULT_FWEIGHT)
+    }
 }
 
 #[must_use]
@@ -1838,8 +1887,8 @@ mod tests {
         term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
         term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
         term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_trim_implications, term_weight_compute, var_print_string,
-        VarNormStyle,
+        term_sym_type_weight, term_trim_implications, term_weight, term_weight_compute,
+        var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -1855,8 +1904,8 @@ mod tests {
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg, Type};
     use crate::terms::termpos::TermPos;
     use crate::terms::termtypes::{
-        term_identity_id, DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_IS_GROUND,
-        TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
+        term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_HAS_DB_SUBTERM,
+        TP_IS_DB_VAR, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
     };
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
@@ -2035,6 +2084,9 @@ mod tests {
         let source_var = typed_var(-2, &i_type);
         let root = Term::top_alloc(10, 2);
         root.set_type(Some(i_type.clone()));
+        root.set_v_count(2);
+        root.set_f_count(1);
+        root.set_weight(2 * DEFAULT_VWEIGHT + DEFAULT_FWEIGHT);
         root.set_prop(TP_IS_SHARED | TP_PRED_POS);
         root.set_argument(0, source_var.clone());
         root.set_argument(1, source_var.clone());
@@ -2443,6 +2495,46 @@ mod tests {
     }
 
     #[test]
+    fn standard_weight_uses_bank_metadata_only_for_shared_terms() {
+        let root = Term::top_alloc(10, 1);
+        root.set_argument(0, Term::const_cell_alloc(11));
+        root.set_weight(99);
+
+        assert_eq!(term_standard_weight(&root), 4);
+        assert_eq!(term_weight(&root, 3, 5), 10);
+
+        root.set_weight(4);
+        root.set_v_count(0);
+        root.set_f_count(2);
+        root.set_prop(TP_IS_SHARED);
+        assert_eq!(term_standard_weight(&root), 4);
+        assert_eq!(term_weight(&root, 3, 5), 10);
+    }
+
+    #[test]
+    fn applied_free_variable_weight_checks_unshared_pattern_shape() {
+        let head = Term::const_cell_alloc(-2);
+        let db = Term::const_cell_alloc(0);
+        db.set_prop(TP_IS_DB_VAR);
+
+        let pattern = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        pattern.set_argument(0, head.clone());
+        pattern.set_argument(1, db.clone());
+        assert_eq!(term_weight_compute(&pattern, 3, 5), 3);
+
+        let non_pattern = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        non_pattern.set_argument(0, head.clone());
+        non_pattern.set_argument(1, Term::const_cell_alloc(11));
+        assert_eq!(term_weight_compute(&non_pattern, 3, 5), 8);
+
+        let repeated_db = Term::top_alloc(SIG_PHONY_APP_CODE, 3);
+        repeated_db.set_argument(0, head);
+        repeated_db.set_argument(1, db.clone());
+        repeated_db.set_argument(2, db);
+        assert_eq!(term_weight_compute(&repeated_db, 3, 5), 13);
+    }
+
+    #[test]
     fn structural_comparisons_use_identity_deref_and_prefix_rules() {
         let bank = TypeBank::new();
         let i_type = bank.i_type();
@@ -2785,6 +2877,9 @@ mod tests {
         let cached = Term::top_alloc(40, 1);
         let hidden_var = Term::const_cell_alloc(-4);
         cached.set_argument(0, hidden_var);
+        cached.set_v_count(1);
+        cached.set_f_count(1);
+        cached.set_weight(DEFAULT_VWEIGHT + DEFAULT_FWEIGHT);
         cached.set_prop(TP_IS_SHARED | TP_IS_GROUND);
         assert!(!term_is_ground_compute(&cached));
         assert!(term_is_ground(&cached));

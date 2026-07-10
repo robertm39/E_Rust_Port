@@ -4,7 +4,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::signature::Signature;
-use crate::terms::termfunc::{term_depth, term_weight_compute};
+use crate::terms::termfunc::{term_depth, term_weight};
 use crate::terms::termtypes::{DEFAULT_FWEIGHT, DEFAULT_VWEIGHT};
 use std::fmt::Write as _;
 
@@ -178,12 +178,12 @@ pub fn compute_clause_set_num_features(features: &mut Features, set: &ClauseSet,
 
         for literal in clause.literals().as_slice() {
             if literal.is_positive() {
-                pos_tsize.push(term_weight_compute(
+                pos_tsize.push(term_weight(
                     literal.left(),
                     DEFAULT_VWEIGHT,
                     DEFAULT_FWEIGHT,
                 ));
-                pos_tsize.push(term_weight_compute(
+                pos_tsize.push(term_weight(
                     literal.right(),
                     DEFAULT_VWEIGHT,
                     DEFAULT_FWEIGHT,
@@ -191,12 +191,12 @@ pub fn compute_clause_set_num_features(features: &mut Features, set: &ClauseSet,
                 pos_tdepth.push(term_depth(literal.left()));
                 pos_tdepth.push(term_depth(literal.right()));
             } else {
-                neg_tsize.push(term_weight_compute(
+                neg_tsize.push(term_weight(
                     literal.left(),
                     DEFAULT_VWEIGHT,
                     DEFAULT_FWEIGHT,
                 ));
-                neg_tsize.push(term_weight_compute(
+                neg_tsize.push(term_weight(
                     literal.right(),
                     DEFAULT_VWEIGHT,
                     DEFAULT_FWEIGHT,

@@ -12,7 +12,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_depth, term_weight_compute};
+use crate::terms::termfunc::{term_depth, term_weight};
 use crate::terms::termtypes::Term;
 
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
@@ -577,21 +577,13 @@ pub fn depth_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
         .map(|literal| {
             let mut left = i64_to_f64(term_depth(literal.left()))
                 + param.term_weight_multiplier
-                    * i64_to_f64(term_weight_compute(
-                        literal.left(),
-                        param.vweight,
-                        param.fweight,
-                    ));
+                    * i64_to_f64(term_weight(literal.left(), param.vweight, param.fweight));
             left *=
                 param.max_term_multiplier * applied_var_factor(literal.left(), param.app_var_mult);
 
             let mut right = i64_to_f64(term_depth(literal.right()))
                 + param.term_weight_multiplier
-                    * i64_to_f64(term_weight_compute(
-                        literal.right(),
-                        param.vweight,
-                        param.fweight,
-                    ))
+                    * i64_to_f64(term_weight(literal.right(), param.vweight, param.fweight))
                     * applied_var_factor(literal.right(), param.app_var_mult);
             if !literal.is_oriented() {
                 right *= param.max_term_multiplier;
@@ -719,21 +711,13 @@ pub fn weight_less_depth_compute(param: &VarWeightParam, clause: &Clause) -> f64
         .as_slice()
         .iter()
         .map(|literal| {
-            let mut left = i64_to_f64(term_weight_compute(
-                literal.left(),
-                param.vweight,
-                param.fweight,
-            )) - param.term_depth_multiplier
-                * i64_to_f64(term_depth(literal.left()));
+            let mut left = i64_to_f64(term_weight(literal.left(), param.vweight, param.fweight))
+                - param.term_depth_multiplier * i64_to_f64(term_depth(literal.left()));
             left *=
                 param.max_term_multiplier * applied_var_factor(literal.left(), param.app_var_mult);
 
-            let mut right = i64_to_f64(term_weight_compute(
-                literal.right(),
-                param.vweight,
-                param.fweight,
-            )) - param.term_depth_multiplier
-                * i64_to_f64(term_depth(literal.right()));
+            let mut right = i64_to_f64(term_weight(literal.right(), param.vweight, param.fweight))
+                - param.term_depth_multiplier * i64_to_f64(term_depth(literal.right()));
             if !literal.is_oriented() {
                 right *= param.max_term_multiplier;
             }
@@ -1746,12 +1730,12 @@ mod tests {
         bank.vars().var_assert_alloc(f_code, &type_)
     }
 
-    fn applied_free_var(bank: &TermBank, variable: &Term, arg: &Term) -> Term {
+    fn applied_free_var(bank: &mut TermBank, variable: &Term, arg: &Term) -> Term {
         let term = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
         term.set_type(Some(bank.signature().type_bank().default_type()));
         term.set_argument(0, variable.clone());
         term.set_argument(1, arg.clone());
-        term
+        bank.insert_ignore_var(&term, DerefType::Never).unwrap()
     }
 
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -2022,7 +2006,7 @@ mod tests {
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "a");
         let b = typed_const(&mut bank, "b");
-        let app = applied_free_var(&bank, &x, &a);
+        let app = applied_free_var(&mut bank, &x, &a);
         let clause = unit_clause(&mut bank, &b, &app, true);
         let depth_param = depth_weight_init(2, 1, 3.0, 1.0, 1.0, 11.0, 5.0);
         let less_depth_param = weight_less_depth_init(2, 1, 3.0, 1.0, 1.0, 0.5, 5.0);

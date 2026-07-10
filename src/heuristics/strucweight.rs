@@ -12,7 +12,7 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_weight_compute;
+use crate::terms::termfunc::term_weight;
 use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
 use crate::terms::termtypes::Term;
 use crate::terms::termvars::VarBank;
@@ -398,7 +398,7 @@ pub fn struc_term_weight(
 
 #[allow(clippy::cast_precision_loss)]
 fn term_c_weight(term: &Term) -> f64 {
-    term_weight_compute(term, 1, 1) as f64
+    term_weight(term, 1, 1) as f64
 }
 
 fn conjecture_struc_distance_weight_wfcb_compute(

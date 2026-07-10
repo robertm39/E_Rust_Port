@@ -11,7 +11,7 @@ use crate::learn::indexfunctions::{
 use crate::learn::patterns::PatternSubst;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_weight_compute;
+use crate::terms::termfunc::term_weight;
 use crate::terms::termtypes::Term;
 use std::fmt::Write as _;
 
@@ -1024,7 +1024,7 @@ fn tsm_rec_eval_no_weight(
         }
     } else {
         if admin.tsm_type == TsmType::Recursive {
-            eval_weight = i64_to_f64(term_weight_compute(term, 1, 1));
+            eval_weight = i64_to_f64(term_weight(term, 1, 1));
         }
         *result += eval_weight * admin.unmapped_eval;
         if admin.tsm_type == TsmType::Recurrent {

@@ -6,7 +6,7 @@ use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_weight_compute;
+use crate::terms::termfunc::term_weight;
 
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
@@ -163,7 +163,7 @@ pub fn sim_eqn_weight(eqn: &Eqn, param: &SimWeightParam) -> f64 {
             clash_weight += param.var_term_clash;
         } else {
             clash_weight += param.term_term_clash
-                * i64_to_f64(term_weight_compute(&left, 1, 1) + term_weight_compute(&right, 1, 1));
+                * i64_to_f64(term_weight(&left, 1, 1) + term_weight(&right, 1, 1));
         }
     }
 
