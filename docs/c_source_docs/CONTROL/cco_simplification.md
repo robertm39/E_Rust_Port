@@ -91,19 +91,20 @@ Source files reviewed: `CONTROL/cco_simplification.h`, `CONTROL/cco_simplificati
 ### Compatibility Notes
 
 - `ClauseMoveSimplified` deletes the live processed clause from global indices before extracting it from its set, archives the original, flat-copies a fresh clause into the temporary set, and marks the archived original dead.
-- `RemoveRewritableClauses` moves every clause collected by the plain backward-rewrite scan. The indexed variant first clears `CPRWDetected` on each collected clause, then moves it through the same simplified-clause path.
+- `RemoveRewritableClauses` moves every clause collected by the plain backward-rewrite scan. The indexed variant treats `gindices->bw_rw_index` as authoritative across all processed sets, first clears `CPRWDetected` on each collected clause, then moves it through the same simplified-clause path.
 - `ClauseSetUnitSimplify` scans the current set in successor order, advances the cursor before moving a matched clause, and returns only the number of moved clauses.
 - `RemoveContextualSRClauses` can receive duplicate hits from `ClauseSetFindContextSRClauses`, so it rechecks that each candidate still belongs to the source set before moving it.
 
 ### Rust Port Status Notes
 
-- `src/heuristics/proofcontrol.rs` ports the `cco_simplification` behavior through the public `proof_state_backward_simplify*` family: backward rewriting via plain or caller-owned indexed rewritable lookup, backward subsumption, unit back-simplification, contextual simplify-reflect, C-ordered global-index deletion before movement, archive/dead-original handling, tmp-store requeueing, statistics, and opt-in proof-documentation quotes.
+- `src/heuristics/proofcontrol.rs` ports the `cco_simplification` behavior through the public `proof_state_backward_simplify*` family: backward rewriting via four plain processed-set scans when no backward index exists or one authoritative caller-owned indexed lookup across all processed sets when it does, backward subsumption, unit back-simplification, contextual simplify-reflect, C-ordered global-index deletion before movement, archive/dead-original handling, tmp-store requeueing, statistics, and opt-in proof-documentation quotes.
 - `proof_state_simplify_watchlist*` ports the watchlist-oriented rewrite-and-requeue path over the same archive/dead-original shape, including caller-owned watchlist indices and represented proof-documentation output.
 
 ### Change Later
 
 - The C `ClauseMoveSimplified` comment says it kills children and modifies the clause counter, but the checked body only archives/requeues the clause and sets `CPIsDead`. Rust mirrors the body; revisit child-link cleanup only when full clause-child ownership is represented.
 - The C helpers rely on live clause pointer identity while clauses remain inside intrusive sets. Rust currently uses owned clauses and stable identifiers around set extraction, archive, and tmp-store movement; switch to stable clause handles only if duplicate identifiers or archive/requeue aliases make pointer identity observable.
+- `RemoveRewritableClausesIndexed` couples duplicate suppression (`CPRWDetected`), source-set ownership (`handle->set`), and mutation through raw live clause pointers. Rust preserves the authoritative-index and reverse-stack movement behavior with index snapshots plus stable identifiers; a later proof-session owner should replace both the C flag protocol and Rust cross-set identifier lookup with explicit stable clause handles, and can add debug consistency checks without changing release search behavior.
 
 ### Porting Focus
 

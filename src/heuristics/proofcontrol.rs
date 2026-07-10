@@ -7978,6 +7978,13 @@ enum ProcessedSetSlot {
     NonUnits,
 }
 
+const PROCESSED_SET_SLOTS: [ProcessedSetSlot; 4] = [
+    ProcessedSetSlot::PosRules,
+    ProcessedSetSlot::PosEqns,
+    ProcessedSetSlot::NegUnits,
+    ProcessedSetSlot::NonUnits,
+];
+
 fn proof_state_demodulator_date(state: &ProofState, level: RewriteLevel) -> SysDate {
     let demodulators = [state.processed_pos_rules(), state.processed_pos_eqns()];
     clause_set_list_get_max_date(&demodulators, rewrite_level_set_count(level))
@@ -8018,35 +8025,61 @@ fn proof_state_eliminate_backward_rewritten_clauses<W: fmt::Write>(
         }
     }
 
-    let mut min_rw = false;
     let lambda_demod = control.heuristic_parms().lambda_demod;
-    for slot in [
-        ProcessedSetSlot::PosRules,
-        ProcessedSetSlot::PosEqns,
-        ProcessedSetSlot::NegUnits,
-        ProcessedSetSlot::NonUnits,
-    ] {
-        let (found, ids) = {
+    let indexed_rewritable = match indices.as_deref().and_then(|indices| indices.bw_rw_index()) {
+        Some(index) => {
             let ocb = control.ocb.as_mut().ok_or_else(|| {
                 Diagnostic::new(
                     ErrorCode::OTHER_ERROR,
                     "backward rewriting requires initialized proof-control ordering",
                 )
             })?;
-            let (terms, processed_sets) = state.terms_and_processed_sets_mut();
-            let set = processed_set_from_bundle(&processed_sets, slot);
-            rewritable_ids_in_set(terms, ocb, set, clause, *clause_date)?
-        };
-        min_rw = min_rw || found;
-        move_simplified_ids_from_slot(
+            Some(rewritable_ids_in_index(
+                state.terms_mut(),
+                ocb,
+                index,
+                clause,
+                *clause_date,
+            )?)
+        }
+        None => None,
+    };
+
+    let min_rw = if let Some((found, ids)) = indexed_rewritable {
+        move_simplified_ids_from_processed_sets(
             state,
-            slot,
             ids,
             indices.as_deref_mut(),
             lambda_demod,
             doc_context,
         )?;
-    }
+        found
+    } else {
+        let mut found_any = false;
+        for slot in PROCESSED_SET_SLOTS {
+            let (found, ids) = {
+                let ocb = control.ocb.as_mut().ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorCode::OTHER_ERROR,
+                        "backward rewriting requires initialized proof-control ordering",
+                    )
+                })?;
+                let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+                let set = processed_set_from_bundle(&processed_sets, slot);
+                rewritable_ids_in_set(terms, ocb, set, clause, *clause_date)?
+            };
+            found_any = found_any || found;
+            move_simplified_ids_from_slot(
+                state,
+                slot,
+                ids,
+                indices.as_deref_mut(),
+                lambda_demod,
+                doc_context,
+            )?;
+        }
+        found_any
+    };
 
     if control.heuristic_parms().detsort_bw_rw {
         proof_state_sort_tmp_store_by_struct_weight(state);
@@ -8067,6 +8100,20 @@ fn rewritable_ids_in_set(
     Ok((found, ids))
 }
 
+fn rewritable_ids_in_index(
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    index: &SubtermIndex<'_>,
+    clause: &Clause,
+    clause_date: SysDate,
+) -> Result<(bool, Vec<i64>), Diagnostic> {
+    let mut rewritable = Vec::new();
+    let found =
+        find_rewritable_clauses_indexed(terms, ocb, index, &mut rewritable, clause, clause_date)?;
+    let ids = rewritable.iter().map(|clause| clause.ident()).collect();
+    Ok((found != 0, ids))
+}
+
 fn rewritable_ids_in_watchlist(
     terms: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -8078,11 +8125,7 @@ fn rewritable_ids_in_watchlist(
     let Some(index) = bw_rw_index else {
         return rewritable_ids_in_set(terms, ocb, set, clause, clause_date);
     };
-    let mut rewritable = Vec::new();
-    let found =
-        find_rewritable_clauses_indexed(terms, ocb, index, &mut rewritable, clause, clause_date)?;
-    let ids = rewritable.iter().map(|clause| clause.ident()).collect();
-    Ok((found != 0, ids))
+    rewritable_ids_in_index(terms, ocb, index, clause, clause_date)
 }
 
 fn proof_state_eliminate_backward_subsumed_clauses<W: fmt::Write>(
@@ -8354,32 +8397,77 @@ fn move_simplified_ids_from_slot<W: fmt::Write>(
 ) -> Result<u64, Diagnostic> {
     let mut moved = 0;
     for id in ids.into_iter().rev() {
-        if let Some(indices) = indices.as_deref_mut() {
-            proof_state_delete_global_indexed_clause_by_id_from_slot(
-                state,
-                slot,
-                id,
-                indices,
-                lambda_demod,
-            );
-        }
-        let Some(mut clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
-            continue;
-        };
-        if let Some((output, session)) = doc_context.as_mut() {
-            session.doc_clause_quote(
-                &mut **output,
-                state.terms(),
-                6,
-                &mut clause,
-                Some("simplifiable"),
-                None,
-            )?;
-        }
-        proof_state_move_simplified_clause_to_tmp(state, clause)?;
-        moved += 1;
+        moved += move_simplified_id_from_slot(
+            state,
+            slot,
+            id,
+            indices.as_deref_mut(),
+            lambda_demod,
+            doc_context,
+        )?;
     }
     Ok(moved)
+}
+
+fn move_simplified_ids_from_processed_sets<W: fmt::Write>(
+    state: &mut ProofState,
+    ids: Vec<i64>,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<u64, Diagnostic> {
+    let mut moved = 0;
+    for id in ids.into_iter().rev() {
+        let slot = PROCESSED_SET_SLOTS
+            .into_iter()
+            .find(|slot| processed_set_by_slot(state, *slot).find_by_id(id).is_some());
+        let Some(slot) = slot else {
+            continue;
+        };
+        moved += move_simplified_id_from_slot(
+            state,
+            slot,
+            id,
+            indices.as_deref_mut(),
+            lambda_demod,
+            doc_context,
+        )?;
+    }
+    Ok(moved)
+}
+
+fn move_simplified_id_from_slot<W: fmt::Write>(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    id: i64,
+    indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<u64, Diagnostic> {
+    if let Some(indices) = indices {
+        proof_state_delete_global_indexed_clause_by_id_from_slot(
+            state,
+            slot,
+            id,
+            indices,
+            lambda_demod,
+        );
+    }
+    let Some(mut clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
+        return Ok(0);
+    };
+    if let Some((output, session)) = doc_context.as_mut() {
+        session.doc_clause_quote(
+            &mut **output,
+            state.terms(),
+            6,
+            &mut clause,
+            Some("simplifiable"),
+            None,
+        )?;
+    }
+    proof_state_move_simplified_clause_to_tmp(state, clause)?;
+    Ok(1)
 }
 
 fn proof_state_move_simplified_clause_to_tmp(
@@ -9188,7 +9276,8 @@ mod tests {
         preinstantiate_induction, proof_control_alloc,
         proof_control_clause_set_filter_reweigth_with_bank,
         proof_control_clause_set_reweight_with_bank, proof_control_init,
-        proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_check_ac_status,
+        proof_control_init_heuristics, proof_control_reset_sat_solver,
+        proof_state_backward_simplify_with_global_indices, proof_state_check_ac_status,
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
         proof_state_check_watchlist_with_global_indices, proof_state_check_watchlist_with_output,
         proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
@@ -16240,6 +16329,110 @@ mod tests {
         );
         let archived = state.archive().find_by_id(4_132).unwrap();
         assert!(archived.query_prop(CP_IS_DEAD));
+    }
+
+    #[test]
+    fn backward_simplification_uses_global_rewrite_index_across_processed_sets() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (
+            demodulator,
+            mut pos_rule,
+            mut pos_eqn,
+            mut neg_unit,
+            mut non_unit,
+            sentinel,
+            compound,
+        ) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_back_index_target");
+            let replacement = typed_const(terms, "pc_back_index_replacement");
+            let compound = typed_unary(terms, "pc_back_index_f", &target);
+            let mut demod_lit = literal(terms, &compound, &replacement, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_170);
+            demodulator.set_weight(demodulator.standard_weight());
+
+            let make_candidate = |terms: &mut TermBank, suffix: &str, ident: i64| {
+                let right = typed_const(terms, &format!("pc_back_index_{suffix}"));
+                let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                    terms, &compound, &right, true,
+                )]));
+                clause.set_ident(ident);
+                clause.set_prop(CP_IS_PROCESSED | CP_LIMITED_RW);
+                clause.set_weight(clause.standard_weight());
+                clause
+            };
+
+            (
+                demodulator,
+                make_candidate(terms, "pos_rule", 4_171),
+                make_candidate(terms, "pos_eqn", 4_172),
+                make_candidate(terms, "neg_unit", 4_173),
+                make_candidate(terms, "non_unit", 4_174),
+                make_candidate(terms, "unindexed", 4_175),
+                compound,
+            )
+        };
+        assert!(demodulator.is_demodulator());
+
+        let signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &signature,
+            "FP1",
+            "NoIndex",
+            "NoIndex",
+            -1,
+            ProblemType::FirstOrder,
+        );
+        indices.insert_clause(&mut pos_rule, state.terms(), false);
+        indices.insert_clause(&mut pos_eqn, state.terms(), false);
+        indices.insert_clause(&mut neg_unit, state.terms(), false);
+        indices.insert_clause(&mut non_unit, state.terms(), false);
+        state.processed_pos_rules_mut().insert(pos_rule);
+        state.processed_pos_eqns_mut().insert(pos_eqn);
+        state.processed_neg_units_mut().insert(neg_unit);
+        state.processed_non_units_mut().insert(non_unit);
+        state.processed_non_units_mut().insert(sentinel);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut clause_date = SysDate::from_raw(12);
+        let outcome = proof_state_backward_simplify_with_global_indices(
+            &mut state,
+            &mut control,
+            &demodulator,
+            &mut clause_date,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(clause_date, SysDate::from_raw(13));
+        assert_eq!(
+            outcome,
+            BackwardSimplificationOutcome {
+                rewritten: 4,
+                rewritten_literals: 4,
+                subsumed: 0,
+                unit_simplified: 0,
+                context_sr: 0,
+                tmp_store_marked: 4,
+                min_rw_detected: true,
+            }
+        );
+        assert!(state.processed_pos_rules().is_empty());
+        assert!(state.processed_pos_eqns().is_empty());
+        assert!(state.processed_neg_units().is_empty());
+        assert_eq!(state.processed_non_units().members(), 1);
+        assert!(state.processed_non_units().find_by_id(4_175).is_some());
+        assert_eq!(state.tmp_store().members(), 4);
+        assert_eq!(state.archive().members(), 4);
+        for ident in 4_171..=4_174 {
+            let archived = state.archive().find_by_id(ident).unwrap();
+            assert!(archived.query_prop(CP_IS_DEAD));
+            assert!(!archived.query_prop(CP_IS_GLOBAL_INDEXED));
+        }
+        assert!(indices.find_bw_rw_occurrence(&compound).is_none());
     }
 
     #[test]
