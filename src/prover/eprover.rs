@@ -7925,6 +7925,7 @@ fn write_proof_object_list_graph(
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
     let items = proof_object_list_display_items(graph);
+    write_proof_object_type_declarations(output, bank, &items, proof_problem_type)?;
     let formula_ids = items
         .iter()
         .filter_map(|item| match item {
@@ -7965,6 +7966,41 @@ fn write_proof_object_list_graph(
         }
     }
     Ok(())
+}
+
+fn write_proof_object_type_declarations(
+    output: &mut impl Write,
+    bank: &TermBank,
+    items: &[ProofObjectListDisplayItem],
+    proof_problem_type: ProblemType,
+) -> io::Result<()> {
+    if !bank.signature().typed_symbols() {
+        return Ok(());
+    }
+
+    let mut symbols = BTreeSet::new();
+    for item in items {
+        let mut item_symbols = Vec::new();
+        match item {
+            ProofObjectListDisplayItem::Clause { clause, .. } => {
+                clause.return_fcodes(&mut item_symbols);
+            }
+            ProofObjectListDisplayItem::Formula(formula) => {
+                formula.return_f_codes(&mut item_symbols);
+            }
+        }
+        symbols.extend(item_symbols);
+    }
+
+    let mut types = Vec::new();
+    bank.signature().fcodes_collect_types(&symbols, &mut types);
+    bank.signature().type_bank().print_selected_sort_defs(
+        output,
+        types.iter(),
+        proof_problem_type,
+    )?;
+    bank.signature()
+        .print_type_decls_tstp_selective(output, &symbols, proof_problem_type)
 }
 
 #[derive(Debug)]
@@ -15465,7 +15501,7 @@ mod tests {
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{RewriteLevel, Term};
     use crate::test_support::global_state_lock;
@@ -30082,8 +30118,40 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     #[test]
     fn proof_object_list_graph_uses_higher_order_tstp_wrappers() {
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
-        let mut formula =
-            WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "list_output_thf_formula"));
+        bank.signature_mut().set_typed_symbols(true);
+        let sort_code = bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("proof_sort")
+            .unwrap();
+        let sort = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(sort_code));
+        let function_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![sort.clone(), sort.clone()]));
+        let function_code = bank
+            .signature_mut()
+            .insert_id("list_output_thf_f", 1, false);
+        bank.signature_mut()
+            .declare_final_type(function_code, function_type)
+            .unwrap();
+        let argument_code = bank
+            .signature_mut()
+            .insert_id("list_output_thf_a", 0, false);
+        bank.signature_mut()
+            .declare_final_type(argument_code, sort.clone())
+            .unwrap();
+        let argument = bank.create_const_term(argument_code).unwrap();
+        let application = Term::top_alloc(function_code, 1);
+        application.set_type(Some(sort));
+        application.set_argument(0, argument);
+        let application = bank.term_top_insert(application).unwrap();
+        let equality_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_term(&mut bank, equality_code, &application, &application);
+        let mut formula = WrappedFormula::wt_formula_alloc(equality);
         formula.set_tptp_type(CP_TYPE_CONJECTURE);
         let formula_ref = FormulaDerivationRef::new(formula.ident());
         let mut clause = Clause::empty();
@@ -30119,7 +30187,25 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(output).unwrap();
         assert!(
-            printed.contains("thf(c_0_0, conjecture, list_output_thf_formula"),
+            printed.contains("thf(decl_sort1, type, proof_sort: $tType)."),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(&format!(
+                "thf(decl_{function_code}, type, list_output_thf_f: proof_sort > proof_sort)."
+            )),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(&format!(
+                "thf(decl_{argument_code}, type, list_output_thf_a: proof_sort)."
+            )),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "thf(c_0_0, conjecture, ((list_output_thf_f @ list_output_thf_a)=(list_output_thf_f @ list_output_thf_a))"
+            ),
             "{printed}"
         );
         assert!(

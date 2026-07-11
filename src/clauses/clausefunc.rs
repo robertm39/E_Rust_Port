@@ -17,8 +17,8 @@ use crate::clauses::derivation::{
     DC_NORMALIZE, DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
 use crate::clauses::eqn::{
-    eqn_fof_parse, eqn_write_app_encode, eqn_write_app_encode_with_type_suffixes, eqn_write_fof,
-    Eqn, EqnFofPrintOptions,
+    eqn_fof_parse, eqn_write_app_encode, eqn_write_app_encode_with_type_suffixes,
+    eqn_write_fof_for_problem, Eqn, EqnFofPrintOptions,
 };
 use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
@@ -3049,12 +3049,13 @@ pub fn tformula_write_tptp(
             bank,
             true,
         )?;
-        return eqn_write_fof(
+        return eqn_write_fof_for_problem(
             output,
             bank,
             &literal,
             form.f_code() == bank.signature().neqn_code(),
             full_terms,
+            options.problem_type,
             options.eqn_options,
         )
         .map_err(tformula_write_error);
@@ -9807,7 +9808,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(first_order, "![X1, X2]:(X1=print_quant_a)");
-        assert_eq!(higher_order, "![X1:$i, X2:$i]:(X1=print_quant_a)");
+        assert_eq!(higher_order, "![X1:$i, X2:$i]:(((X1)=(print_quant_a)))");
     }
 
     #[test]

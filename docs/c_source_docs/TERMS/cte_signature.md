@@ -249,7 +249,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for selective proof-type collection on 2026-07-11.
 
 Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 
@@ -278,6 +278,7 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 - The C-compatible signature side-channel printer intentionally models a debug-output leak. Keep it isolated to executable compatibility paths; cleaned library diagnostics should continue writing complete records to the requested writer.
 - `SigGetTypedApp` stores its synthetic three-component application type directly on the signature symbol without interning that outer arrow in the type bank. This unusual ownership is observable because `TypeBankAppEncodeTypes` therefore omits the synthetic symbol type while `SigPrintAppEncodedDecls` still prints its shared component types. Rust preserves that split with an unshared outer type; a later typed-application API could intern all types and explicitly filter synthetic declarations instead of relying on type-bank absence.
 - `SigInterpreteNumbers` expands to `sig->null_code`, but the checked `SigCell` has no `null_code` field, no C caller uses the macro, and `eprover/DOC/NEWS` records removal of the old `--interprete-numbers` dead code. Treat this as stale header surface rather than adding a Rust placeholder unless future reference builds restore the option.
+- `SigFCodesCollectTypes` exposes its result as a `PTree` keyed by raw `Type_p` addresses. The set semantics are useful, but downstream traversal order is allocator-dependent; a future C API should return a structural or stable-ID-keyed set and let each output boundary choose an explicit deterministic order.
 
 ### Porting Focus
 

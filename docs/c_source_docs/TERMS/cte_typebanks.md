@@ -119,7 +119,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for selective sort-declaration ordering on 2026-07-11.
 
 Source files reviewed: `TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`.
 
@@ -139,6 +139,7 @@ Source files reviewed: `TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`.
 
 - `TypeBankAppEncodeTypes` prints its `%-- ...` type comments through `TypePrintTSTP`, so higher-order arrow formatting depends on the process-global `problemType` rather than on the type bank itself. Rust keeps app-encode type comments explicit by threading the parsed problem type into the renderer; a future type-printing API should continue to carry the dialect directly instead of reintroducing hidden global state.
 - `hash_type` mixes raw component-type pointer addresses into type-bank bucket selection, and `TypeBankAppEncodeTypes` numbers declarations while traversing those buckets. Consequently, separate C processes can print the same type UIDs in different declaration orders and assign different `typedeclN` labels, as observed between file and stdin Socrates reference runs. Rust uses stable type-UID order, and the comparison harness canonicalizes this block; a future C implementation should use structural or UID-based hashing plus deterministic output ordering.
+- `TypeBankPrintSelectedSortDefs` traverses a pointer-keyed `PTree`, so user-sort declaration order and the assigned `decl_sortN` identifiers depend on raw allocation addresses. Rust orders selected user sorts by their stable type-constructor codes, which matches the reference declaration order without copying allocator accidents; C should make this ordering deterministic before compatibility constraints are relaxed.
 
 ### Porting Focus
 

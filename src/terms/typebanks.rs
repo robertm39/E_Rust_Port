@@ -322,14 +322,17 @@ impl TypeBank {
         } else {
             "tff"
         };
+        let mut selected_sorts: Vec<_> = selector
+            .into_iter()
+            .filter(|type_| type_.arity() == 0 && self.type_is_user_defined(type_))
+            .collect();
+        selected_sorts.sort_by_key(|type_| type_.f_code());
         let mut count = 0;
-        for type_ in selector {
-            if type_.arity() == 0 && self.type_is_user_defined(type_) {
-                count += 1;
-                write!(output, "{tag}(decl_sort{count}, type, ")?;
-                self.print_tstp(output, type_, problem_type)?;
-                output.write_all(b": $tType).\n")?;
-            }
+        for type_ in selected_sorts {
+            count += 1;
+            write!(output, "{tag}(decl_sort{count}, type, ")?;
+            self.print_tstp(output, type_, problem_type)?;
+            output.write_all(b": $tType).\n")?;
         }
         Ok(count)
     }
@@ -840,7 +843,7 @@ mod tests {
             alloc_simple_sort(ST_BOOL),
         ]));
         let built_in = bank.i_type();
-        let selected = [built_in, arrow, person, animal];
+        let selected = [built_in, arrow, animal, person];
 
         let mut output = Vec::new();
         let count = bank

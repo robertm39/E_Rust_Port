@@ -176,7 +176,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for formula-copy proof identity and ordered proof renumbering on 2026-07-09.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for formula-copy proof identity, ordered proof renumbering, and typed proof declarations on 2026-07-11.
 
 Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 
@@ -218,6 +218,7 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - `DerivStackExtractParents` pushes `DCACRes` AC axiom parents into the result stack but does not add them to its returned count. Rust preserves that split as a direct-parent count plus appended AC parents; callers should not treat the count as the result length.
 - `DerivStackCountSearchInferences` uses exact opcode cases rather than `DCOpIsGenerating`, so HO-marked variants and some generating-range operations such as `DCDisEqDecompose` are not counted there. Rust preserves the switch behavior until proof-analysis reference tests decide whether the C accounting is intentional.
 - `DerivationPrintConditional` uses the process-global `DocOutputFormat`, compile-time `COMCHAR`, and an ordered derivation graph to render proof objects. Rust currently emits the supported executable's proof-object list framing/final proof-success step plus represented mixed clause/formula list and DOT output, including C-shaped PCL/TSTP derivation/source-info payloads, final/proof root markers only for list roots, proof-found extraction-root stack selection with represented `--full-deriv` additions, stopped ancestor expansion, shared display-only sequential ids, root-backward topological display ordering with C's separate axiom-stack reversal and direct parent stack-pop order, detailed TSTP graph labels for graph levels above 1, and child-coloured graph edges. It also has limited clause-side ancestor/statistics traversals for proof-object GC/training/`--proof-statistics` that walk compact parent references, signature AC axiom parents, and demodulator handles, collapse only literal-identical dummy CNF quotes, preserve mutated quote nodes as derived clauses, prefer selected archive copies for proof-step parents, prefer original quote sources for `DCCnfQuote` parents, and remap represented demodulator handles to display ids for proof-object list output. Full parity still needs stable pointer-like derivation identity, reference-verified C root/sibling ordering over mixed clause/formula nodes, exact C renumbering, formula-owner traversal, and ordered PCL/TSTP derived-step printers beyond the represented root subset.
+- When `sig->typed_symbols` is set, `DerivationPrintConditional` rescans the ordered derivation for function codes, expands their complete type closure, and prints sort and symbol declarations immediately before the proof. Rust preserves that output boundary over its display graph. A cleaned proof API should attach the required declaration closure to the extracted proof object, avoiding render-time graph traversal and the hidden signature flag while preserving declaration identifiers and order.
 
 ### Porting Focus
 

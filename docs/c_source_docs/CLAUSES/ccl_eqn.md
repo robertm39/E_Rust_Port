@@ -311,7 +311,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order equation subsumption and unification on 2026-07-10.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order equation subsumption, unification, and proof rendering on 2026-07-11.
 
 Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 
@@ -350,6 +350,7 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - `EqnMap`'s left-side-only orientation/maximality invalidation can leave metadata untouched after a right-side-only rewrite. Keep this while matching C traces; after drop-in compatibility is stable, consider making any side replacement clear ordering metadata or splitting literal side mutation from truth/polarity normalization.
 - C equations carry their owner bank implicitly, so `EqnOrient`, `EqnCompare`, and `LiteralCompare` can reach owner-bank normalization through `TOCompare` without changing signatures. Rust currently keeps explicit immutable-bank and mutable-bank comparison variants; collapse that split only after term-owner metadata or proof-state ownership can provide the C context without hidden global coupling.
 - The same implicit owner-bank coupling applies to equation subsumption and unification: apparently read-only matching/unifiability checks can eta-normalize and construct shared higher-order bindings. A cleaned C interface should make that mutable context explicit rather than depending on `TermGetBank` below the equation API.
+- `EqnFOFPrint` obtains higher-order term syntax indirectly through the process-global `problemType`, while its explicit arguments cover only dereferencing and literal formatting. Rust threads `ProblemType` into proof-formula equation rendering; a cleaned C printer should make the output dialect and problem type explicit in one options value instead of combining arguments with hidden global state.
 
 ### Porting Focus
 

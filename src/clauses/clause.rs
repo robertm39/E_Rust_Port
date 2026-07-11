@@ -14,8 +14,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausepos::RewriteSequenceEntry;
 use crate::clauses::eqn::{
-    eqn_tstp_string, eqn_write, eqn_write_debug, eqn_write_fof, Eqn, EqnFofPrintOptions,
-    EqnPrintOptions,
+    eqn_tstp_string, eqn_write, eqn_write_debug, eqn_write_fof_for_problem, Eqn,
+    EqnFofPrintOptions, EqnPrintOptions,
 };
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_PSEUDO_LIT,
@@ -2203,6 +2203,7 @@ fn clause_write_tstp_formula_closure_with_type_suffixes(
             bank,
             clause,
             full_terms,
+            problem_type,
             print_types,
         );
     }
@@ -2227,6 +2228,7 @@ fn clause_write_tstp_formula_closure_with_type_suffixes(
         bank,
         clause,
         full_terms,
+        problem_type,
         print_types,
     )?;
     output.write_char(')')
@@ -2237,6 +2239,7 @@ fn clause_write_tstp_formula_body_with_type_suffixes(
     bank: &TermBank,
     clause: &Clause,
     full_terms: bool,
+    problem_type: ProblemType,
     print_types: bool,
 ) -> fmt::Result {
     let literals = clause.literals().as_slice();
@@ -2249,7 +2252,15 @@ fn clause_write_tstp_formula_body_with_type_suffixes(
         if index != 0 {
             output.write_char('|')?;
         }
-        eqn_write_fof(output, bank, literal, false, full_terms, options)?;
+        eqn_write_fof_for_problem(
+            output,
+            bank,
+            literal,
+            false,
+            full_terms,
+            problem_type,
+            options,
+        )?;
     }
 
     if literals.len() > 1 {
@@ -2870,7 +2881,7 @@ mod tests {
 
         assert_eq!(
             clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
-            "thf(c_5_77, negated_conjecture, (tstp_a=tstp_b|tstp_b!=tstp_a))."
+            "thf(c_5_77, negated_conjecture, (((tstp_a)=(tstp_b))|((tstp_b)!=(tstp_a))))."
         );
     }
 
@@ -2922,7 +2933,7 @@ mod tests {
 
         assert_eq!(
             clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
-            "thf(c_2_13, axiom, ![X1:$i, X2:person]:((typed_p(X1)|typed_q(X2))))."
+            "thf(c_2_13, axiom, ![X1:$i, X2:person]:(((typed_p @ X1)|(typed_q @ X2))))."
         );
     }
 

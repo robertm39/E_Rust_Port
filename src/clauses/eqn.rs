@@ -2940,6 +2940,35 @@ pub fn eqn_write_fof(
     full_terms: bool,
     fof_options: EqnFofPrintOptions,
 ) -> fmt::Result {
+    eqn_write_fof_for_problem(
+        output,
+        bank,
+        eqn,
+        negated,
+        full_terms,
+        ProblemType::FirstOrder,
+        fof_options,
+    )
+}
+
+/// Writes the C `EqnFOFPrint` shape with explicit problem-type dispatch.
+///
+/// C's `TBPrintTerm` and `PRINT_HO_PAREN` read the process-global problem
+/// type. This variant keeps that dependency explicit for formula proof output.
+///
+/// # Panics
+///
+/// Panics when `fof_options.output_format` is [`IoFormat::Auto`], matching the
+/// existing C-shaped FOF writer's requirement for a resolved output format.
+pub fn eqn_write_fof_for_problem(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    full_terms: bool,
+    problem_type: ProblemType,
+    fof_options: EqnFofPrintOptions,
+) -> fmt::Result {
     let positive = eqn.is_positive() ^ negated;
     let infix = match fof_options.output_format {
         IoFormat::Tptp => false,
@@ -2949,7 +2978,8 @@ pub fn eqn_write_fof(
     };
     let options = EqnPrintOptions {
         output_format: fof_options.output_format,
-        higher_order_parentheses: fof_options.higher_order_parentheses,
+        higher_order_parentheses: fof_options.higher_order_parentheses
+            || problem_type == ProblemType::HigherOrder,
         print_types: fof_options.print_types,
         ..EqnPrintOptions::default()
     };
@@ -2958,10 +2988,12 @@ pub fn eqn_write_fof(
         if eqn.is_equ_lit(bank) {
             write_ho_paren(output, '(', options)?;
             write_ho_paren(output, '(', options)?;
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.left(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )?;
             write_ho_paren(output, ')', options)?;
@@ -2970,10 +3002,12 @@ pub fn eqn_write_fof(
             }
             output.write_char('=')?;
             write_ho_paren(output, '(', options)?;
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.right(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )?;
             write_ho_paren(output, ')', options)?;
@@ -2983,10 +3017,12 @@ pub fn eqn_write_fof(
                 output.write_char('~')?;
             }
             write_ho_paren(output, '(', options)?;
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.left(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )?;
             write_ho_paren(output, ')', options)
@@ -2997,28 +3033,49 @@ pub fn eqn_write_fof(
         }
         if eqn.is_equ_lit(bank) {
             write!(output, "{EQUAL_PREDICATE}(")?;
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.left(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )?;
             output.write_str(", ")?;
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.right(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )?;
             output.write_char(')')
         } else {
-            bank.write_term_with_type_suffixes(
+            write_fof_term_for_problem(
                 output,
+                bank,
                 eqn.left(),
                 full_terms,
+                problem_type,
                 fof_options.print_types,
             )
         }
+    }
+}
+
+fn write_fof_term_for_problem(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    term: &Term,
+    full_terms: bool,
+    problem_type: ProblemType,
+    print_types: bool,
+) -> fmt::Result {
+    if full_terms && problem_type == ProblemType::HigherOrder && !print_types {
+        bank.write_term_deref_for_problem(output, term, problem_type, DerefType::Never)
+    } else {
+        bank.write_term_with_type_suffixes(output, term, full_terms, print_types)
     }
 }
 
