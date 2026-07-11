@@ -5600,10 +5600,16 @@ pub fn tformula_collect_clause(
     }
 
     let literals = literal_stack.into_iter().rev().collect();
-    let mut clause = Clause::alloc(EqnList::from_vec(literals));
+    let mut literals = EqnList::from_vec(literals);
     if let Some(fresh_vars) = fresh_vars {
-        clause.normalize_vars(bank, fresh_vars)?;
+        let mut subst = Substitution::new();
+        fresh_vars.reset_v_counts();
+        let _ = literals.subst_norm(&mut subst, fresh_vars);
+        let copied = literals.copy_to_bank(bank);
+        subst.delete();
+        literals = copied?;
     }
+    let mut clause = Clause::alloc(literals);
     clause.set_weight(clause.standard_weight());
     Ok(clause)
 }
@@ -9865,6 +9871,33 @@ mod tests {
         assert_ne!(literal.left(), &x);
         assert_eq!(literal.right(), &a);
         assert!(literal.is_positive());
+    }
+
+    #[test]
+    fn tformula_collect_clause_normalizes_before_polarity_partition() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -210);
+        let y = typed_var(&bank, -212);
+        let a = typed_const(&mut bank, "collect_order_a");
+        let b = typed_const(&mut bank, "collect_order_b");
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let negative = bool_binary_with_code(&mut bank, neqn_code, &x, &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let positive = bool_binary_with_code(&mut bank, eqn_code, &y, &b);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &negative, &positive);
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let clause = tformula_collect_clause(&mut bank, &formula, Some(&fresh_vars)).unwrap();
+
+        let literals = clause.literals().as_slice();
+        assert_eq!(literals.len(), 2);
+        assert!(literals[0].is_positive());
+        assert_eq!(literals[0].left().f_code(), -4);
+        assert!(!literals[1].is_positive());
+        assert_eq!(literals[1].left().f_code(), -2);
+        assert!(x.binding().is_none());
+        assert!(y.binding().is_none());
     }
 
     #[test]
