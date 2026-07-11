@@ -249,6 +249,16 @@ impl EqnFofPrintOptions {
     }
 
     #[must_use]
+    pub const fn pcl() -> Self {
+        Self {
+            output_format: IoFormat::Lop,
+            pcl: true,
+            higher_order_parentheses: false,
+            print_types: false,
+        }
+    }
+
+    #[must_use]
     pub const fn tstp() -> Self {
         Self {
             output_format: IoFormat::Tstp,

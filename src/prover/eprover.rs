@@ -32,9 +32,10 @@ use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::bce::eliminate_blocked_clauses_with_output;
 use crate::clauses::clause::{
-    clause_parse, clause_parse_with_options, clause_pcl_string,
-    clause_print_lop_format_string_with_options, clause_print_tptp_format_string_with_options,
-    clause_starts_maybe, clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
+    clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
+    clause_print_tptp_format_string_with_options, clause_starts_maybe,
+    clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
+    ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
@@ -68,9 +69,8 @@ use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{
-    pcl_formula_print_start, pcl_print_end, pcl_print_start, ClauseCreationInference,
-    ClauseCreationParents, PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat,
-    ProofDocSession,
+    pcl_print_end, pcl_print_start, pcl_type_str, ClauseCreationInference, ClauseCreationParents,
+    PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
 use crate::clauses::picosat::PicoSat;
 use crate::clauses::pred_elim::{
@@ -7643,6 +7643,41 @@ fn write_pcl_doc_step_start(
     )
 }
 
+fn write_derived_pcl_clause_start(
+    output: &mut String,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+) -> fmt::Result {
+    write!(
+        output,
+        "{:6} : {} : ",
+        clause.ident(),
+        pcl_type_str(clause.query_tptp_type())
+    )?;
+    clause_write_pcl_with_options(
+        output,
+        bank,
+        clause,
+        config.pcl_output.full_terms,
+        EqnPrintOptions::tptp().with_print_types(config.encoding.print_types),
+    )?;
+    output.write_str(" : ")
+}
+
+fn write_derived_pcl_formula_start(
+    output: &mut String,
+    formula: &WrappedFormula,
+    body: &str,
+) -> fmt::Result {
+    write!(
+        output,
+        "{:6} : {} : {body} : ",
+        formula.ident(),
+        pcl_type_str(formula.query_tptp_type())
+    )
+}
+
 const fn pcl_step_print_options(config: &EProverConfig) -> PclStepPrintOptions {
     PclStepPrintOptions {
         full_terms: config.pcl_output.full_terms,
@@ -8669,7 +8704,7 @@ fn write_saturation_proof_object_clause_with_formula_ids(
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
         DocOutputFormat::Pcl => {
-            write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
+            write_derived_pcl_clause_start(&mut rendered, config, bank, clause)
                 .map_err(proof_doc_write_error)?;
             if let Some(derivation) =
                 deriv_stack_pcl_string_with_ac_axioms(clause.derivation(), ac_axioms)
@@ -8739,20 +8774,9 @@ fn write_saturation_proof_object_formula_with_formula_ids(
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
         DocOutputFormat::Pcl => {
-            let body = if formula.is_clause() {
-                let clause = formula.form_clause_to_clause(bank)?;
-                clause_pcl_string(bank, &clause, true)
-            } else {
-                formula.proof_doc_formula_body_string(bank, true, proof_problem_type)?
-            };
-            pcl_formula_print_start(
-                &mut rendered,
-                formula.ident(),
-                formula.query_tptp_type(),
-                Some(&body),
-                pcl_step_print_options(config),
-            )
-            .map_err(proof_doc_write_error)?;
+            let body = formula.derived_pcl_formula_body_string(bank, proof_problem_type)?;
+            write_derived_pcl_formula_start(&mut rendered, formula, &body)
+                .map_err(proof_doc_write_error)?;
             if let Some(derivation) =
                 deriv_stack_pcl_string_with_ac_axioms(formula.derivation(), ac_axioms)
             {
@@ -28984,11 +29008,11 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("     0 : :[--equal(a, a)] : initial(\""));
+        assert!(printed.contains("     0 :  : ~equal(a, a) : initial(\""));
         assert!(printed.contains("proof-object-success-pcl"));
-        assert!(printed.contains("     1 : :[--equal(a, a)] : fof_simplification(0)\n"));
-        assert!(printed.contains("     2 : :[--equal(a, a)] : 1\n"));
-        assert!(printed.contains("     3 : :[] : cn(2) : 'proof'\n"));
+        assert!(printed.contains("     1 :  : ~equal(a, a) : fof_simplification(0)\n"));
+        assert!(printed.contains("     2 :  : [--equal(a, a)] : 1\n"));
+        assert!(printed.contains("     3 :  : [] : cn(2) : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -29172,11 +29196,11 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains("cnf(c_0_0, axiom, ($false), file('"));
         assert!(printed.contains("proof-object-success-tstp"));
         assert!(printed.contains(
-            "cnf(c_0_1, axiom, ($false), inference(fof_simplification,[status(thm)],[c_0_0])).\n"
+            "cnf(c_0_1, plain, ($false), inference(fof_simplification,[status(thm)],[c_0_0])).\n"
         ));
-        assert!(printed.contains("cnf(c_0_2, axiom, ($false), c_0_1).\n"));
+        assert!(printed.contains("cnf(c_0_2, plain, ($false), c_0_1).\n"));
         assert!(printed.contains(
-            "cnf(c_0_3, axiom, ($false), inference(cn,[status(thm)],[c_0_2]), ['proof']).\n"
+            "cnf(c_0_3, plain, ($false), inference(cn,[status(thm)],[c_0_2]), ['proof']).\n"
         ));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
@@ -29296,19 +29320,19 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(printed.contains("% SZS status Theorem\n"), "{printed}");
         assert!(
             printed.contains(
-                "cnf(c_0_27, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_22, c_0_23])]))."
+                "cnf(c_0_24, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_18, c_0_19])]))."
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "cnf(c_0_33, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_27, c_0_28]), c_0_29]), c_0_29]), c_0_30, c_0_31, c_0_29]))."
+                "cnf(c_0_30, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_24, c_0_25]), c_0_26]), c_0_26]), c_0_27, c_0_28, c_0_26]))."
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "cnf(c_0_36, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_35]), ['proof'])."
+                "cnf(c_0_33, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_32]), ['proof'])."
             ),
             "{printed}"
         );
@@ -30052,9 +30076,42 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             .find("list_output_formula")
             .unwrap_or_else(|| panic!("missing formula PCL node in:\n{printed}"));
         let clause_position = printed
-            .find("     1 : :[] : 0 : 'proof'")
+            .find("     1 :  : [] : 0 : 'proof'")
             .unwrap_or_else(|| panic!("missing remapped clause PCL node in:\n{printed}"));
         assert!(formula_position < clause_position, "{printed}");
+    }
+
+    #[test]
+    fn proof_object_list_graph_prints_clause_backed_formula_as_raw_pcl_formula() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let clause = parse_lop_test_clause(&mut bank, "derived_pcl_a=derived_pcl_b.", 17);
+        let formula =
+            WrappedFormula::form_clause_alloc(&mut bank, clause, ProblemType::FirstOrder).unwrap();
+        let graph = ProofObjectGraph {
+            clauses: Vec::new(),
+            formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: Vec::new(),
+            root_indices: Vec::new(),
+            formula_root_indices: vec![0],
+        };
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Pcl,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_list_graph(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains("     0 :  : equal(derived_pcl_a, derived_pcl_b) : "),
+            "{printed}"
+        );
+        assert!(!printed.contains("[++equal("), "{printed}");
     }
 
     #[test]
@@ -31359,7 +31416,11 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(stdout, stderr, &["i_0_", "plain", "a!=b", "a!=c", "b!=c"]);
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["i_0_", "plain", "(a)!=(b)", "(a)!=(c)", "(b)!=(c)"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -31419,7 +31480,8 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.contains("thf(thf_embedded, axiom, (p(a)|(a!=b&(a!=c&b!=c))))"));
+        assert!(printed
+            .contains("thf(thf_embedded, axiom, ((p @ a)|(((a)!=(b))&(((a)!=(c))&((b)!=(c))))))"));
         assert!(!printed.contains("$distinct"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&higher_order).unwrap();
@@ -32031,7 +32093,11 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(stdout, stderr, &["thf(lambda_arg, axiom, p($named_lam"]);
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["thf(lambda_arg, axiom, (p @ (^[X1:person]:(X1))))"],
+        );
         std::fs::remove_file(&path).unwrap();
     }
 

@@ -2178,6 +2178,27 @@ impl WrappedFormula {
         }
     }
 
+    /// Renders the raw formula body used by C `DerivedPCLPrint`.
+    ///
+    /// Unlike formula proof documentation, this does not close clause-backed
+    /// formulas and uses PCL's prefix equality syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if formula rendering fails.
+    pub fn derived_pcl_formula_body_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        tformula_tptp_string(
+            bank,
+            self.formula(),
+            true,
+            TFormulaTptpPrintOptions::pcl(problem_type),
+        )
+    }
+
     fn proof_doc_renderings(
         &self,
         bank: &mut TermBank,

@@ -2126,7 +2126,7 @@ mod tests {
         assert!(stderr.is_empty());
         let rendered = String::from_utf8(stdout).expect("utf8");
         assert!(rendered.contains("thf(let_fact, axiom, "));
-        assert!(rendered.contains("$let("));
+        assert!(rendered.contains("$let @"));
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);

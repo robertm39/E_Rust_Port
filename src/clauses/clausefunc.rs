@@ -272,6 +272,11 @@ impl TFormulaTptpPrintOptions {
     }
 
     #[must_use]
+    pub const fn pcl(problem_type: ProblemType) -> Self {
+        Self::new(problem_type, EqnFofPrintOptions::pcl())
+    }
+
+    #[must_use]
     pub const fn tstp(problem_type: ProblemType) -> Self {
         Self::new(problem_type, EqnFofPrintOptions::tstp())
     }
