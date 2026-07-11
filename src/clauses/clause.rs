@@ -3,6 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
+use crate::basics::ptrees::PTree;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
@@ -31,10 +32,12 @@ use crate::terms::signature::Signature;
 use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_OP_FLAG};
+use crate::terms::termtypes::{
+    term_identity_id, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_OP_FLAG,
+};
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering as AtomicOrdering};
@@ -2192,10 +2195,7 @@ fn clause_write_tstp_formula_closure_with_type_suffixes(
     problem_type: ProblemType,
     print_types: bool,
 ) -> fmt::Result {
-    let mut variables = BTreeMap::new();
-    let _ = clause.collect_variables(&mut variables);
-    let mut variables: Vec<_> = variables.into_values().collect();
-    variables.sort_by_key(|variable| Reverse(variable.f_code()));
+    let variables = clause_formula_variable_print_order(bank, clause);
 
     if variables.is_empty() {
         return clause_write_tstp_formula_body_with_type_suffixes(
@@ -2252,21 +2252,116 @@ fn clause_write_tstp_formula_body_with_type_suffixes(
         if index != 0 {
             output.write_char('|')?;
         }
-        eqn_write_fof_for_problem(
-            output,
-            bank,
-            literal,
-            false,
-            full_terms,
-            problem_type,
-            options,
-        )?;
+        if problem_type == ProblemType::HigherOrder
+            && literal.is_negative()
+            && !literal.is_equ_lit(bank)
+        {
+            // C first turns the predicate literal into a formula application,
+            // then prints the surrounding negation and the application parens.
+            output.write_str("~(")?;
+            eqn_write_fof_for_problem(
+                output,
+                bank,
+                literal,
+                true,
+                full_terms,
+                problem_type,
+                options,
+            )?;
+            output.write_char(')')?;
+        } else {
+            eqn_write_fof_for_problem(
+                output,
+                bank,
+                literal,
+                false,
+                full_terms,
+                problem_type,
+                options,
+            )?;
+        }
     }
 
     if literals.len() > 1 {
         output.write_char(')')?;
     }
     Ok(())
+}
+
+fn clause_formula_variable_print_order(bank: &TermBank, clause: &Clause) -> Vec<Term> {
+    let mut terms = BTreeMap::new();
+    let mut order = PTree::new();
+    let mut bound = Vec::new();
+    for literal in clause.literals().as_slice() {
+        collect_formula_term_variables(bank, literal.left(), &mut bound, &mut terms, &mut order);
+        collect_formula_term_variables(bank, literal.right(), &mut bound, &mut terms, &mut order);
+    }
+
+    let mut variables = order
+        .to_stack()
+        .into_iter()
+        .map(|identity| {
+            terms
+                .get(&identity)
+                .expect("collected clause variable identity must retain its term")
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    // TFormulaAddQuantors wraps variables in PTreeToPStack order, so the last
+    // stack element becomes the outermost and is printed first.
+    variables.reverse();
+    variables
+}
+
+fn collect_formula_term_variables(
+    bank: &TermBank,
+    term: &Term,
+    bound: &mut Vec<usize>,
+    terms: &mut BTreeMap<usize, Term>,
+    order: &mut PTree<usize>,
+) {
+    if term.is_db_var() {
+        return;
+    }
+    if term.is_free_var() {
+        let identity = term_identity_id(term);
+        if !bound.contains(&identity) {
+            terms.insert(identity, term.clone());
+            order.store(identity);
+        }
+        return;
+    }
+
+    let is_binder = term.arity() == 2
+        && matches!(
+            term.f_code(),
+            code if code == bank.signature().qall_code()
+                || code == bank.signature().qex_code()
+                || term.is_lambda()
+        );
+    if is_binder {
+        let variable = term
+            .argument(0)
+            .expect("formula binder must have a variable argument");
+        let identity = term_identity_id(&variable);
+        bound.push(identity);
+        collect_formula_term_variables(
+            bank,
+            &term
+                .argument(1)
+                .expect("formula binder must have a body argument"),
+            bound,
+            terms,
+            order,
+        );
+        let popped = bound.pop();
+        debug_assert_eq!(popped, Some(identity));
+        return;
+    }
+
+    for argument in term.argument_clones().into_iter().flatten() {
+        collect_formula_term_variables(bank, &argument, bound, terms, order);
+    }
 }
 
 fn write_tstp_type(
@@ -2934,6 +3029,23 @@ mod tests {
         assert_eq!(
             clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
             "thf(c_2_13, axiom, ![X1:$i, X2:person]:(((typed_p @ X1)|(typed_q @ X2))))."
+        );
+    }
+
+    #[test]
+    fn clause_tstp_string_wraps_higher_order_negative_predicate_like_formula_encoding() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let predicate = typed_pred_unary_with_arg_type(&mut bank, "negative_predicate", &x);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc_flatten(
+            predicate, &mut bank, false,
+        )
+        .unwrap()]));
+        clause.set_ident(15);
+
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
+            "thf(c_0_15, plain, ![X1:$i]:(~((negative_predicate @ X1))))."
         );
     }
 
