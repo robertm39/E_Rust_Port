@@ -107,8 +107,8 @@ use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
     get_default_schedule, get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
     heuristic_parms_strategy_print_string, initialize_placeholder_search_schedule,
-    schedule_times_init_multi_core, strategies_print_predefined_string, ScheduleCell, DEFAULT_MASK,
-    DEFAULT_SCHED_TIME_LIMIT,
+    schedule_times_init_multi_core, strategies_print_predefined_string, ResolvedSchedule,
+    ScheduleCell, DEFAULT_MASK, DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
@@ -5817,8 +5817,9 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     let mut raw_features = RawSpecFeatureCell::default();
     raw_spec_features_compute(&mut raw_features, state);
     raw_spec_features_classify(&mut raw_features, &limits, Some(RAW_DEFAULT_MASK));
-    let mut preprocessing_schedule = get_preprocessing_schedule(&raw_features.class)?.schedule;
+    let resolved_preprocessing = get_preprocessing_schedule(&raw_features.class)?;
     if internal_worker.is_none() {
+        write_schedule_partial_match(output, &resolved_preprocessing)?;
         output.write_stdout_side_channel(
             format!(
                 "{DEFAULT_COMCHAR_RAW} Preprocessing class: {}.\n",
@@ -5827,6 +5828,7 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
             .as_bytes(),
         )?;
     }
+    let mut preprocessing_schedule = resolved_preprocessing.schedule;
     let selected_preprocessing_index = if let Some(worker) = internal_worker {
         scheduled_strategy_index(
             &preprocessing_schedule,
@@ -5942,10 +5944,12 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     features.perc_of_form_defs = auto_context.raw_features.perc_of_form_defs;
     spec_features_add_eval(&mut features, &auto_context.limits);
     let class = spec_type_string(&features, DEFAULT_MASK);
-    let mut search_schedule = get_search_schedule(&class)?.schedule;
     output.write_stdout_side_channel(
         format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
     )?;
+    let resolved_search = get_search_schedule(&class)?;
+    write_schedule_partial_match(output, &resolved_search)?;
+    let mut search_schedule = resolved_search.schedule;
     if internal_preprocessing_worker(config).is_some() {
         let outcome =
             execute_auto_search_schedule(output, config, auto_context, &mut search_schedule)?;
@@ -5979,6 +5983,25 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
         )?;
     }
     Ok(AutoModeSearchSelection::Continue)
+}
+
+fn schedule_partial_match_comment(resolved: &ResolvedSchedule) -> Option<String> {
+    (resolved.distance != 0).then(|| {
+        format!(
+            "{DEFAULT_COMCHAR_RAW} partial match({}): {}\n",
+            resolved.distance, resolved.matched_class
+        )
+    })
+}
+
+fn write_schedule_partial_match<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    resolved: &ResolvedSchedule,
+) -> Result<(), EProverError> {
+    if let Some(comment) = schedule_partial_match_comment(resolved) {
+        output.write_all(comment.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn internal_search_selection(config: &EProverConfig) -> Option<ScheduledHeuristicSelection> {
@@ -15378,17 +15401,18 @@ mod tests {
         proof_state_init_global_indices, proof_success_object_roots, proof_success_status,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy,
-        InternalScheduleWorkerMode, LiteralComparison, ParamodulationType, ParsedAppEncodeFormula,
-        PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
-        ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
-        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_run_args,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
+        ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
+        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
         LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
         PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
@@ -15423,7 +15447,7 @@ mod tests {
     use crate::clauses::rewrite::{
         BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
     };
-    use crate::heuristics::new_autoschedule::ScheduleCell;
+    use crate::heuristics::new_autoschedule::{get_search_schedule, ScheduleCell};
     use crate::heuristics::proofcontrol::ProofControl;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
@@ -23662,6 +23686,18 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn autoschedule_partial_match_comment_matches_c_shape() {
+        let partial = get_search_schedule("FGHSF-FSLM21-MFFFFFNX").unwrap();
+        assert_eq!(
+            schedule_partial_match_comment(&partial).as_deref(),
+            Some("% partial match(1): FGHSF-FSLM21-MFFFFFNN\n")
+        );
+
+        let exact = get_search_schedule("FGHSF-FSLM21-MFFFFFNN").unwrap();
+        assert_eq!(schedule_partial_match_comment(&exact), None);
     }
 
     #[test]
