@@ -1733,43 +1733,42 @@ impl TermBank {
 
     /// Inserts a top cell whose arguments are already shared.
     ///
-    /// # Panics
-    ///
-    /// Panics if `term` is a variable, lambda/application invariants are
-    /// violated, or a top-cell child is neither shared nor a free variable.
+    /// Debug builds assert that `term` is not a variable, lambda/application
+    /// invariants hold, and every top-cell child is shared or a free variable.
     pub fn term_top_insert(&mut self, term: Term) -> Result<Term, Diagnostic> {
-        assert!(!term.is_any_var(), "top insertion expects a non-variable");
-        assert!(
+        debug_assert!(!term.is_any_var(), "top insertion expects a non-variable");
+        debug_assert!(
             term.f_code() != SIG_NAMED_LAMBDA_CODE
                 || (term.arity() == 2 && term.argument(0).is_some_and(|arg| arg.is_free_var())),
             "named lambda top cell has invalid binder shape"
         );
-        assert!(
+        debug_assert!(
             term.f_code() != SIG_DB_LAMBDA_CODE
                 || (term.arity() == 2 && term.argument(0).is_some_and(|arg| arg.is_db_var())),
             "DB lambda top cell has invalid binder shape"
         );
-        assert!(
+        debug_assert!(
             !term.is_phony_app()
                 || term
                     .argument(0)
                     .is_some_and(|arg| arg.is_any_var() || arg.is_lambda()),
             "phony application must apply a variable or lambda"
         );
-        assert!(
+        debug_assert!(
             !term.is_phony_app() || term.arity() > 1,
             "phony application needs at least one argument"
         );
-        for arg in term.argument_clones().into_iter().flatten() {
-            assert!(
-                arg.is_shared() || arg.is_free_var(),
-                "term-bank top insertion requires shared arguments"
-            );
-        }
+        debug_assert!(
+            term.argument_clones()
+                .into_iter()
+                .flatten()
+                .all(|arg| arg.is_shared() || arg.is_free_var()),
+            "term-bank top insertion requires shared arguments"
+        );
 
         if term.type_().is_none() {
             type_infer_sort(&mut self.sig, &term)?;
-            assert!(term.type_().is_some(), "type inference assigned a sort");
+            debug_assert!(term.type_().is_some(), "type inference assigned a sort");
         }
 
         self.insertions += 1;
@@ -1783,7 +1782,7 @@ impl TermBank {
         term.assign_prop(TP_GARBAGE_FLAG, self.garbage_state);
         term.set_prop(TP_IS_SHARED);
         self.set_top_insert_metadata(&term);
-        assert_eq!(self.find(&term), Some(term.clone()));
+        debug_assert_eq!(self.find(&term), Some(term.clone()));
         Ok(term)
     }
 
@@ -6891,6 +6890,17 @@ mod tests {
         assert_eq!(bank.in_count(), 3);
         assert_eq!(bank.non_var_term_nodes(), 3);
         assert!(shared_duplicate.query_prop(TP_PRED_POS));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "top insertion expects a non-variable")]
+    fn top_insertion_keeps_c_invariant_checks_in_debug_builds() {
+        let (mut bank, _) = bank_with_symbol("a", 0);
+        let variable = Term::const_cell_alloc(-2);
+        variable.set_type(Some(bank.signature().type_bank().i_type()));
+
+        let _ = bank.term_top_insert(variable);
     }
 
     #[test]
