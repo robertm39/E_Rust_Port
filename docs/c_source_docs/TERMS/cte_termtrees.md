@@ -103,6 +103,7 @@ Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 
 - `TermTopCompare` switches from a first-order type-pointer equality assertion to higher-order type-pointer ordering through the process-global `problemType`. Rust preserves that assertion boundary and activates the parsed problem dialect before proof-search term indexing, but a cleaned term-bank API should pass the problem type explicitly into top-cell comparison instead of relying on parser-global residue.
 - C embeds `lson`/`rson` index links directly in each `TermCell` and uses a stack-local dummy `TermCell` to assemble both sides during top-down splaying. Rust preserves the intrusive tree shape without heap-allocating the dummy header. A safe store-owned node-arena prototype preserved the hash, comparator, rotations, root movement, and extraction behavior but regressed paired `LUSK6.lop` CPU time by 1.31 percent, so revisit store-owned links only as part of a broader stable term arena rather than as an isolated optimization.
+- Because those `lson`/`rson` links belong to the tree rather than to an immutable term value, one `TermCell` can participate in only one independently mutated `TermTree`. Copying tree roots while aliasing cells lets either tree's find, insert, extract, or splay operation relink and disconnect the other tree. C avoids this in normal parsing by allocating distinct banks; a future non-intrusive index or typed single-store ownership boundary would make the invariant enforceable instead of implicit.
 
 ### Porting Focus
 

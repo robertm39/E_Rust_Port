@@ -2551,7 +2551,7 @@ pub fn parse_tstp_negated_distinct_formula(
     if lookahead.test_tok(TokenType::APPLICATION) {
         lookahead.accept_tok(TokenType::APPLICATION)?;
     }
-    let mut probe = bank.clone();
+    let mut probe = bank.detached_empty()?;
     let is_distinct = if lookahead.test_id("$distinct") {
         true
     } else {
@@ -2599,7 +2599,7 @@ pub fn parse_tstp_parenthesized_negated_distinct_formula(
     if wrappers == 0 {
         return Ok(None);
     }
-    let mut probe = bank.clone();
+    let mut probe = bank.detached_empty()?;
     if parse_tstp_negated_distinct_formula(&mut lookahead, &mut probe)?.is_none() {
         return Ok(None);
     }

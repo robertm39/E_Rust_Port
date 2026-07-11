@@ -10948,7 +10948,9 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
 
 fn tstp_body_is_represented_formula_owner_supported(scanner: &Scanner, bank: &TermBank) -> bool {
     let mut lookahead = scanner.clone();
-    let mut probe = bank.clone();
+    let Ok(mut probe) = bank.detached_empty() else {
+        return false;
+    };
     probe
         .parse_tformula_tstp(&mut lookahead)
         .is_ok_and(|formula| {
@@ -10978,7 +10980,9 @@ fn tstp_app_encode_body_is_negated_top_level_distinct(scanner: &Scanner, bank: &
     }
 
     let mut lookahead = scanner.clone();
-    let mut probe = bank.clone();
+    let Ok(mut probe) = bank.detached_empty() else {
+        return false;
+    };
     parse_tstp_negated_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
@@ -10993,7 +10997,9 @@ fn tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(
     }
 
     let mut lookahead = scanner.clone();
-    let mut probe = bank.clone();
+    let Ok(mut probe) = bank.detached_empty() else {
+        return false;
+    };
     parse_tstp_parenthesized_negated_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
@@ -11008,7 +11014,9 @@ fn tstp_app_encode_body_is_parenthesized_top_level_distinct(
     }
 
     let mut lookahead = scanner.clone();
-    let mut probe = bank.clone();
+    let Ok(mut probe) = bank.detached_empty() else {
+        return false;
+    };
     parse_tstp_parenthesized_distinct_formula(&mut lookahead, &mut probe)
         .is_ok_and(|formula| formula.is_some())
         && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
@@ -11032,7 +11040,9 @@ fn tstp_app_encode_fof_starts_owner_supported_equality(scanner: &Scanner, bank: 
     }
 
     let mut lookahead = scanner.clone();
-    let mut typed_probe = bank.clone();
+    let Ok(mut typed_probe) = bank.detached_empty() else {
+        return false;
+    };
     while lookahead.test_tok(TokenType::OPEN_BRACKET) {
         if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
             return false;
@@ -11066,7 +11076,9 @@ fn tstp_app_encode_fof_starts_parenthesized_formula_equality(
     }
     for skipped_opens in 1..=leading_opens {
         let mut lookahead = scanner.clone();
-        let mut formula_probe = bank.clone();
+        let Ok(mut formula_probe) = bank.detached_empty() else {
+            return false;
+        };
         for _ in 0..skipped_opens {
             if lookahead.accept_tok(TokenType::OPEN_BRACKET).is_err() {
                 return false;
@@ -11095,7 +11107,9 @@ fn tstp_app_encode_fof_starts_quantified_formula(scanner: &Scanner, bank: &TermB
         return false;
     }
     let mut lookahead = scanner.clone();
-    let mut formula_probe = bank.clone();
+    let Ok(mut formula_probe) = bank.detached_empty() else {
+        return false;
+    };
     formula_probe
         .parse_tformula_tstp(&mut lookahead)
         .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
@@ -11106,7 +11120,9 @@ fn tstp_app_encode_fof_starts_negated_formula(scanner: &Scanner, bank: &TermBank
         return false;
     }
     let mut lookahead = scanner.clone();
-    let mut formula_probe = bank.clone();
+    let Ok(mut formula_probe) = bank.detached_empty() else {
+        return false;
+    };
     formula_probe
         .parse_tformula_tstp(&mut lookahead)
         .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
@@ -11117,7 +11133,9 @@ fn tstp_app_encode_fof_starts_application_formula(scanner: &Scanner, bank: &Term
         return false;
     }
     let mut lookahead = scanner.clone();
-    let mut formula_probe = bank.clone();
+    let Ok(mut formula_probe) = bank.detached_empty() else {
+        return false;
+    };
     formula_probe
         .parse_tformula_tstp(&mut lookahead)
         .is_ok_and(|formula| formula.type_().as_ref().is_some_and(Type::is_bool))
@@ -11401,7 +11419,9 @@ fn tstp_tcf_body_is_represented_formula_owner_supported(
     problem_type: ProblemType,
 ) -> bool {
     let mut lookahead = scanner.clone();
-    let mut probe = bank.clone();
+    let Ok(mut probe) = bank.detached_empty() else {
+        return false;
+    };
     tcf_tstp_parse(&mut lookahead, &mut probe, problem_type).is_ok_and(|formula| {
         formula.type_().as_ref().is_some_and(Type::is_bool)
             && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA)
@@ -16106,6 +16126,41 @@ mod tests {
                     assert_eq!(parsed.problem_type, expected_problem_type);
                 }
             }
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn represented_owner_probe_keeps_live_term_store_canonical() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        set_problem_type(ProblemType::FirstOrder).unwrap();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let source = "![X]:(p(X)|q(X)))";
+        let mut seed = Scanner::from_user_string(source, false).unwrap();
+        seed.set_format(IoFormat::Tstp);
+        bank.parse_tformula_tstp(&mut seed).unwrap();
+        assert!(seed.test_tok(TokenType::CLOSE_BRACKET));
+
+        let stored = bank.stored_terms();
+        for term in &stored {
+            assert_eq!(bank.find(term).as_ref(), Some(term));
+        }
+        let node_count = bank.non_var_term_nodes();
+        let insertion_count = bank.insertions();
+        let symbol_count = bank.signature().f_count();
+
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        assert!(super::tstp_body_is_represented_formula_owner_supported(
+            &scanner, &bank
+        ));
+
+        assert_eq!(bank.non_var_term_nodes(), node_count);
+        assert_eq!(bank.insertions(), insertion_count);
+        assert_eq!(bank.signature().f_count(), symbol_count);
+        for term in stored {
+            assert_eq!(bank.find(&term), Some(term));
         }
         reset_problem_type();
     }

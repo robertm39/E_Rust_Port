@@ -113,6 +113,16 @@ impl TermBank {
         Ok(bank)
     }
 
+    /// Creates an empty bank with an independent store and a snapshot of this
+    /// bank's signature.
+    ///
+    /// This is the scratch-bank equivalent of C allocating another term bank
+    /// over copied signature metadata. Term-store nodes are intrusive, so a
+    /// shallow clone would let scratch insertions relink the source store.
+    pub(crate) fn detached_empty(&self) -> Result<Self, Diagnostic> {
+        Self::new(self.sig.clone())
+    }
+
     #[must_use]
     pub const fn in_count(&self) -> u64 {
         self.in_count
