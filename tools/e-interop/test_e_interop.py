@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import e_interop
 
@@ -20,6 +21,27 @@ class OutputParsingTests(unittest.TestCase):
         self.assertEqual(
             e_interop.normalize_output(output, [("/tmp/a.p", "<PROBLEM>")]),
             "problem <PROBLEM>\nproof",
+        )
+
+    def test_cross_platform_path_replacements_cover_windows_separator_forms(self):
+        path = Path("reference-root")
+        with patch.object(e_interop, "wslpath", return_value=r"C:\work\TPTP"):
+            replacements = e_interop.cross_platform_path_replacements(path, "<TPTP>")
+
+        self.assertEqual(
+            set(replacements),
+            {
+                (r"C:\work\TPTP", "<TPTP>"),
+                ("C:/work/TPTP", "<TPTP>"),
+                (str(path), "<TPTP>"),
+            },
+        )
+        self.assertEqual(
+            e_interop.normalize_output(
+                "C:/work/TPTP/Axioms/SET001.ax",
+                replacements,
+            ),
+            "<TPTP>/Axioms/SET001.ax",
         )
 
     def test_normalization_sorts_only_saturation_blocks(self):

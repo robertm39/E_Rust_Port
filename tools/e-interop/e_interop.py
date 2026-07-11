@@ -718,6 +718,18 @@ def wslpath(path: Path, windows: bool = False) -> str:
     return run_checked(["wslpath", option, str(path)]).stdout.strip()
 
 
+def cross_platform_path_replacements(
+    path: Path, placeholder: str
+) -> list[tuple[str, str]]:
+    windows_path = wslpath(path, windows=True)
+    forms = (str(path), windows_path, windows_path.replace("\\", "/"))
+    unique_forms = (form for form in dict.fromkeys(forms) if form)
+    return [
+        (form, placeholder)
+        for form in sorted(unique_forms, key=len, reverse=True)
+    ]
+
+
 def expected_status(text: str) -> str | None:
     match = EXPECTED_RE.search(text)
     return match.group(1) if match else None
@@ -1210,10 +1222,8 @@ def compare(args: argparse.Namespace) -> None:
         mismatches = comparison_mismatches(reference, candidate)
 
         replacements = [
-            (str(problem), "<PROBLEM>"),
-            (wslpath(problem, windows=True), "<PROBLEM>"),
-            (str(tptp), "<TPTP>"),
-            (wslpath(tptp, windows=True), "<TPTP>"),
+            *cross_platform_path_replacements(problem, "<PROBLEM>"),
+            *cross_platform_path_replacements(tptp, "<TPTP>"),
         ]
         reference_normalized = normalize_output(reference["stdout"], replacements)
         candidate_normalized = normalize_output(candidate["stdout"], replacements)
@@ -1633,21 +1643,22 @@ def compare_tools(args: argparse.Namespace) -> None:
         mismatches = comparison_mismatches(reference, candidate)
         fixture_replacements: list[tuple[str, str]] = []
         for fixture_path in fixture_paths.values():
-            fixture_replacements.append((str(fixture_path), "<FIXTURE>"))
-            fixture_replacements.append((wslpath(fixture_path, windows=True), "<FIXTURE>"))
+            fixture_replacements.extend(
+                cross_platform_path_replacements(fixture_path, "<FIXTURE>")
+            )
         if uses_case_workdir:
             for workdir in (reference_cwd, candidate_cwd):
-                fixture_replacements.append((str(workdir), "<WORKDIR>"))
-                fixture_replacements.append((wslpath(workdir, windows=True), "<WORKDIR>"))
+                fixture_replacements.extend(
+                    cross_platform_path_replacements(workdir, "<WORKDIR>")
+                )
             for workdir_path in (
                 *reference_workdir_paths.values(),
                 *candidate_workdir_paths.values(),
                 *reference_workdir_directories,
                 *candidate_workdir_directories,
             ):
-                fixture_replacements.append((str(workdir_path), "<WORKDIR_FILE>"))
-                fixture_replacements.append(
-                    (wslpath(workdir_path, windows=True), "<WORKDIR_FILE>")
+                fixture_replacements.extend(
+                    cross_platform_path_replacements(workdir_path, "<WORKDIR_FILE>")
                 )
         reference_normalized_stdout = normalize_output(reference["stdout"], fixture_replacements)
         candidate_normalized_stdout = normalize_output(candidate["stdout"], fixture_replacements)
