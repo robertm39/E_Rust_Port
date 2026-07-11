@@ -40,15 +40,16 @@ impl OverlapTermPos {
     }
 }
 
-pub struct OverlapIndex<'sig> {
-    index: FPIndex<'sig, SubtermOcc>,
+#[derive(Clone, Debug)]
+pub struct OverlapIndex {
+    index: FPIndex<SubtermOcc>,
 }
 
-impl<'sig> OverlapIndex<'sig> {
+impl OverlapIndex {
     #[must_use]
-    pub fn new(fp_fun: FingerprintIndexFunction, sig: &'sig Signature) -> Self {
+    pub fn new(fp_fun: FingerprintIndexFunction) -> Self {
         Self {
-            index: FPIndex::new(fp_fun, sig),
+            index: FPIndex::new(fp_fun),
         }
     }
 
@@ -78,28 +79,12 @@ impl<'sig> OverlapIndex<'sig> {
     pub fn find_unifiable_occurrences<'idx>(
         &'idx self,
         term: &Term,
-        result: &mut Vec<&'idx SubtermOcc>,
-    ) -> usize {
-        let start = result.len();
-        let mut leaves = Vec::new();
-        self.index.find_unifiable(term, &mut leaves);
-        for payload in leaves.into_iter().rev().flatten() {
-            result.extend(payload.iter());
-        }
-        result.len() - start
-    }
-
-    /// Finds unifiable occurrences using a caller-provided live signature.
-    pub fn find_unifiable_occurrences_with_signature<'idx>(
-        &'idx self,
-        term: &Term,
         signature: &Signature,
         result: &mut Vec<&'idx SubtermOcc>,
     ) -> usize {
         let start = result.len();
         let mut leaves = Vec::new();
-        self.index
-            .find_unifiable_with_signature(term, signature, &mut leaves);
+        self.index.find_unifiable(term, signature, &mut leaves);
         for payload in leaves.into_iter().rev().flatten() {
             result.extend(payload.iter());
         }
@@ -142,11 +127,11 @@ impl<'sig> OverlapIndex<'sig> {
 
     #[cfg(feature = "print-index-stats")]
     #[must_use]
-    pub fn dot_string<F>(&self, name: &str, print_payload: F) -> String
+    pub fn dot_string<F>(&self, name: &str, signature: &Signature, print_payload: F) -> String
     where
         F: FnMut(&ObjTree<SubtermOcc>, &Signature) -> String,
     {
-        self.index.dot_string(name, print_payload)
+        self.index.dot_string(name, signature, print_payload)
     }
 
     pub fn insert_pos(&mut self, clause: &Clause, pos: CompactPos, term: Option<&Term>) -> bool {
@@ -405,8 +390,8 @@ pub fn clause_collect_into_terms_pos2(
 }
 
 pub fn overlap_index_insert_into_clause2(
-    tindex: &mut OverlapIndex<'_>,
-    naindex: &mut OverlapIndex<'_>,
+    tindex: &mut OverlapIndex,
+    naindex: &mut OverlapIndex,
     clause: &Clause,
     bank: &TermBank,
 ) -> i64 {
@@ -423,8 +408,8 @@ pub fn overlap_index_insert_into_clause2(
 }
 
 pub fn overlap_index_delete_into_clause2(
-    tindex: &mut OverlapIndex<'_>,
-    naindex: &mut OverlapIndex<'_>,
+    tindex: &mut OverlapIndex,
+    naindex: &mut OverlapIndex,
     clause: &Clause,
     bank: &TermBank,
 ) -> i64 {
@@ -778,7 +763,7 @@ mod tests {
         let left = typed_unary(&mut bank, "oi_idx_f", &a);
         let literal = eqn(&mut bank, &left, &b, true);
         let clause = singleton_clause(literal, 10);
-        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut index = OverlapIndex::new(index_fp1_create);
 
         assert!(index.insert_pos(&clause, 0, Some(&left)));
         assert!(!index.insert_pos(&clause, 0, Some(&left)));
@@ -809,7 +794,7 @@ mod tests {
         let left = typed_unary(&mut bank, "oi_leaf_f", &a);
         let literal = eqn(&mut bank, &left, &b, true);
         let clause = singleton_clause(literal, 12);
-        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut index = OverlapIndex::new(index_fp1_create);
 
         assert!(index.insert_pos(&clause, 0, Some(&left)));
 
@@ -829,12 +814,7 @@ mod tests {
         clippy::needless_pass_by_value,
         reason = "regression exercises cloned clause values passing through a by-value helper"
     )]
-    fn insert_position_by_value(
-        index: &mut OverlapIndex<'_>,
-        clause: Clause,
-        term: &Term,
-        pos: i64,
-    ) {
+    fn insert_position_by_value(index: &mut OverlapIndex, clause: Clause, term: &Term, pos: i64) {
         assert!(index.insert_pos(&clause, pos, Some(term)));
     }
 
@@ -847,7 +827,7 @@ mod tests {
         let left = typed_unary(&mut bank, "oi_stable_f", &a);
         let first = singleton_clause(eqn(&mut bank, &left, &b, true), 40);
         let second = singleton_clause(eqn(&mut bank, &left, &c, true), 41);
-        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut index = OverlapIndex::new(index_fp1_create);
 
         insert_position_by_value(&mut index, first.clone(), &left, 0);
         insert_position_by_value(&mut index, second.clone(), &left, 2);
@@ -888,8 +868,8 @@ mod tests {
         let mut literal = eqn(&mut bank, &left, &right, true);
         literal.set_prop(EP_IS_MAXIMAL);
         let clause = singleton_clause(literal, 20);
-        let mut into_index = OverlapIndex::new(index_fp1_create, bank.signature());
-        let mut from_index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut into_index = OverlapIndex::new(index_fp1_create);
+        let mut from_index = OverlapIndex::new(index_fp1_create);
 
         assert_eq!(into_index.insert_into_clause(&clause), 4);
         assert!(into_index.find_occurrence(&a).is_some());
@@ -914,8 +894,8 @@ mod tests {
             Eqn::alloc(atom.clone(), bank.true_term().clone(), &mut bank, false).unwrap();
         literal.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED);
         let clause = singleton_clause(literal, 30);
-        let mut term_index = OverlapIndex::new(index_fp1_create, bank.signature());
-        let mut natom_index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut term_index = OverlapIndex::new(index_fp1_create);
+        let mut natom_index = OverlapIndex::new(index_fp1_create);
 
         assert_eq!(
             overlap_index_insert_into_clause2(&mut term_index, &mut natom_index, &clause, &bank),
@@ -944,13 +924,16 @@ mod tests {
         let first = singleton_clause(eqn(&mut bank, &x, &a, true), 51);
         let second = singleton_clause(eqn(&mut bank, &f_a, &a, true), 52);
         let third = singleton_clause(eqn(&mut bank, &g_a, &a, true), 53);
-        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+        let mut index = OverlapIndex::new(index_fp1_create);
         index.insert_pos(&first, 0, Some(&x));
         index.insert_pos(&second, 0, Some(&f_a));
         index.insert_pos(&third, 0, Some(&g_a));
 
         let mut occurrences = Vec::new();
-        assert_eq!(index.find_unifiable_occurrences(&x, &mut occurrences), 3);
+        assert_eq!(
+            index.find_unifiable_occurrences(&x, bank.signature(), &mut occurrences),
+            3
+        );
         let idents = occurrences
             .iter()
             .flat_map(|occurrence| occurrence.position_clauses().entries())

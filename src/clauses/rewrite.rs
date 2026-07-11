@@ -173,7 +173,7 @@ pub fn find_rewritable_clauses<'a>(
 pub fn find_rewritable_clauses_indexed<'idx>(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
-    index: &'idx SubtermIndex<'_>,
+    index: &'idx SubtermIndex,
     results: &mut Vec<&'idx Clause>,
     new_demod: &Clause,
     nf_date: SysDate,
@@ -1317,7 +1317,7 @@ fn rewrite_date_level(level: RewriteLevel) -> RewriteLevel {
 fn find_rewritable_clauses_indexed_direction<'idx>(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
-    index: &'idx SubtermIndex<'_>,
+    index: &'idx SubtermIndex,
     results: &mut Vec<&'idx Clause>,
     seen: &mut BTreeSet<i64>,
     new_demod: &Clause,
@@ -1327,7 +1327,7 @@ fn find_rewritable_clauses_indexed_direction<'idx>(
     _nf_date: SysDate,
 ) -> Result<i64, Diagnostic> {
     let mut occurrences = Vec::new();
-    index.collect_matchable_occurrences(left, &mut occurrences);
+    index.collect_matchable_occurrences(left, bank.signature(), &mut occurrences);
     let mut count = 0;
     for occurrence in occurrences {
         count += term_find_rw_clauses_indexed(
@@ -2039,8 +2039,7 @@ mod tests {
         target_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL);
         let mut target = Clause::alloc(EqnList::from_vec(vec![target_lit]));
         target.set_ident(31);
-        let index_sig = bank.signature().clone();
-        let mut index = SubtermIndex::new(index_fp1_create, &index_sig);
+        let mut index = SubtermIndex::new(index_fp1_create);
         index.insert_clause(&target, false);
         let mut ocb = kbo_ocb(&bank);
         let mut results = Vec::new();
@@ -2081,8 +2080,7 @@ mod tests {
         let demod = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &f_x, true)]));
         let mut target = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_b, &c, true)]));
         target.set_ident(32);
-        let index_sig = bank.signature().clone();
-        let mut index = SubtermIndex::new(index_fp1_create, &index_sig);
+        let mut index = SubtermIndex::new(index_fp1_create);
         index.insert_clause(&target, false);
         let mut ocb = kbo_ocb(&bank);
         let mut results = Vec::new();

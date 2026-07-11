@@ -20,6 +20,7 @@ use crate::clauses::fcvindexing::{
 };
 use crate::clauses::formulasets::{wformula_deriv_find_first, FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvCollect;
+use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::rewrite::REWRITE_UNCACHED;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -448,6 +449,8 @@ pub struct ProofState {
     definition_formula_archive: FormulaSet,
     definition_assocs: BTreeMap<i64, FunCode>,
     definition_formula_assocs: BTreeMap<i64, FormulaDerivationRef>,
+    global_indices: GlobalIndices,
+    watchlist_indices: GlobalIndices,
     fvi_initialized: bool,
     fvi_cspec: Option<FvCollect>,
     def_store_cspec: Option<FvCollect>,
@@ -491,10 +494,10 @@ fn gc_mark_clause_set_terms(set: &ClauseSet, terms: &TermBank) {
 impl ProofState {
     /// Allocates the currently ported proof-state owner fields.
     ///
-    /// Global indices, the temporary term bank, and SAT integration are added
-    /// by later slices. The clause-set, demodulator-index, formula-set,
-    /// FV-index, distinct-symbol, and statistic initialization mirrors C
-    /// `ProofStateAlloc`.
+    /// The clause-set, global-index, demodulator-index, formula-set, FV-index,
+    /// distinct-symbol, and statistic initialization mirrors C
+    /// `ProofStateAlloc`. The temporary term bank and SAT integration are added
+    /// by later slices.
     ///
     /// # Errors
     ///
@@ -534,6 +537,8 @@ impl ProofState {
             definition_formula_archive: FormulaSet::new(),
             definition_assocs: BTreeMap::new(),
             definition_formula_assocs: BTreeMap::new(),
+            global_indices: GlobalIndices::null(),
+            watchlist_indices: GlobalIndices::null(),
             fvi_initialized: false,
             fvi_cspec: None,
             def_store_cspec: None,
@@ -552,6 +557,71 @@ impl ProofState {
 
     pub fn terms_mut(&mut self) -> &mut TermBank {
         &mut self.terms
+    }
+
+    #[must_use]
+    pub const fn global_indices(&self) -> &GlobalIndices {
+        &self.global_indices
+    }
+
+    pub fn global_indices_mut(&mut self) -> &mut GlobalIndices {
+        &mut self.global_indices
+    }
+
+    #[must_use]
+    pub const fn watchlist_indices(&self) -> &GlobalIndices {
+        &self.watchlist_indices
+    }
+
+    pub fn watchlist_indices_mut(&mut self) -> &mut GlobalIndices {
+        &mut self.watchlist_indices
+    }
+
+    pub(crate) fn with_global_indices<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Self, &mut GlobalIndices) -> R,
+    ) -> R {
+        let mut indices = std::mem::take(&mut self.global_indices);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(self, &mut indices)
+        }));
+        self.global_indices = indices;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    pub(crate) fn with_watchlist_indices<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Self, &mut GlobalIndices) -> R,
+    ) -> R {
+        let mut indices = std::mem::take(&mut self.watchlist_indices);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(self, &mut indices)
+        }));
+        self.watchlist_indices = indices;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    pub(crate) fn with_global_and_watchlist_indices<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Self, &mut GlobalIndices, &mut GlobalIndices) -> R,
+    ) -> R {
+        let mut indices = std::mem::take(&mut self.global_indices);
+        let mut watchlist_indices = std::mem::take(&mut self.watchlist_indices);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(self, &mut indices, &mut watchlist_indices)
+        }));
+        self.global_indices = indices;
+        self.watchlist_indices = watchlist_indices;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     #[must_use]
@@ -2556,6 +2626,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
         CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROOF_CLAUSE, CP_IS_S_INDEXED, CP_TYPE_AXIOM,
@@ -2896,6 +2967,14 @@ mod tests {
         assert_eq!(state.definition_formula_archive().cardinality(), 0);
         assert_eq!(state.definition_assocs().len(), 0);
         assert_eq!(state.definition_formula_assocs().len(), 0);
+        assert_eq!(
+            state.global_indices().problem_type(),
+            ProblemType::NotInitialized
+        );
+        assert_eq!(
+            state.watchlist_indices().problem_type(),
+            ProblemType::NotInitialized
+        );
         assert!(state.state_is_complete());
         assert!(!state.has_interpreted_symbols());
         assert!(!state.fvi_initialized());
@@ -2903,6 +2982,51 @@ mod tests {
         assert!(state.def_store_cspec().is_none());
         assert_eq!(state.statistics(), &ProofStateStatistics::default());
         assert!(state.terms().signature().distinct_code() > 0);
+    }
+
+    #[test]
+    fn proof_state_scoped_index_access_restores_both_owners() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.global_indices_mut().init_for_problem(
+            "FP1",
+            "FP2",
+            "FP3",
+            4,
+            ProblemType::HigherOrder,
+        );
+        state.watchlist_indices_mut().init_for_problem(
+            "FP4",
+            "NoIndex",
+            "NoIndex",
+            4,
+            ProblemType::HigherOrder,
+        );
+
+        let observed = state.with_global_and_watchlist_indices(|state, global, watchlist| {
+            assert_eq!(
+                state.global_indices().problem_type(),
+                ProblemType::NotInitialized
+            );
+            assert_eq!(
+                state.watchlist_indices().problem_type(),
+                ProblemType::NotInitialized
+            );
+            (
+                global.pm_from_index_type().to_owned(),
+                watchlist.rw_bw_index_type().to_owned(),
+            )
+        });
+
+        assert_eq!(observed, ("FP2".to_owned(), "FP4".to_owned()));
+        assert_eq!(state.global_indices().pm_into_index_type(), "FP3");
+        assert_eq!(state.watchlist_indices().rw_bw_index_type(), "FP4");
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.with_global_and_watchlist_indices(|_, _, _| panic!("index access test"));
+        }));
+        assert!(panic.is_err());
+        assert_eq!(state.global_indices().pm_into_index_type(), "FP3");
+        assert_eq!(state.watchlist_indices().rw_bw_index_type(), "FP4");
     }
 
     #[test]

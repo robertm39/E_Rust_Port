@@ -955,56 +955,59 @@ where
     })
 }
 
-/// Runs C `ProofStateInit`, then initializes caller-owned global indices.
-///
-/// C stores these indices in `state->gindices`. The current Rust `ProofState`
-/// owns its `TermBank` directly, while `GlobalIndices` borrows the signature, so
-/// callers provide the index owner explicitly until proof-session ownership can
-/// hold both without a self-reference.
+/// Runs C `ProofStateInit`, then initializes the proof state's global indices.
 ///
 /// # Errors
 ///
 /// Returns diagnostics from [`proof_state_init`].
-pub fn proof_state_init_with_global_indices<'sig>(
-    state: &'sig mut ProofState,
+pub fn proof_state_init_with_global_indices(
+    state: &mut ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'sig>,
     problem_type: ProblemType,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
     let outcome = proof_state_init(state, control)?;
-    proof_state_init_global_indices(state, control, indices, problem_type);
+    proof_state_init_global_indices(state, control, problem_type);
     Ok(outcome)
 }
 
 /// Runs C `ProofStateInit` with proof-documentation quotes, then initializes
-/// caller-owned global indices.
+/// the proof state's global indices.
 ///
 /// # Errors
 ///
 /// Returns the same diagnostics as [`proof_state_init_with_docs`].
-pub fn proof_state_init_with_global_indices_and_docs<'sig>(
+pub fn proof_state_init_with_global_indices_and_docs(
     output: &mut impl fmt::Write,
     session: &mut ProofDocSession,
-    state: &'sig mut ProofState,
+    state: &mut ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'sig>,
     problem_type: ProblemType,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
     let outcome = proof_state_init_with_docs(output, session, state, control)?;
-    proof_state_init_global_indices(state, control, indices, problem_type);
+    proof_state_init_global_indices(state, control, problem_type);
     Ok(outcome)
 }
 
-/// Inserts the initialized proof-state watchlist into caller-owned
-/// watchlist global indices.
+/// Inserts the initialized proof-state watchlist into its global indices.
 ///
 /// C stores this owner in `state->wlindices` and calls
 /// `GlobalIndicesInsertClauseSet` at the tail of `ProofStateInitWatchlist`.
-/// Rust keeps the owner explicit until a proof-session owner can hold the
-/// proof state and signature-borrowing global-index shell together.
 pub fn proof_state_insert_watchlist_global_indices(
     state: &mut ProofState,
-    indices: &mut GlobalIndices<'_>,
+    lambda_demod: bool,
+) -> i64 {
+    state.with_watchlist_indices(|state, indices| {
+        proof_state_insert_watchlist_global_indices_into(state, indices, lambda_demod)
+    })
+}
+
+/// Inserts the initialized watchlist into an explicitly supplied index owner.
+///
+/// This lower-level variant supports isolated index tests and callers that are
+/// constructing a proof state in stages.
+pub fn proof_state_insert_watchlist_global_indices_into(
+    state: &mut ProofState,
+    indices: &mut GlobalIndices,
     lambda_demod: bool,
 ) -> i64 {
     let (terms, watchlist) = state.terms_and_watchlist_mut();
@@ -1228,7 +1231,7 @@ pub fn proof_state_check_watchlist_with_docs(
     )
 }
 
-/// Runs C `check_watchlist` while maintaining caller-owned watchlist global
+/// Runs C `check_watchlist` while maintaining explicitly supplied watchlist global
 /// indices.
 ///
 /// # Panics
@@ -1242,7 +1245,7 @@ pub fn proof_state_check_watchlist_with_global_indices(
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices,
 ) -> ProofStateWatchlistOutcome {
     let mut doc_context = None;
     let mut output_context = None;
@@ -1258,7 +1261,7 @@ pub fn proof_state_check_watchlist_with_global_indices(
     .unwrap_or_else(|err| panic!("indexed watchlist check unexpectedly failed: {err}"))
 }
 
-/// Runs C `check_watchlist` with proof docs while maintaining caller-owned
+/// Runs C `check_watchlist` with proof docs while maintaining explicitly supplied
 /// watchlist global indices.
 ///
 /// # Errors
@@ -1271,7 +1274,7 @@ pub fn proof_state_check_watchlist_with_global_indices_and_docs(
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
     let mut doc_context = Some((output, session));
     let mut output_context = None;
@@ -1319,7 +1322,7 @@ fn proof_state_check_watchlist_maybe_output<W: fmt::Write>(
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
-    watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    watchlist_indices: Option<&mut GlobalIndices>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
     output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
@@ -1339,7 +1342,7 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
-    watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    watchlist_indices: Option<&mut GlobalIndices>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
     mut output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
@@ -1474,7 +1477,7 @@ pub fn proof_state_simplify_watchlist_with_docs(
     proof_state_simplify_watchlist_impl(state, control, clause, None, Some((output, session)))
 }
 
-/// Runs C `simplify_watchlist` while maintaining caller-owned watchlist global
+/// Runs C `simplify_watchlist` while maintaining explicitly supplied watchlist global
 /// indices.
 ///
 /// # Errors
@@ -1484,7 +1487,7 @@ pub fn proof_state_simplify_watchlist_with_global_indices(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     proof_state_simplify_watchlist_impl::<String>(
         state,
@@ -1495,7 +1498,7 @@ pub fn proof_state_simplify_watchlist_with_global_indices(
     )
 }
 
-/// Runs C `simplify_watchlist` with proof docs while maintaining caller-owned
+/// Runs C `simplify_watchlist` with proof docs while maintaining explicitly supplied
 /// watchlist global indices.
 ///
 /// # Errors
@@ -1507,7 +1510,7 @@ pub fn proof_state_simplify_watchlist_with_global_indices_and_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     proof_state_simplify_watchlist_impl(
         state,
@@ -1526,7 +1529,7 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
-    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    mut watchlist_indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
@@ -1670,7 +1673,7 @@ fn remove_watchlist_subsumed<W: fmt::Write>(
     subsumer: &Clause,
     terms: &mut TermBank,
     lambda_demod: bool,
-    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    mut watchlist_indices: Option<&mut GlobalIndices>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut stack = PStack::new();
@@ -1756,7 +1759,7 @@ pub fn proof_state_reset_processed_with_docs(
 }
 
 /// Moves all processed clauses back to `unprocessed`, deleting any
-/// caller-owned global-index entries before the clauses move.
+/// explicitly supplied global-index entries before the clauses move.
 ///
 /// This matches the indexed C `ProofStateResetProcessed` path where
 /// `GlobalIndicesDeleteClause` runs while the processed-set clause still has
@@ -1768,12 +1771,12 @@ pub fn proof_state_reset_processed_with_docs(
 pub fn proof_state_reset_processed_with_global_indices(
     state: &mut ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     proof_state_reset_processed_impl::<String>(state, control, Some(indices), None)
 }
 
-/// Moves all processed clauses back to `unprocessed`, deleting caller-owned
+/// Moves all processed clauses back to `unprocessed`, deleting explicitly supplied
 /// global-index entries and emitting represented proof-documentation quotes.
 ///
 /// # Errors
@@ -1784,7 +1787,7 @@ pub fn proof_state_reset_processed_with_global_indices_and_docs(
     session: &mut ProofDocSession,
     state: &mut ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     proof_state_reset_processed_impl(state, control, Some(indices), Some((output, session)))
 }
@@ -1792,7 +1795,7 @@ pub fn proof_state_reset_processed_with_global_indices_and_docs(
 fn proof_state_reset_processed_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
@@ -1874,7 +1877,7 @@ fn proof_state_reset_processed_set_by<E, W: fmt::Write>(
     slot: ProcessedSetSlot,
     options: ResetProcessedOptions,
     evaluate: &mut E,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic>
 where
@@ -1953,20 +1956,20 @@ pub fn proof_state_move_to_tmp_store(state: &mut ProofState, _control: &ProofCon
     proof_state_move_to_tmp_store_impl(state, None, false)
 }
 
-/// Moves processed clauses into `tmp_store`, deleting caller-owned global-index
+/// Moves processed clauses into `tmp_store`, deleting explicitly supplied global-index
 /// entries before each original clause moves out of its processed set.
 #[must_use]
 pub fn proof_state_move_to_tmp_store_with_global_indices(
     state: &mut ProofState,
     control: &ProofControl,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> i64 {
     proof_state_move_to_tmp_store_impl(state, Some(indices), control.heuristic_parms().lambda_demod)
 }
 
 fn proof_state_move_to_tmp_store_impl(
     state: &mut ProofState,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
 ) -> i64 {
     let mut moved = 0;
@@ -2000,7 +2003,7 @@ fn proof_state_move_to_tmp_store_impl(
 fn proof_state_move_processed_set_to_tmp_by(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
 ) -> i64 {
     let mut moved = 0;
@@ -4061,7 +4064,7 @@ pub fn proof_state_backward_simplify_with_docs(
     )
 }
 
-/// Runs backward simplification while maintaining caller-owned global indices.
+/// Runs backward simplification while maintaining explicitly supplied global indices.
 ///
 /// C deletes processed clauses from `state->gindices` before moving rewritten
 /// or unit/context-simplified clauses into `tmp_store`, or before archiving
@@ -4076,7 +4079,7 @@ pub fn proof_state_backward_simplify_with_global_indices(
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
     proof_state_backward_simplify_impl::<String>(
         state,
@@ -4088,7 +4091,7 @@ pub fn proof_state_backward_simplify_with_global_indices(
     )
 }
 
-/// Runs backward simplification with caller-owned global indices while emitting
+/// Runs backward simplification with explicitly supplied global indices while emitting
 /// represented proof-documentation quotes for backward-subsumed clauses and
 /// simplified clauses moved through `tmp_store`.
 ///
@@ -4104,7 +4107,7 @@ pub fn proof_state_backward_simplify_with_global_indices_and_docs(
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
     proof_state_backward_simplify_impl(
         state,
@@ -4121,7 +4124,7 @@ fn proof_state_backward_simplify_impl<W: fmt::Write>(
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
     let _timer =
@@ -4230,13 +4233,13 @@ pub fn proof_state_generate_new_clauses_with_docs(
     )
 }
 
-/// Runs the ported first-order selected-clause generators with caller-owned
-/// global indices.
+/// Runs the ported selected-clause generators with explicitly supplied global
+/// indices.
 ///
 /// This mirrors C's indexed paramodulation branch when `indices` has
-/// paramodulation indexes initialized. The current `ProofState` cannot own
-/// `GlobalIndices` directly without a self-reference, so this entry point keeps
-/// the index owner explicit until a proof-session owner is introduced.
+/// paramodulation indexes initialized. `ProofState` owns the production index;
+/// this lower-level entry point keeps the borrow explicit so the inference core
+/// can also be tested with an isolated index.
 ///
 /// # Errors
 ///
@@ -4246,7 +4249,7 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
-    indices: &GlobalIndices<'_>,
+    indices: &GlobalIndices,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
     proof_state_generate_new_clauses_impl::<String>(
         state,
@@ -4258,7 +4261,7 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
     )
 }
 
-/// Runs the ported first-order selected-clause generators with caller-owned
+/// Runs the ported first-order selected-clause generators with explicitly supplied
 /// global indices while emitting represented proof-documentation output for
 /// generated equality factors, equality resolvents, and paramodulants.
 ///
@@ -4273,7 +4276,7 @@ pub fn proof_state_generate_new_clauses_with_global_indices_and_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
-    indices: &GlobalIndices<'_>,
+    indices: &GlobalIndices,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
     proof_state_generate_new_clauses_impl(
         state,
@@ -4623,7 +4626,7 @@ fn compute_ho_inferences(
     control: &ProofControl,
     clause: &Clause,
     problem_type: ProblemType,
-    indices: Option<&GlobalIndices<'_>>,
+    indices: Option<&GlobalIndices>,
 ) -> Result<i64, Diagnostic> {
     if problem_type != ProblemType::HigherOrder {
         return Ok(0);
@@ -4705,21 +4708,21 @@ fn compute_ho_inferences(
     Ok(generated)
 }
 
-fn ext_rule_indices<'indices, 'sig>(
+fn ext_rule_indices<'indices>(
     parms: &HeuristicParmsCell,
-    indices: Option<&'indices GlobalIndices<'sig>>,
-) -> Result<Option<&'indices GlobalIndices<'sig>>, Diagnostic> {
+    indices: Option<&'indices GlobalIndices>,
+) -> Result<Option<&'indices GlobalIndices>, Diagnostic> {
     if parms.ext_rules_max_depth >= 0 {
         let indices = indices.ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::OTHER_ERROR,
-                "higher-order extensional superposition generation requires caller-owned ExtSup indexes",
+                "higher-order extensional superposition generation requires explicitly supplied ExtSup indexes",
             )
         })?;
         if !indices.has_ext_into_index() || !indices.has_ext_from_index() {
             return Err(Diagnostic::new(
                 ErrorCode::OTHER_ERROR,
-                "higher-order extensional superposition generation requires caller-owned ExtSup indexes",
+                "higher-order extensional superposition generation requires explicitly supplied ExtSup indexes",
             ));
         }
         return Ok(Some(indices));
@@ -4727,7 +4730,7 @@ fn ext_rule_indices<'indices, 'sig>(
     Ok(None)
 }
 
-/// Computes C `ComputeExtSup` over caller-owned extension indexes.
+/// Computes C `ComputeExtSup` over explicitly supplied extension indexes.
 ///
 /// `renamed_clause` must be a disjoint variable copy of `orig_clause` with the
 /// same identifier and proof metrics, matching the C `tmp_copy` argument.
@@ -4741,7 +4744,7 @@ pub fn compute_ext_sup(
     renamed_clause: &Clause,
     orig_clause: &Clause,
     store: &mut ClauseSet,
-    indices: &GlobalIndices<'_>,
+    indices: &GlobalIndices,
     limit: i32,
 ) -> Result<i64, Diagnostic> {
     if orig_clause.proof_depth() > i64::from(limit) {
@@ -4759,7 +4762,7 @@ fn compute_ext_sup_from(
     renamed_clause: &Clause,
     orig_clause: &Clause,
     store: &mut ClauseSet,
-    indices: &GlobalIndices<'_>,
+    indices: &GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     let mut positions = Vec::new();
     collect_ext_sup_from_pos(renamed_clause, &mut positions);
@@ -4791,7 +4794,7 @@ fn compute_ext_sup_into(
     renamed_clause: &Clause,
     orig_clause: &Clause,
     store: &mut ClauseSet,
-    indices: &GlobalIndices<'_>,
+    indices: &GlobalIndices,
 ) -> Result<i64, Diagnostic> {
     let mut positions = Vec::new();
     collect_ext_sup_into_pos(renamed_clause, &mut positions);
@@ -6443,7 +6446,7 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     control: &mut ProofControl,
     clause: &Clause,
     problem_type: ProblemType,
-    indices: Option<&GlobalIndices<'_>>,
+    indices: Option<&GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
     let _timer = crate::basics::perf_counters::start(
@@ -6615,7 +6618,7 @@ fn compute_selected_paramodulants(
     generation: &mut ProofStateGenerationContext<'_>,
     enable_neg_unit_paramod: bool,
     pm_type: ClauseParamodulationType,
-    indices: Option<&GlobalIndices<'_>>,
+    indices: Option<&GlobalIndices>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     if let Some((into_index, negp_index, from_index)) =
@@ -6839,13 +6842,11 @@ pub fn proof_state_process_clause_with_output(
     )
 }
 
-/// Processes one selected clause using caller-owned global indices.
+/// Processes one selected clause using explicitly supplied global indices.
 ///
 /// This mirrors the C `ProcessClause` tail that inserts the survivor into
 /// `state->gindices` before watchlist simplification and selected-clause
-/// generation. The caller keeps ownership of the indices until Rust has a
-/// proof-session owner that can safely hold both `ProofState` and
-/// `GlobalIndices`.
+/// generation. Production saturation supplies the index owned by `ProofState`.
 ///
 /// # Errors
 ///
@@ -6856,7 +6857,7 @@ pub fn proof_state_process_clause_with_global_indices(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     proof_state_process_clause_impl::<String>(
         state,
@@ -6869,8 +6870,8 @@ pub fn proof_state_process_clause_with_global_indices(
     )
 }
 
-/// Processes one selected clause using caller-owned global indices and
-/// caller-owned watchlist global indices.
+/// Processes one selected clause using explicitly supplied global and watchlist
+/// global indices.
 ///
 /// # Errors
 ///
@@ -6880,8 +6881,8 @@ pub fn proof_state_process_clause_with_global_and_watchlist_indices(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     proof_state_process_clause_impl::<String>(
         state,
@@ -6894,7 +6895,7 @@ pub fn proof_state_process_clause_with_global_and_watchlist_indices(
     )
 }
 
-/// Processes one selected clause using caller-owned global indices while
+/// Processes one selected clause using explicitly supplied global indices while
 /// rendering only C's `OutputLevel` text.
 ///
 /// # Errors
@@ -6908,7 +6909,7 @@ pub fn proof_state_process_clause_with_global_indices_and_output(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
     proof_state_process_clause_impl::<String>(
@@ -6922,8 +6923,8 @@ pub fn proof_state_process_clause_with_global_indices_and_output(
     )
 }
 
-/// Processes one selected clause using caller-owned global and watchlist global
-/// indices while rendering only C's `OutputLevel` text.
+/// Processes one selected clause using explicitly supplied global and watchlist
+/// global indices while rendering only C's `OutputLevel` text.
 ///
 /// # Errors
 ///
@@ -6935,8 +6936,8 @@ pub fn proof_state_process_clause_with_global_and_watchlist_indices_and_output(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
     proof_state_process_clause_impl::<String>(
@@ -6950,7 +6951,7 @@ pub fn proof_state_process_clause_with_global_and_watchlist_indices_and_output(
     )
 }
 
-/// Processes one selected clause with caller-owned global indices while
+/// Processes one selected clause with explicitly supplied global indices while
 /// emitting represented C `document_processing` output.
 ///
 /// # Errors
@@ -6965,7 +6966,7 @@ pub fn proof_state_process_clause_with_global_indices_and_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     proof_state_process_clause_impl(
         state,
@@ -6986,8 +6987,8 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    mut indices: Option<&mut GlobalIndices<'_>>,
-    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
+    mut watchlist_indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
@@ -7396,7 +7397,7 @@ fn proof_control_write_error(_error: fmt::Error) -> Diagnostic {
 
 fn proof_state_global_index_processed_clause(
     state: &mut ProofState,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
     class: ProcessedClauseClass,
     ident: i64,
     lambda_demod: bool,
@@ -7437,7 +7438,7 @@ fn proof_state_processed_clause_by_class(
 /// [`proof_state_process_clause`], runs `cleanup_unprocessed_clauses` after
 /// non-returning clauses, and stops when the local limit checks fail. The
 /// default path uses the ported unindexed selected-clause generators; the
-/// caller-owned global-index variant uses the indexed branch when PM indexes
+/// explicitly supplied global-index variant uses the indexed branch when PM indexes
 /// are available. The SAT-check branch uses the ported pseudo-ground
 /// propositional import and internal solver when enabled and due.
 ///
@@ -7518,13 +7519,12 @@ pub fn proof_state_saturate_with_output(
     )
 }
 
-/// Runs the ported C `Saturate` loop using caller-owned global indices.
+/// Runs the ported C `Saturate` loop using explicitly supplied global indices.
 ///
 /// This mirrors the `ProcessClause` path where C inserts each processed
 /// survivor into `state->gindices` and then uses indexed selected-clause
-/// generation when paramodulation indexes are available. The caller owns the
-/// indices until a proof-session owner can safely hold both the proof state and
-/// its signature-borrowing index shell.
+/// generation when paramodulation indexes are available. Production saturation
+/// supplies the index owned by `ProofState`.
 ///
 /// # Errors
 ///
@@ -7544,7 +7544,7 @@ pub fn proof_state_saturate_with_global_indices(
     generated_limit: i64,
     tb_insert_limit: i64,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<SaturateOutcome, Diagnostic> {
     proof_state_saturate_impl::<String>(
         state,
@@ -7563,7 +7563,7 @@ pub fn proof_state_saturate_with_global_indices(
     )
 }
 
-/// Runs the ported C `Saturate` loop using caller-owned global indices while
+/// Runs the ported C `Saturate` loop using explicitly supplied global indices while
 /// rendering only C's `OutputLevel` text from selected-clause processing.
 ///
 /// # Errors
@@ -7587,7 +7587,7 @@ pub fn proof_state_saturate_with_global_indices_and_output(
     generated_limit: i64,
     tb_insert_limit: i64,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
     proof_state_saturate_impl::<String>(
@@ -7607,9 +7607,9 @@ pub fn proof_state_saturate_with_global_indices_and_output(
     )
 }
 
-/// Runs the ported C `Saturate` loop using caller-owned global indices and
-/// caller-owned watchlist global indices while rendering only C's `OutputLevel`
-/// text from selected-clause processing.
+/// Runs the ported C `Saturate` loop using explicitly supplied global and
+/// watchlist global indices while rendering only C's `OutputLevel` text from
+/// selected-clause processing.
 ///
 /// # Errors
 ///
@@ -7631,8 +7631,8 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
     generated_limit: i64,
     tb_insert_limit: i64,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let output = output as &mut dyn std::io::Write;
     proof_state_saturate_impl::<String>(
@@ -7652,8 +7652,8 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
     )
 }
 
-/// Runs the ported C `Saturate` loop using caller-owned global indices and
-/// caller-owned watchlist global indices while emitting represented C
+/// Runs the ported C `Saturate` loop using explicitly supplied global and
+/// watchlist global indices while emitting represented C
 /// `document_processing` and generated-clause proof-documentation output.
 ///
 /// # Errors
@@ -7678,8 +7678,8 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_docs(
     generated_limit: i64,
     tb_insert_limit: i64,
     answer_limit: i64,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<SaturateOutcome, Diagnostic> {
     proof_state_saturate_impl(
         state,
@@ -7758,9 +7758,9 @@ fn proof_state_saturate_impl<W: fmt::Write>(
     generated_limit: i64,
     tb_insert_limit: i64,
     answer_limit: i64,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
-    mut watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    mut watchlist_indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
@@ -7935,8 +7935,8 @@ fn proof_state_process_clause_for_saturate(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
-    indices: Option<&mut GlobalIndices<'_>>,
-    watchlist_indices: Option<&mut GlobalIndices<'_>>,
+    indices: Option<&mut GlobalIndices>,
+    watchlist_indices: Option<&mut GlobalIndices>,
     output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     match (indices, watchlist_indices, output_context) {
@@ -8234,7 +8234,7 @@ fn proof_state_eliminate_backward_rewritten_clauses<W: fmt::Write>(
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
     if !clause.is_demodulator() {
@@ -8334,7 +8334,7 @@ fn rewritable_ids_in_set(
 fn rewritable_ids_in_index(
     terms: &mut TermBank,
     ocb: &mut OrderControlBlock,
-    index: &SubtermIndex<'_>,
+    index: &SubtermIndex,
     clause: &Clause,
     clause_date: SysDate,
 ) -> Result<(bool, Vec<i64>), Diagnostic> {
@@ -8349,7 +8349,7 @@ fn rewritable_ids_in_watchlist(
     terms: &mut TermBank,
     ocb: &mut OrderControlBlock,
     set: &ClauseSet,
-    bw_rw_index: Option<&SubtermIndex<'_>>,
+    bw_rw_index: Option<&SubtermIndex>,
     clause: &Clause,
     clause_date: SysDate,
 ) -> Result<(bool, Vec<i64>), Diagnostic> {
@@ -8362,7 +8362,7 @@ fn rewritable_ids_in_watchlist(
 fn proof_state_eliminate_backward_subsumed_clauses<W: fmt::Write>(
     state: &mut ProofState,
     subsumer: &Clause,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8430,7 +8430,7 @@ fn remove_subsumed_ids_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     subsumer: &Clause,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8498,7 +8498,7 @@ fn subsumed_ids_in_set(
 fn proof_state_eliminate_unit_simplified_clauses<W: fmt::Write>(
     state: &mut ProofState,
     simplifier: &Clause,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8548,7 +8548,7 @@ fn move_unit_simplified_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     simplifier: &Clause,
-    indices: Option<&mut GlobalIndices<'_>>,
+    indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8603,7 +8603,7 @@ fn proof_state_eliminate_context_sr_clauses<W: fmt::Write>(
     state: &mut ProofState,
     control: &ProofControl,
     simplifier: &Clause,
-    indices: Option<&mut GlobalIndices<'_>>,
+    indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8645,7 +8645,7 @@ fn move_simplified_ids_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     ids: Vec<i64>,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8666,7 +8666,7 @@ fn move_simplified_ids_from_slot<W: fmt::Write>(
 fn move_simplified_ids_from_processed_sets<W: fmt::Write>(
     state: &mut ProofState,
     ids: Vec<i64>,
-    mut indices: Option<&mut GlobalIndices<'_>>,
+    mut indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8694,7 +8694,7 @@ fn move_simplified_id_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     id: i64,
-    indices: Option<&mut GlobalIndices<'_>>,
+    indices: Option<&mut GlobalIndices>,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
@@ -8801,7 +8801,7 @@ fn processed_set_mut_by_slot(state: &mut ProofState, slot: ProcessedSetSlot) -> 
 fn proof_state_delete_first_global_indexed_clause_from_slot(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
     lambda_demod: bool,
 ) {
     let (terms, sets) = state.terms_and_processed_sets_mut();
@@ -8815,7 +8815,7 @@ fn proof_state_delete_global_indexed_clause_by_id_from_slot(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     ident: i64,
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
     lambda_demod: bool,
 ) {
     let (terms, sets) = state.terms_and_processed_sets_mut();
@@ -8826,7 +8826,7 @@ fn proof_state_delete_global_indexed_clause_by_id_from_slot(
 }
 
 fn proof_state_delete_global_indexed_clause(
-    indices: &mut GlobalIndices<'_>,
+    indices: &mut GlobalIndices,
     bank: &TermBank,
     clause: &mut Clause,
     lambda_demod: bool,
@@ -9277,18 +9277,35 @@ pub fn proof_state_init_ac_handling_with_output(
 /// This mirrors `GlobalIndicesFreeIndices(&state->gindices)` followed by
 /// `GlobalIndicesInit(...)`. The problem type is explicit instead of reading
 /// C's process-global `problemType`.
-pub fn proof_state_init_global_indices<'sig>(
-    state: &'sig ProofState,
+pub fn proof_state_init_global_indices(
+    state: &mut ProofState,
     control: &ProofControl,
-    indices: &mut GlobalIndices<'sig>,
     problem_type: ProblemType,
 ) {
     let params = control.heuristic_parms();
-    indices.init_for_problem(
-        state.terms().signature(),
+    state.global_indices_mut().init_for_problem(
         params.rw_bw_index_type.as_str(),
         params.pm_from_index_type.as_str(),
         params.pm_into_index_type.as_str(),
+        params.ext_rules_max_depth,
+        problem_type,
+    );
+}
+
+/// Initializes the proof state's watchlist indices with rewriting only.
+///
+/// This mirrors C `ProofStateAlloc`, which configures `state->wlindices` with
+/// the backward-rewrite index type and disables paramodulation indexes.
+pub fn proof_state_init_watchlist_global_indices(
+    state: &mut ProofState,
+    control: &ProofControl,
+    problem_type: ProblemType,
+) {
+    let params = control.heuristic_parms();
+    state.watchlist_indices_mut().init_for_problem(
+        params.rw_bw_index_type.as_str(),
+        "NoIndex",
+        "NoIndex",
         params.ext_rules_max_depth,
         problem_type,
     );
@@ -9551,11 +9568,13 @@ mod tests {
         proof_state_generate_new_clauses_with_global_indices_and_docs,
         proof_state_immediate_clausification, proof_state_immediate_clausification_with_docs,
         proof_state_init, proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
-        proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
+        proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_init_watchlist_global_indices, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_init_with_output,
         proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
         proof_state_insert_new_clauses_with_output, proof_state_insert_processed_clause,
-        proof_state_insert_watchlist_global_indices, proof_state_move_eval_store_to_unprocessed,
+        proof_state_insert_watchlist_global_indices_into,
+        proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
@@ -9602,7 +9621,7 @@ mod tests {
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
     use crate::clauses::formulasets::WrappedFormula;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
-    use crate::clauses::global_indices::{global_indices_null, GlobalIndices};
+    use crate::clauses::global_indices::GlobalIndices;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::picosat::PicoSatError;
@@ -10335,9 +10354,7 @@ mod tests {
         let indexed = proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| {
             panic!("{err}");
         });
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "FP1",
             "NoIndex",
             "NoIndex",
@@ -10345,7 +10362,7 @@ mod tests {
             ProblemType::FirstOrder,
         );
 
-        let globally_indexed = proof_state_insert_watchlist_global_indices(
+        let globally_indexed = proof_state_insert_watchlist_global_indices_into(
             &mut state,
             &mut indices,
             control.heuristic_parms().lambda_demod,
@@ -10375,9 +10392,7 @@ mod tests {
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
         proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "FP1",
             "NoIndex",
             "NoIndex",
@@ -10385,7 +10400,7 @@ mod tests {
             ProblemType::FirstOrder,
         );
         assert_eq!(
-            proof_state_insert_watchlist_global_indices(
+            proof_state_insert_watchlist_global_indices_into(
                 &mut state,
                 &mut indices,
                 control.heuristic_parms().lambda_demod,
@@ -11029,8 +11044,7 @@ mod tests {
         let (clause, indexed_term) =
             processed_indexed_unit_clause(state.terms_mut(), "pc_reset_global_idx", 4_044);
         state.processed_pos_rules_mut().insert(clause);
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         {
             let (terms, sets) = state.terms_and_processed_sets_mut();
             let clause = sets.pos_rules.find_by_id_mut(4_044).unwrap();
@@ -11113,8 +11127,7 @@ mod tests {
         let (clause, indexed_term) =
             processed_indexed_unit_clause(state.terms_mut(), "pc_move_global_idx", 4_054);
         state.processed_pos_eqns_mut().insert(clause);
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         {
             let (terms, sets) = state.terms_and_processed_sets_mut();
             let clause = sets.pos_eqns.find_by_id_mut(4_054).unwrap();
@@ -14273,8 +14286,7 @@ mod tests {
             let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
             (selected, partner)
         };
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_partner, state.terms(), false);
         let mut control = proof_control_alloc();
         init_fifo_hcb(&mut control, &state, "ProcessClauseIndexedParamodTest");
@@ -14987,9 +14999,7 @@ mod tests {
             )
         };
         let renamed = selected.copy_disjoint(&mut bank).unwrap();
-        let index_signature = bank.signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &index_signature,
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -15086,9 +15096,7 @@ mod tests {
             partner.set_proof_size(3);
             (selected, partner, u.f_code(), v.f_code())
         };
-        let index_signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &index_signature,
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -15877,8 +15885,7 @@ mod tests {
             let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
             (selected, partner, replacement, rhs)
         };
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_partner, state.terms(), false);
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
@@ -15923,8 +15930,7 @@ mod tests {
             partner.set_ident(4_152);
             (selected, partner)
         };
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_partner, state.terms(), false);
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
@@ -16406,8 +16412,7 @@ mod tests {
             let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
             (selected, partner, source)
         };
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_partner, state.terms(), false);
         let mut control = proof_control_alloc();
         init_fifo_hcb(&mut control, &state, "SaturateIndexedParamodTest");
@@ -16463,11 +16468,9 @@ mod tests {
             partner.set_ident(4_156);
             (selected, partner, source)
         };
-        let index_signature = state.terms().signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_partner, state.terms(), false);
-        let mut watchlist_indices =
-            GlobalIndices::new(&index_signature, "NoIndex", "NoIndex", "NoIndex", 0);
+        let mut watchlist_indices = GlobalIndices::new("NoIndex", "NoIndex", "NoIndex", 0);
         let mut control = proof_control_alloc();
         init_fifo_hcb(&mut control, &state, "SaturateIndexedDocsTest");
         control.set_ocb(kbo_ocb(state.terms()));
@@ -16920,9 +16923,7 @@ mod tests {
         };
         assert!(demodulator.is_demodulator());
 
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "FP1",
             "NoIndex",
             "NoIndex",
@@ -17224,9 +17225,7 @@ mod tests {
         state.watchlist_mut().unwrap().insert(watched);
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "FP1",
             "NoIndex",
             "NoIndex",
@@ -17234,7 +17233,7 @@ mod tests {
             ProblemType::FirstOrder,
         );
         assert_eq!(
-            proof_state_insert_watchlist_global_indices(
+            proof_state_insert_watchlist_global_indices_into(
                 &mut state,
                 &mut indices,
                 control.heuristic_parms().lambda_demod,
@@ -17290,9 +17289,7 @@ mod tests {
         state.watchlist_mut().unwrap().insert(watched);
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "FP1",
             "NoIndex",
             "NoIndex",
@@ -17346,9 +17343,7 @@ mod tests {
         state.watchlist_mut().unwrap().insert(watched);
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
-        let signature = state.terms().signature().clone();
         let mut indices = GlobalIndices::new_for_problem(
-            &signature,
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -17876,16 +17871,14 @@ mod tests {
 
     #[test]
     fn proof_state_init_global_indices_uses_control_index_parameters() {
-        let state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().rw_bw_index_type = "FP1".to_owned();
         control.heuristic_parms_mut().pm_from_index_type = "NoIndex".to_owned();
         control.heuristic_parms_mut().pm_into_index_type = "FP7".to_owned();
         control.heuristic_parms_mut().ext_rules_max_depth = 3;
-        let mut indices = global_indices_null();
-
-        proof_state_init_global_indices(&state, &control, &mut indices, ProblemType::HigherOrder);
-
+        proof_state_init_global_indices(&mut state, &control, ProblemType::HigherOrder);
+        let indices = state.global_indices();
         assert!(indices.has_bw_rw_index());
         assert!(!indices.has_pm_from_index());
         assert!(indices.has_pm_into_index());
@@ -17896,6 +17889,28 @@ mod tests {
         assert_eq!(indices.pm_from_index_type(), "NoIndex");
         assert_eq!(indices.pm_into_index_type(), "FP7");
         assert_eq!(indices.ext_rules_max_depth(), 3);
+        assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
+    }
+
+    #[test]
+    fn proof_state_init_watchlist_indices_enables_only_rewriting() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().rw_bw_index_type = "FP1".to_owned();
+        control.heuristic_parms_mut().pm_from_index_type = "FP6".to_owned();
+        control.heuristic_parms_mut().pm_into_index_type = "FP7".to_owned();
+        control.heuristic_parms_mut().ext_rules_max_depth = 3;
+
+        proof_state_init_watchlist_global_indices(&mut state, &control, ProblemType::HigherOrder);
+
+        let indices = state.watchlist_indices();
+        assert!(indices.has_bw_rw_index());
+        assert!(!indices.has_pm_from_index());
+        assert!(!indices.has_pm_into_index());
+        assert!(!indices.has_pm_negp_index());
+        assert!(indices.has_ext_into_index());
+        assert!(indices.has_ext_from_index());
+        assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
     }
 
@@ -17924,16 +17939,12 @@ mod tests {
         )
         .unwrap_or_else(|err| panic!("{err}"));
 
-        let mut indices = global_indices_null();
-        let outcome = proof_state_init_with_global_indices(
-            &mut state,
-            &mut control,
-            &mut indices,
-            ProblemType::FirstOrder,
-        )
-        .unwrap_or_else(|err| panic!("{err}"));
+        let outcome =
+            proof_state_init_with_global_indices(&mut state, &mut control, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(outcome.initial_clauses, 1);
+        let indices = state.global_indices();
         assert!(indices.has_bw_rw_index());
         assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.problem_type(), ProblemType::FirstOrder);

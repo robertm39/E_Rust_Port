@@ -112,7 +112,8 @@ use crate::heuristics::new_autoschedule::{
 };
 use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
-    proof_state_filter_unprocessed, proof_state_init_with_docs_and_output,
+    proof_state_filter_unprocessed, proof_state_init_global_indices,
+    proof_state_init_watchlist_global_indices, proof_state_init_with_docs_and_output,
     proof_state_init_with_output, proof_state_insert_watchlist_global_indices,
     proof_state_reset_processed_with_global_indices,
     proof_state_reset_processed_with_global_indices_and_docs,
@@ -146,9 +147,11 @@ use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
 };
 use crate::terms::match_mgu::term_has_higher_order_unification_surface;
+#[cfg(test)]
+use crate::terms::signature::Signature;
 use crate::terms::signature::{
-    FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
-    FP_IS_RATIONAL, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
+    FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
@@ -5548,11 +5551,10 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
     }
-    let index_signature = state.terms().signature().clone();
-    let mut watchlist_indices = proof_search_watchlist_indices(&index_signature, &control);
+    proof_state_init_global_indices(&mut state, &control, problem_type());
+    proof_state_init_watchlist_global_indices(&mut state, &control, problem_type());
     let _watchlist_indexed = proof_state_insert_watchlist_global_indices(
         &mut state,
-        &mut watchlist_indices,
         control.heuristic_parms().lambda_demod,
     );
     write_preprocessing_time(output, config)?;
@@ -5573,17 +5575,8 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
-    let mut global_indices = proof_search_global_indices(&index_signature, &control);
     let presat_result = if control.heuristic_parms().presat_interreduction {
-        run_presaturation_interreduction(
-            output,
-            config,
-            next_doc_ident,
-            &mut state,
-            &mut control,
-            &mut global_indices,
-            &mut watchlist_indices,
-        )?
+        run_presaturation_interreduction(output, config, next_doc_ident, &mut state, &mut control)?
     } else {
         PresaturationInterreductionResult {
             outcome: None,
@@ -5597,15 +5590,7 @@ fn run_proof_search<W: Write + ?Sized>(
             next_doc_ident,
         }
     } else {
-        run_main_saturation(
-            output,
-            config,
-            next_doc_ident,
-            &mut state,
-            &mut control,
-            &mut global_indices,
-            &mut watchlist_indices,
-        )?
+        run_main_saturation(output, config, next_doc_ident, &mut state, &mut control)?
     };
     next_doc_ident = saturation.next_doc_ident;
     let mut outcome = saturation.outcome;
@@ -5644,18 +5629,20 @@ fn run_proof_search<W: Write + ?Sized>(
     if !should_suppress_saturated_output_after_force_deriv(config, &outcome) {
         write_saturated_output(output, config, &state, saturated_success)?;
     }
-    write_proof_statistics(
-        output,
-        config,
-        &mut state,
-        Some(&global_indices),
-        ProofStatisticsInput {
-            parsed_ax_no,
-            relevancy_pruned,
-            raw_clause_no,
-            preproc_removed,
-        },
-    )?;
+    state.with_global_indices(|state, global_indices| {
+        write_proof_statistics(
+            output,
+            config,
+            state,
+            Some(global_indices),
+            ProofStatisticsInput {
+                parsed_ax_no,
+                relevancy_pruned,
+                raw_clause_no,
+                preproc_removed,
+            },
+        )
+    })?;
     Ok(saturate_outcome_exit_status(
         &outcome,
         &state,
@@ -5712,8 +5699,28 @@ fn run_main_saturation<W: Write + ?Sized>(
     start_doc_ident: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<SaturationRunResult, EProverError> {
+    state.with_global_and_watchlist_indices(|state, indices, watchlist_indices| {
+        run_main_saturation_with_indices(
+            output,
+            config,
+            start_doc_ident,
+            state,
+            control,
+            indices,
+            watchlist_indices,
+        )
+    })
+}
+
+fn run_main_saturation_with_indices<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    start_doc_ident: i64,
+    state: &mut crate::clauses::proofstate::ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<SaturationRunResult, EProverError> {
     let mut next_doc_ident = start_doc_ident;
     let outcome = if config.output_level >= 2 {
@@ -6245,36 +6252,6 @@ fn f64_from_u64_for_schedule(value: u64) -> f64 {
     value as f64
 }
 
-fn proof_search_global_indices<'sig>(
-    signature: &'sig Signature,
-    control: &ProofControl,
-) -> GlobalIndices<'sig> {
-    let params = control.heuristic_parms();
-    GlobalIndices::new_for_problem(
-        signature,
-        params.rw_bw_index_type.as_str(),
-        params.pm_from_index_type.as_str(),
-        params.pm_into_index_type.as_str(),
-        params.ext_rules_max_depth,
-        problem_type(),
-    )
-}
-
-fn proof_search_watchlist_indices<'sig>(
-    signature: &'sig Signature,
-    control: &ProofControl,
-) -> GlobalIndices<'sig> {
-    let params = control.heuristic_parms();
-    GlobalIndices::new_for_problem(
-        signature,
-        params.rw_bw_index_type.as_str(),
-        "NoIndex",
-        "NoIndex",
-        params.ext_rules_max_depth,
-        problem_type(),
-    )
-}
-
 fn write_proof_search_result_outputs<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
@@ -6479,8 +6456,28 @@ fn run_presaturation_interreduction<W: Write + ?Sized>(
     start_doc_ident: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
-    indices: &mut GlobalIndices<'_>,
-    watchlist_indices: &mut GlobalIndices<'_>,
+) -> Result<PresaturationInterreductionResult, EProverError> {
+    state.with_global_and_watchlist_indices(|state, indices, watchlist_indices| {
+        run_presaturation_interreduction_with_indices(
+            output,
+            config,
+            start_doc_ident,
+            state,
+            control,
+            indices,
+            watchlist_indices,
+        )
+    })
+}
+
+fn run_presaturation_interreduction_with_indices<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    start_doc_ident: i64,
+    state: &mut crate::clauses::proofstate::ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices,
+    watchlist_indices: &mut GlobalIndices,
 ) -> Result<PresaturationInterreductionResult, EProverError> {
     let mut session = if config.output_level >= 2 {
         Some(clause_proof_doc_session(config, start_doc_ident)?)
@@ -9400,7 +9397,7 @@ fn write_proof_statistics(
     output: &mut impl Write,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-    global_indices: Option<&GlobalIndices<'_>>,
+    global_indices: Option<&GlobalIndices>,
     input: ProofStatisticsInput,
 ) -> Result<(), EProverError> {
     #[cfg(not(feature = "print-index-stats"))]
@@ -15378,7 +15375,7 @@ mod tests {
         preprocessing_config_debug_line, problem_input_scanner_with_stdin, process_options,
         proof_control_from_config, proof_object_display_ac_axioms,
         proof_object_list_display_clauses, proof_object_list_display_items,
-        proof_search_global_indices, proof_success_object_roots, proof_success_status,
+        proof_state_init_global_indices, proof_success_object_roots, proof_success_status,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_worker_run_args, simple_fof_bool_term_to_formulas,
@@ -15399,7 +15396,9 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+    use crate::basics::simple_stuff::{
+        problem_type, reset_problem_type, set_problem_type, ProblemType,
+    };
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::clauses::clause::{clause_parse, Clause, ClauseParseOptions};
     use crate::clauses::clause_props::{
@@ -17814,17 +17813,20 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn proof_search_global_indices_follow_current_problem_type() {
         let _lock = global_state_lock();
-        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
         let control = ProofControl::new();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
 
         set_problem_type(ProblemType::FirstOrder).unwrap();
-        let first_order = proof_search_global_indices(bank.signature(), &control);
-        assert_eq!(first_order.problem_type(), ProblemType::FirstOrder);
-        drop(first_order);
+        proof_state_init_global_indices(&mut state, &control, problem_type());
+        assert_eq!(
+            state.global_indices().problem_type(),
+            ProblemType::FirstOrder
+        );
 
         reset_problem_type();
         set_problem_type(ProblemType::HigherOrder).unwrap();
-        let higher_order = proof_search_global_indices(bank.signature(), &control);
+        proof_state_init_global_indices(&mut state, &control, problem_type());
+        let higher_order = state.global_indices();
 
         assert_eq!(higher_order.problem_type(), ProblemType::HigherOrder);
         assert!(higher_order.has_ext_into_index());

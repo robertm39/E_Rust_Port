@@ -386,9 +386,9 @@ pub fn compute_all_paramodulants_indexed(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     parent_alias: &Clause,
-    into_index: &OverlapIndex<'_>,
-    negp_index: &OverlapIndex<'_>,
-    from_index: &OverlapIndex<'_>,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
@@ -424,9 +424,9 @@ pub fn compute_all_paramodulants_indexed_with_docs(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     parent_alias: &Clause,
-    into_index: &OverlapIndex<'_>,
-    negp_index: &OverlapIndex<'_>,
-    from_index: &OverlapIndex<'_>,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
@@ -453,9 +453,9 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     parent_alias: &Clause,
-    into_index: &OverlapIndex<'_>,
-    negp_index: &OverlapIndex<'_>,
-    from_index: &OverlapIndex<'_>,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
@@ -493,8 +493,8 @@ fn compute_into_paramodulants_indexed(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     parent_alias: &Clause,
-    into_index: &OverlapIndex<'_>,
-    negp_index: &OverlapIndex<'_>,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
@@ -547,7 +547,7 @@ fn compute_from_paramodulants_indexed(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     parent_alias: &Clause,
-    from_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
@@ -588,7 +588,7 @@ fn compute_from_position_into_index(
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
     overlap_term: &Term,
-    index: &OverlapIndex<'_>,
+    index: &OverlapIndex,
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
@@ -715,7 +715,7 @@ fn compute_indexed_sources_into_position(
     ocb: &mut OrderControlBlock,
     overlap_term: &Term,
     into_pos: &ClausePos,
-    from_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
@@ -990,7 +990,7 @@ fn compute_indexed_sources_into_position_csu(
     ocb: &mut OrderControlBlock,
     overlap_term: &Term,
     into_pos: &ClausePos,
-    from_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex,
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
@@ -1537,12 +1537,12 @@ const fn paramodulation_type_requests_simultaneous(pm_type: ParamodulationType) 
 }
 
 fn unifiable_occurrences<'index>(
-    index: &'index OverlapIndex<'_>,
+    index: &'index OverlapIndex,
     term: &Term,
     signature: &Signature,
 ) -> Vec<&'index SubtermOcc> {
     let mut occurrences = Vec::new();
-    let _ = index.find_unifiable_occurrences_with_signature(term, signature, &mut occurrences);
+    let _ = index.find_unifiable_occurrences(term, signature, &mut occurrences);
     occurrences
 }
 
@@ -3665,8 +3665,7 @@ mod tests {
         source.set_proof_size(5);
         target.set_proof_depth(4);
         target.set_proof_size(8);
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut target, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -3724,8 +3723,7 @@ mod tests {
         source.set_proof_size(4);
         target.set_proof_depth(5);
         target.set_proof_size(7);
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut target, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -3781,8 +3779,7 @@ mod tests {
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal, target_extra]));
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut target, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -3876,8 +3873,7 @@ mod tests {
         let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
         let target_for_paramod = target.copy_disjoint(&mut bank).unwrap();
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP7", "FP7", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP7", "FP7", 0);
         indices.insert_clause(&mut source, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -3927,8 +3923,7 @@ mod tests {
         maximal_oriented(&mut target_literal);
         let mut indexed_source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let selected = Clause::alloc(EqnList::from_vec(vec![target_literal, target_extra]));
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_source, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -3988,8 +3983,7 @@ mod tests {
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut target, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -4054,8 +4048,7 @@ mod tests {
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut target, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");
@@ -4104,8 +4097,7 @@ mod tests {
         let selected = Clause::alloc(EqnList::from_vec(vec![target_literal]));
         indexed_source.set_proof_depth(6);
         indexed_source.set_proof_size(10);
-        let index_signature = bank.signature().clone();
-        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
         indices.insert_clause(&mut indexed_source, &bank, false);
         let (into_index, negp_index, from_index) =
             indices.pm_paramodulation_indexes().expect("PM indexes");

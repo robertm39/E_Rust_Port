@@ -11,15 +11,16 @@ use std::fmt;
 
 pub type TermIdentitySet = BTreeMap<usize, Term>;
 
-pub struct SubtermIndex<'sig> {
-    index: FPIndex<'sig, SubtermOcc>,
+#[derive(Clone, Debug)]
+pub struct SubtermIndex {
+    index: FPIndex<SubtermOcc>,
 }
 
-impl<'sig> SubtermIndex<'sig> {
+impl SubtermIndex {
     #[must_use]
-    pub fn new(fp_fun: FingerprintIndexFunction, sig: &'sig Signature) -> Self {
+    pub fn new(fp_fun: FingerprintIndexFunction) -> Self {
         Self {
-            index: FPIndex::new(fp_fun, sig),
+            index: FPIndex::new(fp_fun),
         }
     }
 
@@ -64,11 +65,12 @@ impl<'sig> SubtermIndex<'sig> {
     pub fn collect_matchable_occurrences<'idx>(
         &'idx self,
         term: &Term,
+        signature: &Signature,
         result: &mut Vec<&'idx SubtermOcc>,
     ) -> usize {
         let start = result.len();
         let mut payloads = Vec::new();
-        self.index.find_matchable(term, &mut payloads);
+        self.index.find_matchable(term, signature, &mut payloads);
         for payload in payloads.into_iter().rev().flatten() {
             result.extend(payload.iter());
         }
@@ -78,11 +80,12 @@ impl<'sig> SubtermIndex<'sig> {
     pub fn collect_unifiable_occurrences<'idx>(
         &'idx self,
         term: &Term,
+        signature: &Signature,
         result: &mut Vec<&'idx SubtermOcc>,
     ) -> usize {
         let start = result.len();
         let mut payloads = Vec::new();
-        self.index.find_unifiable(term, &mut payloads);
+        self.index.find_unifiable(term, signature, &mut payloads);
         for payload in payloads.into_iter().rev().flatten() {
             result.extend(payload.iter());
         }
@@ -303,7 +306,7 @@ mod tests {
         let b = typed_const(&mut bank, "b");
         let left = typed_unary(&mut bank, "f", &a);
         let clause = singleton_clause(eqn(&mut bank, &left, &b, true), 1);
-        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        let mut index = SubtermIndex::new(index_fp1_create);
 
         assert!(index.insert_occurrence(&clause, &left, true));
         assert!(!index.insert_occurrence(&clause, &left, true));
@@ -391,7 +394,7 @@ mod tests {
         let mut literal = eqn(&mut bank, &left, &right, true);
         literal.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED);
         let clause = singleton_clause(literal, 9);
-        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        let mut index = SubtermIndex::new(index_fp1_create);
 
         index.insert_clause(&clause, false);
         assert_eq!(
@@ -423,13 +426,13 @@ mod tests {
         let f_b = typed_unary(&mut bank, "matchable_f", &b);
         let first = singleton_clause(eqn(&mut bank, &f_a, &a, true), 21);
         let second = singleton_clause(eqn(&mut bank, &f_b, &b, true), 22);
-        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        let mut index = SubtermIndex::new(index_fp1_create);
         index.insert_occurrence(&first, &f_a, false);
         index.insert_occurrence(&second, &f_b, false);
         let mut occurrences = Vec::new();
 
         assert_eq!(
-            index.collect_matchable_occurrences(&f_x, &mut occurrences),
+            index.collect_matchable_occurrences(&f_x, bank.signature(), &mut occurrences),
             2
         );
         let mut identifiers = occurrences
@@ -452,17 +455,23 @@ mod tests {
         let first = singleton_clause(eqn(&mut bank, &x, &a, true), 31);
         let second = singleton_clause(eqn(&mut bank, &f_a, &a, true), 32);
         let third = singleton_clause(eqn(&mut bank, &g_a, &a, true), 33);
-        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        let mut index = SubtermIndex::new(index_fp1_create);
         index.insert_occurrence(&first, &x, false);
         index.insert_occurrence(&second, &f_a, false);
         index.insert_occurrence(&third, &g_a, false);
 
         let mut matchable = Vec::new();
-        assert_eq!(index.collect_matchable_occurrences(&x, &mut matchable), 3);
+        assert_eq!(
+            index.collect_matchable_occurrences(&x, bank.signature(), &mut matchable),
+            3
+        );
         assert_eq!(full_clause_idents(&matchable), vec![33, 32, 31]);
 
         let mut unifiable = Vec::new();
-        assert_eq!(index.collect_unifiable_occurrences(&x, &mut unifiable), 3);
+        assert_eq!(
+            index.collect_unifiable_occurrences(&x, bank.signature(), &mut unifiable),
+            3
+        );
         assert_eq!(full_clause_idents(&unifiable), vec![33, 32, 31]);
     }
 }

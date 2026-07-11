@@ -14,7 +14,6 @@ use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::subterm_occurrences_dot_record_string;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::terms::idx_fp::get_fp_index_function;
-use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 #[cfg(feature = "print-index-stats")]
@@ -22,33 +21,32 @@ use std::fmt::{self, Write as FmtWrite};
 #[cfg(feature = "print-index-stats")]
 use std::io::{self, Write as IoWrite};
 
-pub struct GlobalIndices<'sig> {
-    signature: Option<&'sig Signature>,
+#[derive(Clone, Debug)]
+pub struct GlobalIndices {
     rw_bw_index_type: String,
     pm_from_index_type: String,
     pm_into_index_type: String,
     pm_negp_index_type: String,
-    bw_rw_index: Option<SubtermIndex<'sig>>,
-    pm_from_index: Option<OverlapIndex<'sig>>,
-    pm_into_index: Option<OverlapIndex<'sig>>,
-    pm_negp_index: Option<OverlapIndex<'sig>>,
+    bw_rw_index: Option<SubtermIndex>,
+    pm_from_index: Option<OverlapIndex>,
+    pm_into_index: Option<OverlapIndex>,
+    pm_negp_index: Option<OverlapIndex>,
     ext_sup_into_index: Option<ExtIndex>,
     ext_sup_from_index: Option<ExtIndex>,
     ext_rules_max_depth: i32,
     problem_type: ProblemType,
 }
 
-impl Default for GlobalIndices<'_> {
+impl Default for GlobalIndices {
     fn default() -> Self {
         Self::null()
     }
 }
 
-impl<'sig> GlobalIndices<'sig> {
+impl GlobalIndices {
     #[must_use]
     pub fn null() -> Self {
         Self {
-            signature: None,
             rw_bw_index_type: String::new(),
             pm_from_index_type: String::new(),
             pm_into_index_type: String::new(),
@@ -66,14 +64,12 @@ impl<'sig> GlobalIndices<'sig> {
 
     #[must_use]
     pub fn new(
-        signature: &'sig Signature,
         rw_bw_index_type: &str,
         pm_from_index_type: &str,
         pm_into_index_type: &str,
         ext_rules_max_depth: i32,
     ) -> Self {
         Self::new_for_problem(
-            signature,
             rw_bw_index_type,
             pm_from_index_type,
             pm_into_index_type,
@@ -84,7 +80,6 @@ impl<'sig> GlobalIndices<'sig> {
 
     #[must_use]
     pub fn new_for_problem(
-        signature: &'sig Signature,
         rw_bw_index_type: &str,
         pm_from_index_type: &str,
         pm_into_index_type: &str,
@@ -93,7 +88,6 @@ impl<'sig> GlobalIndices<'sig> {
     ) -> Self {
         let mut indices = Self::null();
         indices.init_for_problem(
-            signature,
             rw_bw_index_type,
             pm_from_index_type,
             pm_into_index_type,
@@ -105,14 +99,12 @@ impl<'sig> GlobalIndices<'sig> {
 
     pub fn init(
         &mut self,
-        signature: &'sig Signature,
         rw_bw_index_type: &str,
         pm_from_index_type: &str,
         pm_into_index_type: &str,
         ext_rules_max_depth: i32,
     ) {
         self.init_for_problem(
-            signature,
             rw_bw_index_type,
             pm_from_index_type,
             pm_into_index_type,
@@ -123,7 +115,6 @@ impl<'sig> GlobalIndices<'sig> {
 
     pub fn init_for_problem(
         &mut self,
-        signature: &'sig Signature,
         rw_bw_index_type: &str,
         pm_from_index_type: &str,
         pm_into_index_type: &str,
@@ -131,7 +122,6 @@ impl<'sig> GlobalIndices<'sig> {
         problem_type: ProblemType,
     ) {
         self.free_indices();
-        self.signature = Some(signature);
         rw_bw_index_type.clone_into(&mut self.rw_bw_index_type);
         pm_from_index_type.clone_into(&mut self.pm_from_index_type);
         pm_into_index_type.clone_into(&mut self.pm_into_index_type);
@@ -139,14 +129,10 @@ impl<'sig> GlobalIndices<'sig> {
         self.ext_rules_max_depth = ext_rules_max_depth;
         self.problem_type = problem_type;
 
-        self.bw_rw_index = get_fp_index_function(rw_bw_index_type)
-            .map(|fp_fun| SubtermIndex::new(fp_fun, signature));
-        self.pm_from_index = get_fp_index_function(pm_from_index_type)
-            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
-        self.pm_into_index = get_fp_index_function(pm_into_index_type)
-            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
-        self.pm_negp_index = get_fp_index_function(pm_into_index_type)
-            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
+        self.bw_rw_index = get_fp_index_function(rw_bw_index_type).map(SubtermIndex::new);
+        self.pm_from_index = get_fp_index_function(pm_from_index_type).map(OverlapIndex::new);
+        self.pm_into_index = get_fp_index_function(pm_into_index_type).map(OverlapIndex::new);
+        self.pm_negp_index = get_fp_index_function(pm_into_index_type).map(OverlapIndex::new);
         if problem_type == ProblemType::HigherOrder {
             self.ext_sup_into_index = Some(ExtIndex::new());
             self.ext_sup_from_index = Some(ExtIndex::new());
@@ -163,17 +149,12 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     pub fn reset(&mut self) {
-        let Some(signature) = self.signature else {
-            self.free_indices();
-            return;
-        };
         let rw_bw_index_type = self.rw_bw_index_type.clone();
         let pm_from_index_type = self.pm_from_index_type.clone();
         let pm_into_index_type = self.pm_into_index_type.clone();
         let ext_rules_max_depth = self.ext_rules_max_depth;
         let problem_type = self.problem_type;
         self.init_for_problem(
-            signature,
             &rw_bw_index_type,
             &pm_from_index_type,
             &pm_into_index_type,
@@ -218,7 +199,7 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     #[must_use]
-    pub const fn bw_rw_index(&self) -> Option<&SubtermIndex<'sig>> {
+    pub const fn bw_rw_index(&self) -> Option<&SubtermIndex> {
         self.bw_rw_index.as_ref()
     }
 
@@ -290,28 +271,24 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     #[must_use]
-    pub const fn pm_from_index(&self) -> Option<&OverlapIndex<'sig>> {
+    pub const fn pm_from_index(&self) -> Option<&OverlapIndex> {
         self.pm_from_index.as_ref()
     }
 
     #[must_use]
-    pub const fn pm_into_index(&self) -> Option<&OverlapIndex<'sig>> {
+    pub const fn pm_into_index(&self) -> Option<&OverlapIndex> {
         self.pm_into_index.as_ref()
     }
 
     #[must_use]
-    pub const fn pm_negp_index(&self) -> Option<&OverlapIndex<'sig>> {
+    pub const fn pm_negp_index(&self) -> Option<&OverlapIndex> {
         self.pm_negp_index.as_ref()
     }
 
     #[must_use]
     pub fn pm_paramodulation_indexes(
         &self,
-    ) -> Option<(
-        &OverlapIndex<'sig>,
-        &OverlapIndex<'sig>,
-        &OverlapIndex<'sig>,
-    )> {
+    ) -> Option<(&OverlapIndex, &OverlapIndex, &OverlapIndex)> {
         Some((
             self.pm_into_index.as_ref()?,
             self.pm_negp_index.as_ref()?,
@@ -439,14 +416,18 @@ impl<'sig> GlobalIndices<'sig> {
         write_overlap_index_distrib_data(output, self.pm_from_index.as_ref())?;
         output.write_char('\n')?;
         if let Some(index) = &self.pm_from_index {
-            output.write_str(&index.dot_string("pm_from_index", |payload, _signature| {
-                subterm_occurrences_dot_record_string(
-                    &format!("{payload:p}"),
-                    payload.iter(),
-                    bank,
-                    ProblemType::FirstOrder,
-                )
-            }))?;
+            output.write_str(&index.dot_string(
+                "pm_from_index",
+                bank.signature(),
+                |payload, _signature| {
+                    subterm_occurrences_dot_record_string(
+                        &format!("{payload:p}"),
+                        payload.iter(),
+                        bank,
+                        ProblemType::FirstOrder,
+                    )
+                },
+            ))?;
         }
         write!(output, "{DEFAULT_COMCHAR_RAW} Paramod-into index        : ")?;
         write_overlap_index_distrib_data(output, self.pm_into_index.as_ref())?;
@@ -471,14 +452,14 @@ impl<'sig> GlobalIndices<'sig> {
 }
 
 #[must_use]
-pub fn global_indices_null<'sig>() -> GlobalIndices<'sig> {
+pub fn global_indices_null() -> GlobalIndices {
     GlobalIndices::null()
 }
 
 #[cfg(feature = "print-index-stats")]
 fn write_subterm_index_distrib_data(
     output: &mut impl FmtWrite,
-    index: Option<&SubtermIndex<'_>>,
+    index: Option<&SubtermIndex>,
 ) -> fmt::Result {
     match index {
         Some(index) => index.write_distrib_data(output),
@@ -489,7 +470,7 @@ fn write_subterm_index_distrib_data(
 #[cfg(feature = "print-index-stats")]
 fn write_overlap_index_distrib_data(
     output: &mut impl FmtWrite,
-    index: Option<&OverlapIndex<'_>>,
+    index: Option<&OverlapIndex>,
 ) -> fmt::Result {
     match index {
         Some(index) => index.write_distrib_data(output),
@@ -648,8 +629,7 @@ mod tests {
 
     #[test]
     fn init_stores_names_and_allocates_only_known_backward_index() {
-        let bank = test_bank();
-        let indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "FP7", -1);
+        let indices = GlobalIndices::new("FP1", "NoIndex", "FP7", -1);
 
         assert!(indices.has_bw_rw_index());
         assert!(!indices.has_pm_from_index());
@@ -667,9 +647,7 @@ mod tests {
 
     #[test]
     fn higher_order_init_allocates_extension_indexes() {
-        let bank = test_bank();
         let indices = GlobalIndices::new_for_problem(
-            bank.signature(),
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -691,7 +669,7 @@ mod tests {
     fn insert_clause_sets_global_prop_and_populates_backward_index() {
         let mut bank = test_bank();
         let (mut clause, left) = unit_clause(&mut bank, "gidx_clause", 10);
-        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "NoIndex", 0);
+        let mut indices = GlobalIndices::new("FP1", "NoIndex", "NoIndex", 0);
 
         indices.insert_clause(&mut clause, &bank, false);
 
@@ -708,7 +686,7 @@ mod tests {
     fn insert_clause_populates_paramodulation_overlap_indexes() {
         let mut bank = test_bank();
         let (mut clause, left, right) = maximal_unit_clause(&mut bank, "gidx_pm_clause", 11);
-        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
 
         indices.insert_clause(&mut clause, &bank, false);
 
@@ -730,7 +708,7 @@ mod tests {
     fn insert_clause_routes_negative_atom_heads_to_negp_index() {
         let mut bank = test_bank();
         let (mut clause, atom, body) = maximal_negative_atom_clause(&mut bank, "gidx_negp", 12);
-        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "NoIndex", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "NoIndex", "FP1", 0);
 
         indices.insert_clause(&mut clause, &bank, false);
 
@@ -756,7 +734,6 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
         clause.set_ident(50);
         let mut indices = GlobalIndices::new_for_problem(
-            bank.signature(),
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -799,7 +776,6 @@ mod tests {
         clause.set_ident(51);
         clause.set_proof_depth(6);
         let mut indices = GlobalIndices::new_for_problem(
-            bank.signature(),
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -824,7 +800,7 @@ mod tests {
         let (clause, _) = unit_clause(&mut bank, "gidx_noindex", 20);
         let mut set = ClauseSet::new();
         set.insert(clause);
-        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
 
         assert_eq!(indices.insert_clause_set(&mut set, &bank, false), 0);
         assert!(set
@@ -846,7 +822,6 @@ mod tests {
         let mut set = ClauseSet::new();
         set.insert(clause);
         let mut indices = GlobalIndices::new_for_problem(
-            bank.signature(),
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -873,7 +848,7 @@ mod tests {
         let mut set = ClauseSet::new();
         set.insert(first);
         set.insert(second);
-        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "NoIndex", 0);
+        let mut indices = GlobalIndices::new("FP1", "NoIndex", "NoIndex", 0);
 
         assert_eq!(indices.insert_clause_set(&mut set, &bank, false), 2);
 
@@ -887,7 +862,7 @@ mod tests {
     fn reset_rebuilds_configured_backward_index_empty() {
         let mut bank = test_bank();
         let (mut clause, left) = unit_clause(&mut bank, "gidx_reset", 40);
-        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "FP1", "FP1", 2);
+        let mut indices = GlobalIndices::new("FP1", "FP1", "FP1", 2);
         indices.insert_clause(&mut clause, &bank, false);
 
         indices.reset();
@@ -918,7 +893,6 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
         clause.set_ident(52);
         let mut indices = GlobalIndices::new_for_problem(
-            bank.signature(),
             "NoIndex",
             "NoIndex",
             "NoIndex",
@@ -942,7 +916,7 @@ mod tests {
     fn index_statistics_string_prints_c_optional_index_stats_block() {
         let mut bank = test_bank();
         let (mut clause, _, _) = maximal_unit_clause(&mut bank, "gidx_stats", 70);
-        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "FP1", "FP1", 0);
+        let mut indices = GlobalIndices::new("FP1", "FP1", "FP1", 0);
 
         indices.insert_clause(&mut clause, &bank, false);
 

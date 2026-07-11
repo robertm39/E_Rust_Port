@@ -584,26 +584,25 @@ impl FPIndexDistrib {
     }
 }
 
-pub struct FPIndex<'a, T>
+#[derive(Clone, Debug)]
+pub struct FPIndex<T>
 where
     T: Ord + Clone,
 {
     index: FPTree<T>,
     fp_fun: FingerprintIndexFunction,
-    sig: &'a Signature,
     discrimination_tree: bool,
 }
 
-impl<'a, T> FPIndex<'a, T>
+impl<T> FPIndex<T>
 where
     T: Ord + Clone,
 {
     #[must_use]
-    pub fn new(fp_fun: FingerprintIndexFunction, sig: &'a Signature) -> Self {
+    pub fn new(fp_fun: FingerprintIndexFunction) -> Self {
         Self {
             index: FPTree::new(),
             fp_fun,
-            sig,
             discrimination_tree: std::ptr::fn_addr_eq(
                 fp_fun,
                 index_dt_create as FingerprintIndexFunction,
@@ -641,20 +640,12 @@ where
         self.index.delete(&key);
     }
 
-    pub fn find_unifiable<'b>(
-        &'b self,
-        term: &Term,
-        collect: &mut Vec<Option<&'b ObjTree<T>>>,
-    ) -> usize {
-        self.find_unifiable_with_signature(term, self.sig, collect)
-    }
-
     /// Finds unifiable leaves using a caller-provided live signature.
     ///
     /// Proof search may add generated symbols after an index was constructed.
     /// Discrimination-tree traversal needs their current arities, so callers
     /// with a mutable term-bank owner must use its live signature here.
-    pub fn find_unifiable_with_signature<'b>(
+    pub fn find_unifiable<'b>(
         &'b self,
         term: &Term,
         sig: &Signature,
@@ -671,16 +662,8 @@ where
         }
     }
 
-    pub fn find_matchable<'b>(
-        &'b self,
-        term: &Term,
-        collect: &mut Vec<Option<&'b ObjTree<T>>>,
-    ) -> usize {
-        self.find_matchable_with_signature(term, self.sig, collect)
-    }
-
     /// Finds matchable leaves using a caller-provided live signature.
-    pub fn find_matchable_with_signature<'b>(
+    pub fn find_matchable<'b>(
         &'b self,
         term: &Term,
         sig: &Signature,
@@ -726,11 +709,11 @@ where
     }
 
     #[must_use]
-    pub fn dot_string<F>(&self, name: &str, print_payload: F) -> String
+    pub fn dot_string<F>(&self, name: &str, sig: &Signature, print_payload: F) -> String
     where
         F: FnMut(&ObjTree<T>, &Signature) -> String,
     {
-        self.index.dot_string(name, self.sig, print_payload)
+        self.index.dot_string(name, sig, print_payload)
     }
 
     #[must_use]
@@ -864,18 +847,18 @@ mod tests {
         let query = term(data.f, &[leaf(data.a), leaf(data.b)]);
         let variable = var(-1);
         let other = term(data.g, &[leaf(data.a)]);
-        let mut index = FPIndex::new(index_fp2_create, &data.sig);
+        let mut index = FPIndex::new(index_fp2_create);
 
         index.insert(&query).store_payload(1);
         index.insert(&variable).store_payload(2);
         index.insert(&other).store_payload(3);
 
         let mut unifiable = Vec::new();
-        assert_eq!(index.find_unifiable(&query, &mut unifiable), 2);
+        assert_eq!(index.find_unifiable(&query, &data.sig, &mut unifiable), 2);
         assert_eq!(payload_values(&unifiable), vec![1, 2]);
 
         let mut matchable = Vec::new();
-        assert_eq!(index.find_matchable(&query, &mut matchable), 1);
+        assert_eq!(index.find_matchable(&query, &data.sig, &mut matchable), 1);
         assert_eq!(payload_values(&matchable), vec![1]);
     }
 
@@ -910,29 +893,37 @@ mod tests {
         let exact = term(data.f, &[leaf(data.a), leaf(data.b)]);
         let other = term(data.g, &[leaf(data.a)]);
         let variable = var(-1);
-        let mut index = FPIndex::new(index_dt_create, &data.sig);
+        let mut index = FPIndex::new(index_dt_create);
 
         index.insert(&exact).store_payload(1);
         index.insert(&other).store_payload(2);
         index.insert(&variable).store_payload(3);
 
         let mut variable_query = Vec::new();
-        assert_eq!(index.find_matchable(&variable, &mut variable_query), 3);
+        assert_eq!(
+            index.find_matchable(&variable, &data.sig, &mut variable_query),
+            3
+        );
         assert_eq!(payload_values(&variable_query), vec![3, 1, 2]);
 
         let mut concrete_query = Vec::new();
-        assert_eq!(index.find_unifiable(&exact, &mut concrete_query), 2);
+        assert_eq!(
+            index.find_unifiable(&exact, &data.sig, &mut concrete_query),
+            2
+        );
         assert_eq!(payload_values(&concrete_query), vec![1, 3]);
 
         let mut concrete_match = Vec::new();
-        assert_eq!(index.find_matchable(&exact, &mut concrete_match), 1);
+        assert_eq!(
+            index.find_matchable(&exact, &data.sig, &mut concrete_match),
+            1
+        );
         assert_eq!(payload_values(&concrete_match), vec![1]);
     }
 
     #[test]
     fn discrimination_tree_can_query_symbols_added_after_index_creation() {
         let mut data = test_signature();
-        let index_signature = data.sig.clone();
         let generated = data.sig.insert_id_for_problem(
             "generated_after_index_init",
             1,
@@ -940,12 +931,12 @@ mod tests {
             ProblemType::FirstOrder,
         );
         let generated_term = term(generated, &[leaf(data.a)]);
-        let mut index = FPIndex::new(index_dt_create, &index_signature);
+        let mut index = FPIndex::new(index_dt_create);
         index.insert(&generated_term).store_payload(7);
 
         let mut unifiable = Vec::new();
         assert_eq!(
-            index.find_unifiable_with_signature(&generated_term, &data.sig, &mut unifiable),
+            index.find_unifiable(&generated_term, &data.sig, &mut unifiable),
             1
         );
         assert_eq!(payload_values(&unifiable), vec![7]);
@@ -957,7 +948,7 @@ mod tests {
         let f = leaf(data.f);
         let g = leaf(data.g);
         let variable = var(-1);
-        let mut index = FPIndex::new(index_fp1_create, &data.sig);
+        let mut index = FPIndex::new(index_fp1_create);
 
         index.insert(&f).store_payload(1);
         index.insert(&g).store_payload(2);
