@@ -1709,6 +1709,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(simplified);
+        self.del_prop(CP_INPUT_FORMULA);
         self.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         Ok(true)
     }
@@ -5669,9 +5670,11 @@ mod tests {
         let or_code = bank.signature().or_code();
         let disjunction = bool_binary_with_code(&mut bank, or_code, &false_formula, &atom);
         let mut wrapped = WrappedFormula::wt_formula_alloc(disjunction);
+        wrapped.set_prop(CP_INPUT_FORMULA);
 
         assert!(wrapped.simplify(&mut bank).unwrap());
         assert_eq!(wrapped.formula(), &atom);
+        assert!(!wrapped.query_prop(CP_INPUT_FORMULA));
         assert_eq!(
             wrapped.derivation_entries(),
             &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]

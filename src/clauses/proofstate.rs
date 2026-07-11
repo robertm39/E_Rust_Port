@@ -1669,9 +1669,6 @@ impl ProofState {
             if std::ptr::eq(parent, current) {
                 break;
             }
-            if !clause_literals_match(current, parent) {
-                break;
-            }
             current = parent;
         }
         current
@@ -2461,16 +2458,6 @@ fn find_formula_by_derivation_ref(
 ) -> Option<&WrappedFormula> {
     set.iter()
         .find(|formula| parent.matches(formula.ident(), formula.entry_id()))
-}
-
-fn clause_literals_match(left: &Clause, right: &Clause) -> bool {
-    left.literal_number() == right.literal_number()
-        && left
-            .literals()
-            .as_slice()
-            .iter()
-            .zip(right.literals().as_slice())
-            .all(|(left, right)| left.literal_equal(right))
 }
 
 fn proof_object_parent_edges(
@@ -3576,7 +3563,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_proof_object_graph_prefers_ax_archive_for_active_quote_source() {
+    fn proof_state_proof_object_graph_collapses_mutated_active_quote_like_c() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let original = simple_clause(&mut state, "proof_graph_ax_archive_original", 20_015);
         let mut active_quote = simple_clause(&mut state, "proof_graph_active_quote", 20_015);
@@ -3594,15 +3581,10 @@ mod tests {
                 .iter()
                 .map(|clause| clause.derivation().is_some())
                 .collect::<Vec<_>>(),
-            vec![true, false]
+            vec![false]
         );
-        assert_eq!(
-            graph.edges,
-            vec![ProofObjectGraphEdge {
-                parent_index: 1,
-                child_index: 0,
-            }]
-        );
+        assert_eq!(graph.root_indices, vec![0]);
+        assert!(graph.edges.is_empty());
     }
 
     #[test]
