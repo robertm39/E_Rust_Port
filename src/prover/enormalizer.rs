@@ -200,7 +200,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp-format"),
         OptArgType::NoArg,
         None,
-        "Parse and print old TPTP format.",
+        "Equivalent to --tptp-in and --tptp-out.",
     ),
     OptCell::new(
         OptionCode::TptpIn,
@@ -248,7 +248,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-format"),
         OptArgType::NoArg,
         None,
-        "Parse and print TSTP format.",
+        "Equivalent to --tstp-in and --tstp-out.",
     ),
     OptCell::new(
         OptionCode::TstpIn,
@@ -1250,6 +1250,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::prover::version::footer;
     use crate::test_support::global_state_lock;
     use std::fs;
     use std::io::{self, Write};
@@ -1281,7 +1282,7 @@ mod tests {
 
     #[allow(clippy::too_many_lines)]
     fn expected_help() -> String {
-        format!(
+        let mut expected = format!(
             concat!(
                 "\n",
                 "\n",
@@ -1380,7 +1381,7 @@ mod tests {
                 "    Print TPTP-2 format instead of E-LOP.\n",
                 "\n",
                 "  --tptp-format\n",
-                "    Parse and print old TPTP format.\n",
+                "    Equivalent to --tptp-in and --tptp-out.\n",
                 "\n",
                 "  --tptp2-in\n",
                 "    Synonymous with --tptp-in.\n",
@@ -1401,7 +1402,7 @@ mod tests {
                 "    Print output clauses in TPTP-3 syntax.\n",
                 "\n",
                 "  --tstp-format\n",
-                "    Parse and print TSTP format.\n",
+                "    Equivalent to --tstp-in and --tstp-out.\n",
                 "\n",
                 "  --tptp3-in\n",
                 "    Synonymous with --tstp-in.\n",
@@ -1436,25 +1437,11 @@ mod tests {
                 "\n",
                 "\n",
                 "\n",
-                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
-                "and the E contributors (see DOC/CONTRIBUTORS).\n",
-                "\n",
-                "This program is a part of the distribution of the equational theorem\n",
-                "prover E. You can find the latest version of the E distribution\n",
-                "as well as additional information at\n",
-                "http://www.eprover.org\n",
-                "\n",
-                "This program is free software; you can redistribute it and/or modify\n",
-                "it under the terms of the GNU General Public License as published by\n",
-                "the Free Software Foundation; either version 2 of the License, or\n",
-                "(at your option) any later version.\n",
-                "\n",
-                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
-                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
-                "<jasmin.blanchette@gmail.com>.\n",
             ),
             version = VERSION,
-        )
+        );
+        expected.push_str(&footer());
+        expected
     }
 
     #[test]

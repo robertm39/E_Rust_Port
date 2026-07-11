@@ -5,7 +5,7 @@ use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
 use crate::inout::initio::{exit_io, init_io};
-use crate::inout::output::set_output_level;
+use crate::inout::output::{output_level, set_output_level};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::learn::annoterms::{anno_set_compute_pattern_subst, anno_set_parse};
 use crate::learn::classification::tsm_classify_set_write;
@@ -319,6 +319,16 @@ fn execute_tsm_classify(
         config.index_depth,
         subst,
     )?;
+    if output_level() != 0 && config.tsm_type != TsmType::RecurrentLocal {
+        for tsm in admin.tsms().iter().skip(1) {
+            let selection = format!(
+                "% Selected: {:2}  depth: {:2}",
+                tsm.index().index_type().bits(),
+                tsm.index().depth()
+            );
+            write_summary(summary_file.as_mut(), stdout, &selection)?;
+        }
+    }
     let eval_limit = tsm_compute_classification_limit(&mut admin, &ftrain_set);
     admin.set_eval_limit(eval_limit);
     let unmapped_eval = tsm_compute_average_eval(&mut admin, &ftrain_set);
@@ -495,6 +505,7 @@ f(a) : 2:(1,1).
 Evaluation: -1.0000  Termeval: -1.0000 OKOK a
 Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
 ";
+    const SELECTION_TRACE: &str = "% Selected: 64  depth:  1\n";
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::current_dir()
@@ -649,7 +660,7 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
         assert_eq!(
             output,
             format!(
-                "% Index type: 64\n{CLASSIFICATION_TRACE} 2 terms, 2 successes, 100.000 percent\n"
+                "% Index type: 64\n{SELECTION_TRACE}{CLASSIFICATION_TRACE} 2 terms, 2 successes, 100.000 percent\n"
             )
         );
         assert!(stderr.is_empty());
@@ -700,7 +711,10 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
             .expect("stderr is utf8")
             .is_empty());
         let output = std::fs::read_to_string(&output_path).expect("output file is readable");
-        assert_eq!(output, " 2 terms, 2 successes, 100.000 percent\n");
+        assert_eq!(
+            output,
+            format!("{SELECTION_TRACE} 2 terms, 2 successes, 100.000 percent\n")
+        );
 
         remove_if_present(&input_a_path);
         remove_if_present(&input_b_path);
@@ -725,7 +739,7 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
         assert_eq!(
             output,
             format!(
-                "% Index type: 64\n{CLASSIFICATION_TRACE} 2 terms, 2 successes, 100.000 percent\n"
+                "% Index type: 64\n{SELECTION_TRACE}{CLASSIFICATION_TRACE} 2 terms, 2 successes, 100.000 percent\n"
             )
         );
         assert!(stderr.is_empty());

@@ -110,4 +110,5 @@ Source files reviewed: `PROVER/ekb_ginsert.c`.
 - Replace the implicit floating-point-to-`long` negative-example budget with a named policy that documents truncation and boundary behavior.
 - Revisit the signal/temp-file setup and global `ClausesHaveLocalVariables` mutation when the Rust executable surface has a unified process-lifetime and parser-state model; the Rust port currently keeps the variable policy as explicit parser configuration.
 - Replace the hidden `OutputLevel = 0` executable startup mutation with explicit local output state in any cleaned API that is not trying to be a drop-in replacement.
+- The current WSL C reference aborts with glibc `double free or corruption (out)` on the comparison harness's small stdin protocol after creating partial KB output, while the ownership-safe Rust path completes. Do not reproduce the heap corruption; isolate whether the trigger is malformed legacy input or a protocol/KB ownership defect before promoting this fixture to an exact-output baseline.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -55,7 +55,7 @@ const MERGED_CNF_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 200;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const TFORM_RENAME_LIMIT_STR: &str = "24";
-const TFORM_MINISCOPE_LIMIT_STR: &str = "1000";
+const TFORM_MINISCOPE_LIMIT_STR: &str = "2147483648";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -292,7 +292,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("no-eq-unfolding"),
         OptArgType::NoArg,
         None,
-        "During preprocessing, abstain from unfolding equational definitions.",
+        "During preprocessing, abstain from unfolding (and removing) equational definitions.",
     ),
     OptCell::new(
         OptionCode::Sine,
@@ -332,7 +332,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("old-cnf"),
         OptArgType::OptArg,
         Some(TFORM_RENAME_LIMIT_STR),
-        "As the previous option, but use the classical, well-tested clausification algorithm as opposed to the newewst one which avoids some algorithmic pitfalls and hence works better on some exotic formulae. The two may produce slightly different (but equisatisfiable) clause normal forms.",
+        "As the previous option, but use the classical, well-tested clausification algorithm as opposed to the newewst one which avoides some algorithmic pitfalls and hence works better on some exotic formulae. The two may produce slightly different (but equisatisfiable) clause normal forms.",
     ),
     OptCell::new(
         OptionCode::MiniscopeLimit,
@@ -1971,7 +1971,8 @@ mod tests {
                 "    the problem has more than this limit of clauses.\n",
                 "\n",
                 "  --no-eq-unfolding\n",
-                "    During preprocessing, abstain from unfolding equational definitions.\n",
+                "    During preprocessing, abstain from unfolding (and removing) equational\n",
+                "    definitions.\n",
                 "\n",
                 "  --sine[=<arg>]\n",
                 "    Apply SInE to prune the unprocessed axioms with the specified filter.\n",
@@ -1998,7 +1999,7 @@ mod tests {
                 "\n",
                 "  --old-cnf[=<arg>]\n",
                 "    As the previous option, but use the classical, well-tested clausification\n",
-                "    algorithm as opposed to the newewst one which avoids some algorithmic\n",
+                "    algorithm as opposed to the newewst one which avoides some algorithmic\n",
                 "    pitfalls and hence works better on some exotic formulae. The two may\n",
                 "    produce slightly different (but equisatisfiable) clause normal forms. The\n",
                 "    option without the optional argument is equivalent to --old-cnf=24.\n",
@@ -2007,7 +2008,7 @@ mod tests {
                 "    Set the limit of variables to miniscope per input formula. The build-in\n",
                 "    default is 1000. Only applies to the new (default) clausification\n",
                 "    algorithm The option without the optional argument is equivalent to\n",
-                "    --miniscope-limit=1000.\n",
+                "    --miniscope-limit=2147483648.\n",
                 "\n",
                 "   -c <arg>\n",
                 "  --class-mask=<arg>\n",
@@ -2236,6 +2237,7 @@ mod tests {
                 "--ngu-many-limit=0.875",
                 "--ax-some-limit=7",
                 "--farity-large-limit=13",
+                "--miniscope-limit",
                 "features.txt",
             ],
             &mut stdout,
@@ -2254,6 +2256,7 @@ mod tests {
             free_symbol_properties,
             files,
             limits,
+            miniscope_limit,
             ..
         } = *config;
         assert!(parse_features);
@@ -2269,6 +2272,7 @@ mod tests {
         assert!((limits.ngu_many_limit - 0.875).abs() < f64::EPSILON);
         assert_eq!(limits.ax_some_limit, 7);
         assert_eq!(limits.far_sum_large_limit, 13);
+        assert_eq!(miniscope_limit, 2_147_483_648);
         assert_eq!(verbose_level(), 2);
         assert!(stdout.is_empty());
     }

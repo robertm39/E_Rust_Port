@@ -241,7 +241,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::control::proc_ctrl::EPCtrl;
-    use crate::prover::version::{E_NICKNAME, VERSION};
+    use crate::prover::version::{footer, E_NICKNAME, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Write};
     use std::process::Command;
@@ -259,7 +259,7 @@ mod tests {
     }
 
     fn expected_help() -> String {
-        format!(
+        let mut expected = format!(
             concat!(
                 "\n",
                 "e_stratpar {version} \"{nickname}\"\n",
@@ -286,26 +286,12 @@ mod tests {
                 "\n",
                 "\n",
                 "\n",
-                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
-                "and the E contributors (see DOC/CONTRIBUTORS).\n",
-                "\n",
-                "This program is a part of the distribution of the equational theorem\n",
-                "prover E. You can find the latest version of the E distribution\n",
-                "as well as additional information at\n",
-                "http://www.eprover.org\n",
-                "\n",
-                "This program is free software; you can redistribute it and/or modify\n",
-                "it under the terms of the GNU General Public License as published by\n",
-                "the Free Software Foundation; either version 2 of the License, or\n",
-                "(at your option) any later version.\n",
-                "\n",
-                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
-                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
-                "<jasmin.blanchette@gmail.com>.\n",
             ),
             version = VERSION,
             nickname = E_NICKNAME,
-        )
+        );
+        expected.push_str(&footer());
+        expected
     }
 
     #[test]

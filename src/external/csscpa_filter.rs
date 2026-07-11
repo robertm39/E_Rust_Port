@@ -83,7 +83,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("rant-about-input-buffering"),
         OptArgType::OptArg,
         Some("666"),
-        "Tell the program how much you hate to include the 'Please'-sequence in the input. The optional argument is the rant-intensity.",
+        "Tell the program how much you hate to include the 'Please'-sequence in the input. The optional argument is the  rant-intensity.",
     ),
 ];
 
@@ -497,8 +497,8 @@ mod tests {
                 "   -r\n",
                 "  --rant-about-input-buffering[=<arg>]\n",
                 "    Tell the program how much you hate to include the 'Please'-sequence in\n",
-                "    the input. The optional argument is the rant-intensity. The short form or\n",
-                "    the long form without the optional argument is equivalent to\n",
+                "    the input. The optional argument is the  rant-intensity. The short form\n",
+                "    or the long form without the optional argument is equivalent to\n",
                 "    --rant-about-input-buffering=666.\n",
                 "\n",
                 "\n",

@@ -235,6 +235,7 @@ class ComparisonTests(unittest.TestCase):
                 ("CSSCPA_filter/help", ["--help"]),
                 ("CSSCPA_filter/version", ["--version"]),
                 ("CSSCPA_filter/silent-accept", ["--silent"]),
+                ("CSSCPA_filter/trace-state-check", []),
                 ("checkproof/help", ["--help"]),
                 ("checkproof/version", ["--version"]),
                 ("checkproof/assumption-only", []),
@@ -335,6 +336,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             csscpa_case["stdin"], "accept: cnf(csscpa_unit,axiom,p(a)).\n"
         )
+        csscpa_trace_case = cases_by_name["CSSCPA_filter/trace-state-check"]
+        self.assertIn("output_level 0\nstate:\noutput_level 1", csscpa_trace_case["stdin"])
+        self.assertIn("check improve(0.0,0.0)", csscpa_trace_case["stdin"])
+        self.assertIn("great shining CSSCPA", csscpa_trace_case["stdin"])
         checkproof_case = cases_by_name["checkproof/assumption-only"]
         self.assertEqual(checkproof_case["stdin"], "1 : : [++p(a)] : initial\n")
         classify_case = cases_by_name["classify_problem/parse-features-standard"]

@@ -6768,7 +6768,7 @@ mod tests {
         tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW,
@@ -6800,6 +6800,22 @@ mod tests {
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use std::collections::BTreeMap;
+
+    struct ProblemTypeReset;
+
+    impl ProblemTypeReset {
+        fn higher_order() -> Self {
+            reset_problem_type();
+            set_problem_type(ProblemType::HigherOrder).expect("higher-order test problem type");
+            Self
+        }
+    }
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -10517,6 +10533,7 @@ mod tests {
 
     #[test]
     fn recognize_choice_axiom_records_choice_symbol_copy() {
+        let _problem_type = ProblemTypeReset::higher_order();
         let mut bank = test_bank();
         let (choice_clause, choice_code) = choice_axiom(&mut bank, "choice_recognized", -70, -72);
         let mut set = ClauseSet::from_clauses([choice_clause]);
@@ -10540,6 +10557,7 @@ mod tests {
 
     #[test]
     fn recognizes_choice_without_map_does_not_mutate_or_reject_duplicates() {
+        let _problem_type = ProblemTypeReset::higher_order();
         let mut bank = test_bank();
         let (first, choice_code) = choice_axiom(&mut bank, "choice_boolean", -71, -73);
         let (second, _) = choice_axiom(&mut bank, "choice_boolean", -75, -77);
@@ -10562,6 +10580,7 @@ mod tests {
 
     #[test]
     fn recognize_choice_axiom_rejects_duplicate_choice_symbol() {
+        let _problem_type = ProblemTypeReset::higher_order();
         let mut bank = test_bank();
         let (first, choice_code) = choice_axiom(&mut bank, "choice_duplicate", -80, -82);
         let (second, _) = choice_axiom(&mut bank, "choice_duplicate", -84, -86);

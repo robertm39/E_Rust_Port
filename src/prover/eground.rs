@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "eground";
 const TFORM_RENAME_LIMIT_STR: &str = "24";
-const TFORM_MINISCOPE_LIMIT_STR: &str = "1000";
+const TFORM_MINISCOPE_LIMIT_STR: &str = "2147483648";
 const EGROUND_CNF_MINISCOPE_LIMIT: i64 = 1_048_576;
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
@@ -130,7 +130,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Select an output level, greater values imply more verbose output.",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in eground (I think).",
     ),
     OptCell::new(
         OptionCode::PrintStatistics,
@@ -146,7 +146,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("resources-info"),
         OptArgType::NoArg,
         None,
-        "Give some information about the resources used by the system.",
+        "Give some information about the resources used by the system. You will usually get CPU time information. On systems returning more information with the rusage() system call, you will also get information about memory consumption.",
     ),
     OptCell::new(
         OptionCode::SuppressResult,
@@ -154,7 +154,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("suppress-result"),
         OptArgType::NoArg,
         None,
-        "Suppress actual printing of the result, just give a short message about success.",
+        "Suppress actual printing of the result, just give a short message about success. Useful mainly for test runs.",
     ),
     OptCell::new(
         OptionCode::LopParse,
@@ -162,7 +162,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpParse,
@@ -170,7 +170,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp-in"),
         OptArgType::NoArg,
         None,
-        "Parse TPTP-2 format instead of E-LOP.",
+        "Parse TPTP-2 format instead of E-LOP (except includes, which are handles as in TPTP-3, as TPTP-2 include syntax is considered harmful).",
     ),
     OptCell::new(
         OptionCode::TptpPrint,
@@ -218,7 +218,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-in"),
         OptArgType::NoArg,
         None,
-        "Parse TPTP-3 format instead of E-LOP.",
+        "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still under development, and the version implemented may not be fully conformant at all times. It works on all TPTP 3.0.1 input files (including includes).",
     ),
     OptCell::new(
         OptionCode::TstpPrint,
@@ -274,7 +274,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("definitional-cnf"),
         OptArgType::OptArg,
         Some(TFORM_RENAME_LIMIT_STR),
-        "Tune the clausification algorithm to introduce definitions for subformulae.",
+        "Tune the clausification algorithm to introduces definitions for subformulae to avoid exponential blow-up. The optional argument is a fudge factor that determines when definitions are introduced. 0 disables definitions completely. The default works well.",
     ),
     OptCell::new(
         OptionCode::MiniscopeLimit,
@@ -282,7 +282,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("miniscope-limit"),
         OptArgType::OptArg,
         Some(TFORM_MINISCOPE_LIMIT_STR),
-        "Set the limit of variables to miniscope per input formula.",
+        "Set the limit of variables to miniscope per input formula. The build-in default is 1000. Only applies to the new (default) clausification algorithm",
     ),
     OptCell::new(
         OptionCode::SplitTries,
@@ -290,7 +290,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("split-tries"),
         OptArgType::OptArg,
         Some("1"),
-        "Determine the number of tries for splitting.",
+        "Determine the number of tries for splitting. If 0, no splitting is performed. If 1, only variable-disjoint splits are done. Otherwise, up to the desired number of variable permutations is tried to find a splitting subset.",
     ),
     OptCell::new(
         OptionCode::DisableUnitSubsumption,
@@ -322,7 +322,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("memory-limit"),
         OptArgType::ReqArg,
         None,
-        "Limit the memory the system may use. The argument is the allowed amount of memory in MB.",
+        "Limit the memory the system may use. The argument is the allowed amount of memory in MB. This option may not work everywhere, due to broken and/or strange behaviour of setrlimit() in some UNIX implementations. It does work under all tested versions of Solaris and GNU/Linux.",
     ),
     OptCell::new(
         OptionCode::CpuLimit,
@@ -330,7 +330,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("cpu-limit"),
         OptArgType::OptArg,
         Some("300"),
-        "Limit the cpu time the program should run.",
+        "Limit the cpu time the program should run. The optional argument is the CPU time in seconds. The program will terminate immediately after reaching the time limit, regardless of internal state. This option may not work everywhere, due to broken and/or strange behaviour of setrlimit() in some UNIX implementations. It does work under all tested versions of Solaris, HP-UX and GNU/Linux. As a side effect, this option will inhibit core file writing.",
     ),
     OptCell::new(
         OptionCode::SoftCpuLimit,
@@ -338,7 +338,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("soft-cpu-limit"),
         OptArgType::OptArg,
         Some("310"),
-        "Limit the cpu time spent in grounding.",
+        "Limit the cpu time spend in grounding. After the time expires, the prover will print an partial system.",
     ),
     OptCell::new(
         OptionCode::PartComplete,
@@ -346,7 +346,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("add-one-instance"),
         OptArgType::NoArg,
         None,
-        "If grounding runs out of time or memory, try to add at least one instance of each clause.",
+        "If the grounding procedure runs out of time or memory, try to add at least one instance of each clause to the set. This might fail for  really large clause sets, since the reserve memory kept for this purpose may be insufficient. ",
     ),
     OptCell::new(
         OptionCode::GiveUp,
@@ -354,7 +354,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("give-up"),
         OptArgType::ReqArg,
         None,
-        "Give up early if the problem is unlikely to be reasonably small.",
+        "Give up early if the problem is unlikely to be reasonably small. If run without constraints, the program will give up if the clause with the largest number of instances will be expanded into more than this number of instances. If run with constraints, the program keeps a running count and will terminate if the estimated total number of clauses would exceed this value . A value of 0 will leave this test disabled.",
     ),
     OptCell::new(
         OptionCode::Constraints,
@@ -370,7 +370,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("local-constraints"),
         OptArgType::NoArg,
         None,
-        "Use local purity constraints to further restrict the number of instantiations done.",
+        "Use local purity constraints to further restrict the number of instantiations done. Implies the previous option. Not yet implemented! Note to self: Split clauses need to get fresh variables if this is to work!",
     ),
     OptCell::new(
         OptionCode::FixMinisat,
@@ -378,7 +378,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("fix-minisat"),
         OptArgType::NoArg,
         None,
-        "Fix the preamble to include only the maximum variable index.",
+        "Fix the preamble to include only the maximum variable index, to compensate for MiniSAT's problematic interpretation of the DIMAC syntax.",
     ),
 ];
 
@@ -1257,6 +1257,7 @@ mod tests {
                 "--fix-minisat",
                 "--give-up=12",
                 "--definitional-cnf=7",
+                "--miniscope-limit",
             ],
             &mut stdout,
         )

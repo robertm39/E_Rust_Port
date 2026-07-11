@@ -1,5 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+use crate::basics::simple_stuff::reset_problem_type;
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -104,7 +104,6 @@ where
 {
     let _problem_type_guard = ProblemTypeRunGuard::new();
     init_io(PROGRAM_NAME);
-    set_problem_type(ProblemType::FirstOrder)?;
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout, stderr);
     exit_io();
@@ -401,6 +400,7 @@ mod tests {
         let output = String::from_utf8(stdout).expect("output is utf8");
         assert!(output.starts_with("% Signature ("));
         assert!(output.contains("   f             :  2"));
+        assert!(output.contains("   f             :  2    %   4  1 $i > $i > $i\n"));
         assert!(output.contains("*1 : $true   =   $true\t/*  Properties:"));
         assert!(output.contains("*3 : a   =   a\t/*  Properties:"));
         assert!(output.contains("*4 : f(*3,*3)   =   f(a,a)\t/*  Properties:"));

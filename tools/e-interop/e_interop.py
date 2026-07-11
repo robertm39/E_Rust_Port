@@ -154,6 +154,21 @@ TOOL_FUNCTIONAL_CASES = {
             ("--silent",),
             "accept: cnf(csscpa_unit,axiom,p(a)).\n",
         ),
+        (
+            "trace-state-check",
+            (),
+            (
+                "output_level 0\n"
+                "state:\n"
+                "output_level 1\n"
+                "accept from 2: cnf(csscpa_unit,axiom,p(a)).\n"
+                "check improve(0.0,0.0): "
+                "cnf(csscpa_candidate,axiom,(p(a)|q(a))).\n"
+                "Please process clauses now, I beg you, great shining CSSCPA,\n"
+                "wonder of the world, most beautiful program ever written.\n"
+                "state:\n"
+            ),
+        ),
     ),
     "checkproof": (
         (

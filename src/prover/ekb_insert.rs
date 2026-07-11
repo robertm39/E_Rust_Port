@@ -63,7 +63,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("name"),
         OptArgType::ReqArg,
         None,
-        "Give the name of the new problem. If not given, the program will take the name of the first input file, or, if <stdin> is read, a name of the form '__problem__i', where i is magically computed from the existing knowledge base.",
+        "Give the name of the new problem. If not given, the program will take the name of the first input file, or, if <stdin> is read, a name of the form '__problem__i', where i is magically computed  from the existing knowledge base.",
     ),
     OptCell::new(
         OptionCode::KnowledgeBase,

@@ -105,6 +105,7 @@ Source files reviewed: `PROVER/epcllemma.c`.
 - `--no-reference-weights` is documented as clearing all reference weights, but C assigns `pas_simpl_w` twice and leaves `act_simpl_w` unchanged. Rust preserves the effective assignments; revisit only with lemma-selection trace comparisons.
 - The default relative lemma limit uses `PCLProtStepNo(prot) * max_lemmas_rel + 0.99` and then stores the result in `long`; this can still truncate to zero for very small protocols. Rust preserves the numeric behavior; a clearer UI could expose explicit rounding only outside compatibility mode.
 - `print_help(FILE* out)` prints the option table to `stdout` instead of `out`, and the footer uses the old 2003-2005 support-tool copyright block. Rust keeps the visible executable text but not the internal helper-output bug.
+- The footer's backslash-continued C string has inconsistent continuation indentation, producing large leading-space runs before its second and third lines. Rust pins those spaces for exact help output; a cleaned footer helper should store logical lines without source-indentation leakage.
 
 ### Porting Focus
 

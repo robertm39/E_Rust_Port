@@ -87,6 +87,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 
 - The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are represented in `src/external/csscpa.rs`.
 - `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: exact C-shaped full help text through the shared option renderer, C-shaped option parsing for version/verbose/output/silent/output-level/rant, including C's negative `--output-level` truthiness below `OUTPRINT(1)`, stdout or output-file routing, default `-` stdin handling, C source-confirmed `TSTPFormat` file scanner setup, sequential input processing over one CSSCPA state, replay of C's state/process-clause trace flush points, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `SysError`-style two-line input/output file-open diagnostics, C `OutClose` output-stream error wording on final flush failure, and `InitIO`/`ExitIO` initialization.
+- WSL comparison now covers a non-silent command stream with `state:`, output-level changes, forced acceptance, a subsumed `check improve(...)`, the historical buffering plea, and final state output; normalized C and Rust output is exact for that trace as well as help, version, and silent acceptance.
 
 ### Change Later
 
@@ -99,6 +100,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 - Rust exposes output routing through explicit writers and file creation rather than the process-global `GlobalOut`. This is cleaner for tests, but exact `OpenGlobalOut`/`OutClose` ownership and error wording should still be audited when byte-compatible CLI diagnostics are required.
 - Rust now mirrors C's two-line `SysError` shape for CSSCPA input/output file-open failures by embedding the program-prefixed OS error line in the diagnostic. A later process-level diagnostic layer could represent fatal system errors structurally instead of carrying the second line as text.
 - Rust file scanners currently load each file or stdin into memory before scanning. C reads through a `FILE*` stream; large CSSCPA inputs should be benchmarked before treating the eager path as final.
+- The rant option description contains a source-level double space in `the  rant-intensity`; because the shared option renderer wraps source text, that whitespace changes the help layout. Rust preserves it for byte compatibility, but cleaned help should not depend on accidental internal spacing.
 
 ### Porting Focus
 

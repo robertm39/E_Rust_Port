@@ -95,12 +95,13 @@ Source files reviewed: `PROVER/tsm_classify.c`.
 - `src/prover/tsm_classify.rs` and `src/bin/tsm_classify.rs` port the standalone executable over the existing Rust learning modules for annotations, flat annotated terms, pattern substitutions, TSM construction, and classification.
 - The Rust wrapper preserves the C command-line surface, including long-only `--version`, optional `--verbose`, `-o` summary redirection including `-o -`, C-shaped input/output file-open and output-close diagnostics, `--index-type` printing `% Index type: ...` to stdout during option parsing, and the typo-preserving `--tsm-type` error text.
 - Input files are concatenated before scanning, then parsed as `Training: <annotated terms>. Test: <annotated terms>.`; the parser flattens all annotations and translates them with C's fixed weight vector where only weight slot `0` is set.
-- `TSMClassifySet` writes per-term `Evaluation: ... OKOK/FAIL ...` progress to plain `stdout`; only the final `<n> terms, <n> successes, ...` summary is written through `GlobalOut`/`-o`. The Rust executable mirrors that split.
+- `TSMFindOptimalIndex` writes `% Selected: ... depth: ...` through `GlobalOut` whenever `OutputLevel` is nonzero, `TSMClassifySet` writes per-term `Evaluation: ... OKOK/FAIL ...` progress to plain `stdout`, and the final `<n> terms, <n> successes, ...` summary returns to `GlobalOut`/`-o`. The Rust executable mirrors that three-part split, including recursive selection order.
 
 ### Change Later
 
 - Replace the temporary-file concatenation model with streaming or a scanner chain only after compatibility tests cover diagnostics, lack of inserted separators, and stdin/file ordering.
 - Move the `--index-type` parse echo and classification progress behind explicit output controls in a modernized mode. In C these writes go to stdout even on usage errors or when `-o` redirects the summary, which is awkward for machine consumers.
+- Index-selection progress is emitted from the learning core through process-global `GlobalOut`, coupling index search to presentation. Rust reconstructs the same lines at the executable boundary from concrete TSM creation order; a cleaned C API should return selection events or results instead of printing internally.
 - `main()` opens `GlobalOut` before defaulting to stdin and before `ConcatFiles()` reads the inputs, so an output file can be created or truncated even when input opening or parsing later fails. Rust preserves that ordering through its explicit summary writer; a cleaned CLI should make output transactional if compatibility mode is not required.
 - Make the fixed `(Sources, Class)` annotation interpretation explicit in a typed configuration instead of allocating a generic dynamic double array and setting only `weights[0]`.
 - Define empty-test-set behavior deliberately. The C summary divides by `nodes` without a zero guard, so an empty test block can print NaN/Inf depending on the platform C library.

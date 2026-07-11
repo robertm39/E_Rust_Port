@@ -567,7 +567,7 @@ mod tests {
     use super::{full_parse_options, print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::inout::output::output_level;
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{footer, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -603,7 +603,7 @@ mod tests {
     }
 
     fn expected_help() -> String {
-        format!(
+        let mut expected = format!(
             concat!(
                 "\n",
                 "\n",
@@ -666,25 +666,11 @@ mod tests {
                 "\n",
                 "\n",
                 "\n",
-                "Copyright 1998-2026 by Stephan Schulz, schulz@eprover.org,\n",
-                "and the E contributors (see DOC/CONTRIBUTORS).\n",
-                "\n",
-                "This program is a part of the distribution of the equational theorem\n",
-                "prover E. You can find the latest version of the E distribution\n",
-                "as well as additional information at\n",
-                "http://www.eprover.org\n",
-                "\n",
-                "This program is free software; you can redistribute it and/or modify\n",
-                "it under the terms of the GNU General Public License as published by\n",
-                "the Free Software Foundation; either version 2 of the License, or\n",
-                "(at your option) any later version.\n",
-                "\n",
-                "Bug reports for the first-order prover should be sent to <schulz@eprover.org>.\n",
-                "Bug reports with respect to the HO-version should be sent to or at least copied to\n",
-                "<jasmin.blanchette@gmail.com>.\n",
             ),
             version = VERSION,
-        )
+        );
+        expected.push_str(&footer());
+        expected
     }
 
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {

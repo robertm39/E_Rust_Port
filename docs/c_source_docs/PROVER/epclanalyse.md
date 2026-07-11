@@ -99,6 +99,7 @@ Source files reviewed: `PROVER/epclanalyse.c`.
 - `OpenGlobalOut(outname)` runs before inserting the default `-` input and before input scanning, so `-o` can create/truncate an output path before later input failures while `-o -` remains stdout. Rust preserves the side effect through an explicit output owner; transactional output belongs outside the drop-in replacement mode.
 - The C help text uses a legacy 2002-2009 support-tool footer and obsolete URL instead of the shared modern `E_FOOTER`. Rust preserves that visible text for this executable; consider moving old support-tool footers behind a shared compatibility helper later.
 - `epclanalyse` inherits `PCLProtPropDataPrint`'s zero-denominator average formulas and unconditional representative/metric printing. Empty protocols and formula-only protocols can hit assertions, null pointers, or invalid clause-union reads in C after the summary header; Rust keeps the visible arithmetic shape but makes representative rendering total. After drop-in compatibility is secured, the C path should report unavailable representatives explicitly.
+- Even the small non-empty comparison fixture reaches a zero denominator for one metric: glibc spells the resulting value `-nan`, while Rust's formatter spells it `NaN`. Treat non-finite spelling as a platform presentation difference; a cleaned statistics renderer should print an explicit unavailable marker instead of exposing runtime-specific NaN text.
 
 ### Porting Focus
 

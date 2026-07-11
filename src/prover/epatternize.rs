@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "epatternize";
 const TFORM_RENAME_LIMIT_STR: &str = "24";
-const TFORM_MINISCOPE_LIMIT_STR: &str = "1000";
+const TFORM_MINISCOPE_LIMIT_STR: &str = "2147483648";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
 const MINISCOPE_LIMIT_DEFAULT: i64 = 1_000;
 const OUTPUT_CLOSE_ERROR: &str =
@@ -1199,7 +1199,7 @@ mod tests {
                 "    Set the limit of variables to miniscope per input formula. The build-in\n",
                 "    default is 1000. Only applies to the new (default) clausification\n",
                 "    algorithm The option without the optional argument is equivalent to\n",
-                "    --miniscope-limit=1000.\n",
+                "    --miniscope-limit=2147483648.\n",
                 "\n",
                 "   -c <arg>\n",
                 "  --class-mask=<arg>\n",
@@ -1427,6 +1427,17 @@ mod tests {
                 files: vec!["-".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn miniscope_option_without_argument_uses_c_header_limit() {
+        let command = process_options(["epatternize", "--miniscope-limit"], &mut Vec::new())
+            .expect("optional miniscope argument parses");
+
+        let RunCommand::Execute(config) = command else {
+            panic!("expected execution command");
+        };
+        assert_eq!(config.miniscope_limit, 2_147_483_648);
     }
 
     #[test]
