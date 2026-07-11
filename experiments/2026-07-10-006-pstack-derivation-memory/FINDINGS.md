@@ -55,7 +55,7 @@ The exact proof-object command now returns `Unsatisfiable` for both former fast-
 
 ## Limits
 
-- `BOO020-1.p` now reaches about 46.7 seconds before the 2 GiB allocation failure instead of 24.3 seconds, but it still does not match C's 60-second `ResourceOut` result.
+- At this experiment's retained byte-equivalent allocation, `BOO020-1.p` reached about 46.7 seconds before the 2 GiB allocation failure instead of 24.3 seconds. The follow-up `2026-07-11-001-boo020-memory` experiment uses C's six-entry `PSTACK_AVG_MEM` occupancy for derivation stacks and reaches C's 60-second `ResourceOut` result at a 1,889.8 MiB peak.
 - `LUSK6.lop` remains allocator-sensitive because C and Rust term stores use object identity in hashes and tie breaks. The retained layout proves the problem but shifts the run from the prior 4,897/122,867 processed/generated trace to 5,305/129,610 and a roughly 6.9-7.1 second warm runtime. C takes about 1.1 seconds.
 - This fixes a major semantic memory-limit mismatch; it is not final memory or performance parity.
 

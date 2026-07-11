@@ -1632,7 +1632,8 @@ impl WrappedFormula {
     }
 
     pub fn ensure_derivation(&mut self) -> &mut PStack<DerivationEntry> {
-        self.derivation.get_or_insert_with(PStack::new)
+        self.derivation
+            .get_or_insert_with(PStack::with_average_capacity)
     }
 
     pub fn set_derivation(&mut self, derivation: Option<PStack<DerivationEntry>>) {

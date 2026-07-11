@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, fmt, mem};
 
 pub const PSTACK_DEFAULT_SIZE: usize = 128;
+const PSTACK_AVG_ENTRIES: usize = 6;
 
 pub type PStackPointer = isize;
 pub type PStackInt = i64;
@@ -36,9 +37,25 @@ impl<T> PStack<T> {
     #[must_use]
     pub fn with_size(size: usize) -> Self {
         assert!(size > 0, "PStack initial size must be non-zero");
+        Self::with_size_and_capacity(size, Self::initial_capacity(size))
+    }
+
+    /// Allocate a default-sized stack using the average occupancy assumed by
+    /// the C aggregate-memory estimates.
+    #[must_use]
+    pub(crate) fn with_average_capacity() -> Self {
+        Self::with_size_and_capacity(PSTACK_DEFAULT_SIZE, PSTACK_AVG_ENTRIES)
+    }
+
+    fn with_size_and_capacity(size: usize, capacity: usize) -> Self {
+        assert!(size > 0, "PStack initial size must be non-zero");
+        assert!(
+            capacity > 0 && capacity <= size,
+            "PStack physical capacity must be within its logical size"
+        );
         Self {
             size,
-            stack: Vec::with_capacity(Self::initial_capacity(size)),
+            stack: Vec::with_capacity(capacity),
         }
     }
 
@@ -434,7 +451,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{PStack, PStackInt, PSTACK_DEFAULT_SIZE};
+    use super::{PStack, PStackInt, PSTACK_AVG_ENTRIES, PSTACK_DEFAULT_SIZE};
     use std::fmt::Write as _;
 
     #[test]
@@ -473,6 +490,20 @@ mod tests {
         let stack = PStack::<[usize; 4]>::new();
         assert_eq!(stack.allocated_size(), PSTACK_DEFAULT_SIZE);
         assert_eq!(stack.stack.capacity(), PSTACK_DEFAULT_SIZE / 4);
+    }
+
+    #[test]
+    fn average_capacity_stack_keeps_c_logical_growth_boundary() {
+        let mut stack = PStack::<[usize; 4]>::with_average_capacity();
+        assert_eq!(stack.allocated_size(), PSTACK_DEFAULT_SIZE);
+        assert_eq!(stack.stack.capacity(), PSTACK_AVG_ENTRIES);
+
+        for value in 0..=PSTACK_AVG_ENTRIES {
+            stack.push([value; 4]);
+        }
+
+        assert_eq!(stack.len(), PSTACK_AVG_ENTRIES + 1);
+        assert_eq!(stack.allocated_size(), PSTACK_DEFAULT_SIZE);
     }
 
     #[test]
