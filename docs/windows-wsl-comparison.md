@@ -15,8 +15,16 @@ installed for the normal Windows user context, `robert_2023\rober`, and reports
 WSL version 2. WSL distributions are registered per Windows user, so sandboxed
 Codex commands can report no installed distributions even though normal
 PowerShell for `rober` can run the harness. Run the commands below from a normal
-`rober` PowerShell prompt; Codex tool runs that need WSL may need approval to run
-outside the sandbox in that user context.
+`rober` PowerShell prompt. For Codex tool runs, the entire outer command must run
+outside the sandbox in that user context with
+`sandbox_permissions=require_escalated`. This applies both to direct `wsl.exe`
+commands and to scripts such as `e-interop.ps1` that invoke WSL internally.
+
+Do not install, import, unregister, or otherwise modify a distribution because a
+sandboxed Codex command reports an empty distro list. Treat that result as a
+per-user visibility limitation and retry the command outside the sandbox first.
+Only use the installation command below if a normal `robert_2023\rober`
+PowerShell prompt also confirms that `Ubuntu-24.04` is absent.
 
 Confirm the distro first:
 

@@ -44,6 +44,21 @@ function Get-WslDistros {
 function Assert-DistroInstalled {
     $distros = @(Get-WslDistros)
     if ($Distro -notin $distros) {
+        $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        if ($currentIdentity -match '(?i)\\codexsandboxoffline$') {
+            throw @"
+The WSL distribution '$Distro' is not visible to the current Windows identity,
+'$currentIdentity'. WSL distributions are registered per Windows user, and the
+Codex sandbox uses an isolated account. This result does not mean that the normal
+Windows user's distribution was removed.
+
+Rerun the entire e-interop.ps1 command outside the Codex sandbox under the normal
+Windows user context by using sandbox_permissions=require_escalated. Do not
+install, import, unregister, or otherwise modify a WSL distribution based on this
+sandbox result.
+"@
+        }
+
         throw @"
 WSL 2 is enabled, but '$Distro' is not installed.
 Run this once from an elevated PowerShell prompt, complete the Linux user setup,
