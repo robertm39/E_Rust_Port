@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fmt};
+use std::{cmp::Ordering, fmt, mem};
 
 pub const PSTACK_DEFAULT_SIZE: usize = 128;
 
@@ -25,6 +25,10 @@ impl<T> PStack<T> {
 
     /// Allocate an empty stack with selectable initial size.
     ///
+    /// C stores pointer-sized union elements. Rust keeps the same logical
+    /// growth boundary while sizing the initial vector to the equivalent byte
+    /// count when `T` is wider than that union.
+    ///
     /// # Panics
     ///
     /// Panics when `size` is zero. The C implementation assumes a positive
@@ -34,8 +38,18 @@ impl<T> PStack<T> {
         assert!(size > 0, "PStack initial size must be non-zero");
         Self {
             size,
-            stack: Vec::with_capacity(size),
+            stack: Vec::with_capacity(Self::initial_capacity(size)),
         }
+    }
+
+    fn initial_capacity(size: usize) -> usize {
+        let element_size = mem::size_of::<T>();
+        if element_size == 0 {
+            return size;
+        }
+
+        let c_bytes = size.saturating_mul(mem::size_of::<usize>());
+        (c_bytes / element_size).clamp(1, size)
     }
 
     #[must_use]
@@ -452,6 +466,13 @@ mod tests {
     fn default_stack_starts_at_c_default_size() {
         let stack = PStack::<usize>::new();
         assert_eq!(stack.allocated_size(), PSTACK_DEFAULT_SIZE);
+    }
+
+    #[test]
+    fn wide_typed_stack_matches_c_initial_allocation_bytes() {
+        let stack = PStack::<[usize; 4]>::new();
+        assert_eq!(stack.allocated_size(), PSTACK_DEFAULT_SIZE);
+        assert_eq!(stack.stack.capacity(), PSTACK_DEFAULT_SIZE / 4);
     }
 
     #[test]
