@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
+use crate::basics::ptrees::PTree;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
     clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
@@ -4190,7 +4191,7 @@ pub fn tformula_create_def(
         _ => panic!("TFormulaCreateDef polarity must be -1, 0, or 1"),
     };
 
-    for variable in tformula_collect_free_vars(bank, def_atom) {
+    for variable in term_collect_variables_in_c_stack_order(def_atom) {
         result = tformula_fcode_alloc(bank, universal_code, variable, Some(result))?;
     }
 
@@ -5097,21 +5098,74 @@ fn tformula_rek_skolemize(
 /// This matches C `TFormulaCollectFreeVars` for the represented formula shapes:
 /// `$let` contributes only its body, DB variables are ignored, and quantifiers
 /// plus named lambdas bind their first argument while traversing their body.
-/// Unlike C, this staged Rust helper does not mutate `TPIsFreeVar`; it returns
-/// variables in term-identity order.
+/// Unlike C, this staged Rust helper does not mutate `TPIsFreeVar`. It preserves
+/// the pointer-identity splay and root-right-left `PTreeToPStack` order through
+/// safe term identities.
 #[must_use]
 pub fn tformula_collect_free_vars(bank: &TermBank, form: &Term) -> Vec<Term> {
-    let mut vars = BTreeMap::new();
+    let mut vars = TFormulaVariableCollector::new();
     let mut bound = Vec::new();
     tformula_collect_free_vars_rek(bank, form, &mut bound, &mut vars);
-    vars.into_values().collect()
+    vars.into_c_stack_order()
+}
+
+struct TFormulaVariableCollector {
+    terms: BTreeMap<usize, Term>,
+    order: PTree<usize>,
+}
+
+impl TFormulaVariableCollector {
+    const fn new() -> Self {
+        Self {
+            terms: BTreeMap::new(),
+            order: PTree::new(),
+        }
+    }
+
+    fn store(&mut self, term: Term) {
+        let identity = term_identity_id(&term);
+        self.terms.insert(identity, term);
+        self.order.store(identity);
+    }
+
+    fn into_c_stack_order(self) -> Vec<Term> {
+        self.order
+            .to_stack()
+            .into_iter()
+            .map(|identity| {
+                self.terms
+                    .get(&identity)
+                    .expect("collected variable identity must retain its term")
+                    .clone()
+            })
+            .collect()
+    }
+}
+
+fn term_collect_variables_in_c_stack_order(term: &Term) -> Vec<Term> {
+    let mut vars = TFormulaVariableCollector::new();
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            vars.store(current);
+        } else {
+            stack.extend(
+                current
+                    .argument_clones()
+                    .into_iter()
+                    .flatten()
+                    .filter(|arg| !term_is_ground(arg)),
+            );
+        }
+    }
+    vars.into_c_stack_order()
 }
 
 fn tformula_collect_free_vars_rek(
     bank: &TermBank,
     form: &Term,
     bound: &mut Vec<usize>,
-    vars: &mut BTreeMap<usize, Term>,
+    vars: &mut TFormulaVariableCollector,
 ) {
     if form.f_code() == SIG_LET_CODE {
         if form.arity() > 0 {
@@ -5145,7 +5199,7 @@ fn tformula_collect_free_vars_rek(
     if form.is_free_var() {
         let variable_id = term_identity_id(form);
         if !bound.contains(&variable_id) {
-            vars.insert(variable_id, form.clone());
+            vars.store(form.clone());
         }
         return;
     }
@@ -5154,7 +5208,7 @@ fn tformula_collect_free_vars_rek(
         if arg.is_free_var() {
             let variable_id = term_identity_id(&arg);
             if !bound.contains(&variable_id) {
-                vars.insert(variable_id, arg);
+                vars.store(arg);
             }
         } else {
             tformula_collect_free_vars_rek(bank, &arg, bound, vars);
@@ -8490,6 +8544,32 @@ mod tests {
     }
 
     #[test]
+    fn tformula_create_def_preserves_definition_atom_and_binder_orders() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -38);
+        let y = typed_var(&bank, -40);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &x, &y);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+
+        let def_atom =
+            tformula_def_rename(&mut bank, &formula, 0, &mut defs, &mut renamed_forms).unwrap();
+        let predicate = def_atom.argument(0).unwrap();
+        assert_eq!(predicate.argument(0).as_ref(), Some(&y));
+        assert_eq!(predicate.argument(1).as_ref(), Some(&x));
+
+        let definition = tformula_create_def(&mut bank, &def_atom, &formula, 0).unwrap();
+        assert_eq!(definition.argument(0).as_ref(), Some(&x));
+        let inner = definition.argument(1).unwrap();
+        assert_eq!(inner.argument(0).as_ref(), Some(&y));
+        assert_eq!(
+            inner.argument(1).unwrap().argument(0).as_ref(),
+            Some(&def_atom)
+        );
+    }
+
+    #[test]
     fn tformula_create_def_uses_polarity_direction() {
         let mut bank = test_bank();
         let first = typed_const(&mut bank, "create_def_dir_first");
@@ -9365,6 +9445,19 @@ mod tests {
         let closed = tformula_add_quantor(&mut bank, &quantified, true, &y).unwrap();
 
         assert!(tformula_is_closed(&bank, &closed));
+    }
+
+    #[test]
+    fn tformula_collect_free_vars_uses_c_ptree_stack_order() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -303);
+        let y = typed_var(&bank, -305);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &x, &y);
+
+        let free_vars = tformula_collect_free_vars(&bank, &formula);
+
+        assert_eq!(free_vars, vec![y, x]);
     }
 
     #[test]

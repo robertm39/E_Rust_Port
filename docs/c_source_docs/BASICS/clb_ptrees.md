@@ -150,5 +150,5 @@ Source files reviewed: `BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`.
 ### Change Later
 
 - `PTreeCell` stores `key` last to work around an old GCC/memory-manager interaction described in the header. Rust does not mirror that field-layout workaround; keep any future raw-pointer arena representation behind a documented compatibility boundary instead of carrying the historical layout into safe code.
-- `PTreeToPStack` and `PTreeDebugPrint` use root-first explicit-stack traversal even though the C comment calls the order arbitrary. Rust now exposes root-first compatibility order, while sorted traversal remains a separate iterator; keep those surfaces distinct if the container is later replaced with an actual splay tree.
+- `PTreeToPStack` and `PTreeDebugPrint` use root-right-left explicit-stack traversal even though the C comment calls the order arbitrary. Rust now preserves the actual top-down splay topology with safe vector-index links and keeps sorted traversal separate. The resulting C order still depends on raw pointer values and temporary lookup history; a cleaned container API should distinguish unordered identity-set use from callers that deliberately consume compatibility traversal order.
 <!-- END MANUAL REVIEW: c_source_docs -->
