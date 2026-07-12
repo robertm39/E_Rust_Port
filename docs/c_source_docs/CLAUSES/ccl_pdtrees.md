@@ -158,7 +158,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for post-cache search profiling on 2026-07-11.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for demodulator leaf ordering on 2026-07-12.
 
 Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 
@@ -190,5 +190,6 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 - C `PDTreeDelete` removes function alternatives from the parent `IntMap`, but the `arr_storage_est` adjustment subtracts and re-adds the deleted child's function-alternative storage instead of the parent's changed storage. Rust preserves that stale estimate for `PDTreeStorage`; clean accounting should be considered only after compatibility tests cover demodulator-index memory reporting.
 - C increments `visited_count` on successful traversal advances and, under `PDT_COUNT_NODES`, increments the global `PDTNodeCounter` during node-constraint verification. Rust now records successful child advances in the compact candidate traversal through the shared visited-node hook; revisit exact verification-loop/global-counter parity when `PDTreeFindNextIndexedLeaf`/`PDTreeFindNextDemodulator` traversal is ported.
 - `PDTreeFindNextIndexedLeaf` deliberately couples incremental traversal to the caller's live substitution so a returned demodulator needs no second complete match. Rust experiments that added incremental traversal without reusing those bindings have been rejected twice: an earlier version regressed `LUSK6.lop` forward rewriting by 30-38%, while a later explicit continuation stack modestly improved LUSK6 but made the canonical `GEO288+1.p` search about 10% slower and miss its 60-second limit. Preserve the C substitution/cursor coupling as a performance requirement when replacing the current compact candidate collector, and represent it with scoped search ownership rather than node-global mutable cursor fields. Rust does retain the separately measured single-vector query state, which removes four per-search copies without changing traversal.
+- `PDTreeFindNextDemodulator` traverses each leaf's `ClausePos*` entries through an in-order `PTree`, so candidate priority is ascending raw address. Those positions come from the process-global `SizeMalloc` size-class free list shared with unrelated object types; deletion and allocator traffic can therefore change which equivalent demodulator is tried first and can alter retained clauses and proofs. Rust uses reverse terminal insertion order as the stable surrogate observed for the canonical `LUSK6ext.lop` reference. A cleaned C index should use an explicit semantic or insertion-sequence key, but changing this before compatibility is secured changes search behavior.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

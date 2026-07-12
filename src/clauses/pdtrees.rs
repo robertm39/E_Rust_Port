@@ -795,6 +795,9 @@ impl PdTree {
             for occurrence in self.nodes[node_index]
                 .terminal_entries
                 .iter()
+                // C traverses a pointer-keyed PTree here. Its allocator reuse
+                // makes newer same-leaf ClausePos entries precede older ones.
+                .rev()
                 .filter_map(|entry| entry.occurrence)
             {
                 if !occurrences.contains(&occurrence) {
@@ -1436,7 +1439,7 @@ mod tests {
         assert!(tree.insert_term_occurrence(&term, SysDate::from_raw(7), right));
         tree.record_search_init(&term, PDTREE_IGNORE_NF_DATE, false);
 
-        assert_eq!(tree.search_matching_occurrences(), Some(vec![left, right]));
+        assert_eq!(tree.search_matching_occurrences(), Some(vec![right, left]));
 
         assert!(tree.delete_term_occurrence(&term, SysDate::from_raw(7), left));
         tree.record_search_exit();

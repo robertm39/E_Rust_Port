@@ -2177,8 +2177,10 @@ mod tests {
         let y = typed_var(&bank, -4);
         let z = typed_var(&bank, -6);
         let yz = typed_binary(&mut bank, "rw_lusk680_j", &y, &z);
+        let xy = typed_binary(&mut bank, "rw_lusk680_j", &x, &y);
         let yx = typed_binary(&mut bank, "rw_lusk680_j", &y, &x);
         let demod_left = typed_binary(&mut bank, "rw_lusk680_j", &x, &yz);
+        let older_demod_right = typed_binary(&mut bank, "rw_lusk680_j", &z, &xy);
         let demod_right = typed_binary(&mut bank, "rw_lusk680_j", &z, &yx);
         let z_y = typed_binary(&mut bank, "rw_lusk680_j", &z, &y);
         let g_z_y = typed_unary(&mut bank, "rw_lusk680_g", &z_y);
@@ -2186,6 +2188,15 @@ mod tests {
         let target = typed_binary(&mut bank, "rw_lusk680_j", &g_z_y, &x_y);
         let x_g_z_y = typed_binary(&mut bank, "rw_lusk680_j", &x, &g_z_y);
         let expected = typed_binary(&mut bank, "rw_lusk680_j", &y, &x_g_z_y);
+        let mut older_demod = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &demod_left,
+            &older_demod_right,
+            true,
+        )]));
+        older_demod.set_ident(546);
+        older_demod.set_date(SysDate::from_raw(1));
+        older_demod.set_weight(older_demod.standard_weight());
         let mut demod = Clause::alloc(EqnList::from_vec(vec![eqn(
             &mut bank,
             &demod_left,
@@ -2193,9 +2204,10 @@ mod tests {
             true,
         )]));
         demod.set_ident(2_574);
-        demod.set_date(SysDate::from_raw(1));
+        demod.set_date(SysDate::from_raw(2));
         demod.set_weight(demod.standard_weight());
         let mut demods = ClauseSet::new_demod_indexed();
+        demods.indexed_insert_clause_owned(older_demod, &bank);
         demods.indexed_insert_clause_owned(demod, &bank);
         let mut ocb = OrderControlBlock::alloc(
             TermOrdering::Kbo6,
