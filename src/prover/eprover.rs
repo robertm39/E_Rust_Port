@@ -51,7 +51,7 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
+    clause_dummy_quote_parent_ref, demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
     deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids, op_has_arg1,
     op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
     FormulaDerivationRef, DC_CNF_QUOTE,
@@ -8493,6 +8493,18 @@ fn proof_object_display_clause_parent_ident_if_known(
     fallback_clause_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> Option<i64> {
     if let Some(parent_index) = graph.clause_aliases.get(&parent).copied() {
+        let first_index = proof_object_list_first_clause_index(graph, parent_index);
+        if first_index != parent_index
+            && proof_object_list_mixed_edges(graph).iter().any(|edge| {
+                edge.child == child && edge.parent == ProofObjectGraphNode::Clause(first_index)
+            })
+        {
+            return Some(proof_object_display_id_for_node(
+                graph,
+                ProofObjectGraphNode::Clause(first_index),
+                display_ids_by_ordinal,
+            ));
+        }
         return Some(proof_object_display_id_for_node(
             graph,
             ProofObjectGraphNode::Clause(parent_index),
@@ -8520,6 +8532,24 @@ fn proof_object_display_clause_parent_ident_if_known(
                 ))
             },
         )
+}
+
+fn proof_object_list_first_clause_index(graph: &ProofObjectGraph<'_>, mut index: usize) -> usize {
+    let mut visited = BTreeSet::new();
+    while visited.insert(index) {
+        let Some(parent) = graph
+            .clauses
+            .get(index)
+            .and_then(|clause| clause_dummy_quote_parent_ref(clause))
+        else {
+            break;
+        };
+        let Some(parent_index) = graph.clause_aliases.get(&parent).copied() else {
+            break;
+        };
+        index = parent_index;
+    }
+    index
 }
 
 fn proof_object_display_formula_parent_ident(
@@ -29372,19 +29402,19 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(printed.contains("% SZS status Theorem\n"), "{printed}");
         assert!(
             printed.contains(
-                "cnf(c_0_24, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_18, c_0_19])]))."
+                "cnf(c_0_27, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_18, c_0_19])]))."
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "cnf(c_0_30, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_24, c_0_25]), c_0_26]), c_0_26]), c_0_27, c_0_28, c_0_26]))."
+                "cnf(c_0_33, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_27, c_0_28]), c_0_24]), c_0_24]), c_0_29, c_0_30, c_0_31]))."
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "cnf(c_0_33, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_32]), ['proof'])."
+                "cnf(c_0_36, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_35]), ['proof'])."
             ),
             "{printed}"
         );

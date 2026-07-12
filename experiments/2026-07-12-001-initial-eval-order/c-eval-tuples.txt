@@ -1,0 +1,94 @@
+﻿
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+Breakpoint 1 at 0x8abd9
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+TRACE 1 ident=-9223372036854775799 count=0 eval=[40:154]
+TRACE 2 ident=-9223372036854775798 count=1 eval=[40:518]
+TRACE 3 ident=-9223372036854775797 count=2 eval=[40:518]
+TRACE 4 ident=-9223372036854775796 count=3 eval=[40:1470]
+TRACE 5 ident=-9223372036854775794 count=4 eval=[40:42]
+TRACE 6 ident=-9223372036854775791 count=5 eval=[40:432]
+TRACE 7 ident=-9223372036854775790 count=6 eval=[40:288]
+TRACE 8 ident=-9223372036854775793 count=7 eval=[40:50]
+TRACE 9 ident=-9223372036854775792 count=8 eval=[40:168]
+TRACE 10 ident=-9223372036854775789 count=9 eval=[40:7524]
+TRACE 11 ident=-9223372036854775794 count=10 eval=[40:625][40:637.5][40:1][30:625][40:84]
+TRACE 12 ident=-9223372036854775793 count=11 eval=[40:625][40:517.5][40:2][30:625][40:66]
+TRACE 13 ident=-9223372036854775799 count=12 eval=[40:900][40:1350][40:3][30:900][40:69]
+TRACE 14 ident=-9223372036854775792 count=13 eval=[40:1450][40:1447.5][40:4][30:1450][40:75]
+TRACE 15 ident=-9223372036854775790 count=14 eval=[40:1300][40:1735][40:5][30:1300][40:102]
+TRACE 16 ident=-9223372036854775791 count=15 eval=[40:1300][40:1365][40:6][30:1300][40:69]
+TRACE 17 ident=-9223372036854775798 count=16 eval=[40:1125][40:1417.5][40:7][30:1125][40:93]
+TRACE 18 ident=-9223372036854775797 count=17 eval=[40:1125][40:1417.5][40:8][30:1125][40:93]
+TRACE 19 ident=-9223372036854775796 count=18 eval=[40:1500][40:1800][40:9][30:1500][40:117]
+TRACE 20 ident=-9223372036854775789 count=19 eval=[40:4050][40:2970][40:10][40:4050][40:189]
+TRACE 21 ident=-9223372036854775792 count=20 eval=[50:262.5][40:258.75][30:11][30:262.5][50:36]
+TRACE 22 ident=-9223372036854775791 count=21 eval=[50:375][40:562.5][30:12][30:375][50:36]
+TRACE 23 ident=-9223372036854775792 count=22 eval=[50:262.5][40:258.75][30:13][30:262.5][50:36]
+TRACE 24 ident=-9223372036854775796 count=23 eval=[40:1500][40:1800][30:14][30:1500][40:117]
+TRACE 25 ident=-9223372036854775799 count=24 eval=[40:900][40:1350][30:15][30:900][40:69]
+TRACE 26 ident=-9223372036854775798 count=25 eval=[40:1125][40:1417.5][30:16][30:1125][40:93]
+TRACE 27 ident=-9223372036854775797 count=26 eval=[40:1125][40:1417.5][30:17][30:1125][40:93]
+TRACE 28 ident=-9223372036854775789 count=27 eval=[40:1012.5][40:742.5][30:18][40:1012.5][40:52.5]
+TRACE 29 ident=-9223372036854775793 count=28 eval=[50:387.5][40:296.25][30:19][30:387.5][50:60]
+TRACE 30 ident=-9223372036854775786 count=29 eval=[50:900][40:1350][40:20][30:900][50:69]
+TRACE 31 ident=-9223372036854775784 count=30 eval=[50:900][40:1350][40:21][30:900][50:69]
+TRACE 32 ident=-9223372036854775785 count=31 eval=[50:900][40:1350][40:22][30:900][50:69]
+TRACE 33 ident=-9223372036854775783 count=32 eval=[50:900][40:1350][40:23][30:900][50:69]
+TRACE 34 ident=-9223372036854775782 count=33 eval=[50:300][40:360][40:24][30:300][50:36]
+TRACE 35 ident=-9223372036854775792 count=34 eval=[50:187.5][40:56.25][30:25][30:187.5][50:36]
+% Preprocessing class: FSMSSMSSSSSNFFN.
+% Configuration: G-E--_208_C18_F1_SE_CS_SOS_SP_PS_S5PRR_RG_S04AN
+% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Auto)
+% No SInE strategy applied
+% Search class: FGHPM-FFSF21-MFFFFFNN
+% Configuration: SAT001_MinMin_p005000_rr_RG
+% Presaturation interreduction done
+
+% Proof found!
+% SZS status Theorem
+% SZS output start CNFRefutation
+fof(guarded_eq, axiom, ((d=c|d=c)<=>h(i(e))=h(i(a))), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', guarded_eq)).
+fof(conj, conjecture, (?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6))), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', conj)).
+cnf(split_or_condense, axiom, (c=b|X1!=X2|X3!=X4|d!=c), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', split_or_condense)).
+cnf(identity, axiom, (i(X1)=i(X2)), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', identity)).
+cnf(consts2, axiom, (a=b|c=a|e!=a), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', consts2)).
+cnf(p_holds, axiom, (p(X1)), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', p_holds)).
+cnf(comm_f, axiom, (f(X1,X2)=f(X2,X1)), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', comm_f)).
+cnf(comm_g, axiom, (g(X1,X2)=g(X2,X1)), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', comm_g)).
+cnf(ass_f, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', ass_f)).
+cnf(consts1, axiom, (a=b|c=a|e=a), file('/mnt/c/Users/rober/OneDrive/Desktop/E_Rust_Port/eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', consts1)).
+fof(c_0_10, plain, (d=c<=>h(i(e))=h(i(a))), inference(fof_simplification,[status(thm)],[guarded_eq])).
+fof(c_0_11, negated_conjecture, ~((?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6)))), inference(assume_negation,[status(cth)],[conj])).
+fof(c_0_12, plain, ((d!=c|h(i(e))=h(i(a)))&(h(i(e))!=h(i(a))|d=c)), inference(fof_nnf,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_10])])).
+fof(c_0_13, negated_conjecture, ![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))|~p(esk1_0))), inference(fof_nnf,[status(thm)],[inference(shift_quantors,[status(thm)],[inference(skolemize,[status(esa)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_11])])])])])).
+cnf(c_0_14, plain, (c=b|X1!=X2|X3!=X4|d!=c), inference(fof_simplification,[status(thm)],[split_or_condense])).
+cnf(c_0_15, plain, (d=c|h(i(e))!=h(i(a))), inference(split_conjunct,[status(thm)],[c_0_12])).
+cnf(c_0_16, axiom, (i(X1)=i(X2)), identity).
+cnf(c_0_17, plain, (a=b|c=a|e!=a), inference(fof_simplification,[status(thm)],[consts2])).
+cnf(c_0_18, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))|~p(esk1_0)), inference(split_conjunct,[status(thm)],[c_0_13])).
+cnf(c_0_19, axiom, (p(X1)), p_holds).
+cnf(c_0_20, plain, (c=b|X1!=X2|X3!=X4|d!=c), c_0_14).
+cnf(c_0_21, plain, (d=c), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_15, c_0_16])])).
+cnf(c_0_22, axiom, (f(X1,X2)=f(X2,X1)), comm_f).
+cnf(c_0_23, axiom, (g(X1,X2)=g(X2,X1)), comm_g).
+cnf(c_0_24, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), ass_f).
+cnf(c_0_25, plain, (a=b|c=a|e!=a), c_0_17).
+cnf(c_0_26, axiom, (a=b|c=a|e=a), consts1).
+cnf(c_0_27, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_18, c_0_19])])).
+cnf(c_0_28, plain, (b=c), inference(er,[status(thm)],[inference(er,[status(thm)],[inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_20, c_0_21])])])])).
+cnf(c_0_29, plain, (f(X1,X2)=f(X2,X1)), c_0_22).
+cnf(c_0_30, plain, (g(X1,X2)=g(X2,X1)), c_0_23).
+cnf(c_0_31, plain, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), c_0_24).
+cnf(c_0_32, plain, (c=a|b=a), inference(csr,[status(thm)],[c_0_25, c_0_26])).
+cnf(c_0_33, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_27, c_0_28]), c_0_24]), c_0_24]), c_0_29, c_0_30, c_0_31])).
+cnf(c_0_34, plain, (c=a), inference(spm,[status(thm)],[c_0_28, c_0_32])).
+cnf(c_0_35, negated_conjecture, (k(a,a)!=k(X1,X1)), inference(rw,[status(thm)],[c_0_33, c_0_34])).
+cnf(c_0_36, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_35]), ['proof']).
+% SZS output end CNFRefutation
+[Inferior 1 (process 412) exited normally]

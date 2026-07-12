@@ -6,9 +6,9 @@ use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
-    CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
-    CP_WATCH_ONLY,
+    CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM,
+    CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
+    CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
 };
 use crate::clauses::clausecpos::unpack_clause_pos;
 use crate::clauses::clausefunc::{
@@ -1140,6 +1140,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             watchlist_removed += watchlist_outcome.removed;
 
             hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, state.terms_mut(), &mut new)?;
+            new.del_prop(CP_INPUT_FORMULA);
             if let Some((output, session)) = doc_context.as_mut() {
                 session.doc_clause_quote(output, state.terms(), 6, &mut new, Some("eval"), None)?;
             }
@@ -1921,6 +1922,7 @@ where
     };
     evaluate(state.terms_mut(), &mut requeued)?;
     requeued.del_prop(CP_IS_ORIENTED);
+    requeued.del_prop(CP_INPUT_FORMULA);
     if let Some((output, session)) = doc_context.as_mut() {
         session.doc_clause_quote(
             output,
@@ -10491,6 +10493,7 @@ mod tests {
             let mut axiom =
                 Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
             axiom.set_ident(4_001);
+            axiom.set_prop(CP_INPUT_FORMULA);
 
             let conj_left = typed_const(terms, "pc_init_conj_a");
             let conj_right = typed_const(terms, "pc_init_conj_b");
@@ -10549,6 +10552,7 @@ mod tests {
 
         let copied_axiom = state.unprocessed().find_by_id(axiom_id).unwrap();
         assert!(copied_axiom.query_prop(CP_INITIAL));
+        assert!(!copied_axiom.query_prop(CP_INPUT_FORMULA));
         assert!(!copied_axiom.query_prop(CP_IS_SOS));
         assert_eq!(
             copied_axiom
@@ -10916,7 +10920,7 @@ mod tests {
     #[test]
     fn proof_state_reset_processed_archives_originals_and_requeues_evaluated_copies() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (rule, equation, negative, non_unit) = {
+        let (mut rule, equation, negative, non_unit) = {
             let terms = state.terms_mut();
             (
                 processed_unit_clause(terms, "pc_reset_rule", 4_040),
@@ -10925,6 +10929,7 @@ mod tests {
                 processed_unit_clause(terms, "pc_reset_non_unit", 4_043),
             )
         };
+        rule.set_prop(CP_INPUT_FORMULA);
         let ids = [
             rule.ident(),
             equation.ident(),
@@ -10980,6 +10985,7 @@ mod tests {
             let requeued = state.unprocessed().find_by_id(ident).unwrap();
             assert!(requeued.query_prop(CP_IS_PROCESSED));
             assert!(!requeued.query_prop(CP_IS_ORIENTED));
+            assert!(!requeued.query_prop(CP_INPUT_FORMULA));
             assert_eq!(
                 requeued
                     .derivation()

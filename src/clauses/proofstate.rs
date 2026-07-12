@@ -414,6 +414,7 @@ pub struct ProofStateTrainingExamples<'a> {
 enum ProofObjectParentResolution {
     ProofStep,
     QuoteSource,
+    AcAxiom,
 }
 
 #[derive(Clone, Copy)]
@@ -1404,7 +1405,7 @@ impl ProofState {
             match edge.parent {
                 DerivationParentRef::Clause(_) | DerivationParentRef::Demodulator(_) => {
                     for clause in self.proof_object_edge_clauses(edge) {
-                        let clause = self.proof_object_first_clause(clause);
+                        let clause = self.proof_object_edge_first_clause(edge, clause);
                         Self::analyse_proof_object_clause(
                             clause,
                             &mut analysis,
@@ -1490,7 +1491,7 @@ impl ProofState {
             match edge.parent {
                 DerivationParentRef::Clause(_) | DerivationParentRef::Demodulator(_) => {
                     for clause in self.proof_object_edge_clauses(edge) {
-                        let clause = self.proof_object_first_clause(clause);
+                        let clause = self.proof_object_edge_first_clause(edge, clause);
                         let parent_index = Self::collect_proof_object_graph_clause(
                             clause,
                             &mut graph,
@@ -1674,6 +1675,18 @@ impl ProofState {
         current
     }
 
+    fn proof_object_edge_first_clause<'a>(
+        &'a self,
+        edge: ProofObjectParentEdge,
+        clause: &'a Clause,
+    ) -> &'a Clause {
+        if matches!(edge.resolution, ProofObjectParentResolution::AcAxiom) {
+            clause
+        } else {
+            self.proof_object_first_clause(clause)
+        }
+    }
+
     fn proof_object_first_formula<'a>(&'a self, formula: &'a WrappedFormula) -> &'a WrappedFormula {
         wformula_deriv_find_first(formula, |parent| {
             self.proof_formula_by_derivation_ref(parent)
@@ -1692,7 +1705,8 @@ impl ProofState {
         match edge.parent {
             DerivationParentRef::Clause(parent) => {
                 let clause = match edge.resolution {
-                    ProofObjectParentResolution::ProofStep => {
+                    ProofObjectParentResolution::ProofStep
+                    | ProofObjectParentResolution::AcAxiom => {
                         self.proof_clause_by_derivation_ref(parent)
                     }
                     ProofObjectParentResolution::QuoteSource => {
@@ -2564,7 +2578,7 @@ fn push_proof_object_ac_axiom_edges(
             .copied()
             .map(|parent| ProofObjectParentEdge {
                 parent: DerivationParentRef::Clause(parent),
-                resolution: ProofObjectParentResolution::ProofStep,
+                resolution: ProofObjectParentResolution::AcAxiom,
             }),
     );
 }
@@ -3653,6 +3667,48 @@ mod tests {
                 ProofObjectGraphEdge {
                     parent_index: 2,
                     child_index: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_preserves_ac_axiom_quote_node_like_c() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = simple_clause(&mut state, "proof_graph_ac_original", 20_057);
+        let mut selected = simple_clause(&mut state, "proof_graph_ac_selected", 20_058);
+        clause_push_derivation(&mut selected, DC_CNF_QUOTE, Some(&original), None);
+        let selected_ref = ClauseDerivationRef::from(&selected);
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_059);
+        clause_push_ac_res_derivation(&mut root, 1);
+
+        state
+            .terms_mut()
+            .signature_mut()
+            .push_ac_axiom(selected_ref);
+        state.axioms_mut().insert(original);
+        state.archive_mut().insert(selected);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_059, 20_058, 20_057]
+        );
+        assert_eq!(
+            graph.edges,
+            vec![
+                ProofObjectGraphEdge {
+                    parent_index: 1,
+                    child_index: 0,
+                },
+                ProofObjectGraphEdge {
+                    parent_index: 2,
+                    child_index: 1,
                 },
             ]
         );

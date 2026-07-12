@@ -1,0 +1,188 @@
+﻿% Preprocessing class: FSMSSMSSSSSNFFN.
+% Configuration: G-E--_208_C18_F1_SE_CS_SOS_SP_PS_S5PRR_RG_S04AN
+% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Auto)
+% No SInE strategy applied
+cnf(identity, axiom, (i(X1)=i(X2)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', identity)).
+cnf(comm_f, axiom, (f(X1,X2)=f(X2,X1)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', comm_f)).
+cnf(comm_g, axiom, (g(X1,X2)=g(X2,X1)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', comm_g)).
+cnf(ass_f, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', ass_f)).
+cnf(p_holds, axiom, (p(X1)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', p_holds)).
+cnf(consts1, axiom, (a=b|c=a|e=a), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', consts1)).
+cnf(consts2, axiom, (a=b|c=a|e!=a), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', consts2)).
+cnf(split_or_condense, axiom, (c=b|X1!=X2|X3!=X4|d!=c), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', split_or_condense)).
+fof(guarded_eq, axiom, ((d=c|d=c)<=>h(i(e))=h(i(a))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', guarded_eq)).
+fof(conj, conjecture, (?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', conj)).
+fof(c_0_11, negated_conjecture, ~((?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6)))),inference(assume_negation, [status(cth)],[c_0_10])).
+cnf(c_0_12, plain, (a=b|c=a|e!=a),inference(fof_simplification, [status(thm)],[c_0_7])).
+cnf(c_0_13, plain, (c=b|X1!=X2|X3!=X4|d!=c),inference(fof_simplification, [status(thm)],[c_0_8])).
+fof(c_0_14, plain, (d=c<=>h(i(e))=h(i(a))),inference(fof_simplification, [status(thm)],[c_0_9])).
+fof(c_0_15, plain, ((d!=c|h(i(e))=h(i(a)))&(h(i(e))!=h(i(a))|d=c)),inference(fof_nnf, [status(thm)],[c_0_14])).
+fof(c_0_16, plain, ((d!=c|h(i(e))=h(i(a)))&(h(i(e))!=h(i(a))|d=c)),inference(fof_nnf, [status(thm)],[c_0_15])).
+cnf(c_0_17, plain, (d=c|h(i(e))!=h(i(a))),inference(split_conjunct, [status(thm)],[c_0_16])).
+cnf(c_0_18, plain, (h(i(e))=h(i(a))|d!=c),inference(split_conjunct, [status(thm)],[c_0_16])).
+fof(c_0_19, negated_conjecture, (![X3, X4, X1, X2, X5]:((k(a,b)!=k(X3,X3)|f(f(g(X2,X5),X1),f(X4,X3))!=f(f(X3,X4),f(X1,g(X2,X5)))))|?[X6]:(~p(X6))),inference(fof_nnf, [status(thm)],[c_0_11])).
+fof(c_0_20, negated_conjecture, (![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))))|?[X12]:(~p(X12))),inference(variable_rename, [status(thm)],[c_0_19])).
+fof(c_0_21, negated_conjecture, (![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))))|~p(esk1_0)),inference(skolemize, [status(esa)], [c_0_20])).
+fof(c_0_22, negated_conjecture, ![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))|~p(esk1_0))),inference(shift_quantors, [status(thm)],[c_0_21])).
+fof(c_0_23, negated_conjecture, ![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))|~p(esk1_0))),inference(fof_nnf, [status(thm)],[c_0_22])).
+cnf(c_0_24, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))|~p(esk1_0)),inference(split_conjunct, [status(thm)],[c_0_23])).
+cnf(c_0_25, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))|$false),inference(rw, [status(thm)],[c_0_24,c_0_-9223372036854775785]),['Unfolding']).
+cnf(c_0_26, axiom, (i(X1)=i(X2)), ).
+cnf(c_0_27, axiom, (f(X1,X2)=f(X2,X1)), ).
+cnf(c_0_28, axiom, (g(X1,X2)=g(X2,X1)), ).
+cnf(c_0_29, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), ).
+cnf(c_0_30, axiom, (b=a|c=a|e=a), ).
+cnf(c_0_31, plain, (d=c|h(i(e))!=h(i(a))), ).
+cnf(c_0_32, plain, (h(i(e))=h(i(a))|d!=c), ).
+cnf(c_0_33, plain, (b=a|c=a|e!=a), ).
+cnf(c_0_34, plain, (c=b|X3!=X4|X1!=X2|d!=c), ).
+cnf(c_0_35, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), ).
+% Search class: FGHPM-FFSF21-MFFFFFNN
+% Configuration: SAT001_MinMin_p005000_rr_RG
+% Initializing proof state
+cnf(c_0_36, plain, (b=a|c=a|e=a), c_0_30,['eval']).
+cnf(c_0_37, plain, (b=a|c=a|e!=a), c_0_33,['eval']).
+cnf(c_0_38, plain, (i(X1)=i(X2)), c_0_26,['eval']).
+cnf(c_0_39, plain, (b=c|X3!=X4|X1!=X2|d!=c), c_0_34,['eval']).
+cnf(c_0_40, plain, (h(i(e))=h(i(a))|d!=c), c_0_32,['eval']).
+cnf(c_0_41, plain, (d=c|h(i(e))!=h(i(a))), c_0_31,['eval']).
+cnf(c_0_42, plain, (f(X1,X2)=f(X2,X1)), c_0_27,['eval']).
+cnf(c_0_43, plain, (g(X1,X2)=g(X2,X1)), c_0_28,['eval']).
+cnf(c_0_44, plain, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), c_0_29,['eval']).
+cnf(c_0_45, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), c_0_35,['eval']).
+% Scanning for AC axioms
+% f is AC
+% g is commutative
+% AC handling enabled
+cnf(c_0_46, plain, (e=a|c=a|b=a), c_0_36,['new_given']).
+cnf(c_0_47, plain, (c=a|b=a), c_0_37,['new_given']).
+cnf(c_0_48, plain, (e=a|c=a|b=a), c_0_46,['subsumed(c_0_47)']).
+cnf(c_0_49, plain, (i(X1)=i(X2)), c_0_38,['new_given']).
+cnf(c_0_50, plain, (d=c), c_0_41,['new_given']).
+cnf(c_0_51, plain, (f(X1,X2)=f(X2,X1)), c_0_42,['new_given']).
+cnf(c_0_52, plain, (b=c|X3!=X4|X1!=X2), c_0_39,['new_given']).
+cnf(c_0_53, plain, (b=c|X1!=X2),inference(er,[status(thm)],[c_0_52])).
+cnf(c_0_54, plain, (b=c),inference(er,[status(thm)],[c_0_53])).
+cnf(c_0_55, plain, (b=c), c_0_54,['eval']).
+cnf(c_0_56, plain, (b=c), c_0_55,['new_given']).
+cnf(c_0_57, plain, (g(X1,X2)=g(X2,X1)), c_0_43,['new_given']).
+cnf(c_0_58, plain, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), c_0_44,['new_given']).
+cnf(c_0_59, negated_conjecture, (k(a,c)!=k(X1,X1)), c_0_45,['new_given']).
+% Presaturation interreduction done
+cnf(c_0_60, plain, (d=c), c_0_50,['move_eval']).
+cnf(c_0_61, plain, (b=c), c_0_56,['move_eval']).
+cnf(c_0_62, plain, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), c_0_58,['move_eval']).
+cnf(c_0_63, plain, (i(X1)=i(X2)), c_0_49,['move_eval']).
+cnf(c_0_64, plain, (f(X1,X2)=f(X2,X1)), c_0_51,['move_eval']).
+cnf(c_0_65, plain, (g(X1,X2)=g(X2,X1)), c_0_57,['move_eval']).
+cnf(c_0_66, negated_conjecture, (k(a,c)!=k(X1,X1)), c_0_59,['move_eval']).
+cnf(c_0_67, plain, (c=a|b=a), c_0_47,['move_eval']).
+cnf(c_0_68, plain, (i(X1)=i(X2)), c_0_63,['new_given']).
+cnf(c_0_69, plain, (i(X3)=i(X2)),inference(spm,[status(thm)],[c_0_68,c_0_68])).
+cnf(c_0_70, plain, (i(X1)=i(X3)),inference(spm,[status(thm)],[c_0_68,c_0_68])).
+cnf(c_0_71, plain, (i(X3)=i(X2)),inference(spm,[status(thm)],[c_0_68,c_0_68])).
+cnf(c_0_72, plain, (i(X1)=i(X3)),inference(spm,[status(thm)],[c_0_68,c_0_68])).
+cnf(c_0_73, plain, (i(X3)=i(X2)), c_0_69,['eval']).
+cnf(c_0_74, plain, (i(X3)=i(X2)), c_0_71,['eval']).
+cnf(c_0_75, plain, (i(X1)=i(X3)), c_0_70,['eval']).
+cnf(c_0_76, plain, (i(X1)=i(X3)), c_0_72,['eval']).
+cnf(c_0_77, plain, (b=c), c_0_61,['new_given']).
+cnf(c_0_78, plain, (b=a|c=a), c_0_67,['new_given']).
+cnf(c_0_79, plain, (a=c),inference(spm,[status(thm)],[c_0_77,c_0_78])).
+cnf(c_0_80, plain, (c=a), c_0_79,['eval']).
+cnf(c_0_81, plain, (c=a), c_0_80,['new_given']).
+cnf(c_0_82, plain, (b=a|c=a), c_0_78,['simplifiable']).
+cnf(c_0_83, plain, (b=c), c_0_77,['simplifiable']).
+cnf(c_0_84, plain, (b=a),inference(rw, [status(thm)],[c_0_83,c_0_81])).
+cnf(c_0_85, plain, (b=a|a=a),inference(rw, [status(thm)],[c_0_82,c_0_81])).
+cnf(c_0_86, plain, (b=a), c_0_84,['eval']).
+cnf(c_0_87, plain, (b=a), c_0_86,['new_given']).
+cnf(c_0_88, plain, (d=a), c_0_60,['new_given']).
+cnf(c_0_89, negated_conjecture, (k(a,a)!=k(X1,X1)), c_0_66,['new_given']).
+cnf(c_0_90, negated_conjecture, ($false),inference(er,[status(thm)],[c_0_89])).
+cnf(c_0_91, negated_conjecture, ($false), c_0_90,['proof']).
+
+% Proof found!
+% SZS status Theorem
+% SZS output start CNFRefutation
+fof(guarded_eq, axiom, ((d=c|d=c)<=>h(i(e))=h(i(a))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', guarded_eq)).
+fof(conj, conjecture, (?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', conj)).
+cnf(split_or_condense, axiom, (c=b|X1!=X2|X3!=X4|d!=c), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', split_or_condense)).
+cnf(identity, axiom, (i(X1)=i(X2)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', identity)).
+cnf(p_holds, axiom, (p(X1)), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', p_holds)).
+cnf(ass_f, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), file('./eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p', ass_f)).
+fof(c_0_6, plain, (d=c<=>h(i(e))=h(i(a))), inference(fof_simplification,[status(thm)],[guarded_eq])).
+fof(c_0_7, negated_conjecture, ~((?[X3, X4, X1, X2, X5]:((k(a,b)=k(X3,X3)&f(f(g(X2,X5),X1),f(X4,X3))=f(f(X3,X4),f(X1,g(X2,X5)))))&![X6]:(p(X6)))), inference(assume_negation,[status(cth)],[conj])).
+fof(c_0_8, plain, ((d!=c|h(i(e))=h(i(a)))&(h(i(e))!=h(i(a))|d=c)), inference(fof_nnf,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_6])])).
+fof(c_0_9, negated_conjecture, ![X7, X8, X9, X10, X11]:((k(a,b)!=k(X7,X7)|f(f(g(X10,X11),X9),f(X8,X7))!=f(f(X7,X8),f(X9,g(X10,X11)))|~p(esk1_0))), inference(fof_nnf,[status(thm)],[inference(shift_quantors,[status(thm)],[inference(skolemize,[status(esa)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_7])])])])])).
+cnf(c_0_10, plain, (c=b|X1!=X2|X3!=X4|d!=c), inference(fof_simplification,[status(thm)],[split_or_condense])).
+cnf(c_0_11, plain, (d=c|h(i(e))!=h(i(a))), inference(split_conjunct,[status(thm)],[c_0_8])).
+cnf(c_0_12, axiom, (i(X1)=i(X2)), identity).
+cnf(c_0_13, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))|~p(esk1_0)), inference(split_conjunct,[status(thm)],[c_0_9])).
+cnf(c_0_14, axiom, (p(X1)), p_holds).
+cnf(c_0_15, plain, (c=b|X1!=X2|X3!=X4|d!=c), c_0_10).
+cnf(c_0_16, plain, (d=c), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_11, c_0_49])])).
+cnf(c_0_17, negated_conjecture, (k(a,b)!=k(X1,X1)|f(f(g(X2,X3),X4),f(X5,X1))!=f(f(X1,X5),f(X4,g(X2,X3)))), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_13, c_0_14])])).
+cnf(c_0_18, plain, (b=c), inference(er,[status(thm)],[inference(er,[status(thm)],[inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_15, c_0_16])])])])).
+cnf(c_0_19, axiom, (f(f(X1,X2),X3)=f(X1,f(X2,X3))), ass_f).
+cnf(c_0_20, negated_conjecture, (k(a,c)!=k(X1,X1)), inference(ar,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[inference(rw,[status(thm)],[c_0_17, c_0_18]), c_0_58]), c_0_58]), c_0_42, c_0_43, c_0_44])).
+cnf(c_0_21, plain, (c=a), inference(spm,[status(thm)],[c_0_77, c_0_78])).
+cnf(c_0_22, negated_conjecture, (k(a,a)!=k(X1,X1)), inference(rw,[status(thm)],[c_0_20, c_0_21])).
+cnf(c_0_23, negated_conjecture, ($false), inference(er,[status(thm)],[c_0_22]), ['proof']).
+% SZS output end CNFRefutation
+% Parsed axioms                        : 10
+% Removed by relevancy pruning/SinE    : 0
+% Initial clauses                      : 11
+% Removed in clause preprocessing      : 1
+% Initial clauses in saturation        : 10
+% Processed clauses                    : 19
+% ...of these trivial                  : 1
+% ...subsumed                          : 1
+% ...remaining for further processing  : 17
+% Other redundant clauses eliminated   : 2
+% Clauses deleted for lack of memory   : 0
+% Backward-subsumed                    : 1
+% Backward-rewritten                   : 2
+% Generated clauses                    : 7
+% ...of the previous two non-redundant : 7
+% ...aggressively subsumed             : 0
+% Contextual simplify-reflections      : 1
+% Paramodulations                      : 5
+% Factorizations                       : 0
+% NegExts                              : 0
+% Equation resolutions                 : 3
+% Disequality decompositions           : 0
+% Total rewrite steps                  : 11
+% ...of those cached                   : 5
+% Propositional unsat checks           : 0
+%    Propositional check models        : 0
+%    Propositional check unsatisfiable : 0
+%    Propositional clauses             : 0
+%    Propositional clauses after purity: 0
+%    Propositional unsat core size     : 0
+%    Propositional preprocessing time  : 0.000
+%    Propositional encoding time       : 0.000
+%    Propositional solver time         : 0.000
+%    Success case prop preproc time    : 0.000
+%    Success case prop encoding time   : 0.000
+%    Success case prop solver time     : 0.000
+% Current number of processed clauses  : 5
+%    Positive orientable unit clauses  : 3
+%    Positive unorientable unit clauses: 1
+%    Negative unit clauses             : 1
+%    Non-unit-clauses                  : 0
+% Current number of unprocessed clauses: 6
+% ...number of literals in the above   : 6
+% Current number of archived formulas  : 0
+% Current number of archived clauses   : 12
+% Clause-clause subsumption calls (NU) : 7
+% Rec. Clause-clause subsumption calls : 4
+% Non-unit clause-clause subsumptions  : 2
+% Unit Clause-clause subsumption calls : 2
+% Rewrite failures with RHS unbound    : 0
+% BW rewrite match attempts            : 2
+% BW rewrite match successes           : 2
+% Condensation attempts                : 0
+% Condensation successes               : 0
+% Termbank termtop insertions          : 494
+% Search garbage collected termcells   : 86
