@@ -101,6 +101,9 @@ where
         self.find(key)
     }
 
+    /// # Panics
+    ///
+    /// Panics if the tree's internal root index does not refer to a live node.
     pub fn extract_key(&mut self, key: &K) -> Option<K> {
         let root = self.splay(self.root?, key);
         self.root = Some(root);
@@ -138,7 +141,7 @@ where
 
     pub fn merge(&mut self, add: Self) -> bool {
         let before = self.len;
-        for key in add.to_stack() {
+        for key in add.into_stack() {
             self.store(key);
         }
         self.len != before
@@ -174,6 +177,21 @@ where
         self.c_stack_order()
             .into_iter()
             .map(|index| self.node(index).key.clone())
+            .collect()
+    }
+
+    fn into_stack(self) -> Vec<K> {
+        let order = self.c_stack_order();
+        let mut nodes = self.nodes;
+        order
+            .into_iter()
+            .map(|index| {
+                // The traversal only returns indexes of live nodes in this tree.
+                nodes[index]
+                    .take()
+                    .expect("PTree traversal must refer to a live node")
+                    .key
+            })
             .collect()
     }
 

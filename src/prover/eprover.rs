@@ -2693,7 +2693,7 @@ fn cpu_rlimit_desc(config: &EProverConfig) -> &'static str {
     }
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(test)]
 fn rlimit_warning_from_result(
     result: RLimResult,
     resource: i32,
@@ -3163,15 +3163,12 @@ where
         picosat_library: configured_picosat_library(),
         ..EProverConfig::default()
     };
-    loop {
-        let Some(parsed) = (match state.next_opt(EPROVER_OPTIONS) {
-            Ok(parsed) => parsed,
-            Err(diagnostic) => {
-                return Err(OptionProcessingError::new(diagnostic, config.warnings));
-            }
-        }) else {
-            break;
-        };
+    while let Some(parsed) = match state.next_opt(EPROVER_OPTIONS) {
+        Ok(parsed) => parsed,
+        Err(diagnostic) => {
+            return Err(OptionProcessingError::new(diagnostic, config.warnings));
+        }
+    } {
         match apply_parsed_option(&mut config, &parsed) {
             Ok(Some(action)) => {
                 return Ok(ProcessedOptions {

@@ -7055,7 +7055,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         return Ok(ProcessClauseOutcome::Returned { clause, reason });
     }
 
-    debug_assert!(packed.clause().weight() == packed.clause().standard_weight());
+    debug_assert_eq!(packed.clause().weight(), packed.clause().standard_weight());
     let ac_activated = if let Some((output, _session, output_level)) = doc_context.as_mut() {
         proof_state_check_ac_status_with_fmt_output(
             &mut **output,

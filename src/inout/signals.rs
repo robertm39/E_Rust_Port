@@ -434,24 +434,20 @@ mod linux_signal {
         fn raise(signal_number: i32) -> i32;
         fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
         #[link_name = "signal"]
-        fn signal_handler(signum: i32, handler: SignalHandler) -> usize;
-        #[link_name = "signal"]
-        fn signal_raw(signum: i32, handler: usize) -> usize;
+        fn signal_compat(signum: i32, handler: Option<SignalHandler>) -> usize;
     }
 
     pub(super) fn install_e_signal_handler(signal_number: i32) -> bool {
         // SAFETY: signal installs a process-global handler. The handler is an
         // extern "C" function with the required integer signal argument and no
         // captured Rust state.
-        (unsafe { signal_handler(signal_number, signal_trampoline) }) != SIG_ERR_COMPAT
+        (unsafe { signal_compat(signal_number, Some(signal_trampoline)) }) != SIG_ERR_COMPAT
     }
 
     pub(super) fn restore_default_handler(signal_number: i32) -> bool {
-        const SIG_DFL_COMPAT: usize = 0;
-
         // SAFETY: SIG_DFL is the C signal API's null handler sentinel. This is
         // the same process-global reset used by C `ESigTermSchedHandler`.
-        (unsafe { signal_raw(signal_number, SIG_DFL_COMPAT) }) != SIG_ERR_COMPAT
+        (unsafe { signal_compat(signal_number, None) }) != SIG_ERR_COMPAT
     }
 
     pub(super) fn restore_default_and_reraise(signal_number: i32) {

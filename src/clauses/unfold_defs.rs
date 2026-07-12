@@ -316,10 +316,7 @@ fn clause_set_unfold_all_eq_defs_impl<W: fmt::Write>(
     let mut start = DefinitionSearchStart::Beginning;
     let mut passive = passive;
 
-    loop {
-        let Some(demod_pos) = find_eq_definition_from_start(set, bank, min_arity, start) else {
-            break;
-        };
+    while let Some(demod_pos) = find_eq_definition_from_start(set, bank, min_arity, start) {
         let demod_clause = demod_pos
             .clause()
             .expect("definition position must carry a clause");
