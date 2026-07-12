@@ -33,6 +33,7 @@ use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::{Term, TermProperties};
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -248,6 +249,7 @@ pub struct ClauseSet {
     date: SysDate,
     identifier: String,
     demod_index: Option<PdTree>,
+    demod_index_coverage: Cell<Option<bool>>,
     indexed_clause_positions: BTreeMap<i64, usize>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
@@ -273,6 +275,7 @@ impl ClauseSet {
             date,
             identifier: String::new(),
             demod_index: None,
+            demod_index_coverage: Cell::new(None),
             indexed_clause_positions: BTreeMap::new(),
             fv_anchor: None,
             eval_indices: Vec::new(),
@@ -324,6 +327,7 @@ impl ClauseSet {
     pub fn init_demod_index(&mut self) {
         if self.demod_index.is_none() {
             self.demod_index = Some(PdTree::new());
+            self.demod_index_coverage.set(None);
             self.rebuild_indexed_clause_positions();
         }
     }
@@ -524,6 +528,7 @@ impl ClauseSet {
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Clause> {
+        self.demod_index_coverage.set(None);
         self.clauses.iter_mut()
     }
 
@@ -787,6 +792,7 @@ impl ClauseSet {
     }
 
     pub fn insert(&mut self, mut clause: Clause) {
+        self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
         self.literals += usize_to_i64(clause.literal_number());
         index_clause_evaluations(
@@ -935,12 +941,14 @@ impl ClauseSet {
         &mut self,
         parent: ClauseDerivationRef,
     ) -> Option<&mut Clause> {
+        self.demod_index_coverage.set(None);
         self.clauses
             .iter_mut()
             .find(|clause| ClauseDerivationRef::from(&**clause) == parent)
     }
 
     pub fn find_by_id_mut(&mut self, ident: i64) -> Option<&mut Clause> {
+        self.demod_index_coverage.set(None);
         self.clauses
             .iter_mut()
             .find(|clause| clause.ident() == ident)
@@ -1044,12 +1052,14 @@ impl ClauseSet {
     }
 
     pub fn set_prop(&mut self, prop: FormulaProperties) {
+        self.demod_index_coverage.set(None);
         for clause in &mut self.clauses {
             clause.set_prop(prop);
         }
     }
 
     pub fn del_prop(&mut self, prop: FormulaProperties) {
+        self.demod_index_coverage.set(None);
         for clause in &mut self.clauses {
             clause.del_prop(prop);
         }
@@ -1562,11 +1572,13 @@ impl ClauseSet {
     }
 
     fn find_by_eval_object_mut(&mut self, object: EvalObjectHandle) -> Option<&mut Clause> {
+        self.demod_index_coverage.set(None);
         let slot = self.eval_object_slots.get(object).copied().flatten()?;
         self.clauses.get_slot_mut(slot)
     }
 
     fn extract_at_slot(&mut self, slot: ClauseSlot) -> Option<Clause> {
+        self.demod_index_coverage.set(None);
         let clause = self.clauses.get_slot(slot)?;
         let entries = eval_index_entries(clause);
         let eval_object = clause.evaluations().and_then(EvalCell::object);
@@ -1627,9 +1639,15 @@ impl ClauseSet {
     }
 
     fn demod_index_covers_demodulators(&self) -> bool {
-        self.clauses
+        if let Some(covers) = self.demod_index_coverage.get() {
+            return covers;
+        }
+        let covers = self
+            .clauses
             .iter()
-            .all(|clause| !clause.is_demodulator() || clause.query_prop(CP_IS_D_INDEXED))
+            .all(|clause| !clause.is_demodulator() || clause.query_prop(CP_IS_D_INDEXED));
+        self.demod_index_coverage.set(Some(covers));
+        covers
     }
 
     fn rebuild_indexed_clause_positions(&mut self) {
@@ -2620,7 +2638,39 @@ mod tests {
         set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
 
         assert!(set.demod_index_search_may_have_match());
+        assert_eq!(set.demod_index_coverage.get(), Some(false));
         set.record_demod_index_search_exit();
+    }
+
+    #[test]
+    fn demod_index_coverage_cache_invalidates_on_mutable_clause_access() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "coverage_cache_a");
+        let b = typed_const(&mut bank, "coverage_cache_b");
+        let mut literal = literal(&mut bank, &a, &b, true);
+        literal.set_prop(EP_IS_ORIENTED);
+        let clause = clause_from(vec![literal]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+        assert_eq!(set.demod_index_coverage.get(), None);
+
+        set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
+        assert!(set.demod_index_search_may_have_match());
+        assert_eq!(set.demod_index_coverage.get(), Some(true));
+        assert!(set.demod_index_search_uses_compact_candidates());
+        assert_eq!(set.demod_index_coverage.get(), Some(true));
+        set.record_demod_index_search_exit();
+
+        let _ = set.iter_mut().next();
+        assert_eq!(set.demod_index_coverage.get(), None);
+        set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
+        assert!(set.demod_index_search_uses_compact_candidates());
+        assert_eq!(set.demod_index_coverage.get(), Some(true));
+        set.record_demod_index_search_exit();
+
+        set.set_prop(CP_IS_SOS);
+        assert_eq!(set.demod_index_coverage.get(), None);
     }
 
     #[test]
@@ -3406,7 +3456,7 @@ mod tests {
         assert_eq!(set.find_max_standard_weight().map(Clause::weight), Some(5));
         assert!(set.term_nodes(&bank) > 0);
 
-        assert!(set.tb_term_prop_del_count(TP_CHECK_FLAG) == 0);
+        assert_eq!(set.tb_term_prop_del_count(TP_CHECK_FLAG), 0);
         set.term_set_prop(TP_CHECK_FLAG);
         assert!(set.tb_term_prop_del_count(TP_CHECK_FLAG) > 0);
         assert!(set.shared_term_nodes() > 0);
