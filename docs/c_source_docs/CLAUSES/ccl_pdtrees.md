@@ -158,7 +158,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for post-cache search profiling on 2026-07-11.
 
 Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 
@@ -189,6 +189,6 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 - C `PDTreeDelete` deletes clause-position entries at the leaf, subtracts the number of removed entries from every traversed node, physically frees dead nodes, and lazily invalidates cached size/age constraints for later recomputation. Rust now mirrors the ref-count and child-pruning shape for the current trie-only term/code subset and eagerly recomputes represented terminal metadata after deletion; the lazy invalidation shape can be revisited only after full `ClausePos` payload ownership and traversal reference traces show whether the intermediate sentinel state is externally observable.
 - C `PDTreeDelete` removes function alternatives from the parent `IntMap`, but the `arr_storage_est` adjustment subtracts and re-adds the deleted child's function-alternative storage instead of the parent's changed storage. Rust preserves that stale estimate for `PDTreeStorage`; clean accounting should be considered only after compatibility tests cover demodulator-index memory reporting.
 - C increments `visited_count` on successful traversal advances and, under `PDT_COUNT_NODES`, increments the global `PDTNodeCounter` during node-constraint verification. Rust now records successful child advances in the compact candidate traversal through the shared visited-node hook; revisit exact verification-loop/global-counter parity when `PDTreeFindNextIndexedLeaf`/`PDTreeFindNextDemodulator` traversal is ported.
-- `PDTreeFindNextIndexedLeaf` deliberately couples incremental traversal to the caller's live substitution so a returned demodulator needs no second complete match. A Rust experiment that added incremental traversal without also reusing those bindings regressed `LUSK6.lop` forward rewriting by 30-38%; preserve the C substitution/cursor coupling as a performance requirement when replacing the current compact candidate collector, while representing it with scoped search ownership rather than node-global mutable cursor fields.
+- `PDTreeFindNextIndexedLeaf` deliberately couples incremental traversal to the caller's live substitution so a returned demodulator needs no second complete match. Rust experiments that added incremental traversal without reusing those bindings have been rejected twice: an earlier version regressed `LUSK6.lop` forward rewriting by 30-38%, while a later explicit continuation stack modestly improved LUSK6 but made the canonical `GEO288+1.p` search about 10% slower and miss its 60-second limit. Preserve the C substitution/cursor coupling as a performance requirement when replacing the current compact candidate collector, and represent it with scoped search ownership rather than node-global mutable cursor fields. Rust does retain the separately measured single-vector query state, which removes four per-search copies without changing traversal.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

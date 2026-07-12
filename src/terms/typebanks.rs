@@ -326,7 +326,7 @@ impl TypeBank {
             .into_iter()
             .filter(|type_| type_.arity() == 0 && self.type_is_user_defined(type_))
             .collect();
-        selected_sorts.sort_by_key(|type_| type_.f_code());
+        selected_sorts.sort_by_key(|type_| type_.type_uid());
         let mut count = 0;
         for type_ in selected_sorts {
             count += 1;
@@ -836,8 +836,8 @@ mod tests {
         let mut bank = TypeBank::new();
         let person_code = bank.define_simple_sort("person").unwrap();
         let animal_code = bank.define_simple_sort("animal").unwrap();
-        let person = bank.insert_type_shared(alloc_simple_sort(person_code));
         let animal = bank.insert_type_shared(alloc_simple_sort(animal_code));
+        let person = bank.insert_type_shared(alloc_simple_sort(person_code));
         let arrow = bank.insert_type_shared(alloc_arrow_type(vec![
             person.clone(),
             alloc_simple_sort(ST_BOOL),
@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(
             string_from(output),
-            "thf(decl_sort1, type, person: $tType).\nthf(decl_sort2, type, animal: $tType).\n"
+            "thf(decl_sort1, type, animal: $tType).\nthf(decl_sort2, type, person: $tType).\n"
         );
     }
 

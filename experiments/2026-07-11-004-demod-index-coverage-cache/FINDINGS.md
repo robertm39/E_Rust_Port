@@ -67,7 +67,7 @@ The paired CPU median improves by 11.4%. All six runs proved the theorem and
 maximum RSS stayed approximately 287 MB. The independent three-run harness
 measured C at 1.108 seconds and Rust at 4.101 seconds, a remaining 3.703x ratio.
 
-## Rejected Follow-Up
+## Initial Query-State Follow-Up
 
 A follow-up stored the already-built PDT query as one vector of query cells
 instead of copying it into four parallel vectors. All 28 focused PDT tests
@@ -78,8 +78,13 @@ passed, but an extended seven-pair sample did not establish an improvement:
 | Coverage cache only | 4.59 s | 4.45 s |
 | Coverage cache plus single query vector | 4.58 s | 4.47 s |
 
-The refactor was removed. Fewer allocations alone are not enough evidence on
-this allocator-sensitive workload.
+The refactor was removed at that point because fewer allocations alone were not
+enough evidence on this allocator-sensitive workload. A later post-cache profile
+retested the same representation with ten alternating pairs and an independent
+`GEO288+1.p` falsification case. That broader run measured a 3.1% LUSK6 median
+CPU improvement and a small GEO improvement, so the single-vector state was
+retained later. See
+[`../2026-07-11-006-post-cache-callgrind/FINDINGS.md`](../2026-07-11-006-post-cache-callgrind/FINDINGS.md).
 
 ## Falsification Checks
 
@@ -87,7 +92,8 @@ this allocator-sensitive workload.
   mutable clause access.
 - All paired runs report `SZS status Unsatisfiable`.
 - The native harness reports matching C/Rust behavior for the one-case corpus.
-- The rejected query-state refactor leaves no source diff.
+- The initially rejected query-state result is preserved here; the later
+  re-evaluation records the evidence used to retain it.
 - The nested upstream checkout remains clean.
 
 ## Conclusion

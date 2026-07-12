@@ -87,10 +87,7 @@ impl Default for PdtTraversalOrder {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PdtSearchState {
-    pub term_code: Vec<PrefixToken>,
-    pub term_spans: Vec<usize>,
-    pub term_type_uids: Vec<TypeUniqueId>,
-    pub term_weights: Vec<i64>,
+    query: Vec<PrefixQueryCell>,
     pub term_weight: i64,
     pub term_date: SysDate,
     pub traversal_order: PdtTraversalOrder,
@@ -358,7 +355,7 @@ impl PdTree {
         let Some(state) = state.as_ref() else {
             return true;
         };
-        self.code_may_have_matchable_path(&state.term_code, &state.term_spans)
+        self.query_may_have_matchable_path(&state.query)
     }
 
     #[must_use]
@@ -403,10 +400,7 @@ impl PdTree {
         self.search_term_weight.set(term_weight);
         self.search_term_date.set(age_constraint);
         *self.search_state.borrow_mut() = Some(PdtSearchState {
-            term_code: query.iter().map(|cell| cell.token).collect(),
-            term_spans: query.iter().map(|cell| cell.span).collect(),
-            term_type_uids: query.iter().map(|cell| cell.type_uid).collect(),
-            term_weights: query.iter().map(|cell| cell.weight).collect(),
+            query,
             term_weight,
             term_date: age_constraint,
             traversal_order,
@@ -762,12 +756,6 @@ impl PdTree {
     pub fn search_matching_occurrences(&self) -> Option<Vec<PdtIndexedOccurrence>> {
         let state = self.search_state.borrow();
         let state = state.as_ref()?;
-        if state.term_code.len() != state.term_spans.len()
-            || state.term_code.len() != state.term_type_uids.len()
-            || state.term_code.len() != state.term_weights.len()
-        {
-            return None;
-        }
         let mut occurrences = Vec::new();
         let mut bindings = PdtQueryBindings::new();
         self.collect_matching_occurrences(
@@ -790,49 +778,6 @@ impl PdTree {
         self.search_cursor.borrow_mut().as_mut()?.next()
     }
 
-    fn code_may_have_matchable_path(&self, code: &[PrefixToken], spans: &[usize]) -> bool {
-        if code.len() != spans.len() {
-            return true;
-        }
-        self.node_may_have_matchable_path(0, 0, code, spans)
-    }
-
-    fn node_may_have_matchable_path(
-        &self,
-        node_index: usize,
-        query_index: usize,
-        code: &[PrefixToken],
-        spans: &[usize],
-    ) -> bool {
-        if query_index == code.len() {
-            return self.nodes[node_index].terminal_count != 0;
-        }
-
-        let token = code[query_index];
-        if !matches!(token, PrefixToken::FreeVar { .. })
-            && self.nodes[node_index]
-                .children
-                .get(&token)
-                .is_some_and(|next_index| {
-                    self.node_may_have_matchable_path(*next_index, query_index + 1, code, spans)
-                })
-        {
-            return true;
-        }
-
-        let next_query_index = query_index.saturating_add(spans[query_index]);
-        if next_query_index > code.len() {
-            return true;
-        }
-        self.nodes[node_index]
-            .children
-            .iter()
-            .filter(|(edge, _)| matches!(edge, PrefixToken::FreeVar { .. }))
-            .any(|(_, next_index)| {
-                self.node_may_have_matchable_path(*next_index, next_query_index, code, spans)
-            })
-    }
-
     fn collect_matching_occurrences(
         &self,
         node_index: usize,
@@ -846,7 +791,7 @@ impl PdTree {
             return;
         }
 
-        if query_index == state.term_code.len() {
+        if query_index == state.query.len() {
             for occurrence in self.nodes[node_index]
                 .terminal_entries
                 .iter()
@@ -890,7 +835,7 @@ impl PdTree {
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let token = state.term_code[query_index];
+        let token = state.query[query_index].token;
         if !matches!(token, PrefixToken::FreeVar { .. }) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
                 self.record_nodes_visited(1);
@@ -915,8 +860,8 @@ impl PdTree {
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let next_query_index = query_index.saturating_add(state.term_spans[query_index]);
-        if next_query_index > state.term_code.len() {
+        let next_query_index = query_index.saturating_add(state.query[query_index].span);
+        if next_query_index > state.query.len() {
             return;
         }
         let current = QuerySubtree {
@@ -939,13 +884,13 @@ impl PdTree {
                 }
             })
         {
-            if state.term_type_uids[query_index] != variable_type_uid {
+            if state.query[query_index].type_uid != variable_type_uid {
                 continue;
             }
             let variable_key = (variable_id, variable_type_uid, variable_weight);
             let next_effective_term_weight = adjusted_variable_edge_weight(
                 effective_term_weight,
-                state.term_weights[query_index],
+                state.query[query_index].weight,
                 variable_weight,
             );
             if let Some(bound) = bindings.get(&variable_key).copied() {
@@ -975,6 +920,45 @@ impl PdTree {
             }
         }
     }
+
+    fn query_may_have_matchable_path(&self, query: &[PrefixQueryCell]) -> bool {
+        self.node_may_have_matchable_path(0, 0, query)
+    }
+
+    fn node_may_have_matchable_path(
+        &self,
+        node_index: usize,
+        query_index: usize,
+        query: &[PrefixQueryCell],
+    ) -> bool {
+        if query_index == query.len() {
+            return self.nodes[node_index].terminal_count != 0;
+        }
+
+        let token = query[query_index].token;
+        if !matches!(token, PrefixToken::FreeVar { .. })
+            && self.nodes[node_index]
+                .children
+                .get(&token)
+                .is_some_and(|next_index| {
+                    self.node_may_have_matchable_path(*next_index, query_index + 1, query)
+                })
+        {
+            return true;
+        }
+
+        let next_query_index = query_index.saturating_add(query[query_index].span);
+        if next_query_index > query.len() {
+            return true;
+        }
+        self.nodes[node_index]
+            .children
+            .iter()
+            .filter(|(edge, _)| matches!(edge, PrefixToken::FreeVar { .. }))
+            .any(|(_, next_index)| {
+                self.node_may_have_matchable_path(*next_index, next_query_index, query)
+            })
+    }
 }
 
 fn query_subtrees_match(
@@ -982,10 +966,17 @@ fn query_subtrees_match(
     expected: QuerySubtree,
     actual: QuerySubtree,
 ) -> bool {
-    state.term_code.get(expected.start..expected.end)
-        == state.term_code.get(actual.start..actual.end)
-        && state.term_spans.get(expected.start..expected.end)
-            == state.term_spans.get(actual.start..actual.end)
+    let Some(expected) = state.query.get(expected.start..expected.end) else {
+        return false;
+    };
+    let Some(actual) = state.query.get(actual.start..actual.end) else {
+        return false;
+    };
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(left, right)| left.token == right.token && left.span == right.span)
 }
 
 #[cfg(feature = "pdt-count-nodes")]
@@ -1314,8 +1305,18 @@ mod tests {
         assert_eq!(tree.search_term_weight(), term_standard_weight(&first));
         assert_eq!(tree.search_term_date(), SysDate::creation_time());
         let state = tree.search_state().expect("search init stores state");
-        assert_eq!(state.term_code, prefix_compute_term_code(&first));
-        assert_eq!(state.term_spans, vec![2, 1]);
+        assert_eq!(
+            state
+                .query
+                .iter()
+                .map(|cell| cell.token)
+                .collect::<Vec<_>>(),
+            prefix_compute_term_code(&first)
+        );
+        assert_eq!(
+            state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
         assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
         tree.record_search_exit();
@@ -1343,8 +1344,18 @@ mod tests {
         let state = tree
             .search_state()
             .expect("search init stores replacement state");
-        assert_eq!(state.term_code, prefix_compute_term_code(&second));
-        assert_eq!(state.term_spans, vec![3, 1, 1]);
+        assert_eq!(
+            state
+                .query
+                .iter()
+                .map(|cell| cell.token)
+                .collect::<Vec<_>>(),
+            prefix_compute_term_code(&second)
+        );
+        assert_eq!(
+            state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
+            vec![3, 1, 1]
+        );
         assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
     }
 
@@ -1593,7 +1604,7 @@ mod tests {
         let state = tree.search_state().unwrap();
         let root_child_index = tree.nodes[0]
             .children
-            .get(&state.term_code[0])
+            .get(&state.query[0].token)
             .copied()
             .unwrap();
         let (variable_weight, variable_child_index) = tree.nodes[root_child_index]
@@ -1609,12 +1620,12 @@ mod tests {
             .unwrap();
         let adjusted_weight = adjusted_variable_edge_weight(
             state.term_weight,
-            state.term_weights[1],
+            state.query[1].weight,
             variable_weight,
         );
 
         assert_eq!(state.term_weight, term_standard_weight(&query));
-        assert_eq!(state.term_weights[1], term_standard_weight(&query_head));
+        assert_eq!(state.query[1].weight, term_standard_weight(&query_head));
         assert_eq!(variable_weight, term_standard_weight(&variable));
         assert!(tree.node_satisfies_constraints(
             variable_child_index,
