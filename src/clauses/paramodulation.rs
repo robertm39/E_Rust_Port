@@ -1334,12 +1334,12 @@ fn indexed_plain_paramod_construct_with_subst(
 
     let backtrack = subst.len();
     let result = (|| {
-        let _ = into_clause.literals().subst_norm(subst, freshvars);
-        let _ = from_clause.literals().subst_norm(subst, freshvars);
-
         let from_rhs = from
             .get_other_side()
             .expect("indexed source position must select an opposite side");
+        let into_lhs = into
+            .get_side()
+            .expect("indexed target position must select a side");
         let into_rhs = into
             .get_other_side()
             .expect("indexed target position must select an opposite side");
@@ -1347,6 +1347,10 @@ fn indexed_plain_paramod_construct_with_subst(
             .get_subterm()
             .expect("indexed target position must select a subterm");
 
+        // C ComputeOverlap normalizes these terms before constructing the
+        // critical pair; the order determines shared variable-cell identity.
+        subst.norm_term(&into_lhs, freshvars);
+        subst.norm_term(&from_rhs, freshvars);
         let new_lhs = tb_term_pos_replace(
             bank,
             &from_rhs,
@@ -1355,12 +1359,19 @@ fn indexed_plain_paramod_construct_with_subst(
             0,
             Some(&into_subterm),
         )?;
+        subst.norm_term(&into_rhs, freshvars);
         let new_rhs = bank.insert(&into_rhs, DerefType::Always)?;
 
         if into_literal.is_positive() && new_lhs == new_rhs {
             return Ok(None);
         }
 
+        let _ = into_clause
+            .literals()
+            .subst_norm_except(Some(into_index), subst, freshvars);
+        let _ = from_clause
+            .literals()
+            .subst_norm_except(Some(from_index), subst, freshvars);
         let mut into_copy = into_clause
             .literals()
             .copy_opt_except_index(Some(into_index), bank)?;
@@ -2475,12 +2486,9 @@ fn compute_directed_clause_paramodulants(
             metadata_parent2,
             source_parent,
         )?;
-        clause_push_derivation(
-            &mut paramodulant,
-            paramodulation_derivation_code(effective_pm_type),
-            Some(metadata_parent2),
-            Some(source_parent),
-        );
+        // C ComputeClauseClauseParamodulants pushes this derivation onto its
+        // temporary selected-clause copy, which is freed after generation.
+        // Leaving the child without that entry is observable in orphan filtering.
         store.insert(paramodulant);
     }
     Ok(paramod_count)
@@ -2630,7 +2638,8 @@ mod tests {
         clause_ordered_paramod, clause_ordered_sim_paramod, clause_ordered_super_sim_paramod,
         compute_all_paramodulants, compute_all_paramodulants_indexed,
         compute_all_paramodulants_with_docs, compute_clause_clause_paramodulants,
-        effective_paramodulation_type, fresh_var_bank_for_clauses, paramod_from_side_positions,
+        effective_paramodulation_type, fresh_var_bank_for_clauses,
+        indexed_plain_paramod_construct_with_subst, paramod_from_side_positions,
         paramod_into_positions, paramodulation_pair_positions, ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2657,6 +2666,7 @@ mod tests {
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
     use crate::terms::typebanks::TypeBank;
@@ -2781,6 +2791,29 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_]),
+                )
+                .unwrap();
+        }
+        f_code
+    }
+
+    fn typed_binary(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     #[test]
     fn paramodulation_fresh_variables_restart_at_canonical_codes() {
         let mut bank = test_bank();
@@ -2809,6 +2842,58 @@ mod tests {
         );
 
         assert_eq!(normalized.f_code(), canonical.f_code());
+    }
+
+    #[test]
+    fn indexed_plain_paramodulation_preserves_c_variable_normalization_order() {
+        let mut bank = test_bank();
+        for f_code in [-2, -4, -6, -8] {
+            let _ = typed_var(&bank, f_code);
+        }
+        let source_x = typed_var(&bank, -20);
+        let source_y = typed_var(&bank, -22);
+        let target_x = typed_var(&bank, -24);
+        let target_y = typed_var(&bank, -26);
+        let overlap = typed_const(&mut bank, "pm_norm_overlap");
+        let pair_code = typed_binary_code(&mut bank, "pm_norm_pair");
+        let target_code = typed_binary_code(&mut bank, "pm_norm_target");
+        let replacement = typed_binary(&mut bank, pair_code, &source_x, &source_y);
+        let target_left = typed_binary(&mut bank, target_code, &overlap, &target_x);
+        let mut source_literal = lit(&mut bank, &overlap, &replacement, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_y, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let source_pos = top_left_position(&source);
+        let mut target_pos = top_left_position(&target);
+        target_pos.term_pos_mut().push_component(target_left, 0);
+        let freshvars = fresh_var_bank_for_clauses(&bank, &source, &target);
+        let mut subst = Substitution::new();
+
+        let generated = indexed_plain_paramod_construct_with_subst(
+            &mut bank,
+            &source_pos,
+            &target_pos,
+            &source,
+            &target,
+            &freshvars,
+            &mut subst,
+        )
+        .unwrap()
+        .expect("ground overlap should generate a critical pair");
+
+        let literal = &generated.literals().as_slice()[0];
+        let left_args = literal.left().argument_clones();
+        let replacement_args = left_args[0]
+            .as_ref()
+            .expect("replacement argument must exist")
+            .argument_clones();
+        assert_eq!(replacement_args[0].as_ref().map(Term::f_code), Some(-4));
+        assert_eq!(replacement_args[1].as_ref().map(Term::f_code), Some(-6));
+        assert_eq!(left_args[1].as_ref().map(Term::f_code), Some(-2));
+        assert_eq!(literal.right().f_code(), -8);
+        assert!(subst.is_empty());
     }
 
     fn unary_predicate_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -3042,14 +3127,7 @@ mod tests {
         assert_eq!(stored.literal_number(), 1);
         assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
         assert_eq!(stored.literals().as_slice()[0].right(), &target_rhs);
-        assert_eq!(
-            stored.derivation().unwrap().as_slice(),
-            &[
-                DerivationEntry::Operation(DC_PARAMOD),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
-            ]
-        );
+        assert!(stored.derivation().is_none());
     }
 
     #[test]
@@ -3199,14 +3277,7 @@ mod tests {
         assert!(generated.is_positive());
         assert_eq!(generated.left(), &source_right);
         assert_eq!(generated.right(), &target_right);
-        assert_eq!(
-            stored.derivation().unwrap().as_slice(),
-            &[
-                DerivationEntry::Operation(DC_PARAMOD),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
-            ]
-        );
+        assert!(stored.derivation().is_none());
     }
 
     #[test]
@@ -3253,14 +3324,7 @@ mod tests {
         assert!(!generated[1].is_positive());
         assert_eq!(generated[1].left(), &source_right);
         assert_eq!(generated[1].right(), &target_extra_right);
-        assert_eq!(
-            stored.derivation().unwrap().as_slice(),
-            &[
-                DerivationEntry::Operation(DC_SIM_PARAMOD),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
-            ]
-        );
+        assert!(stored.derivation().is_none());
     }
 
     #[test]
@@ -3463,14 +3527,7 @@ mod tests {
         assert!(generated.is_positive());
         assert_eq!(generated.left(), &f_of_replacement);
         assert_eq!(generated.right(), &g_of_replacement);
-        assert_eq!(
-            stored.derivation().unwrap().as_slice(),
-            &[
-                DerivationEntry::Operation(DC_SIM_PARAMOD),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
-            ]
-        );
+        assert!(stored.derivation().is_none());
     }
 
     #[test]
@@ -3636,14 +3693,7 @@ mod tests {
         let stored = store.iter().next().expect("one documented paramodulant");
         assert_eq!(stored.ident(), 1);
         assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
-        assert_eq!(
-            stored.derivation().unwrap().as_slice(),
-            &[
-                DerivationEntry::Operation(DC_PARAMOD),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
-                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
-            ]
-        );
+        assert!(stored.derivation().is_none());
     }
 
     #[test]

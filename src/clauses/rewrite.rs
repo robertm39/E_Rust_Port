@@ -2171,6 +2171,58 @@ mod tests {
     }
 
     #[test]
+    fn indexed_forward_rewrite_matches_lusk6ext_clause_680_root() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let z = typed_var(&bank, -6);
+        let yz = typed_binary(&mut bank, "rw_lusk680_j", &y, &z);
+        let yx = typed_binary(&mut bank, "rw_lusk680_j", &y, &x);
+        let demod_left = typed_binary(&mut bank, "rw_lusk680_j", &x, &yz);
+        let demod_right = typed_binary(&mut bank, "rw_lusk680_j", &z, &yx);
+        let z_y = typed_binary(&mut bank, "rw_lusk680_j", &z, &y);
+        let g_z_y = typed_unary(&mut bank, "rw_lusk680_g", &z_y);
+        let x_y = typed_binary(&mut bank, "rw_lusk680_j", &x, &y);
+        let target = typed_binary(&mut bank, "rw_lusk680_j", &g_z_y, &x_y);
+        let x_g_z_y = typed_binary(&mut bank, "rw_lusk680_j", &x, &g_z_y);
+        let expected = typed_binary(&mut bank, "rw_lusk680_j", &y, &x_g_z_y);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &demod_left,
+            &demod_right,
+            true,
+        )]));
+        demod.set_ident(2_574);
+        demod.set_date(SysDate::from_raw(1));
+        demod.set_weight(demod.standard_weight());
+        let mut demods = ClauseSet::new_demod_indexed();
+        demods.indexed_insert_clause_owned(demod, &bank);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &target,
+            SysDate::creation_time(),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, expected);
+        assert_eq!(
+            target.rw_demod_field().map(RewriteDemodulator::id),
+            Some(2_574)
+        );
+    }
+
+    #[test]
     fn plain_clause_set_rewrite_links_first_matching_demodulator() {
         let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
