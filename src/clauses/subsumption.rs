@@ -286,8 +286,9 @@ pub fn unit_clause_subsumes_clause_with_bank(
 
 /// Returns a unit clause from `set` that subsumes one literal of `clause`.
 ///
-/// This plain-set path mirrors `UnitClauseSetSubsumesClause` without using the
-/// C demodulator index.
+/// A fully covered demodulator index follows C's indexed lookup. Plain or
+/// partially indexed sets retain the compatibility scan used by isolated
+/// helpers and transitional owners.
 #[must_use]
 pub fn unit_clause_set_subsumes_clause<'set>(
     set: &'set ClauseSet,
@@ -310,18 +311,18 @@ pub fn unit_clause_set_subsumes_clause_with_strong<'set>(
     clause.literals().as_slice().iter().find_map(|literal| {
         if literal.is_positive() {
             if strong_unit_forward_subsumption {
-                find_strong_unit_simplifier_plain(set, literal.left(), literal.right(), true)
+                find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
             } else {
-                find_positive_unit_simplifier_plain(set, literal.left(), literal.right())
+                find_positive_unit_simplifier(set, literal.left(), literal.right())
             }
         } else {
-            find_negative_top_unit_simplifier_plain(set, literal.left(), literal.right())
+            find_negative_top_unit_simplifier(set, literal.left(), literal.right())
         }
     })
 }
 
-/// Bank-aware unit-clause-set subsumption using complete higher-order
-/// matching where required.
+/// Bank-aware unit-clause-set subsumption using the covered demodulator index
+/// and complete higher-order matching where required, with a plain-set fallback.
 ///
 /// # Errors
 ///
@@ -335,7 +336,7 @@ pub fn unit_clause_set_subsumes_clause_with_bank<'set>(
     for literal in clause.literals().as_slice() {
         let result = if literal.is_positive() {
             if strong_unit_forward_subsumption {
-                find_strong_unit_simplifier_plain_with_bank(
+                find_strong_unit_simplifier_with_bank(
                     bank,
                     set,
                     literal.left(),
@@ -343,20 +344,10 @@ pub fn unit_clause_set_subsumes_clause_with_bank<'set>(
                     true,
                 )?
             } else {
-                find_positive_unit_simplifier_plain_with_bank(
-                    bank,
-                    set,
-                    literal.left(),
-                    literal.right(),
-                )?
+                find_positive_unit_simplifier_with_bank(bank, set, literal.left(), literal.right())?
             }
         } else {
-            find_negative_top_unit_simplifier_plain_with_bank(
-                bank,
-                set,
-                literal.left(),
-                literal.right(),
-            )?
+            find_negative_top_unit_simplifier_with_bank(bank, set, literal.left(), literal.right())?
         };
         if result.is_some() {
             return Ok(result);
@@ -1936,23 +1927,9 @@ fn find_positive_unit_simplifier<'set>(
     left: &Term,
     right: &Term,
 ) -> Option<&'set Clause> {
-    find_simplifying_unit(set, left, right, true).map(SimplifyingUnit::clause)
-}
-
-fn find_positive_unit_simplifier_with_bank<'set>(
-    bank: &mut TermBank,
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-) -> Result<Option<&'set Clause>, Diagnostic> {
-    Ok(find_simplifying_unit_with_bank(bank, set, left, right, true)?.map(SimplifyingUnit::clause))
-}
-
-fn find_positive_unit_simplifier_plain<'set>(
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-) -> Option<&'set Clause> {
+    if set.demod_index_search_uses_compact_candidates() {
+        return find_simplifying_unit(set, left, right, true).map(SimplifyingUnit::clause);
+    }
     set.iter().find(|candidate| {
         candidate
             .literals()
@@ -1966,12 +1943,18 @@ fn find_positive_unit_simplifier_plain<'set>(
     })
 }
 
-fn find_positive_unit_simplifier_plain_with_bank<'set>(
+fn find_positive_unit_simplifier_with_bank<'set>(
     bank: &mut TermBank,
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
+    if set.demod_index_search_uses_compact_candidates() {
+        return Ok(
+            find_simplifying_unit_with_bank(bank, set, left, right, true)?
+                .map(SimplifyingUnit::clause),
+        );
+    }
     for candidate in set.iter() {
         let Some(literal) = candidate.literals().as_slice().first() else {
             continue;
@@ -2080,133 +2063,16 @@ fn find_strong_unit_simplifier_with_bank<'set>(
     Ok(None)
 }
 
-fn find_strong_unit_simplifier_plain<'set>(
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-    positive: bool,
-) -> Option<&'set Clause> {
-    let mut stack = vec![(left.clone(), right.clone())];
-    while let Some((current_left, current_right)) = stack.pop() {
-        if let Some(result) =
-            find_top_unit_simplifier_plain(set, &current_left, &current_right, positive)
-        {
-            return Some(result);
-        }
-        if current_left.is_applied_free_var()
-            || current_right.is_applied_free_var()
-            || current_left.is_lambda()
-            || current_right.is_lambda()
-            || current_left.f_code() != current_right.f_code()
-            || current_left.arity() == 0
-        {
-            break;
-        }
-        assert_eq!(
-            current_left.arity(),
-            current_right.arity(),
-            "strong unit subsumption descent expects equal arities"
-        );
-        assert_eq!(
-            current_left.type_(),
-            current_right.type_(),
-            "strong unit subsumption descent expects equal types"
-        );
-        for index in 0..current_left.arity() {
-            let next_left = current_left
-                .argument(index)
-                .expect("left term arguments must be initialized");
-            let next_right = current_right
-                .argument(index)
-                .expect("right term arguments must be initialized");
-            if next_left != next_right {
-                stack.push((next_left, next_right));
-            }
-        }
-    }
-    None
-}
-
-fn find_strong_unit_simplifier_plain_with_bank<'set>(
-    bank: &mut TermBank,
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-    positive: bool,
-) -> Result<Option<&'set Clause>, Diagnostic> {
-    let mut stack = vec![(left.clone(), right.clone())];
-    while let Some((current_left, current_right)) = stack.pop() {
-        if let Some(result) = find_top_unit_simplifier_plain_with_bank(
-            bank,
-            set,
-            &current_left,
-            &current_right,
-            positive,
-        )? {
-            return Ok(Some(result));
-        }
-        if current_left.is_applied_free_var()
-            || current_right.is_applied_free_var()
-            || current_left.is_lambda()
-            || current_right.is_lambda()
-            || current_left.f_code() != current_right.f_code()
-            || current_left.arity() == 0
-        {
-            break;
-        }
-        assert_eq!(
-            current_left.arity(),
-            current_right.arity(),
-            "strong unit subsumption descent expects equal arities"
-        );
-        assert_eq!(
-            current_left.type_(),
-            current_right.type_(),
-            "strong unit subsumption descent expects equal types"
-        );
-        for index in 0..current_left.arity() {
-            let next_left = current_left
-                .argument(index)
-                .expect("left term arguments must be initialized");
-            let next_right = current_right
-                .argument(index)
-                .expect("right term arguments must be initialized");
-            if next_left != next_right {
-                stack.push((next_left, next_right));
-            }
-        }
-    }
-    Ok(None)
-}
-
 fn find_top_unit_simplifier<'set>(
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
     positive: bool,
 ) -> Option<&'set Clause> {
-    find_signed_top_simplifying_unit(set, left, right, positive).map(SimplifyingUnit::clause)
-}
-
-fn find_top_unit_simplifier_with_bank<'set>(
-    bank: &mut TermBank,
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-    positive: bool,
-) -> Result<Option<&'set Clause>, Diagnostic> {
-    Ok(
-        find_signed_top_simplifying_unit_with_bank(bank, set, left, right, positive)?
-            .map(SimplifyingUnit::clause),
-    )
-}
-
-fn find_top_unit_simplifier_plain<'set>(
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-    positive: bool,
-) -> Option<&'set Clause> {
+    if set.demod_index_search_uses_compact_candidates() {
+        return find_signed_top_simplifying_unit(set, left, right, positive)
+            .map(SimplifyingUnit::clause);
+    }
     set.iter().find(|candidate| {
         candidate
             .literals()
@@ -2220,13 +2086,19 @@ fn find_top_unit_simplifier_plain<'set>(
     })
 }
 
-fn find_top_unit_simplifier_plain_with_bank<'set>(
+fn find_top_unit_simplifier_with_bank<'set>(
     bank: &mut TermBank,
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
     positive: bool,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
+    if set.demod_index_search_uses_compact_candidates() {
+        return Ok(
+            find_signed_top_simplifying_unit_with_bank(bank, set, left, right, positive)?
+                .map(SimplifyingUnit::clause),
+        );
+    }
     for candidate in set.iter() {
         let Some(literal) = candidate.literals().as_slice().first() else {
             continue;
@@ -2258,23 +2130,6 @@ fn find_negative_top_unit_simplifier_with_bank<'set>(
     find_top_unit_simplifier_with_bank(bank, set, left, right, false)
 }
 
-fn find_negative_top_unit_simplifier_plain<'set>(
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-) -> Option<&'set Clause> {
-    find_top_unit_simplifier_plain(set, left, right, false)
-}
-
-fn find_negative_top_unit_simplifier_plain_with_bank<'set>(
-    bank: &mut TermBank,
-    set: &'set ClauseSet,
-    left: &Term,
-    right: &Term,
-) -> Result<Option<&'set Clause>, Diagnostic> {
-    find_top_unit_simplifier_plain_with_bank(bank, set, left, right, false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2293,7 +2148,8 @@ mod tests {
         fv_index_find_first_subsumed_clause, fv_index_find_subsumed_clauses,
         fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
         unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
-        unit_clause_set_subsumes_clause_with_strong, unit_clause_subsumes_clause,
+        unit_clause_set_subsumes_clause_with_bank, unit_clause_set_subsumes_clause_with_strong,
+        unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{set_problem_type, ProblemType};
@@ -2438,6 +2294,52 @@ mod tests {
         assert!(
             !eqn_topsubsumes_termpair_with_bank(&mut bank, &unit_lit, &first, &second).unwrap()
         );
+    }
+
+    #[test]
+    fn unit_set_subsumption_uses_opposite_indexed_equality_side_like_c() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -10);
+        let y = typed_var(&bank, -12);
+        let z = typed_var(&bank, -14);
+
+        let yz = typed_binary(&mut bank, "indexed_subsumption_j", &y, &z);
+        let xy = typed_binary(&mut bank, "indexed_subsumption_j", &x, &y);
+        let zx = typed_binary(&mut bank, "indexed_subsumption_j", &z, &x);
+        let subsumer_left = typed_binary(&mut bank, "indexed_subsumption_j", &x, &yz);
+        let subsumer_right = typed_binary(&mut bank, "indexed_subsumption_j", &z, &xy);
+        let candidate_right = typed_binary(&mut bank, "indexed_subsumption_j", &y, &zx);
+
+        let mut subsumer = clause_from(vec![literal(
+            &mut bank,
+            &subsumer_left,
+            &subsumer_right,
+            true,
+        )]);
+        subsumer.set_ident(2_091);
+        subsumer.set_weight(subsumer.standard_weight());
+        let subsumer_id = subsumer.ident();
+        let mut units = ClauseSet::new_demod_indexed();
+        units.indexed_insert_clause_owned(subsumer, &bank);
+
+        let candidate = clause_from(vec![literal(
+            &mut bank,
+            &subsumer_left,
+            &candidate_right,
+            true,
+        )]);
+        assert!(!eqn_subsumes_termpair(
+            &units.iter().next().unwrap().literals().as_slice()[0],
+            candidate.literals().as_slice()[0].left(),
+            candidate.literals().as_slice()[0].right(),
+        ));
+        assert_eq!(
+            unit_clause_set_subsumes_clause_with_bank(&mut bank, &units, &candidate, false)
+                .unwrap()
+                .map(Clause::ident),
+            Some(subsumer_id)
+        );
+        assert!(units.demod_index_match_count() > 0);
     }
 
     #[test]

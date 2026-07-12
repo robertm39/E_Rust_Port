@@ -1823,6 +1823,24 @@ mod tests {
         typed_unary_with_return(bank, name, &type_, type_.clone(), arg)
     }
 
+    fn typed_binary(bank: &mut TermBank, name: &str, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_.clone()]),
+                )
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
@@ -2099,6 +2117,57 @@ mod tests {
         assert_eq!(results[0].ident(), 32);
         assert!(f_b.is_top_rewritten());
         assert_eq!(f_b.rw_replace_field(), Some(a));
+    }
+
+    #[test]
+    fn indexed_forward_rewrite_preserves_c_shared_variable_match() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let z = typed_var(&bank, -6);
+        let w = typed_var(&bank, -8);
+        let yz = typed_binary(&mut bank, "rw_idx_cycle_j", &y, &z);
+        let yx = typed_binary(&mut bank, "rw_idx_cycle_j", &y, &x);
+        let left = typed_binary(&mut bank, "rw_idx_cycle_j", &x, &yz);
+        let right = typed_binary(&mut bank, "rw_idx_cycle_j", &z, &yx);
+        let g_y = typed_unary(&mut bank, "rw_idx_cycle_g", &y);
+        let w_y = typed_binary(&mut bank, "rw_idx_cycle_j", &w, &y);
+        let target = typed_binary(&mut bank, "rw_idx_cycle_j", &g_y, &w_y);
+        let w_g_y = typed_binary(&mut bank, "rw_idx_cycle_j", &w, &g_y);
+        let expected = typed_binary(&mut bank, "rw_idx_cycle_j", &y, &w_g_y);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &left, &right, true)]));
+        demod.set_ident(33);
+        demod.set_date(SysDate::from_raw(1));
+        demod.set_weight(demod.standard_weight());
+        let mut demods = ClauseSet::new_demod_indexed();
+        demods.indexed_insert_clause_owned(demod, &bank);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+
+        demods.record_demod_index_search_init(&target, SysDate::from_raw(0), false);
+        let candidates = demods.demod_index_search_candidate_sides().unwrap();
+        demods.record_demod_index_search_exit();
+        assert!(candidates
+            .iter()
+            .any(|candidate| { candidate.clause_id == 33 && candidate.side == EqnSide::LeftSide }));
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &target,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, expected);
+        assert!(demods.demod_index_match_count() > 0);
     }
 
     #[test]

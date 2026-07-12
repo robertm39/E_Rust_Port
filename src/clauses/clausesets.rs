@@ -371,7 +371,7 @@ impl ClauseSet {
         let Some(index) = &self.demod_index else {
             return true;
         };
-        if !self.demod_index_covers_demodulators() {
+        if !self.demod_index_covers_units() {
             return true;
         }
         index.search_root_satisfies_constraints() && index.search_root_may_have_matchable_path()
@@ -379,20 +379,20 @@ impl ClauseSet {
 
     #[must_use]
     pub fn demod_index_search_uses_compact_candidates(&self) -> bool {
-        self.demod_index.is_some() && self.demod_index_covers_demodulators()
+        self.demod_index.is_some() && self.demod_index_covers_units()
     }
 
     #[must_use]
     pub fn demod_index_search_candidate_sides(&self) -> Option<Vec<PdtIndexedOccurrence>> {
         let index = self.demod_index.as_ref()?;
-        if !self.demod_index_covers_demodulators() {
+        if !self.demod_index_covers_units() {
             return None;
         }
         index.search_matching_occurrences()
     }
 
     pub fn demod_index_search_next_candidate_side(&self) -> Option<PdtIndexedOccurrence> {
-        if !self.demod_index_covers_demodulators() {
+        if !self.demod_index_covers_units() {
             return None;
         }
         self.demod_index
@@ -1638,14 +1638,14 @@ impl ClauseSet {
         clause.del_prop(CP_IS_D_INDEXED);
     }
 
-    fn demod_index_covers_demodulators(&self) -> bool {
+    fn demod_index_covers_units(&self) -> bool {
         if let Some(covers) = self.demod_index_coverage.get() {
             return covers;
         }
         let covers = self
             .clauses
             .iter()
-            .all(|clause| !clause.is_demodulator() || clause.query_prop(CP_IS_D_INDEXED));
+            .all(|clause| !clause.is_unit() || clause.query_prop(CP_IS_D_INDEXED));
         self.demod_index_coverage.set(Some(covers));
         covers
     }
