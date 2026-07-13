@@ -168,6 +168,11 @@ Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 - `SplitClassType` is used as a bitmask despite being declared as an enum. Values such as `SplitHorn | SplitNonHorn` are accepted by the executable option handler and by `HeuristicParmsParseInto`, so Rust preserves raw C-width bit patterns rather than rejecting combinations as invalid enum discriminants.
 - `SplitAll` is the numeric mask `7`, so it does not include `SplitPositive` (`8`) or `SplitMixed` (`16`) despite the name. Keep that value until clause-splitting callers prove whether this is intentional legacy behavior or a cleanup candidate.
 
+### Change Later
+
+- `HCBStandardClauseSelect` interleaves evaluation-queue extraction with `ClauseIsOrphaned`, whose constant-time parent checks depend on raw derivation pointers into long-lived clause owners. Preserve the selection/removal order for compatibility, but a future implementation should expose stable parent handles and maintained liveness state instead of making the HCB depend on archive pointer lifetime.
+- HCB evaluation cells and clause-set evaluation indexes store multiple views of the same scheduling state and rely on mutation order for consistency. Rust preserves this representation; after compatibility is secured, an indexed owner that updates both views through one API would make stale-entry invariants easier to enforce and benchmark.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

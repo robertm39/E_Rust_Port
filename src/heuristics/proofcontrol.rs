@@ -130,8 +130,9 @@ use crate::terms::termfunc::{term_has_f_code, term_is_db_closed};
 use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
 use crate::terms::termvars::VarBank;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{self, Write as _},
+    hash::{BuildHasherDefault, Hasher},
     path::Path,
     time::Instant,
 };
@@ -3017,14 +3018,55 @@ pub fn proof_state_storage_estimate(state: &ProofState) -> i64 {
 }
 
 #[derive(Clone, Debug, Default)]
+struct ClauseRefHasher(u64);
+
+impl Hasher for ClauseRefHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0_u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.write_u64(u64::from_ne_bytes(word));
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        const FX_SEED: u64 = 0x517c_c1b7_2722_0a95;
+        self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(FX_SEED);
+    }
+
+    fn write_i64(&mut self, value: i64) {
+        self.write_u64(u64::from_ne_bytes(value.to_ne_bytes()));
+    }
+}
+
+type ClauseRefSet = HashSet<ClauseDerivationRef, BuildHasherDefault<ClauseRefHasher>>;
+
+#[derive(Clone, Debug, Default)]
 struct ParentLivenessSnapshot {
-    live: BTreeSet<ClauseDerivationRef>,
-    dead: BTreeSet<ClauseDerivationRef>,
+    live: ClauseRefSet,
 }
 
 impl ParentLivenessSnapshot {
     fn from_state(state: &ProofState) -> Self {
-        let mut snapshot = Self::default();
+        let capacity = state.axioms().len()
+            + state.ax_archive().len()
+            + state.processed_pos_rules().len()
+            + state.processed_pos_eqns().len()
+            + state.processed_neg_units().len()
+            + state.processed_non_units().len()
+            + state.unprocessed().len()
+            + state.tmp_store().len()
+            + state.eval_store().len()
+            + state.archive().len()
+            + state.definition_store().len()
+            + state.watchlist().map_or(0, ClauseSet::len);
+        let mut snapshot = Self {
+            live: ClauseRefSet::with_capacity_and_hasher(capacity, BuildHasherDefault::default()),
+        };
         snapshot.collect_set(state.axioms());
         snapshot.collect_set(state.ax_archive());
         snapshot.collect_set(state.processed_pos_rules());
@@ -3043,7 +3085,18 @@ impl ParentLivenessSnapshot {
     }
 
     fn from_selection_state(state: &ProofState) -> Self {
-        let mut snapshot = Self::default();
+        let capacity = state.axioms().len()
+            + state.ax_archive().len()
+            + state.processed_pos_rules().len()
+            + state.processed_pos_eqns().len()
+            + state.processed_neg_units().len()
+            + state.processed_non_units().len()
+            + state.archive().len()
+            + state.definition_store().len()
+            + state.watchlist().map_or(0, ClauseSet::len);
+        let mut snapshot = Self {
+            live: ClauseRefSet::with_capacity_and_hasher(capacity, BuildHasherDefault::default()),
+        };
         snapshot.collect_set(state.axioms());
         snapshot.collect_set(state.ax_archive());
         snapshot.collect_set(state.processed_pos_rules());
@@ -3060,11 +3113,8 @@ impl ParentLivenessSnapshot {
 
     fn collect_set(&mut self, set: &ClauseSet) {
         for clause in set.iter() {
-            let parent = ClauseDerivationRef::from(clause);
-            if clause.query_prop(CP_IS_DEAD) {
-                self.dead.insert(parent);
-            } else {
-                self.live.insert(parent);
+            if !clause.query_prop(CP_IS_DEAD) {
+                self.live.insert(ClauseDerivationRef::from(clause));
             }
         }
     }
@@ -12618,7 +12668,6 @@ mod tests {
         let parent = ClauseDerivationRef::new(4_117, 0);
         let mut snapshot = ParentLivenessSnapshot::default();
         snapshot.live.insert(parent);
-        snapshot.dead.insert(parent);
 
         assert!(!snapshot.parent_is_dead(DerivationParentRef::Clause(parent)));
         assert!(

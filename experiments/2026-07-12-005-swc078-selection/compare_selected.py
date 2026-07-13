@@ -93,6 +93,10 @@ def selected_clauses(path: Path) -> list[tuple[str, ...]]:
             continue
         if not after_presaturation:
             continue
+        if line.startswith("% Failure:") or line.startswith("%% Failure:"):
+            break
+        if "SZS status" in line:
+            break
 
         c_match = C_CLAUSE.fullmatch(line)
         normalized = (

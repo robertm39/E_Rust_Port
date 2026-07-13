@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObjTree<T> {
-    objects: BTreeSet<T>,
-    root_object: Option<T>,
+    objects: BTreeSet<Rc<T>>,
+    root_object: Option<Rc<T>>,
 }
 
 impl<T> Default for ObjTree<T>
@@ -38,17 +39,18 @@ where
     }
 
     #[must_use]
-    pub const fn root_object(&self) -> Option<&T> {
-        self.root_object.as_ref()
+    pub fn root_object(&self) -> Option<&T> {
+        self.root_object.as_deref()
     }
 
     pub fn store(&mut self, object: T) -> Option<&T> {
         if self.objects.contains(&object) {
             let existing = self.objects.get(&object);
             self.root_object = existing.cloned();
-            existing
+            existing.map(Rc::as_ref)
         } else {
-            self.root_object = Some(object.clone());
+            let object = Rc::new(object);
+            self.root_object = Some(Rc::clone(&object));
             self.objects.insert(object);
             None
         }
@@ -56,7 +58,7 @@ where
 
     #[must_use]
     pub fn find(&self, key: &T) -> Option<&T> {
-        self.objects.get(key)
+        self.objects.get(key).map(Rc::as_ref)
     }
 
     #[must_use]
@@ -69,23 +71,26 @@ where
         if found.is_some() {
             self.root_object = found.cloned();
         }
-        found
+        found.map(Rc::as_ref)
     }
 
     pub fn extract_object(&mut self, key: &T) -> Option<T> {
         let removed = self.objects.take(key);
         if removed.is_some() {
+            if self.root_object.as_deref() == Some(key) {
+                self.root_object = None;
+            }
             self.root_object = self.objects.iter().next().cloned();
         }
-        removed
+        removed.map(|object| Rc::try_unwrap(object).unwrap_or_else(|shared| (*shared).clone()))
     }
 
     pub fn extract_root_object(&mut self) -> Option<T> {
         let key = match self.root_object.as_ref() {
-            Some(key) if self.objects.contains(key) => key.clone(),
-            _ => self.objects.iter().next()?.clone(),
+            Some(key) if self.objects.contains(key.as_ref()) => Rc::clone(key),
+            _ => Rc::clone(self.objects.iter().next()?),
         };
-        self.extract_object(&key)
+        self.extract_object(key.as_ref())
     }
 
     /// # Panics
@@ -93,7 +98,13 @@ where
     /// Panics if `add` contains an object already present in this tree. This
     /// mirrors the C `PTreeObjMerge` assertion that input trees are disjoint.
     pub fn merge_unique(&mut self, add: Self) {
-        for object in add.objects {
+        let Self {
+            objects,
+            root_object,
+        } = add;
+        drop(root_object);
+        for object in objects {
+            let object = Rc::try_unwrap(object).unwrap_or_else(|shared| (*shared).clone());
             assert!(
                 self.store(object).is_none(),
                 "ObjTree merge expects disjoint trees"
@@ -102,20 +113,28 @@ where
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.objects.iter()
+        self.objects.iter().map(Rc::as_ref)
     }
 
     #[must_use]
     pub fn to_vec(&self) -> Vec<T> {
-        self.objects.iter().cloned().collect()
+        self.objects
+            .iter()
+            .map(|object| (**object).clone())
+            .collect()
     }
 
     pub fn free_with<F>(self, mut del_fun: F)
     where
         F: FnMut(T),
     {
-        for object in self.objects {
-            del_fun(object);
+        let Self {
+            objects,
+            root_object,
+        } = self;
+        drop(root_object);
+        for object in objects {
+            del_fun(Rc::try_unwrap(object).unwrap_or_else(|shared| (*shared).clone()));
         }
     }
 
@@ -125,6 +144,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::ObjTree;
+    use std::{cell::Cell, cmp::Ordering, rc::Rc};
+
+    #[derive(Debug)]
+    struct CloneCounted {
+        value: i32,
+        clones: Rc<Cell<usize>>,
+    }
+
+    impl Clone for CloneCounted {
+        fn clone(&self) -> Self {
+            self.clones.set(self.clones.get() + 1);
+            Self {
+                value: self.value,
+                clones: Rc::clone(&self.clones),
+            }
+        }
+    }
+
+    impl PartialEq for CloneCounted {
+        fn eq(&self, other: &Self) -> bool {
+            self.value == other.value
+        }
+    }
+
+    impl Eq for CloneCounted {}
+
+    impl PartialOrd for CloneCounted {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for CloneCounted {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.value.cmp(&other.value)
+        }
+    }
 
     fn tree(values: &[i32]) -> ObjTree<i32> {
         let mut tree = ObjTree::new();
@@ -187,5 +243,29 @@ mod tests {
         let mut deleted = Vec::new();
         tree.free_with(|object| deleted.push(object));
         assert_eq!(deleted, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn root_tracking_and_extraction_do_not_clone_payloads() {
+        let clones = Rc::new(Cell::new(0));
+        let counted = |value| CloneCounted {
+            value,
+            clones: Rc::clone(&clones),
+        };
+        let mut tree = ObjTree::new();
+
+        assert!(tree.store(counted(2)).is_none());
+        assert!(tree.store(counted(1)).is_none());
+        assert!(tree.store(counted(2)).is_some());
+        assert_eq!(
+            tree.find_splayed(&counted(1)).map(|item| item.value),
+            Some(1)
+        );
+        assert_eq!(tree.root_object().map(|item| item.value), Some(1));
+        assert_eq!(
+            tree.extract_object(&counted(1)).map(|item| item.value),
+            Some(1)
+        );
+        assert_eq!(clones.get(), 0);
     }
 }

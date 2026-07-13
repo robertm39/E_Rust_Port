@@ -57,11 +57,20 @@ clause-level choice point. It restores the substitution after a failed
 recursive suffix and retries the swapped candidate sides for an unoriented
 pattern literal, matching C's control flow.
 
-The post-fix trace agrees with C through 6,367 selected clauses instead of 174.
-The next divergence is ordinal 6,368, where C selects clause `i_0_18945` and
-Rust does not retain an equivalent selected clause. This later divergence is a
-separate investigation; the current fix does not claim complete SWC078 proof
-parity.
+The post-fix trace agrees with C through all 6,367 clauses Rust selects before
+its resource exit, instead of only 174. The original comparator continued
+parsing Rust's final-state dump after `% Failure:` as though those comment
+lines were selected clauses; that produced a false ordinal-6,368 divergence.
+The corrected comparator stops at failure/SZS status boundaries. C selects
+8,499 clauses in the same run, so the trace established a matching Rust prefix
+and a performance boundary, not a semantic mismatch.
+
+The follow-up in
+[`../2026-07-12-006-swc078-evaluation/FINDINGS.md`](../2026-07-12-006-swc078-evaluation/FINDINGS.md)
+confirmed that the final-state clause `i_0_18945` has the same runtime identity,
+FIFO count, and five HCB evaluation cells in both implementations. After
+removing two Rust-only ownership costs, both provers select the same complete
+8,499-clause sequence and prove the problem within the canonical limit.
 
 The full 50-case comparison at
 `.artifacts/e-compare/20260712-200555-272981/` reports eight mismatches. On
@@ -90,7 +99,8 @@ The semantic correction does not resolve the broader performance defect.
   of the original C clause as the source of its `cons/cons` shape.
 - The focused regression checks the exact recursive backtracking requirement,
   rather than merely pinning the large SWC078 trace.
-- The remaining ordinal-6,368 divergence means normalized final proof output
-  can still differ, and the canonical 60-second search now reaches
-  `ResourceOut`. Full differential and benchmark results are recorded in
-  `docs/rust-port-status.md` after validation.
+- The corrected parser explicitly falsifies the supposed ordinal-6,368
+  divergence: Rust had stopped selecting clauses and was printing final state.
+- This experiment isolated and fixed recursive orientation backtracking. The
+  later performance work is kept in a separate experiment so its ownership and
+  profiling claims do not get attributed to the semantic fix.

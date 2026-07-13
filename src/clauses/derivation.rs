@@ -182,7 +182,7 @@ pub const DC_CHOICE_INST: i64 = DO_CHOICE_INST | ARG1_CNF | ARG2_CNF | ARG_IS_HO
 pub const DC_TRIGGER: i64 = DO_TRIGGER | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
 pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ClauseDerivationRef {
     ident: i64,
     source: u64,

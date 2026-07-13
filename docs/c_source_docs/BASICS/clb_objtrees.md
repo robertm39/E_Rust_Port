@@ -113,4 +113,5 @@ Source files reviewed: `BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`.
 ### Change Later
 
 - `PTreeObjMerge` asserts that inserted objects are not already present, but in release builds the returned duplicate node is only assigned to an unused local and is not freed. Rust enforces the disjoint-merge precondition with an assertion instead of reproducing the leak-shaped release path; a cleaned API should keep this as an explicit `Result` or prevalidated merge operation.
+- The generic tree stores untyped borrowed-or-owned `void*` keys and delegates both equality and ordering to a caller-supplied function, while `PObjTreeFree` separately receives a deletion callback. This makes ownership transfer implicit and lets ordinary lookup mutate the root through splaying. Rust preserves shared object identity without deep copies through typed `Rc` payloads; a future C API should use typed containers or explicit owner/borrow variants and name mutating versus non-mutating lookup directly.
 <!-- END MANUAL REVIEW: c_source_docs -->
