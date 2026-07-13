@@ -1581,7 +1581,14 @@ fn eqn_list_rec_subsume(
 
         picked[index] = true;
         let state = subst.len();
-        if literal_matches_with_subst(literal, candidate, subst)
+        if literal_matches_directed_with_subst(literal, candidate, subst, false)
+            && eqn_list_rec_subsume(remaining, sub_cand_list, subst, picked, bank)
+        {
+            return true;
+        }
+        subst.backtrack_to_pos(state);
+        if !literal.is_oriented()
+            && literal_matches_directed_with_subst(literal, candidate, subst, true)
             && eqn_list_rec_subsume(remaining, sub_cand_list, subst, picked, bank)
         {
             return true;
@@ -1623,7 +1630,8 @@ fn eqn_list_rec_subsume_with_bank(
 
         picked[index] = true;
         let state = subst.len();
-        let matches = literal_matches_with_subst_with_bank(literal, candidate, subst, bank);
+        let matches =
+            literal_matches_directed_with_subst_with_bank(literal, candidate, subst, bank, false);
         match matches {
             Ok(true) => {
                 match eqn_list_rec_subsume_with_bank(remaining, sub_cand_list, subst, picked, bank)
@@ -1645,6 +1653,37 @@ fn eqn_list_rec_subsume_with_bank(
             }
         }
         subst.backtrack_to_pos(state);
+        if !literal.is_oriented() {
+            let matches = literal_matches_directed_with_subst_with_bank(
+                literal, candidate, subst, bank, true,
+            );
+            match matches {
+                Ok(true) => {
+                    match eqn_list_rec_subsume_with_bank(
+                        remaining,
+                        sub_cand_list,
+                        subst,
+                        picked,
+                        bank,
+                    ) {
+                        Ok(true) => return Ok(true),
+                        Ok(false) => {}
+                        Err(error) => {
+                            subst.backtrack_to_pos(state);
+                            picked[index] = false;
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    subst.backtrack_to_pos(state);
+                    picked[index] = false;
+                    return Err(error);
+                }
+            }
+            subst.backtrack_to_pos(state);
+        }
         picked[index] = false;
     }
     Ok(false)
@@ -1654,6 +1693,26 @@ fn literal_matches_with_subst(pattern: &Eqn, candidate: &Eqn, subst: &mut Substi
     pattern.subsume(candidate, subst)
 }
 
+fn literal_matches_directed_with_subst(
+    pattern: &Eqn,
+    candidate: &Eqn,
+    subst: &mut Substitution,
+    reverse_candidate: bool,
+) -> bool {
+    let state = subst.len();
+    let (candidate_left, candidate_right) = if reverse_candidate {
+        (candidate.right(), candidate.left())
+    } else {
+        (candidate.left(), candidate.right())
+    };
+    let result = subst_match_complete(pattern.left(), candidate_left, subst)
+        && subst_match_complete(pattern.right(), candidate_right, subst);
+    if !result {
+        subst.backtrack_to_pos(state);
+    }
+    result
+}
+
 fn literal_matches_with_subst_with_bank(
     pattern: &Eqn,
     candidate: &Eqn,
@@ -1661,6 +1720,30 @@ fn literal_matches_with_subst_with_bank(
     bank: &mut TermBank,
 ) -> Result<bool, Diagnostic> {
     pattern.subsume_with_bank(candidate, subst, bank)
+}
+
+fn literal_matches_directed_with_subst_with_bank(
+    pattern: &Eqn,
+    candidate: &Eqn,
+    subst: &mut Substitution,
+    bank: &mut TermBank,
+    reverse_candidate: bool,
+) -> Result<bool, Diagnostic> {
+    let state = subst.len();
+    let (candidate_left, candidate_right) = if reverse_candidate {
+        (candidate.right(), candidate.left())
+    } else {
+        (candidate.left(), candidate.right())
+    };
+    let result = match subst_match_complete_with_bank(bank, pattern.left(), candidate_left, subst) {
+        Ok(true) => subst_match_complete_with_bank(bank, pattern.right(), candidate_right, subst),
+        Ok(false) => Ok(false),
+        Err(error) => Err(error),
+    };
+    if !matches!(result, Ok(true)) {
+        subst.backtrack_to_pos(state);
+    }
+    result
 }
 
 fn fv_index_subsumes_clause_rec<'index>(
@@ -2375,6 +2458,33 @@ mod tests {
         assert!(clause_clause_subsumption_calls() >= calls_before + 2);
         assert!(clause_clause_subsumption_calls_rec() >= rec_before + 2);
         assert!(clause_clause_subsumption_successes() > successes_before);
+    }
+
+    #[test]
+    fn clause_subsumption_retries_swapped_literal_after_recursive_failure() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -10);
+        let y = typed_var(&bank, -12);
+        let a = typed_const(&mut bank, "subsume_retry_a");
+        let b = typed_const(&mut bank, "subsume_retry_b");
+        let key = typed_const(&mut bank, "subsume_retry_key");
+        let cons_x = typed_binary(&mut bank, "subsume_retry_cons", &key, &x);
+        let cons_b = typed_binary(&mut bank, "subsume_retry_cons", &key, &b);
+        let app_y = typed_binary(&mut bank, "subsume_retry_app", &key, &y);
+        let app_a = typed_binary(&mut bank, "subsume_retry_app", &key, &a);
+        let mut subsumer = clause_from(vec![
+            literal(&mut bank, &x, &y, true),
+            literal(&mut bank, &cons_x, &app_y, false),
+        ]);
+        let mut candidate = clause_from(vec![
+            literal(&mut bank, &a, &b, true),
+            literal(&mut bank, &app_a, &cons_b, false),
+        ]);
+        prepare(&mut subsumer, &bank);
+        prepare(&mut candidate, &bank);
+
+        assert!(clause_subsumes_clause(&subsumer, &candidate, &bank));
+        assert!(clause_subsumes_clause_with_bank(&subsumer, &candidate, &mut bank).unwrap());
     }
 
     #[test]
