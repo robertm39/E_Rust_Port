@@ -65,7 +65,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for formula-CNF registered-root behavior on 2026-07-13.
 
 Source files reviewed: `CLAUSES/ccl_garbage_coll.h`, `CLAUSES/ccl_garbage_coll.c`.
 
@@ -78,9 +78,14 @@ Source files reviewed: `CLAUSES/ccl_garbage_coll.h`, `CLAUSES/ccl_garbage_coll.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TBGCCollect` marks every clause and formula set registered in `bank->gc`, even when called from a helper such as `FormulaSetSimplify` that receives only one active set. GEO288 tracing showed this global root coverage is compatibility-visible: omitting the pre-CNF archive reclaimed 897 additional nodes, shifted later collections, and left Rust with 39 additional unique term entries after CNF.
+
 ### Change Later
 
 - `TBGCCollect` dispatches through untyped pointers stored in the term bank's GC admin and assumes every registered pointer still names a live `ClauseSet` or `FormulaSet`. Rust should keep compatibility with the registration surface, but the long-term owner model should use typed stable handles so stale or wrong-kind registrations cannot be observed as memory-unsafe behavior.
+- GC retention depends on all sets currently registered with the bank, not on roots named by the caller. This makes local transformations sensitive to unrelated owner-registration timing. A typed collection context should make the effective root domain explicit after compatibility traces and memory benchmarks are stable.
 
 ### Porting Focus
 

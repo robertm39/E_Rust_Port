@@ -1081,10 +1081,14 @@ fn collect_formula_set_cnf_garbage(
 fn collect_formula_set_simplify_garbage(
     bank: &mut TermBank,
     set: &FormulaSet,
+    clause_roots: &[&ClauseSet],
+    formula_roots: &[&FormulaSet],
     result: &mut FormulaSetSimplifyResult,
 ) {
-    let clause_sets: [&ClauseSet; 0] = [];
-    let recovered = tb_gc_collect(bank, &clause_sets, &[set]);
+    let mut all_formula_roots = Vec::with_capacity(formula_roots.len() + 1);
+    all_formula_roots.push(set);
+    all_formula_roots.extend_from_slice(formula_roots);
+    let recovered = tb_gc_collect(bank, clause_roots, &all_formula_roots);
     result.term_garbage_collections += 1;
     result.terms_recovered_by_gc += recovered;
 }
@@ -3035,6 +3039,16 @@ impl FormulaSet {
         bank: &mut TermBank,
         do_garbage_collect: bool,
     ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
+        self.simplify_with_garbage_collection_roots(bank, do_garbage_collect, &[], &[])
+    }
+
+    fn simplify_with_garbage_collection_roots(
+        &mut self,
+        bank: &mut TermBank,
+        do_garbage_collect: bool,
+        clause_roots: &[&ClauseSet],
+        formula_roots: &[&FormulaSet],
+    ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
         let mut result = FormulaSetSimplifyResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
         let mut gc_threshold = formula_set_gc_threshold(old_nodes);
@@ -3049,7 +3063,13 @@ impl FormulaSet {
                 result.formulas_changed += 1;
                 result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
                 if do_garbage_collect && bank.non_var_term_nodes() > gc_threshold {
-                    collect_formula_set_simplify_garbage(bank, self, &mut result);
+                    collect_formula_set_simplify_garbage(
+                        bank,
+                        self,
+                        clause_roots,
+                        formula_roots,
+                        &mut result,
+                    );
                     old_nodes = bank.non_var_term_nodes();
                     gc_threshold = formula_set_gc_threshold(old_nodes);
                 }
@@ -3058,7 +3078,13 @@ impl FormulaSet {
         }
 
         if do_garbage_collect && bank.non_var_term_nodes() != old_nodes {
-            collect_formula_set_simplify_garbage(bank, self, &mut result);
+            collect_formula_set_simplify_garbage(
+                bank,
+                self,
+                clause_roots,
+                formula_roots,
+                &mut result,
+            );
         }
         Ok(result)
     }
@@ -3087,6 +3113,33 @@ impl FormulaSet {
         full_terms: bool,
         problem_type: ProblemType,
         do_garbage_collect: bool,
+    ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
+        self.simplify_with_garbage_collection_and_docs_roots(
+            output,
+            bank,
+            session,
+            full_terms,
+            problem_type,
+            do_garbage_collect,
+            &[],
+            &[],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible formula simplification keeps proof-document and GC-root contexts explicit"
+    )]
+    fn simplify_with_garbage_collection_and_docs_roots<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        full_terms: bool,
+        problem_type: ProblemType,
+        do_garbage_collect: bool,
+        clause_roots: &[&ClauseSet],
+        formula_roots: &[&FormulaSet],
     ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
         let mut result = FormulaSetSimplifyDocResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
@@ -3122,7 +3175,13 @@ impl FormulaSet {
                 result.write_results.push(write_result);
 
                 if do_garbage_collect && bank.non_var_term_nodes() > gc_threshold {
-                    collect_formula_set_simplify_garbage(bank, self, &mut result.simplify);
+                    collect_formula_set_simplify_garbage(
+                        bank,
+                        self,
+                        clause_roots,
+                        formula_roots,
+                        &mut result.simplify,
+                    );
                     old_nodes = bank.non_var_term_nodes();
                     gc_threshold = formula_set_gc_threshold(old_nodes);
                 }
@@ -3131,7 +3190,13 @@ impl FormulaSet {
         }
 
         if do_garbage_collect && bank.non_var_term_nodes() != old_nodes {
-            collect_formula_set_simplify_garbage(bank, self, &mut result.simplify);
+            collect_formula_set_simplify_garbage(
+                bank,
+                self,
+                clause_roots,
+                formula_roots,
+                &mut result.simplify,
+            );
         }
         Ok(result)
     }
@@ -4058,7 +4123,8 @@ impl FormulaSet {
                 .extend(unroll_result.formula_derivation_ops);
         }
 
-        let simplify_result = self.simplify_with_garbage_collection(bank, true)?;
+        let simplify_result =
+            self.simplify_with_garbage_collection_roots(bank, true, &[&*clauseset], &[&*archive])?;
         result.formulas_simplified = simplify_result.formulas_changed;
         result.term_garbage_collections += simplify_result.term_garbage_collections;
         result.terms_recovered_by_gc += simplify_result.terms_recovered_by_gc;
@@ -4179,13 +4245,15 @@ impl FormulaSet {
             result.cnf.add_fool_unroll(&unroll_result);
         }
 
-        let simplify_result = self.simplify_with_garbage_collection_and_docs(
+        let simplify_result = self.simplify_with_garbage_collection_and_docs_roots(
             &mut *doc.output,
             bank,
             &mut *doc.session,
             doc.render_options.full_terms,
             doc.render_options.problem_type,
             true,
+            &[&*clauseset],
+            &[&*archive],
         )?;
         result.add_simplify_doc(simplify_result);
 
@@ -8523,11 +8591,17 @@ mod tests {
     fn formula_set_cnf2_collects_term_garbage_after_cnf_growth() {
         let mut bank = test_bank();
         let dropped = typed_const(&mut bank, "set_cnf_gc_dropped");
+        let archive_left = typed_const(&mut bank, "set_cnf_gc_archive_left");
+        let archive_right = typed_const(&mut bank, "set_cnf_gc_archive_right");
+        let clause_arg = typed_const(&mut bank, "set_cnf_gc_clause_arg");
+        let clause_root = typed_unary(&mut bank, "set_cnf_gc_clause_root", &clause_arg);
         let first = typed_const(&mut bank, "set_cnf_gc_first");
         let second = typed_const(&mut bank, "set_cnf_gc_second");
         let third = typed_const(&mut bank, "set_cnf_gc_third");
         let fourth = typed_const(&mut bank, "set_cnf_gc_fourth");
         let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let archive_root =
+            bool_binary_with_code(&mut bank, eqn_code, &archive_left, &archive_right);
         let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
         let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
         let equiv_code = bank.signature().equiv_code();
@@ -8538,7 +8612,14 @@ mod tests {
         let mut set = FormulaSet::new();
         set.insert(WrappedFormula::wt_formula_alloc(formula));
         let mut archive = FormulaSet::new();
+        archive.insert(WrappedFormula::wt_formula_alloc(archive_root.clone()));
         let mut clauses = ClauseSet::new();
+        clauses.insert(Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &clause_root,
+            &clause_arg,
+            true,
+        )])));
         let fresh_vars = VarBank::new(bank.signature().type_bank());
 
         let result = set
@@ -8555,6 +8636,8 @@ mod tests {
         assert!(result.term_garbage_collections >= 1);
         assert!(result.terms_recovered_by_gc >= 1);
         assert!(bank.find(&dropped).is_none());
+        assert!(bank.find(&archive_root).is_some());
+        assert!(bank.find(&clause_root).is_some());
         let archived_formula = archive.iter().next().unwrap().formula().clone();
         assert!(bank.find(&archived_formula).is_some());
     }
