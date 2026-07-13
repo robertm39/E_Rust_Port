@@ -1222,6 +1222,7 @@ fn preprocess_real_input_clauses(
             config.eqdef_maxclauses,
         )?;
     }
+    state.replace_tmp_terms(tmp_bank);
     Ok(())
 }
 

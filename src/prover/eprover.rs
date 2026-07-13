@@ -7061,6 +7061,7 @@ fn apply_clause_set_preprocessing(
         eqdef_incrlimit,
         eqdef_maxclauses,
     )?;
+    state.replace_tmp_terms(tmp_bank);
     Ok(removed)
 }
 
@@ -7222,6 +7223,8 @@ fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
         )?;
         preprocessing.start_ident
     };
+
+    state.replace_tmp_terms(tmp_bank);
 
     Ok(ClausePreprocessingResult {
         removed,

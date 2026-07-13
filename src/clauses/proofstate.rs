@@ -426,6 +426,7 @@ struct ProofObjectParentEdge {
 #[derive(Clone, Debug)]
 pub struct ProofState {
     terms: TermBank,
+    tmp_terms: TermBank,
     fresh_vars: VarBank,
     original_symbols: usize,
     axioms: ClauseSet,
@@ -497,8 +498,7 @@ impl ProofState {
     ///
     /// The clause-set, global-index, demodulator-index, formula-set, FV-index,
     /// distinct-symbol, and statistic initialization mirrors C
-    /// `ProofStateAlloc`. The temporary term bank and SAT integration are added
-    /// by later slices.
+    /// `ProofStateAlloc`. SAT integration is added by later slices.
     ///
     /// # Errors
     ///
@@ -508,12 +508,14 @@ impl ProofState {
         signature.insert_internal_codes()?;
         signature.remove_distinct_props(free_symbol_props);
         let mut terms = TermBank::new(signature)?;
+        let tmp_terms = TermBank::new(terms.signature().clone())?;
         let fresh_vars = VarBank::new(terms.signature().type_bank());
         terms.vars().pair_shadow(&fresh_vars);
         register_proof_state_gc_roots(&mut terms);
 
         Ok(Self {
             terms,
+            tmp_terms,
             fresh_vars,
             original_symbols: 0,
             axioms: ClauseSet::new(),
@@ -558,6 +560,26 @@ impl ProofState {
 
     pub fn terms_mut(&mut self) -> &mut TermBank {
         &mut self.terms
+    }
+
+    #[must_use]
+    pub const fn tmp_terms(&self) -> &TermBank {
+        &self.tmp_terms
+    }
+
+    pub fn tmp_terms_mut(&mut self) -> &mut TermBank {
+        let main_signature = self.terms.signature();
+        let tmp_signature = self.tmp_terms.signature();
+        if main_signature.f_count() != tmp_signature.f_count()
+            || main_signature.type_bank().types_count() != tmp_signature.type_bank().types_count()
+        {
+            *self.tmp_terms.signature_mut() = main_signature.clone();
+        }
+        &mut self.tmp_terms
+    }
+
+    pub fn replace_tmp_terms(&mut self, tmp_terms: TermBank) {
+        self.tmp_terms = tmp_terms;
     }
 
     #[must_use]

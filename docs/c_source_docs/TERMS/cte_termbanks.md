@@ -207,7 +207,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for term-sharing key verification on 2026-07-13.
 
 Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 
@@ -254,6 +254,7 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - The C `TBInsertOpt` ground fast path relies on a global `problemType` branch to call `WHNF_deref` for higher-order `DEREF_ALWAYS`; that mixes sharing, dereferencing, and weak-head normalization policy in one API. Rust should keep the current explicit sharing fix for unshared ground expansions, then revisit whether `insert_opt` itself should own HO WHNF once term-bank/session ownership can represent the C global cleanly.
 - Conventional term printing still spans `cte_termfunc` global type/list switches, cache-backed dereferencing/WHNF paths, and the C split where first-order `$let` is pretty-printed but higher-order `$let` remains ordinary application. Keep the term-bank writer APIs explicit until those compatibility surfaces and executable output paths are audited, then decide whether a single problem-type-dispatched wrapper is useful.
 - `TBPrintBankInOrder` allocates and frees a temporary `NumTree` every time it needs sorted entry-number output. Rust sorts collected bank terms directly; preserve output order, but do not cargo-cult the temporary tree unless reference/performance data gives a reason.
+- The `TermTopCompare` header commentary says term properties participate in the sharing key, but the implementation compares function code, arity, type, and argument pointers without comparing `properties`. Rust follows the implementation. The C comment should be corrected later, and any future property-sensitive sharing design must first audit callers that mutate flags on already shared terms.
 
 ### Porting Focus
 

@@ -155,6 +155,7 @@ pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
 
 const IMMEDIATE_CLAUSIFICATION_RENAMING_LIMIT: i64 = 24;
 const IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT: i64 = 100;
+const TMPBANK_GC_LIMIT: i64 = 256;
 
 pub const DEFAULT_HEURISTICS: &str = concat!(
     "Weight     = (1*weight21_ugg)                       \n",
@@ -2673,7 +2674,7 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
             }
         }
 
-        if clause_is_tautology(state.terms_mut(), clause)? {
+        if clause_is_tautology(state.tmp_terms_mut(), clause)? {
             counts.trivial += 1;
             return Ok(None);
         }
@@ -3964,6 +3965,18 @@ pub fn proof_state_insert_processed_clause(
 ) -> Result<ProcessedClauseClass, Diagnostic> {
     let fresh_vars = state.fresh_vars().clone();
     clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
+    Ok(proof_state_insert_normalized_processed_clause(
+        state,
+        clause,
+        clause_date,
+    ))
+}
+
+fn proof_state_insert_normalized_processed_clause(
+    state: &mut ProofState,
+    mut clause: Clause,
+    clause_date: SysDate,
+) -> ProcessedClauseClass {
     clause.set_date(clause_date);
     clause.set_prop(CP_LIMITED_RW);
     clause.set_weight(clause.standard_weight());
@@ -4016,7 +4029,7 @@ pub fn proof_state_insert_processed_clause(
         }
     }
 
-    Ok(class)
+    class
 }
 
 /// Selects and extracts the next unprocessed clause with the active HCB.
@@ -4052,7 +4065,6 @@ pub fn proof_state_select_unprocessed_clause(
                 "active proof-control heuristic handle is invalid",
             )
         })?;
-
     let selected = match hcb.hcb_select() {
         HcbSelectFunction::StandardClauseSelect => {
             hcb_standard_clause_select_with(hcb, state.unprocessed_mut(), |clause| {
@@ -4676,6 +4688,7 @@ fn term_contains_subterm(term: &Term, needle: &Term) -> bool {
 fn compute_ho_inferences(
     state: &mut ProofState,
     control: &ProofControl,
+    renamed_clause: &Clause,
     clause: &Clause,
     problem_type: ProblemType,
     indices: Option<&GlobalIndices>,
@@ -4706,10 +4719,9 @@ fn compute_ho_inferences(
             generated += compute_inverse_recognition(terms, clause, generation.tmp_store)?;
         }
         if let Some(indices) = ext_rule_indices {
-            let renamed_clause = clause.copy_disjoint(terms)?;
             generated += compute_ext_sup(
                 terms,
-                &renamed_clause,
+                renamed_clause,
                 clause,
                 generation.tmp_store,
                 indices,
@@ -4748,6 +4760,7 @@ fn compute_ho_inferences(
         if parms.inst_choice_max_depth >= 0 {
             generated += instantiate_choice_clauses(
                 terms,
+                renamed_clause,
                 clause,
                 generation.tmp_store,
                 generation.archive,
@@ -6119,6 +6132,7 @@ enum ChoiceTrigger {
 
 fn instantiate_choice_clauses(
     bank: &mut TermBank,
+    renamed_clause: &Clause,
     clause: &Clause,
     store: &mut ClauseSet,
     archive: &mut ClauseSet,
@@ -6131,7 +6145,7 @@ fn instantiate_choice_clauses(
 
     let mut generated = 0;
     let mut triggers = Vec::new();
-    for literal in clause.literals().as_slice() {
+    for literal in renamed_clause.literals().as_slice() {
         debug_assert!(triggers.is_empty());
         find_choice_triggers(choice_symbols, &mut triggers, literal.left());
         find_choice_triggers(choice_symbols, &mut triggers, literal.right());
@@ -6489,13 +6503,35 @@ fn set_ho_generation_proof_object(
     clause_push_derivation(new_clause, derivation_code, Some(orig_clause), parent2);
 }
 
+fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    problem_type: ProblemType,
+    indices: Option<&GlobalIndices>,
+    doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    let mut renamed_clause = clause.copy_disjoint(state.terms_mut())?;
+    renamed_clause.set_ident(clause.ident());
+    proof_state_generate_new_clauses_with_disjoint_copy_impl(
+        state,
+        control,
+        &renamed_clause,
+        clause,
+        problem_type,
+        indices,
+        doc_context,
+    )
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "C-compatible selected-clause generation keeps generator order and optional proof docs together"
 )]
-fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
+fn proof_state_generate_new_clauses_with_disjoint_copy_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
+    renamed_clause: &Clause,
     clause: &Clause,
     problem_type: ProblemType,
     indices: Option<&GlobalIndices>,
@@ -6505,7 +6541,14 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
         crate::basics::perf_counters::PerfCounter::GenerateTimer,
     );
     state.terms().vars().set_v_counts_to_used();
-    let _ = compute_ho_inferences(state, control, clause, problem_type, indices)?;
+    let _ = compute_ho_inferences(
+        state,
+        control,
+        renamed_clause,
+        clause,
+        problem_type,
+        indices,
+    )?;
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
     let enable_neg_unit_paramod = control.heuristic_parms().enable_neg_unit_paramod;
     let diseq_decomposition = control.heuristic_parms().diseq_decomposition;
@@ -6518,11 +6561,7 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     } else {
         None
     };
-    let source_for_paramod = if should_paramodulate {
-        Some(clause.copy_disjoint(state.terms_mut())?)
-    } else {
-        None
-    };
+    let source_for_paramod = should_paramodulate.then_some(renamed_clause);
 
     let result = (|| {
         let mut outcome = GenerateNewClausesOutcome::default();
@@ -7241,8 +7280,13 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         proof_state_backward_simplify(state, control, &clause, &mut clause_date)?
     };
 
+    let fresh_vars = state.fresh_vars().clone();
+    clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
+    let mut renamed_clause = clause.copy_disjoint(state.terms_mut())?;
+    renamed_clause.set_ident(clause.ident());
+
     let processed_ident = clause.ident();
-    let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
+    let class = proof_state_insert_normalized_processed_clause(state, clause, clause_date);
     if let Some(indices) = indices.as_deref_mut() {
         proof_state_global_index_processed_clause(
             state,
@@ -7311,35 +7355,32 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
                 )
             })?;
         if let Some((output, session, _output_level)) = doc_context.as_mut() {
-            if let Some(indices) = indices.as_deref() {
-                proof_state_generate_new_clauses_with_global_indices_and_docs(
-                    &mut **output,
-                    session,
-                    state,
-                    control,
-                    &processed_clause,
-                    indices,
-                )?
-            } else {
-                proof_state_generate_new_clauses_with_docs(
-                    &mut **output,
-                    session,
-                    state,
-                    control,
-                    &processed_clause,
-                )?
-            }
-        } else if let Some(indices) = indices.as_deref() {
-            proof_state_generate_new_clauses_with_global_indices(
+            proof_state_generate_new_clauses_with_disjoint_copy_impl(
                 state,
                 control,
+                &renamed_clause,
                 &processed_clause,
-                indices,
+                problem_type(),
+                indices.as_deref(),
+                Some((&mut **output, session)),
             )?
         } else {
-            proof_state_generate_new_clauses(state, control, &processed_clause)?
+            proof_state_generate_new_clauses_with_disjoint_copy_impl::<String>(
+                state,
+                control,
+                &renamed_clause,
+                &processed_clause,
+                problem_type(),
+                indices.as_deref(),
+                None,
+            )?
         }
     };
+    drop(renamed_clause);
+
+    if state.tmp_terms().non_var_term_nodes() > TMPBANK_GC_LIMIT {
+        let _ = state.tmp_terms_mut().gc_sweep();
+    }
 
     if control.heuristic_parms().detsort_tmpset {
         proof_state_sort_tmp_store_by_struct_weight(state);
@@ -12229,6 +12270,8 @@ mod tests {
             condense_clause: false,
             level: RewriteLevel::RuleRewrite,
         };
+        let permanent_terms_before = state.terms().in_count();
+        let temporary_terms_before = state.tmp_terms().in_count();
 
         let packed = proof_state_forward_contract_clause(&mut state, &mut control, clause, options)
             .unwrap_or_else(|err| panic!("{err}"))
@@ -12237,6 +12280,8 @@ mod tests {
 
         assert_eq!(state.statistics().proc_forward_subsumed_count, 0);
         assert_eq!(state.statistics().proc_trivial_count, 0);
+        assert_eq!(state.terms().in_count(), permanent_terms_before);
+        assert!(state.tmp_terms().in_count() > temporary_terms_before);
         assert!(survivor.query_prop(CP_IS_ORIENTED));
         assert_eq!(survivor.prop_lit_number(EP_IS_SELECTED), 1);
         assert!(survivor.literals().as_slice().iter().any(Eqn::is_maximal));
@@ -14171,6 +14216,40 @@ mod tests {
         };
         assert_eq!(generation.paramodulants, 0);
         assert_eq!(state.statistics().paramod_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_copies_normalized_clause_disjointly_without_generation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let skolem = typed_unary(terms, "pc_process_disjoint_skolem", &variable);
+            let predicate_code = unary_predicate_code(terms, "pc_process_disjoint_predicate");
+            let predicate = unary_predicate(terms, predicate_code, &variable);
+            let truth = terms.true_term().clone();
+            let first = literal(terms, &skolem, &variable, false);
+            let second = literal(terms, &predicate, &truth, false);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+            clause.set_ident(4_147);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let terms_before = state.terms().in_count();
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(
+            outcome,
+            ProcessClauseOutcome::Processed {
+                class: ProcessedClauseClass::NonUnit,
+                ..
+            }
+        ));
+        assert_eq!(state.terms().in_count(), terms_before + 2);
     }
 
     #[test]

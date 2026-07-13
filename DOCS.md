@@ -28,6 +28,8 @@ Retroactive audit status as of 2026-07-11: the existing C-source manual-review p
 
 The 2026-07-12 retroactive follow-up also reviewed C parent-liveness/archive coupling, object-tree payload ownership, and long-equation-list tautology search behavior under this rule.
 
+The 2026-07-13 retroactive follow-up reviewed proof-state temporary-term-bank ownership, forward-contraction tautology scratch storage, unconditional selected-clause disjoint-copy allocation, and term-bank sharing-key commentary under this rule.
+
 Start here:
 
 - [`docs/c_source_docs/overview.md`](docs/c_source_docs/overview.md) - subsystem map, coverage counts, porting guidance, and links to every source-unit page.
