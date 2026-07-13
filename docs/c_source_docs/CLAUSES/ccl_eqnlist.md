@@ -239,6 +239,7 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 
 - `EqnMap` clears `EPMaxIsUpToDate` and `EPIsOriented` only when the final left side differs from the old left side, even if the right side changed. Rust preserves that invalidation rule through both generic term mapping and lambda normalization; a cleaned literal-mutation API should decide whether right-side-only rewrites should also invalidate ordering metadata after compatibility tests cover the affected callers.
 - `EqnListLambdaNormalize` obtains the term bank from the first linked literal and is a no-op for `NULL`, which hides the bank ownership boundary inside list nodes. Rust takes the active `TermBank` explicitly; future call-site integration should keep that owner explicit rather than recreating C's implicit list-head bank lookup.
+- `EqnLongListIsTrivial` inherits the off-by-one behavior of `PStackBinSearch`: its exclusive upper bound is updated to `i-1`, and an unsuccessful search returns `lower+1`. The resulting two-stack search can skip complementary literals and admit a tautology once a clause exceeds `EQN_LIST_LONG_LIMIT` (15 literals); `GEO288+1.p` clause 3656 is a concrete 16-literal example. Rust preserves this false negative because delayed deletion changes the HCB schedule, but C should later use a conventional lower-bound search and add threshold-focused tests.
 
 ### Porting Focus
 

@@ -855,21 +855,42 @@ impl EqnList {
 
     #[must_use]
     pub fn long_is_trivial(&self, bank: &TermBank) -> bool {
-        let mut positives = BTreeSet::new();
-        let mut negatives = BTreeSet::new();
+        let mut positives = PStack::new();
+        let mut negatives = PStack::new();
         for literal in &self.literals {
-            let key = eqn_syntax_key(literal, bank);
             if literal.is_positive() {
-                if negatives.contains(&key) {
-                    return true;
-                }
-                positives.insert(key);
+                positives.push(literal);
             } else {
-                if positives.contains(&key) {
-                    return true;
-                }
-                negatives.insert(key);
+                negatives.push(literal);
             }
+        }
+
+        positives.sort_by(|left, right| left.syntax_compare(right, bank).cmp(&0));
+        negatives.sort_by(|left, right| left.syntax_compare(right, bank).cmp(&0));
+
+        let mut positive_pos = 0;
+        let mut negative_pos = 0;
+        while positive_pos < positives.stack_pointer() {
+            let key = *positives.element(positive_pos);
+            negative_pos = negatives.bin_search_by_key(
+                key,
+                negative_pos,
+                negatives.stack_pointer(),
+                |search, element| search.syntax_compare(element, bank).cmp(&0),
+            );
+            if negative_pos >= negatives.stack_pointer() {
+                break;
+            }
+            let other = *negatives.element(negative_pos);
+            if key.syntax_compare(other, bank) == 0 {
+                return true;
+            }
+            positive_pos = positives.bin_search_by_key(
+                other,
+                positive_pos,
+                positives.stack_pointer(),
+                |search, element| search.syntax_compare(element, bank).cmp(&0),
+            );
         }
         false
     }
@@ -1510,6 +1531,31 @@ mod tests {
             DerefType::Never,
             DerefType::Never
         ));
+    }
+
+    #[test]
+    fn long_triviality_preserves_c_binary_search_false_negative() {
+        let mut bank = test_bank();
+        let terms = (1..=14)
+            .map(|index| typed_pred_const(&mut bank, &format!("long_pred_{index}")))
+            .collect::<Vec<_>>();
+        let truth = bank.true_term().clone();
+        let positive_indices = [2, 5, 6, 7, 8];
+        let negative_indices = [0, 1, 3, 4, 5, 7, 9, 10, 11, 12, 13];
+        let mut literals = Vec::with_capacity(16);
+        for index in positive_indices {
+            literals
+                .push(Eqn::alloc(terms[index].clone(), truth.clone(), &mut bank, true).unwrap());
+        }
+        for index in negative_indices {
+            literals
+                .push(Eqn::alloc(terms[index].clone(), truth.clone(), &mut bank, false).unwrap());
+        }
+        let list = EqnList::from_vec(literals);
+
+        assert_eq!(list.len(), EQN_LIST_LONG_LIMIT + 1);
+        assert!(list.is_trivial());
+        assert!(!list.long_is_trivial(&bank));
     }
 
     #[test]
