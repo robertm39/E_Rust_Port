@@ -637,73 +637,43 @@ fn compute_from_position_into_occurrence(
         );
     }
 
-    let mut paramod_count = 0;
-    ensure_higher_order_paramodulation_ordering_supported(ocb, &[occurrence.term()], || {
-        higher_order_paramod_diagnostic_for_type(pm_type)
-    })?;
-    let Some(effective_pm_type) =
-        indexed_effective_paramodulation_type(bank, ocb, from_pos, occurrence.term(), pm_type)?
-    else {
-        return Ok(0);
-    };
-    let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
+    let from_term = from_pos
+        .get_side()
+        .expect("indexed source position must select a side");
+    ensure_higher_order_paramodulation_ordering_supported(
+        ocb,
+        &[&from_term, occurrence.term()],
+        || higher_order_paramod_diagnostic_for_type(pm_type),
+    )?;
 
-    for into_clause_pos in occurrence.position_clauses().entries() {
-        let mut marked_term = None;
-        for into_cpos in into_clause_pos.positions() {
-            let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
-            if is_simultaneous {
-                let into_term = into_pos
-                    .get_subterm()
-                    .expect("indexed target position must select a subterm");
-                if marked_term.is_none() {
-                    into_term.set_prop(TP_POTENTIAL_PARAMOD);
-                    marked_term = Some(into_term.clone());
-                } else if !into_term.query_prop(TP_POTENTIAL_PARAMOD) {
-                    break;
-                }
-            }
-
-            let paramodulant =
-                clause_ordered_paramod_by_type(bank, ocb, from_pos, &into_pos, effective_pm_type);
-            let paramodulant = match paramodulant {
-                Ok(paramodulant) => paramodulant,
-                Err(error) => {
-                    if let Some(term) = marked_term {
-                        term.del_prop(TP_POTENTIAL_PARAMOD);
-                    }
-                    return Err(error);
-                }
-            };
-            let Some(mut paramodulant) = paramodulant else {
-                continue;
-            };
-            paramod_count += 1;
-            update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
-            document_paramodulant_creation(
-                doc_context,
+    let mut subst = Substitution::new();
+    let result = (|| {
+        if !subst_mgu_complete_with_bank(bank, &from_term, occurrence.term(), &mut subst)?
+            || !indexed_source_allows_under_subst(bank, ocb, from_pos)?
+        {
+            return Ok(0);
+        }
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
+        let mut paramod_count = 0;
+        for target_entry in occurrence.position_clauses().entries() {
+            paramod_count += compute_from_position_into_target_clause_entry_with_subst(
                 bank,
-                &mut paramodulant,
-                effective_pm_type,
-                into_clause_pos.clause(),
+                ocb,
+                from_pos,
+                target_entry,
+                store,
                 parent_alias,
+                &mut subst,
+                false,
+                effective_pm_type,
+                pm_type,
+                doc_context,
             )?;
-            clause_push_derivation(
-                &mut paramodulant,
-                paramodulation_derivation_code(effective_pm_type),
-                Some(into_clause_pos.clause()),
-                Some(parent_alias),
-            );
-            store.insert(paramodulant);
-            if is_simultaneous {
-                break;
-            }
         }
-        if let Some(term) = marked_term {
-            term.del_prop(TP_POTENTIAL_PARAMOD);
-        }
-    }
-    Ok(paramod_count)
+        Ok(paramod_count)
+    })();
+    subst.backtrack();
+    result
 }
 
 #[expect(
@@ -737,68 +707,50 @@ fn compute_indexed_sources_into_position(
 
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
+    let into_clause = into_pos
+        .clause()
+        .expect("indexed target position must be backed by its working clause");
     for occurrence in unifiable_occurrences(from_index, overlap_term, bank.signature()) {
-        for from_clause_pos in occurrence.position_clauses().entries() {
-            if from_clause_pos.clause_key() == parent_key {
-                continue;
-            }
-            for from_cpos in from_clause_pos.positions() {
-                let from_pos = unpack_clause_pos(*from_cpos, from_clause_pos.clause().clone());
-                ensure_higher_order_paramodulation_ordering_supported(
-                    ocb,
-                    &[occurrence.term()],
-                    || higher_order_paramod_diagnostic_for_type(pm_type),
-                )?;
-                let Some(effective_pm_type) = indexed_effective_paramodulation_type(
-                    bank,
-                    ocb,
-                    &from_pos,
-                    overlap_term,
-                    pm_type,
-                )?
-                else {
-                    continue;
-                };
-                let into_term = into_pos
-                    .get_subterm()
-                    .expect("indexed target position must select a subterm");
-                let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
-                if is_simultaneous {
-                    into_term.set_prop(TP_POTENTIAL_PARAMOD);
+        let mut subst = Substitution::new();
+        let unified =
+            match subst_mgu_complete_with_bank(bank, overlap_term, occurrence.term(), &mut subst) {
+                Ok(unified) => unified,
+                Err(error) => {
+                    subst.backtrack();
+                    return Err(error);
                 }
-                let paramodulant = clause_ordered_paramod_by_type(
-                    bank,
-                    ocb,
-                    &from_pos,
-                    into_pos,
-                    effective_pm_type,
-                );
-                if is_simultaneous {
-                    into_term.del_prop(TP_POTENTIAL_PARAMOD);
-                }
-                let paramodulant = paramodulant?;
-                let Some(mut paramodulant) = paramodulant else {
-                    continue;
-                };
-                paramod_count += 1;
-                update_paramodulant_info(&mut paramodulant, from_clause_pos.clause(), parent_alias);
-                document_paramodulant_creation(
-                    doc_context,
-                    bank,
-                    &mut paramodulant,
-                    effective_pm_type,
-                    parent_alias,
-                    from_clause_pos.clause(),
-                )?;
-                clause_push_derivation(
-                    &mut paramodulant,
-                    paramodulation_derivation_code(effective_pm_type),
-                    Some(parent_alias),
-                    Some(from_clause_pos.clause()),
-                );
-                store.insert(paramodulant);
-            }
+            };
+        if !unified {
+            subst.backtrack();
+            continue;
         }
+
+        let generated = (|| {
+            if !indexed_target_allows_under_subst(bank, ocb, into_pos, into_clause)? {
+                return Ok(0);
+            }
+            let mut generated = 0;
+            for source_entry in occurrence.position_clauses().entries() {
+                if source_entry.clause_key() == parent_key {
+                    continue;
+                }
+                generated += compute_indexed_sources_from_clause_entry_with_subst(
+                    bank,
+                    ocb,
+                    source_entry,
+                    into_pos,
+                    store,
+                    parent_alias,
+                    &mut subst,
+                    false,
+                    pm_type,
+                    doc_context,
+                )?;
+            }
+            Ok(generated)
+        })();
+        subst.backtrack();
+        paramod_count += generated?;
     }
     Ok(paramod_count)
 }
@@ -852,7 +804,7 @@ fn compute_from_position_into_occurrence_csu(
         let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
 
         for into_clause_pos in occurrence.position_clauses().entries() {
-            let generated = match compute_from_position_into_target_clause_entry_csu(
+            let generated = match compute_from_position_into_target_clause_entry_with_subst(
                 bank,
                 ocb,
                 from_pos,
@@ -881,9 +833,9 @@ fn compute_from_position_into_occurrence_csu(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "C-compatible indexed CSU helper keeps source, target entry, active substitution, and optional docs explicit"
+    reason = "C-compatible indexed helper keeps source, target entry, active substitution, and optional docs explicit"
 )]
-fn compute_from_position_into_target_clause_entry_csu(
+fn compute_from_position_into_target_clause_entry_with_subst(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
@@ -1010,6 +962,9 @@ fn compute_indexed_sources_into_position_csu(
 
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
+    let into_clause = into_pos
+        .clause()
+        .expect("indexed target position must be backed by its working clause");
     for occurrence in unifiable_occurrences(from_index, overlap_term, bank.signature()) {
         ensure_higher_order_paramodulation_ordering_supported(
             ocb,
@@ -1031,7 +986,7 @@ fn compute_indexed_sources_into_position_csu(
                 break;
             }
 
-            if !indexed_target_allows_under_subst(bank, ocb, into_pos, parent_alias)? {
+            if !indexed_target_allows_under_subst(bank, ocb, into_pos, into_clause)? {
                 continue;
             }
             let subst_is_ho = subst.has_ho_binding();
@@ -1040,7 +995,7 @@ fn compute_indexed_sources_into_position_csu(
                 if from_clause_pos.clause_key() == parent_key {
                     continue;
                 }
-                let generated = match compute_indexed_sources_from_clause_entry_csu(
+                let generated = match compute_indexed_sources_from_clause_entry_with_subst(
                     bank,
                     ocb,
                     from_clause_pos,
@@ -1070,9 +1025,9 @@ fn compute_indexed_sources_into_position_csu(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "C-compatible indexed CSU helper keeps source entry, target position, active substitution, and optional docs explicit"
+    reason = "C-compatible indexed helper keeps source entry, target position, active substitution, and optional docs explicit"
 )]
-fn compute_indexed_sources_from_clause_entry_csu(
+fn compute_indexed_sources_from_clause_entry_with_subst(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     source_entry: &ClauseTPos,
@@ -1124,7 +1079,7 @@ fn compute_indexed_sources_from_clause_entry_csu(
         };
 
         paramod_count += 1;
-        update_paramodulant_info(&mut paramodulant, parent_alias, source_entry.clause());
+        update_paramodulant_info(&mut paramodulant, source_entry.clause(), parent_alias);
         document_paramodulant_creation(
             doc_context,
             bank,
@@ -1460,72 +1415,6 @@ fn indexed_sim_paramod_construct_with_subst(
         subst,
         replacement,
     )
-}
-
-fn indexed_effective_paramodulation_type(
-    bank: &mut TermBank,
-    ocb: &mut OrderControlBlock,
-    from_pos: &ClausePos,
-    overlap_term: &Term,
-    pm_type: ParamodulationType,
-) -> Result<Option<ParamodulationType>, Diagnostic> {
-    let from_literal = from_pos
-        .literal()
-        .expect("indexed source position must select a literal");
-    let from_term = from_pos
-        .get_side()
-        .expect("indexed source position must select a side");
-    let from_other = from_pos
-        .get_other_side()
-        .expect("indexed source position must select an opposite side");
-    ensure_higher_order_paramodulation_ordering_supported(
-        ocb,
-        &[&from_term, &from_other, overlap_term],
-        || higher_order_paramod_diagnostic_for_type(pm_type),
-    )?;
-    let mut subst = Substitution::new();
-    let result = (|| {
-        if !subst_mgu_complete_with_bank(bank, &from_term, overlap_term, &mut subst)?
-            || (!from_literal.is_oriented()
-                && to_greater_with_bank(
-                    ocb,
-                    bank,
-                    &from_other,
-                    &from_term,
-                    DerefType::Always,
-                    DerefType::Always,
-                )?)
-        {
-            return Ok(None);
-        }
-        effective_paramodulation_type(bank, ocb, from_pos, pm_type).map(Some)
-    })();
-    subst.backtrack();
-    result
-}
-
-fn clause_ordered_paramod_by_type(
-    bank: &mut TermBank,
-    ocb: &mut OrderControlBlock,
-    from_pos: &ClausePos,
-    into_pos: &ClausePos,
-    pm_type: ParamodulationType,
-) -> Result<Option<Clause>, Diagnostic> {
-    match pm_type {
-        ParamodulationType::Plain => clause_ordered_paramod(bank, ocb, from_pos, into_pos),
-        ParamodulationType::Simultaneous => {
-            clause_ordered_sim_paramod(bank, ocb, from_pos, into_pos)
-        }
-        ParamodulationType::SuperSimultaneous => {
-            clause_ordered_super_sim_paramod(bank, ocb, from_pos, into_pos)
-        }
-        ParamodulationType::OrientedSimultaneous
-        | ParamodulationType::OrientedSuperSimultaneous
-        | ParamodulationType::DecreasingSimultaneous
-        | ParamodulationType::SizeDecreasingSimultaneous => {
-            unreachable!("effective paramodulation type must be concrete")
-        }
-    }
 }
 
 const fn paramodulation_is_simultaneous(pm_type: ParamodulationType) -> bool {
@@ -3751,6 +3640,127 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
         );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_reuses_binding_for_shared_target_term() {
+        let mut bank = test_bank();
+        let source_variable = typed_var(&bank, -2_470);
+        let argument = typed_const(&mut bank, "pm_idx_shared_argument");
+        let target_rhs = typed_const(&mut bank, "pm_idx_shared_target_rhs");
+        let source_code = typed_unary_code(&mut bank, "pm_idx_shared_source");
+        let replacement_code = typed_unary_code(&mut bank, "pm_idx_shared_replacement");
+        let target_code = typed_binary_code(&mut bank, "pm_idx_shared_target");
+        let source_left = typed_unary(&mut bank, source_code, &source_variable);
+        let source_right = typed_unary(&mut bank, replacement_code, &source_variable);
+        let indexed_term = typed_unary(&mut bank, source_code, &argument);
+        let replacement = typed_unary(&mut bank, replacement_code, &argument);
+        let target_left = typed_binary(&mut bank, target_code, &indexed_term, &indexed_term);
+        let expected_first = typed_binary(&mut bank, target_code, &replacement, &indexed_term);
+        let expected_second = typed_binary(&mut bank, target_code, &indexed_term, &replacement);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
+        let generated_lefts = store
+            .iter()
+            .map(|clause| clause.literals().as_slice()[0].left().clone())
+            .collect::<Vec<_>>();
+        assert!(generated_lefts.contains(&expected_first));
+        assert!(generated_lefts.contains(&expected_second));
+        assert!(store
+            .iter()
+            .all(|clause| clause.literals().as_slice()[0].right() == &target_rhs));
+        assert!(source_variable.binding().is_none());
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_reuses_target_unifier_across_source_clauses() {
+        let mut bank = test_bank();
+        let argument = typed_const(&mut bank, "pm_idx_shared_source_argument");
+        let target_variable = typed_var(&bank, -2_472);
+        let first_replacement = typed_const(&mut bank, "pm_idx_shared_first_replacement");
+        let second_replacement = typed_const(&mut bank, "pm_idx_shared_second_replacement");
+        let target_rhs = typed_const(&mut bank, "pm_idx_shared_reverse_rhs");
+        let source_code = typed_unary_code(&mut bank, "pm_idx_shared_reverse_source");
+        let target_code = typed_unary_code(&mut bank, "pm_idx_shared_reverse_target");
+        let source_left = typed_unary(&mut bank, source_code, &argument);
+        let target_subterm = typed_unary(&mut bank, source_code, &target_variable);
+        let target_left = typed_unary(&mut bank, target_code, &target_subterm);
+        let expected_first = typed_unary(&mut bank, target_code, &first_replacement);
+        let expected_second = typed_unary(&mut bank, target_code, &second_replacement);
+        let mut first_source_literal = lit(&mut bank, &source_left, &first_replacement, true);
+        let mut second_source_literal = lit(&mut bank, &source_left, &second_replacement, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_rhs, true);
+        maximal_oriented(&mut first_source_literal);
+        maximal_oriented(&mut second_source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut first_source = Clause::alloc(EqnList::from_vec(vec![first_source_literal]));
+        let mut second_source = Clause::alloc(EqnList::from_vec(vec![second_source_literal]));
+        first_source.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        second_source.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let selected = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let selected_for_paramod = selected.copy_disjoint(&mut bank).unwrap();
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut first_source, &bank, false);
+        indices.insert_clause(&mut second_source, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &selected_for_paramod,
+            &selected,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
+        let generated_lefts = store
+            .iter()
+            .map(|clause| clause.literals().as_slice()[0].left().clone())
+            .collect::<Vec<_>>();
+        assert!(generated_lefts.contains(&expected_first));
+        assert!(generated_lefts.contains(&expected_second));
+        assert!(store
+            .iter()
+            .all(|clause| clause.literals().as_slice()[0].right() == &target_rhs));
+        assert!(store
+            .iter()
+            .all(|clause| clause.query_tptp_type() == CP_TYPE_NEG_CONJECTURE));
+        assert!(target_variable.binding().is_none());
     }
 
     #[test]
