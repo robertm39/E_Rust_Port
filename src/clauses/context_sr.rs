@@ -9,8 +9,10 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
-    clause_set_find_subsumed_clauses, clause_set_find_subsumed_clauses_with_bank,
-    clause_subsume_order_sort_lits, clause_subsumes_clause, clause_subsumes_clause_with_bank,
+    clause_set_find_subsumed_clauses_with_index,
+    clause_set_find_subsumed_clauses_with_index_and_bank, clause_set_subsumes_clause_with_index,
+    clause_set_subsumes_clause_with_index_and_bank, clause_subsume_order_sort_lits,
+    clause_subsumes_clause, clause_subsumes_clause_with_bank,
 };
 use crate::terms::termbanks::TermBank;
 use std::fmt;
@@ -210,7 +212,7 @@ pub fn clause_set_find_context_sr_clauses<'set>(
             continue;
         }
         clause_subsume_order_sort_lits(clause, bank);
-        clause_set_find_subsumed_clauses(set, clause, result, bank);
+        clause_set_find_subsumed_clauses_with_index(set, set.fv_anchor(), clause, result, bank);
         let restored = flip_literal_sign(clause, &flipped);
         debug_assert!(restored, "flipped literal must be restored after lookup");
     }
@@ -243,7 +245,13 @@ pub fn clause_set_find_context_sr_clauses_with_bank<'set>(
             continue;
         }
         clause_subsume_order_sort_lits(clause, bank);
-        let lookup = clause_set_find_subsumed_clauses_with_bank(set, clause, result, bank);
+        let lookup = clause_set_find_subsumed_clauses_with_index_and_bank(
+            set,
+            set.fv_anchor(),
+            clause,
+            result,
+            bank,
+        );
         let restored = flip_literal_sign(clause, &flipped);
         debug_assert!(restored, "flipped literal must be restored after lookup");
         if let Err(error) = lookup {
@@ -262,8 +270,12 @@ fn clause_set_subsumes_context_clause<'set>(
     clause: &Clause,
     bank: &TermBank,
 ) -> Option<&'set Clause> {
-    set.iter()
-        .find(|candidate| clause_subsumes_clause(candidate, clause, bank))
+    match set.fv_anchor() {
+        Some(index) => clause_set_subsumes_clause_with_index(set, Some(index), clause, bank),
+        None => set
+            .iter()
+            .find(|candidate| clause_subsumes_clause(candidate, clause, bank)),
+    }
 }
 
 fn clause_set_subsumes_context_clause_with_bank<'set>(
@@ -271,12 +283,15 @@ fn clause_set_subsumes_context_clause_with_bank<'set>(
     clause: &Clause,
     bank: &mut TermBank,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
-    for candidate in set.iter() {
-        if clause_subsumes_clause_with_bank(candidate, clause, bank)? {
-            return Ok(Some(candidate));
+    let Some(index) = set.fv_anchor() else {
+        for candidate in set.iter() {
+            if clause_subsumes_clause_with_bank(candidate, clause, bank)? {
+                return Ok(Some(candidate));
+            }
         }
-    }
-    Ok(None)
+        return Ok(None);
+    };
+    clause_set_subsumes_clause_with_index_and_bank(set, Some(index), clause, bank)
 }
 
 fn literal_stack(clause: &Clause) -> Vec<Eqn> {
@@ -334,6 +349,8 @@ mod tests {
     use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CONTEXT_SR};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::fcvindexing::FvIndexAnchor;
+    use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::terms::lambda::apply_terms;
@@ -401,6 +418,13 @@ mod tests {
         clause
     }
 
+    fn ac_anchor_for_bank(bank: &TermBank) -> FvIndexAnchor {
+        let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        cspec.set_max_symbols(max_symbols);
+        FvIndexAnchor::new(cspec, None)
+    }
+
     #[test]
     fn contextual_simplify_reflect_removes_flipped_subsumed_literal() {
         let mut bank = test_bank();
@@ -438,6 +462,38 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(10, 0)),
             ]
         );
+    }
+    #[test]
+    fn indexed_contextual_simplify_reflect_continues_after_unit_reduction() {
+        let mut bank = test_bank();
+        let p = predicate_atom(&mut bank, "indexed_context_p");
+        let q = predicate_atom(&mut bank, "indexed_context_q");
+        let mut subsumer = prepare(
+            clause_from(vec![
+                predicate_literal(&mut bank, &p, true),
+                predicate_literal(&mut bank, &q, false),
+            ]),
+            &bank,
+            11,
+        );
+        subsumer.set_prop(CP_IS_SOS);
+        let mut set = ClauseSet::new();
+        set.set_fv_anchor(Some(ac_anchor_for_bank(&bank)));
+        set.indexed_insert_clause_owned(subsumer, &bank);
+        let mut target = clause_from(vec![
+            predicate_literal(&mut bank, &p, true),
+            predicate_literal(&mut bank, &q, true),
+        ]);
+        target.set_prop(CP_INITIAL | CP_LIMITED_RW);
+
+        let removed = clause_contextual_simplify_reflect(&set, &mut target, &bank);
+
+        assert_eq!(removed, 1);
+        assert_eq!(target.literal_number(), 1);
+        assert!(target.literals().as_slice()[0].is_positive());
+        assert_eq!(target.literals().as_slice()[0].left(), &p);
+        assert!(target.query_prop(CP_IS_SOS));
+        assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 1);
     }
 
     #[test]

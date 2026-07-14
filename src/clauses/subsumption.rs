@@ -1045,9 +1045,10 @@ pub fn clause_set_find_first_subsumed_clause_with_bank<'set>(
 ///
 /// # Panics
 ///
-/// Panics if `sub_candidate` is unit, if the query or any checked clause is not
-/// subsumption-ordered, or if any checked clause has stale cached standard
-/// weight, matching the C preconditions.
+/// With an index, panics if the query or a checked clause is not
+/// subsumption-ordered or has stale cached standard weight. The indexed C path
+/// accepts unit candidates. Without an index, the plain fallback also requires
+/// a non-unit candidate.
 #[must_use]
 pub fn clause_set_subsumes_clause_with_index<'set>(
     set: &'set ClauseSet,
@@ -1057,10 +1058,6 @@ pub fn clause_set_subsumes_clause_with_index<'set>(
 ) -> Option<&'set Clause> {
     let _timer = crate::basics::perf_counters::start(
         crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
-    );
-    assert!(
-        sub_candidate.literal_number() > 1,
-        "ClauseSetSubsumesClause expects a non-unit candidate"
     );
     let Some(index) = index else {
         return clause_set_subsumes_clause(set, sub_candidate, bank);
@@ -1077,8 +1074,10 @@ pub fn clause_set_subsumes_clause_with_index<'set>(
 ///
 /// # Panics
 ///
-/// Panics if the candidate is unit, is not subsumption ordered, or has a stale
-/// cached weight.
+/// With an index, panics if the query or a checked clause is not subsumption
+/// ordered or has a stale cached weight. The indexed C path accepts unit
+/// candidates. Without an index, the plain fallback also requires a non-unit
+/// candidate.
 pub fn clause_set_subsumes_clause_with_index_and_bank<'set>(
     set: &'set ClauseSet,
     index: Option<&'set FvIndexAnchor>,
@@ -1087,10 +1086,6 @@ pub fn clause_set_subsumes_clause_with_index_and_bank<'set>(
 ) -> Result<Option<&'set Clause>, Diagnostic> {
     let _timer = crate::basics::perf_counters::start(
         crate::basics::perf_counters::PerfCounter::SetSubsumeTimer,
-    );
-    assert!(
-        sub_candidate.literal_number() > 1,
-        "ClauseSetSubsumesClause expects a non-unit candidate"
     );
     let Some(index) = index else {
         return clause_set_subsumes_clause_with_bank(set, sub_candidate, bank);
@@ -2225,9 +2220,9 @@ mod tests {
         clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
         clause_set_find_subsumed_clauses_with_index, clause_set_find_unit_subsumed_clause,
         clause_set_find_variant_clause_indexed, clause_set_subsumes_clause,
-        clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
-        clause_subsumes_clause, clause_subsumes_clause_with_bank, eqn_subsumes_termpair,
-        eqn_topsubsumes_termpair, eqn_topsubsumes_termpair_with_bank,
+        clause_set_subsumes_clause_with_index, clause_set_subsumes_clause_with_index_and_bank,
+        clause_subsume_order_sort_lits, clause_subsumes_clause, clause_subsumes_clause_with_bank,
+        eqn_subsumes_termpair, eqn_topsubsumes_termpair, eqn_topsubsumes_termpair_with_bank,
         fv_index_find_first_subsumed_clause, fv_index_find_subsumed_clauses,
         fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
         unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
@@ -2713,6 +2708,39 @@ mod tests {
             Some(matching_id)
         );
         assert!(clause_set_subsumes_clause_with_index(&set, None, &candidate, &bank).is_none());
+    }
+
+    #[test]
+    fn indexed_clause_set_subsumption_accepts_unit_candidates() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let first = typed_const(&mut bank, "indexed_unit_a");
+        let second = typed_const(&mut bank, "indexed_unit_b");
+        let mut indexed = clause_from(vec![literal(&mut bank, &variable, &first, true)]);
+        let mut candidate = clause_from(vec![literal(&mut bank, &second, &first, true)]);
+        prepare(&mut indexed, &bank);
+        prepare(&mut candidate, &bank);
+        let indexed_id = indexed.ident();
+        let set = ClauseSet::new();
+        let mut anchor = ac_anchor_for_bank(&bank);
+        insert_indexed_clause(&mut anchor, &indexed, &bank);
+
+        assert_eq!(
+            clause_set_subsumes_clause_with_index(&set, Some(&anchor), &candidate, &bank)
+                .map(Clause::ident),
+            Some(indexed_id)
+        );
+        assert_eq!(
+            clause_set_subsumes_clause_with_index_and_bank(
+                &set,
+                Some(&anchor),
+                &candidate,
+                &mut bank,
+            )
+            .unwrap()
+            .map(Clause::ident),
+            Some(indexed_id)
+        );
     }
 
     #[test]

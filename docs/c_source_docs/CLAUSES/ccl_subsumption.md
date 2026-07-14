@@ -145,7 +145,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for recursive orientation-backtracking parity on 2026-07-12.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for indexed contextual-subsumption parity on 2026-07-13.
 
 Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 
@@ -164,6 +164,7 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 ### Rust Port Status Notes
 
 - `src/clauses/subsumption.rs` ports direct subsumption helpers, unit subsumption helpers, positive and negative simplify-reflect over plain or demodulator-indexed unit sets, optional strong positive unit simplify-reflect, plain and FV-indexed subsumed-clause discovery, variant lookup, and the process-global subsumption counters now read by executable statistics. `UnitClauseSetSubsumesClause` now follows C through the unit demodulator index rather than a linear set scan, so both indexed sides of an unorientable equality remain candidates. Recursive whole-clause matching preserves C's direct-then-swapped orientation choice point across failures in later literals. Mutable-bank variants route proof-control contraction, contextual simplify-reflect, condensation, split-definition variants, and CSSCPA through complete higher-order matching while retaining the unbanked first-order compatibility APIs.
+- Contextual simplify-reflect now reaches the same feature-vector subsumer and subsumed-clause queries as C whenever the clause set owns an FV anchor. The indexed subsumer wrapper deliberately accepts unit queries produced after an earlier contextual deletion; only the no-index linear fallback retains C's non-unit assertion.
 - Positive and negative simplify-reflect now record `DCSR` derivation entries with compact references to the simplifying unit clause when a literal is removed. Opt-in documenting helpers emit represented `DocClauseModificationDefault(..., inf_simplify_reflect, ...)` output before pushing the matching `DCSR` entry.
 - Executable-wide proof-output/session ownership and proof-object traversal remain pending. Rust stores C's process-global `StrongUnitForwardSubsumption` as proof-control session configuration for forward subsumption and positive simplify-reflect callers.
 
@@ -176,6 +177,8 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 - `UnitClauseSetSubsumesClause` delegates to the indexed simplifying-unit lookup. Because an unorientable equality is indexed under both sides, this can find an opposite-side candidate that a linear scan plus the asymmetric `eqn_topsubsumes_termpair` retry misses. Rust preserves the combination because it changes forward contraction and clause selection; after compatibility is secured, a cleaned API should make commutative direction handling independent of index representation.
 - C subsumption APIs recover the mutable owner bank indirectly through terms when `SubstMatchComplete` enters higher-order mode. This keeps signatures deceptively read-only even though eta normalization and applied-variable binding construction can allocate shared terms; prefer an explicit mutable proof-session or bank parameter in a cleaned API.
 - `eqn_list_rec_subsume` embeds each unoriented literal's direct/swapped alternatives inside recursive whole-clause search. The backtracking is semantically required, but the literal API does not expose an iterator or continuation over successful orientations, which made a locally successful direction easy to commit too early in the Rust port. After compatibility is secured, make orientation alternatives explicit while preserving substitution rollback and candidate-reservation semantics.
+- `ClauseSetSubsumesClause` has an index-dependent precondition: the plain scan asserts a non-unit target, while the FV-index branch accepts unit targets. Contextual simplify-reflect reaches both shapes during one mutation loop. Rust preserves the split and tests it, but a cleaned API should state one contract independent of storage representation.
+- FV-index leaves in C are pointer-keyed splay trees, so first-hit subsumer order can depend on allocator addresses and tree rotations even when feature vectors and candidate sets are identical. Repeated bounded GEO288 runs changed C's non-unit subsumption and retained-clause counts slightly under ASLR. Rust uses stable clause identifiers for deterministic leaf order. Do not emulate C allocator layout merely to reproduce identifier permutations; if exact first-hit order proves externally visible, define and test a semantic tie-break in both implementations.
 
 ### Porting Focus
 
