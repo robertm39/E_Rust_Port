@@ -26,7 +26,7 @@ static UNIFICATION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
 
 pub const MATCH_FAILED: i32 = -1;
 
-const INLINE_MATCH_JOB_PAIRS: usize = 32;
+const INLINE_MATCH_JOB_PAIRS: usize = 4;
 
 struct MatchJobStack {
     inline: [Option<(Term, Term)>; INLINE_MATCH_JOB_PAIRS],
