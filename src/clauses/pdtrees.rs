@@ -127,6 +127,12 @@ struct PrefixQueryCell {
     term: Term,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PrefixQueryBuildFrame {
+    Enter(Term),
+    Exit(usize),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct QuerySubtree {
     start: usize,
@@ -152,6 +158,7 @@ pub struct PdTree {
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
     search_query_scratch: RefCell<Vec<PrefixQueryCell>>,
+    search_query_build_stack: RefCell<Vec<PrefixQueryBuildFrame>>,
     search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
     search_subst_cursor: RefCell<PdtSubstCursor>,
 }
@@ -362,6 +369,7 @@ impl PdTree {
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
             search_query_scratch: RefCell::new(Vec::new()),
+            search_query_build_stack: RefCell::new(Vec::new()),
             search_cursor: RefCell::new(None),
             search_subst_cursor: RefCell::new(PdtSubstCursor::new()),
         }
@@ -515,7 +523,46 @@ impl PdTree {
             query.is_empty(),
             "PDTree query scratch is empty between searches"
         );
-        push_prefix_query_cell(&mut query, term.clone());
+        let mut build_stack = self.search_query_build_stack.borrow_mut();
+        debug_assert!(
+            build_stack.is_empty(),
+            "PDTree query build stack is empty between searches"
+        );
+        build_stack.push(PrefixQueryBuildFrame::Enter(term.clone()));
+
+        while let Some(frame) = build_stack.pop() {
+            match frame {
+                PrefixQueryBuildFrame::Enter(term) => {
+                    let start = query.len();
+                    let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+                    let arity = term.arity();
+                    let traverses_arguments = !term.is_top_level_free_var();
+
+                    if traverses_arguments {
+                        build_stack.push(PrefixQueryBuildFrame::Exit(start));
+                        let arguments = term.arguments();
+                        for index in (first_arg..arity).rev() {
+                            let argument = arguments[index].clone().unwrap_or_else(|| {
+                                panic!("term argument {index} is uninitialized")
+                            });
+                            build_stack.push(PrefixQueryBuildFrame::Enter(argument));
+                        }
+                    }
+
+                    query.push(PrefixQueryCell {
+                        token: prefix_token(&term),
+                        span: usize::from(!traverses_arguments),
+                        type_uid: term_type_uid(&term),
+                        weight: term_standard_weight(&term),
+                        term,
+                    });
+                }
+                PrefixQueryBuildFrame::Exit(start) => {
+                    query[start].span = query.len() - start;
+                }
+            }
+        }
+
         std::mem::take(&mut *query)
     }
 
@@ -1465,11 +1512,12 @@ fn term_lr_traverse_path(term: &Term) -> Vec<(PrefixToken, Option<Term>)> {
 #[cfg(test)]
 fn term_lr_traverse_query(term: &Term) -> Vec<PrefixQueryCell> {
     let mut query = Vec::new();
-    push_prefix_query_cell(&mut query, term.clone());
+    push_prefix_query_cell_reference(&mut query, term.clone());
     query
 }
 
-fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: Term) -> usize {
+#[cfg(test)]
+fn push_prefix_query_cell_reference(query: &mut Vec<PrefixQueryCell>, term: Term) -> usize {
     let start = query.len();
     let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
     let arity = term.arity();
@@ -1488,7 +1536,7 @@ fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: Term) -> usize
                 .term
                 .argument(index)
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            push_prefix_query_cell(query, arg);
+            push_prefix_query_cell_reference(query, arg);
         }
     }
 
@@ -1824,10 +1872,15 @@ mod tests {
     }
 
     #[test]
-    fn query_spans_count_whole_lr_subtrees() {
+    fn iterative_query_builder_matches_recursive_cells_and_spans() {
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let term = parse_in_bank(&mut bank, "span_f(span_g(span_a),span_b)");
-        let query = term_lr_traverse_query(&term);
+        let expected = term_lr_traverse_query(&term);
+        let tree = PdTree::new();
+        let query = tree.build_search_query(&term);
+
+        assert_eq!(query, expected);
+        assert!(tree.search_query_build_stack.borrow().is_empty());
 
         assert_eq!(
             query.iter().map(|cell| cell.token).collect::<Vec<_>>(),
