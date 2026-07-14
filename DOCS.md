@@ -47,6 +47,8 @@ The 2026-07-14 term-variable-traversal follow-up applied this rule retroactively
 
 The 2026-07-14 substitution-normalization traversal follow-up applied this rule retroactively to C's unused `Sig_p` parameter and process-global dereference selection in `SubstNormTerm`. The paired `cte_subst` review records an explicit dereference-policy API as a later cleanup while retaining C's inline local stack, direct reversed argument pushes, and left-to-right binding order.
 
+The 2026-07-14 term-top-comparator follow-up applied this rule retroactively to C's stale masked-properties key comment and process-local `uintptr_t` ordering in `TermTopCompare`. The paired `cte_termtrees` review records a corrected formal key contract and eventual stable-ID ordering as later cleanup candidates while preserving direct argument-array comparison and current allocation-sensitive behavior.
+
 The 2026-07-13 retroactive follow-up reviewed proof-state temporary-term-bank ownership, forward-contraction tautology scratch storage, unconditional selected-clause disjoint-copy allocation, term-bank sharing-key commentary, and formula-simplification coupling to bank-global GC roots under this rule.
 
 Start here:

@@ -148,20 +148,22 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
         assert_eq!(left_type, right_type, "first-order term types must match");
     }
 
-    result = i64::try_from(left.arity()).unwrap_or(i64::MAX)
-        - i64::try_from(right.arity()).unwrap_or(i64::MAX);
+    let left_arguments = left.arguments();
+    let right_arguments = right.arguments();
+    result = i64::try_from(left_arguments.len()).unwrap_or(i64::MAX)
+        - i64::try_from(right_arguments.len()).unwrap_or(i64::MAX);
     if result != 0 {
         return result;
     }
 
-    for index in 0..left.arity() {
-        let left_arg = left
-            .argument(index)
+    for (left_argument, right_argument) in left_arguments.iter().zip(right_arguments.iter()) {
+        let left_argument = left_argument
+            .as_ref()
             .expect("term top comparison requires initialized arguments");
-        let right_arg = right
-            .argument(index)
+        let right_argument = right_argument
+            .as_ref()
             .expect("term top comparison requires initialized arguments");
-        result = i64::from(term_identity_cmp(&left_arg, &right_arg));
+        result = i64::from(term_identity_cmp(left_argument, right_argument));
         if result != 0 {
             return result;
         }
@@ -258,7 +260,7 @@ mod tests {
     use super::{term_top_compare, term_top_compare_for_problem, TermTree};
     use crate::basics::simple_stuff::ProblemType;
     use crate::terms::simpletypes::alloc_simple_sort;
-    use crate::terms::termtypes::{Term, TP_CHECK_FLAG, TP_TOP_POS};
+    use crate::terms::termtypes::{term_identity_cmp, Term, TP_CHECK_FLAG, TP_TOP_POS};
     use crate::terms::typebanks::TypeBank;
 
     fn typed_const(f_code: i64, type_: &crate::terms::simpletypes::Type) -> Term {
@@ -279,8 +281,11 @@ mod tests {
         binary.set_argument(0, left.clone());
         let same_top_different_arg = Term::top_alloc(3, 1);
         same_top_different_arg.set_type(Some(types.i_type()));
-        same_top_different_arg.set_argument(0, right);
-        assert_ne!(term_top_compare(&binary, &same_top_different_arg), 0);
+        same_top_different_arg.set_argument(0, right.clone());
+        assert_eq!(
+            term_top_compare(&binary, &same_top_different_arg),
+            i64::from(term_identity_cmp(&left, &right))
+        );
 
         let arity_two = Term::top_alloc(3, 2);
         arity_two.set_type(Some(types.i_type()));
