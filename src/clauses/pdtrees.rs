@@ -10,6 +10,7 @@ use crate::basics::sysdate::SysDate;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
+use crate::terms::subst::Substitution;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{term_identity_id, Term};
 
@@ -18,6 +19,7 @@ pub const PDTNODE_MEM: usize = 52;
 pub const CLAUSEPOSCELL_MEM: usize = 20;
 pub const PDTREE_IGNORE_TERM_WEIGHT: i64 = i64::MAX;
 pub const PDTREE_IGNORE_NF_DATE: SysDate = SysDate::creation_time();
+const PDT_NO_VARIABLE_CHILD: u32 = u32::MAX;
 
 static PDT_USE_SIZE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
 static PDT_USE_AGE_CONSTRAINTS: AtomicBool = AtomicBool::new(true);
@@ -116,12 +118,13 @@ pub struct PdtIndexedOccurrence {
     pub side: EqnSide,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct PrefixQueryCell {
     token: PrefixToken,
     span: usize,
     type_uid: TypeUniqueId,
     weight: i64,
+    term: Term,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,6 +138,9 @@ type PdtQueryBindings = BTreeMap<(usize, TypeUniqueId, i64), QuerySubtree>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdTree {
     nodes: Vec<PdNode>,
+    variable_child_heads: Vec<u32>,
+    variable_children: Vec<PdtVariableChild>,
+    free_variable_child: u32,
     term_count: usize,
     live_node_count: usize,
     arr_storage_estimate: usize,
@@ -146,6 +152,7 @@ pub struct PdTree {
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
     search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
+    search_subst_cursor: RefCell<PdtSubstCursor>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +164,33 @@ struct PdNode {
     terminal_entries: Vec<PdTerminalEntry>,
     size_constr: i64,
     age_constr: SysDate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtVariableChild {
+    node_index: usize,
+    next_sibling: u32,
+    variable: Option<Term>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtSubstCursor {
+    frames: Vec<PdtTraversalFrame>,
+    bindings: Vec<(Term, Term)>,
+    base_subst: usize,
+    initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PdtTraversalFrame {
+    node_index: usize,
+    query_index: usize,
+    effective_term_weight: i64,
+    binding_pos: usize,
+    entered: bool,
+    next_step: usize,
+    next_variable_child: u32,
+    terminal_position: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -185,6 +219,56 @@ impl PdtOccurrenceCursor {
         let occurrence = self.occurrences.get(self.position).copied()?;
         self.position += 1;
         Some(occurrence)
+    }
+}
+
+impl PdtSubstCursor {
+    const fn new() -> Self {
+        Self {
+            frames: Vec::new(),
+            bindings: Vec::new(),
+            base_subst: 0,
+            initialized: false,
+        }
+    }
+
+    fn start(&mut self, term_weight: i64, base_subst: usize, first_variable_child: u32) {
+        self.frames.push(PdtTraversalFrame::new(
+            0,
+            0,
+            term_weight,
+            0,
+            first_variable_child,
+        ));
+        self.base_subst = base_subst;
+        self.initialized = true;
+    }
+
+    fn reset(&mut self) {
+        self.frames.clear();
+        self.bindings.clear();
+        self.initialized = false;
+    }
+}
+
+impl PdtTraversalFrame {
+    const fn new(
+        node_index: usize,
+        query_index: usize,
+        effective_term_weight: i64,
+        binding_pos: usize,
+        first_variable_child: u32,
+    ) -> Self {
+        Self {
+            node_index,
+            query_index,
+            effective_term_weight,
+            binding_pos,
+            entered: false,
+            next_step: 0,
+            next_variable_child: first_variable_child,
+            terminal_position: 0,
+        }
     }
 }
 
@@ -263,6 +347,9 @@ impl PdTree {
     pub fn new() -> Self {
         Self {
             nodes: vec![PdNode::default()],
+            variable_child_heads: vec![PDT_NO_VARIABLE_CHILD],
+            variable_children: Vec::new(),
+            free_variable_child: PDT_NO_VARIABLE_CHILD,
             term_count: 0,
             live_node_count: 0,
             arr_storage_estimate: 0,
@@ -274,6 +361,7 @@ impl PdTree {
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
             search_cursor: RefCell::new(None),
+            search_subst_cursor: RefCell::new(PdtSubstCursor::new()),
         }
     }
 
@@ -406,6 +494,7 @@ impl PdTree {
             traversal_order,
         });
         *self.search_cursor.borrow_mut() = None;
+        self.search_subst_cursor.borrow_mut().reset();
         self.search_active.set(true);
         self.record_search_attempt();
     }
@@ -414,6 +503,7 @@ impl PdTree {
         self.search_active.set(false);
         *self.search_state.borrow_mut() = None;
         *self.search_cursor.borrow_mut() = None;
+        self.search_subst_cursor.borrow_mut().reset();
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -424,13 +514,13 @@ impl PdTree {
     }
 
     pub fn insert_term(&mut self, term: &Term) -> bool {
-        let code = term_lr_traverse_code(term);
-        self.insert_code_with_metadata(&code, term_standard_weight(term), None)
+        let entry = PdTerminalEntry::new(term_standard_weight(term), None);
+        self.insert_term_with_entry(term, entry)
     }
 
     pub fn insert_term_with_clause_date(&mut self, term: &Term, clause_date: SysDate) -> bool {
-        let code = term_lr_traverse_code(term);
-        self.insert_code_with_metadata(&code, term_standard_weight(term), Some(clause_date))
+        let entry = PdTerminalEntry::new(term_standard_weight(term), Some(clause_date));
+        self.insert_term_with_entry(term, entry)
     }
 
     pub fn insert_term_occurrence(
@@ -439,13 +529,12 @@ impl PdTree {
         clause_date: SysDate,
         occurrence: PdtIndexedOccurrence,
     ) -> bool {
-        let code = term_lr_traverse_code(term);
         let entry = PdTerminalEntry::with_occurrence(
             term_standard_weight(term),
             Some(clause_date),
             occurrence,
         );
-        self.insert_code_with_entry(&code, entry)
+        self.insert_term_with_entry(term, entry)
     }
 
     pub fn insert_code(&mut self, code: &[PrefixToken]) -> bool {
@@ -463,20 +552,34 @@ impl PdTree {
         self.insert_code_with_entry(code, entry)
     }
 
+    fn insert_term_with_entry(&mut self, term: &Term, entry: PdTerminalEntry) -> bool {
+        let path = term_lr_traverse_path(term);
+        self.insert_path_with_entry(path, entry)
+    }
+
     fn insert_code_with_entry(&mut self, code: &[PrefixToken], entry: PdTerminalEntry) -> bool {
+        self.insert_path_with_entry(code.iter().copied().map(|token| (token, None)), entry)
+    }
+
+    fn insert_path_with_entry<I>(&mut self, path: I, entry: PdTerminalEntry) -> bool
+    where
+        I: IntoIterator<Item = (PrefixToken, Option<Term>)>,
+    {
         let mut node_index = 0;
         self.nodes[node_index].ref_count += 1;
         self.apply_entry_to_node(node_index, entry);
 
-        for token in code {
-            self.select_alt_ref_for_insert(node_index, *token);
+        for (token, indexed_variable) in path {
+            let parent_index = node_index;
+            self.select_alt_ref_for_insert(parent_index, token);
             let next_index =
-                if let Some(existing) = self.nodes[node_index].children.get(token).copied() {
+                if let Some(existing) = self.nodes[parent_index].children.get(&token).copied() {
                     existing
                 } else {
                     let created = self.nodes.len();
                     self.nodes.push(PdNode::default());
-                    self.nodes[node_index].children.insert(*token, created);
+                    self.variable_child_heads.push(PDT_NO_VARIABLE_CHILD);
+                    self.nodes[parent_index].children.insert(token, created);
                     self.live_node_count += 1;
                     self.arr_storage_estimate = self.arr_storage_estimate.saturating_add(
                         self.nodes[created]
@@ -485,6 +588,9 @@ impl PdTree {
                     );
                     created
                 };
+            if let Some(variable) = indexed_variable {
+                self.link_variable_child(parent_index, next_index, token, variable);
+            }
             node_index = next_index;
             self.nodes[node_index].ref_count += 1;
             self.apply_entry_to_node(node_index, entry);
@@ -494,6 +600,94 @@ impl PdTree {
         self.nodes[node_index].terminal_entries.push(entry);
         self.term_count += 1;
         true
+    }
+
+    fn link_variable_child(
+        &mut self,
+        parent_index: usize,
+        child_index: usize,
+        token: PrefixToken,
+        variable: Term,
+    ) {
+        if !matches!(token, PrefixToken::FreeVar { .. }) {
+            return;
+        }
+        let mut previous_link = PDT_NO_VARIABLE_CHILD;
+        let mut current_link = self.variable_child_heads[parent_index];
+        while let Some(current_index) = unpack_variable_child_index(current_link) {
+            let current = &self.variable_children[current_index];
+            let current_token = prefix_token(
+                current
+                    .variable
+                    .as_ref()
+                    .expect("linked variable child has an indexed variable"),
+            );
+            if token == current_token {
+                debug_assert_eq!(current.node_index, child_index);
+                debug_assert_eq!(current.variable.as_ref(), Some(&variable));
+                return;
+            }
+            if token < current_token {
+                break;
+            }
+            previous_link = current_link;
+            current_link = current.next_sibling;
+        }
+
+        let child_link = self.allocate_variable_child(child_index, variable, current_link);
+        if let Some(previous_index) = unpack_variable_child_index(previous_link) {
+            self.variable_children[previous_index].next_sibling = child_link;
+        } else {
+            self.variable_child_heads[parent_index] = child_link;
+        }
+    }
+
+    fn unlink_variable_child(&mut self, parent_index: usize, child_index: usize) {
+        let mut previous_link = PDT_NO_VARIABLE_CHILD;
+        let mut current_link = self.variable_child_heads[parent_index];
+        while let Some(current_index) = unpack_variable_child_index(current_link) {
+            if self.variable_children[current_index].node_index == child_index {
+                let next_link = self.variable_children[current_index].next_sibling;
+                if let Some(previous_index) = unpack_variable_child_index(previous_link) {
+                    self.variable_children[previous_index].next_sibling = next_link;
+                } else {
+                    self.variable_child_heads[parent_index] = next_link;
+                }
+                self.variable_children[current_index].node_index = 0;
+                self.variable_children[current_index].variable = None;
+                self.variable_children[current_index].next_sibling = self.free_variable_child;
+                self.free_variable_child = current_link;
+                return;
+            }
+            previous_link = current_link;
+            current_link = self.variable_children[current_index].next_sibling;
+        }
+    }
+
+    fn allocate_variable_child(
+        &mut self,
+        node_index: usize,
+        variable: Term,
+        next_sibling: u32,
+    ) -> u32 {
+        if let Some(index) = unpack_variable_child_index(self.free_variable_child) {
+            let link = self.free_variable_child;
+            self.free_variable_child = self.variable_children[index].next_sibling;
+            self.variable_children[index] = PdtVariableChild {
+                node_index,
+                next_sibling,
+                variable: Some(variable),
+            };
+            link
+        } else {
+            let link = pack_variable_child_index(self.variable_children.len());
+            self.variable_children.push(PdtVariableChild {
+                node_index,
+                next_sibling,
+                variable: Some(variable),
+            });
+            link
+        }
     }
 
     pub fn delete_term(&mut self, term: &Term) -> bool {
@@ -592,6 +786,9 @@ impl PdTree {
                         .arr_storage_estimate
                         .saturating_sub(size_of_obj_map_node_estimate());
                 }
+            }
+            if matches!(token, PrefixToken::FreeVar { .. }) {
+                self.unlink_variable_child(parent_index, dead_index);
             }
             self.nodes[parent_index].children.remove(&token);
             self.nodes[dead_index].children.clear();
@@ -776,6 +973,159 @@ impl PdTree {
         }
 
         self.search_cursor.borrow_mut().as_mut()?.next()
+    }
+
+    /// Returns the next first-order indexed match while keeping its bindings
+    /// active in `subst`, matching C `PDTreeFindNextDemodulator`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keeps the cursor traversal and backtracking state machine together"
+    )]
+    pub fn search_next_matching_occurrence_with_subst(
+        &self,
+        subst: &mut Substitution,
+    ) -> Option<PdtIndexedOccurrence> {
+        let state = self.search_state.borrow();
+        let state = state.as_ref()?;
+        let mut cursor = self.search_subst_cursor.borrow_mut();
+        if !cursor.initialized {
+            cursor.start(state.term_weight, subst.len(), self.variable_child_heads[0]);
+        }
+        debug_assert!(
+            subst.len() >= cursor.base_subst,
+            "PDTree cursor substitution was externally backtracked"
+        );
+        subst.backtrack_to_pos(cursor.base_subst);
+
+        loop {
+            let frame_index = cursor.frames.len().checked_sub(1)?;
+            let node_index = cursor.frames[frame_index].node_index;
+            let query_index = cursor.frames[frame_index].query_index;
+
+            if !cursor.frames[frame_index].entered {
+                cursor.frames[frame_index].entered = true;
+                if !self.node_satisfies_constraints(
+                    node_index,
+                    cursor.frames[frame_index].effective_term_weight,
+                    state.term_date,
+                ) {
+                    pop_subst_cursor_frame(&mut cursor);
+                    continue;
+                }
+                if query_index == state.query.len() {
+                    cursor.frames[frame_index].terminal_position =
+                        self.nodes[node_index].terminal_entries.len();
+                }
+            }
+
+            if query_index == state.query.len() {
+                let terminal_position = cursor.frames[frame_index].terminal_position;
+                if terminal_position == 0 {
+                    pop_subst_cursor_frame(&mut cursor);
+                    continue;
+                }
+                cursor.frames[frame_index].terminal_position -= 1;
+                if let Some(occurrence) =
+                    self.nodes[node_index].terminal_entries[terminal_position - 1].occurrence
+                {
+                    for (variable, binding) in &cursor.bindings {
+                        debug_assert!(
+                            variable.binding().is_none(),
+                            "speculative PDTree binding leaked into the shared term"
+                        );
+                        subst.add_binding(variable, binding);
+                    }
+                    return Some(occurrence);
+                }
+                continue;
+            }
+
+            let step_index = cursor.frames[frame_index].next_step;
+            if step_index >= 2 {
+                pop_subst_cursor_frame(&mut cursor);
+                continue;
+            }
+            let step = if step_index == 0 {
+                state.traversal_order.first
+            } else {
+                state.traversal_order.second
+            };
+
+            match step {
+                PdtTraversalStep::Symbols => {
+                    cursor.frames[frame_index].next_step += 1;
+                    let token = state.query[query_index].token;
+                    if matches!(token, PrefixToken::FreeVar { .. }) {
+                        continue;
+                    }
+                    let Some(next_index) = self.nodes[node_index].children.get(&token).copied()
+                    else {
+                        continue;
+                    };
+                    self.record_nodes_visited(1);
+                    let effective_term_weight = cursor.frames[frame_index].effective_term_weight;
+                    let binding_pos = cursor.bindings.len();
+                    cursor.frames.push(PdtTraversalFrame::new(
+                        next_index,
+                        query_index + 1,
+                        effective_term_weight,
+                        binding_pos,
+                        self.variable_child_heads[next_index],
+                    ));
+                }
+                PdtTraversalStep::Variables => {
+                    let variable_link = cursor.frames[frame_index].next_variable_child;
+                    let Some(variable_index) = unpack_variable_child_index(variable_link) else {
+                        cursor.frames[frame_index].next_step += 1;
+                        continue;
+                    };
+                    let variable_child = &self.variable_children[variable_index];
+                    cursor.frames[frame_index].next_variable_child = variable_child.next_sibling;
+                    let next_index = variable_child.node_index;
+                    let variable = variable_child.variable.as_ref()?;
+                    if state.query[query_index].type_uid != term_type_uid(variable) {
+                        continue;
+                    }
+                    let next_query_index =
+                        query_index.saturating_add(state.query[query_index].span);
+                    if next_query_index > state.query.len() {
+                        continue;
+                    }
+                    let binding_pos = cursor.bindings.len();
+                    let query_term = &state.query[query_index].term;
+                    let matched = if let Some((_, bound)) = cursor
+                        .bindings
+                        .iter()
+                        .rev()
+                        .find(|(candidate, _)| candidate == variable)
+                    {
+                        *bound == *query_term
+                    } else if let Some(bound) = variable.binding() {
+                        bound == *query_term
+                    } else {
+                        cursor.bindings.push((variable.clone(), query_term.clone()));
+                        true
+                    };
+                    if !matched {
+                        cursor.bindings.truncate(binding_pos);
+                        continue;
+                    }
+                    self.record_nodes_visited(1);
+                    let effective_term_weight = adjusted_variable_edge_weight(
+                        cursor.frames[frame_index].effective_term_weight,
+                        state.query[query_index].weight,
+                        term_standard_weight(variable),
+                    );
+                    cursor.frames.push(PdtTraversalFrame::new(
+                        next_index,
+                        next_query_index,
+                        effective_term_weight,
+                        binding_pos,
+                        self.variable_child_heads[next_index],
+                    ));
+                }
+            }
+        }
     }
 
     fn collect_matching_occurrences(
@@ -964,6 +1314,27 @@ impl PdTree {
     }
 }
 
+fn pop_subst_cursor_frame(cursor: &mut PdtSubstCursor) {
+    if let Some(frame) = cursor.frames.pop() {
+        cursor.bindings.truncate(frame.binding_pos);
+    }
+}
+
+fn pack_variable_child_index(index: usize) -> u32 {
+    let packed = u32::try_from(index).expect("PDTree variable child index exceeds packed range");
+    assert_ne!(
+        packed, PDT_NO_VARIABLE_CHILD,
+        "PDTree variable child index collides with sentinel"
+    );
+    packed
+}
+
+fn unpack_variable_child_index(index: u32) -> Option<usize> {
+    (index != PDT_NO_VARIABLE_CHILD).then(|| {
+        usize::try_from(index).expect("packed PDTree variable child index does not fit usize")
+    })
+}
+
 fn query_subtrees_match(
     state: &PdtSearchState,
     expected: QuerySubtree,
@@ -1043,6 +1414,31 @@ pub fn term_lr_traverse_code(term: &Term) -> Vec<PrefixToken> {
     code
 }
 
+fn term_lr_traverse_path(term: &Term) -> Vec<(PrefixToken, Option<Term>)> {
+    let mut path = Vec::new();
+    let mut stack = vec![term.clone()];
+
+    while let Some(current) = stack.pop() {
+        let token = prefix_token(&current);
+        let indexed_variable =
+            matches!(token, PrefixToken::FreeVar { .. }).then(|| current.clone());
+        path.push((token, indexed_variable));
+        if current.is_top_level_free_var() {
+            continue;
+        }
+
+        let start = usize::from(current.is_lambda() || current.is_applied_db_var());
+        for index in (start..current.arity()).rev() {
+            let arg = current
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            stack.push(arg);
+        }
+    }
+
+    path
+}
+
 fn term_lr_traverse_query(term: &Term) -> Vec<PrefixQueryCell> {
     let mut query = Vec::new();
     push_prefix_query_cell(&mut query, term);
@@ -1056,6 +1452,7 @@ fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: &Term) -> usiz
         span: 0,
         type_uid: term_type_uid(term),
         weight: term_standard_weight(term),
+        term: term.clone(),
     });
 
     if !term.is_top_level_free_var() {
@@ -1150,6 +1547,7 @@ mod tests {
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type, INVALID_TYPE_UID};
+    use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term, DEFAULT_VWEIGHT};
@@ -1496,6 +1894,132 @@ mod tests {
         tree.record_search_exit();
 
         assert_eq!(tree.search_next_matching_occurrence(), None);
+    }
+
+    #[test]
+    fn substitution_cursor_preserves_order_and_live_binding() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = parse_in_bank(&mut bank, "pdt_subst_cursor_f(pdt_subst_cursor_a)");
+        let variable = typed_var(&bank, -28);
+        let specific = PdtIndexedOccurrence::new(110, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(111, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+        let mut subst = Substitution::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(general)
+        );
+        assert_eq!(subst.len(), 1);
+        assert_eq!(variable.binding(), Some(query.clone()));
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(specific)
+        );
+        assert!(subst.is_empty());
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            None
+        );
+        assert!(subst.is_empty());
+    }
+
+    #[test]
+    fn substitution_cursor_rejects_inconsistent_repeated_variable_and_backtracks() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let a = typed_const(&mut bank, "pdt_subst_repeat_a");
+        let b = typed_const(&mut bank, "pdt_subst_repeat_b");
+        let variable = typed_var(&bank, -29);
+        let pattern = typed_binary(&mut bank, "pdt_subst_repeat_f", &variable, &variable);
+        let different = typed_binary(&mut bank, "pdt_subst_repeat_f", &a, &b);
+        let same = typed_binary(&mut bank, "pdt_subst_repeat_f", &a, &a);
+        let occurrence = PdtIndexedOccurrence::new(112, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+        let mut subst = Substitution::new();
+
+        assert!(tree.insert_term_occurrence(&pattern, SysDate::from_raw(7), occurrence));
+        tree.record_search_init(&different, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            None
+        );
+        assert!(subst.is_empty());
+        assert_eq!(variable.binding(), None);
+
+        tree.record_search_exit();
+        tree.record_search_init(&same, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(occurrence)
+        );
+        assert_eq!(subst.len(), 1);
+        assert_eq!(variable.binding(), Some(a));
+        tree.record_search_exit();
+        assert_eq!(subst.len(), 1);
+        subst.backtrack();
+    }
+
+    #[test]
+    fn substitution_cursor_updates_variable_edge_arena_after_deletion() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let argument = typed_const(&mut bank, "pdt_subst_delete_a");
+        let fixed = typed_const(&mut bank, "pdt_subst_delete_fixed");
+        let first_variable = typed_var(&bank, -30);
+        let second_variable = typed_var(&bank, -31);
+        let query = typed_binary(&mut bank, "pdt_subst_delete_f", &argument, &fixed);
+        let first_pattern = typed_binary(&mut bank, "pdt_subst_delete_f", &first_variable, &fixed);
+        let second_pattern =
+            typed_binary(&mut bank, "pdt_subst_delete_f", &second_variable, &fixed);
+        let first = PdtIndexedOccurrence::new(113, EqnSide::LeftSide);
+        let second = PdtIndexedOccurrence::new(114, EqnSide::LeftSide);
+        let date = SysDate::from_raw(7);
+        let mut tree = PdTree::new();
+        let mut subst = Substitution::new();
+
+        assert!(tree.insert_term_occurrence(&second_pattern, date, second));
+        assert!(tree.insert_term_occurrence(&first_pattern, date, first));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        let expected = tree.search_matching_occurrences().unwrap();
+        tree.record_search_exit();
+
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        let mut actual = Vec::new();
+        while let Some(occurrence) = tree.search_next_matching_occurrence_with_subst(&mut subst) {
+            actual.push(occurrence);
+        }
+        assert_eq!(actual, expected);
+        assert!(subst.is_empty());
+        tree.record_search_exit();
+
+        assert!(tree.delete_term_occurrence(&first_pattern, date, first));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(second)
+        );
+        assert_eq!(second_variable.binding(), Some(query.argument(0).unwrap()));
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            None
+        );
+        assert!(subst.is_empty());
+        assert_eq!(first_variable.binding(), None);
+
+        tree.record_search_exit();
+        assert!(tree.insert_term_occurrence(&first_pattern, date, first));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        let mut after_reinsertion = Vec::new();
+        while let Some(occurrence) = tree.search_next_matching_occurrence_with_subst(&mut subst) {
+            after_reinsertion.push(occurrence);
+        }
+        assert_eq!(after_reinsertion, expected);
+        assert!(subst.is_empty());
+        assert_eq!(first_variable.binding(), None);
+        assert_eq!(second_variable.binding(), None);
     }
 
     #[test]

@@ -30,6 +30,7 @@ use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::{Term, TermProperties};
@@ -407,6 +408,18 @@ impl ClauseSet {
         self.demod_index
             .as_ref()
             .and_then(PdTree::search_next_matching_occurrence)
+    }
+
+    pub fn demod_index_search_next_candidate_side_with_subst(
+        &self,
+        subst: &mut Substitution,
+    ) -> Option<PdtIndexedOccurrence> {
+        if !self.demod_index_covers_units() {
+            return None;
+        }
+        self.demod_index
+            .as_ref()
+            .and_then(|index| index.search_next_matching_occurrence_with_subst(subst))
     }
 
     pub fn record_demod_index_search_attempt(&self) {

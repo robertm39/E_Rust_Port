@@ -1128,6 +1128,51 @@ fn find_indexed_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    if problem_type() != ProblemType::FirstOrder {
+        return find_materialized_indexed_demodulator(
+            ocb,
+            bank,
+            term,
+            date,
+            demodulators,
+            subst,
+            restricted_rw,
+        );
+    }
+
+    while let Some(candidate) =
+        demodulators.demod_index_search_next_candidate_side_with_subst(subst)
+    {
+        let Some(clause) = demodulators.find_indexed_by_id(candidate.clause_id) else {
+            continue;
+        };
+        let Some(match_) = try_pre_matched_demodulator_clause_side(
+            ocb,
+            bank,
+            term,
+            date,
+            clause,
+            candidate.side,
+            subst,
+            restricted_rw,
+        )?
+        else {
+            continue;
+        };
+        return Ok(Some(match_));
+    }
+    Ok(None)
+}
+
+fn find_materialized_indexed_demodulator<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    demodulators: &'a ClauseSet,
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     while let Some(candidate) = demodulators.demod_index_search_next_candidate_side() {
         let Some(clause) = demodulators.find_indexed_by_id(candidate.clause_id) else {
             continue;
@@ -1191,6 +1236,55 @@ fn find_set_order_demodulator<'a>(
         }
     }
     Ok(None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C indexed side checks with the PDTree substitution live"
+)]
+fn try_pre_matched_demodulator_clause_side<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    clause: &'a Clause,
+    side: EqnSide,
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    if !clause.is_demodulator() || !date.is_earlier_than(clause.date()) {
+        return Ok(None);
+    }
+
+    let eqn = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("positive unit demodulator has one literal");
+    if demodulator_date_blocks_term(term, clause, eqn) {
+        return Ok(None);
+    }
+
+    let replacement = match side {
+        EqnSide::LeftSide
+            if (eqn.is_oriented()
+                || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
+                && (!restricted_rw || !subst.is_renaming()) =>
+        {
+            Some(eqn.right())
+        }
+        EqnSide::RightSide
+            if !eqn.is_oriented()
+                && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)? =>
+        {
+            Some(eqn.left())
+        }
+        _ => None,
+    };
+    Ok(replacement.map(|replacement| PlainDemodulatorMatch {
+        clause,
+        replacement,
+    }))
 }
 
 #[expect(
