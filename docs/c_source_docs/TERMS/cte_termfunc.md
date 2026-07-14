@@ -231,7 +231,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for recursive argument-access profiling on 2026-07-13.
 
 Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 
@@ -265,6 +265,7 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 ### Change Later
 
 - The C weight macros hide the requirement that every shared term have immutable, valid cached counts and standard weight, while `TermWeightCompute` calls `NormalizePatternAppVar`, whose result depends on term-bank and eta-normalization state. Rust preserves the observable fast path and pattern result; a future typed shared-term constructor should make metadata validity explicit and separate nominal weight inspection from hidden normalization side effects.
+- C exposes child terms through the raw `args` array and arity field, which makes recursive comparisons allocation-free but also lets unrelated code mutate children without a constructor or cache invalidation boundary. Rust now borrows read-only argument slices in hot structural comparisons. A cleaned C/Rust term API should provide an explicit immutable child view and confine child mutation to metadata-maintaining builders.
 - `TermPrintLists` and `SigSupportLists` are process-global formatting/allocation switches. Rust currently keeps list support explicit on `Signature` and routes bracket notation through term-bank printing; once executable option handling is complete, decide whether a global compatibility shim is needed or whether explicit per-signature state is preferable.
 - `parse_cons_list` allocates the eventual `$nil` cell through the same arity-2 default-cell path used for `$cons` placeholders. Rust uses a zero-arity `$nil` for valid shared and unshared term shapes; compare this against reference behavior before deciding whether the allocation artifact needs to be externally preserved.
 - The C parser surfaces differ: unshared `TermParse` checks integer/object argument lists, full `TBTermParseReal` also checks rational/float argument lists, and `TBTermParseSimple` does not check distinct-token argument lists at all. Keep the distinction for compatibility, but future internal APIs should name the checked/full parser path explicitly so callers do not accidentally choose the looser simple parser.

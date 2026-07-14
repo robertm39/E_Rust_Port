@@ -785,20 +785,22 @@ pub fn term_struct_prefix_equal(
         return false;
     }
 
-    left.argument_clones()
-        .into_iter()
-        .zip(right.argument_clones())
-        .enumerate()
-        .all(|(index, (left, right))| {
-            left.zip(right).is_some_and(|(left, right)| {
-                term_struct_equal_deref(
-                    &left,
-                    &right,
-                    convert_lfho_deref(index, left_limit, left_deref),
-                    convert_lfho_deref(index, right_limit, right_deref),
-                )
-            })
-        })
+    let left_args = left.arguments();
+    let right_args = right.arguments();
+    for (index, (left, right)) in left_args.iter().zip(right_args.iter()).enumerate() {
+        let Some((left, right)) = left.as_ref().zip(right.as_ref()) else {
+            return false;
+        };
+        if !term_struct_equal_deref(
+            left,
+            right,
+            convert_lfho_deref(index, left_limit, left_deref),
+            convert_lfho_deref(index, right_limit, right_deref),
+        ) {
+            return false;
+        }
+    }
+    true
 }
 
 #[must_use]
@@ -836,16 +838,17 @@ pub fn term_struct_weight_compare(left: &Term, right: &Term) -> i64 {
         return arity_cmp;
     }
 
-    left.argument_clones()
-        .into_iter()
-        .zip(right.argument_clones())
-        .find_map(|(left, right)| {
-            left.zip(right).and_then(|(left, right)| {
-                let cmp = term_struct_weight_compare(&left, &right);
-                (cmp != 0).then_some(cmp)
-            })
-        })
-        .unwrap_or(0)
+    let left_args = left.arguments();
+    let right_args = right.arguments();
+    for (left, right) in left_args.iter().zip(right_args.iter()) {
+        if let Some((left, right)) = left.as_ref().zip(right.as_ref()) {
+            let cmp = term_struct_weight_compare(left, right);
+            if cmp != 0 {
+                return cmp;
+            }
+        }
+    }
+    0
 }
 
 #[must_use]
@@ -858,16 +861,17 @@ pub fn term_lex_compare(left: &Term, right: &Term) -> i64 {
     if arity_cmp != 0 {
         return arity_cmp;
     }
-    left.argument_clones()
-        .into_iter()
-        .zip(right.argument_clones())
-        .find_map(|(left, right)| {
-            left.zip(right).and_then(|(left, right)| {
-                let cmp = term_lex_compare(&left, &right);
-                (cmp != 0).then_some(cmp)
-            })
-        })
-        .unwrap_or(0)
+    let left_args = left.arguments();
+    let right_args = right.arguments();
+    for (left, right) in left_args.iter().zip(right_args.iter()) {
+        if let Some((left, right)) = left.as_ref().zip(right.as_ref()) {
+            let cmp = term_lex_compare(left, right);
+            if cmp != 0 {
+                return cmp;
+            }
+        }
+    }
+    0
 }
 
 #[must_use]

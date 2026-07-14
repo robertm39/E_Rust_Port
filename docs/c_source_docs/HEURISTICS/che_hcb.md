@@ -136,7 +136,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for selection-time parent liveness on 2026-07-13.
 
 Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 
@@ -163,7 +163,7 @@ Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 - `HCBFree` releases only the HCB's pointer arrays and optional HCB-local data; it intentionally does not free stored WFCBs because those come from `WFCBAdmin`. Rust should continue to store handles or borrows to admin-owned WFCBs rather than transferring ownership into HCB.
 - `HCBAddWFCB` converts each added `steps` value into a cumulative switch-count boundary and changes the selector from `HCBSingleWeightClauseSelect` to `HCBStandardClauseSelect` after the second WFCB. Preserve that cumulative representation before considering a clearer schedule data type.
 - `HCBClauseEvaluate` assumes `clause->evaluations == NULL`, allocates a fresh `EvalCell` sized to `wfcb_no`, and writes WFCB evaluations in list order. Rust clause-owned storage now preserves this shape, keeps the explicit evaluation adapter for callers not yet integrated with clause-owned evaluations, and exposes a banked HCB evaluation path for WFCBs whose C callbacks mutate maximality/orientation while scoring. Proof-control now uses that banked path for state-owned axiom init, processed reset, forward-contract reweight, cleanup reweight, and eval-store scoring.
-- `HCBStandardClauseSelect` updates `select_count` and `current_eval` after `ClauseSetFindBest`/orphan removal, compares the incremented count against cumulative switch boundaries with equality, and resets only when `current_eval == wfcb_no`. Rust preserves this order through clause-set eval-index selection; proof-control now supplies a source-aware compact-parent orphan predicate, while stable proof-state clause handles are still needed to eliminate the remaining archived/requeued duplicate-identity caveat.
+- `HCBStandardClauseSelect` updates `select_count` and `current_eval` after `ClauseSetFindBest`/orphan removal, compares the incremented count against cumulative switch boundaries with equality, and resets only when `current_eval == wfcb_no`. Rust preserves this order through clause-set eval-index selection; proof control detaches each chosen clause before checking its compact parents directly in stable owners, using maintained identifier positions for processed non-units instead of rebuilding a proof-wide liveness snapshot.
 - `HCBClauseSetDelProp` appears to use `PDArrayElementInt(hcb->select_switch, j)` as the inner-loop bound while `j` is also the loop variable. Rust preserves that compiled loop-bound shape for delete-bad/filtering compatibility; it may be an accidental loop-index bug worth cleaning up later.
 - `SplitClassType` is used as a bitmask despite being declared as an enum. Values such as `SplitHorn | SplitNonHorn` are accepted by the executable option handler and by `HeuristicParmsParseInto`, so Rust preserves raw C-width bit patterns rather than rejecting combinations as invalid enum discriminants.
 - `SplitAll` is the numeric mask `7`, so it does not include `SplitPositive` (`8`) or `SplitMixed` (`16`) despite the name. Keep that value until clause-splitting callers prove whether this is intentional legacy behavior or a cleanup candidate.

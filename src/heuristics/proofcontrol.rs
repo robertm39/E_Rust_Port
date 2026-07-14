@@ -3085,33 +3085,6 @@ impl ParentLivenessSnapshot {
         snapshot
     }
 
-    fn from_selection_state(state: &ProofState) -> Self {
-        let capacity = state.axioms().len()
-            + state.ax_archive().len()
-            + state.processed_pos_rules().len()
-            + state.processed_pos_eqns().len()
-            + state.processed_neg_units().len()
-            + state.processed_non_units().len()
-            + state.archive().len()
-            + state.definition_store().len()
-            + state.watchlist().map_or(0, ClauseSet::len);
-        let mut snapshot = Self {
-            live: ClauseRefSet::with_capacity_and_hasher(capacity, BuildHasherDefault::default()),
-        };
-        snapshot.collect_set(state.axioms());
-        snapshot.collect_set(state.ax_archive());
-        snapshot.collect_set(state.processed_pos_rules());
-        snapshot.collect_set(state.processed_pos_eqns());
-        snapshot.collect_set(state.processed_neg_units());
-        snapshot.collect_set(state.processed_non_units());
-        snapshot.collect_set(state.archive());
-        snapshot.collect_set(state.definition_store());
-        if let Some(watchlist) = state.watchlist() {
-            snapshot.collect_set(watchlist);
-        }
-        snapshot
-    }
-
     fn collect_set(&mut self, set: &ClauseSet) {
         for clause in set.iter() {
             if !clause.query_prop(CP_IS_DEAD) {
@@ -3126,6 +3099,37 @@ impl ParentLivenessSnapshot {
             DerivationParentRef::Demodulator(_) | DerivationParentRef::Formula(_) => false,
         }
     }
+}
+
+fn selection_parent_is_dead(state: &ProofState, parent: DerivationParentRef) -> bool {
+    let DerivationParentRef::Clause(parent) = parent else {
+        return false;
+    };
+    let is_live_parent = |clause: &Clause| {
+        !clause.query_prop(CP_IS_DEAD) && ClauseDerivationRef::from(clause) == parent
+    };
+    let indexed_parent_sets = [
+        state.processed_pos_rules(),
+        state.processed_pos_eqns(),
+        state.processed_neg_units(),
+        state.processed_non_units(),
+    ];
+    if indexed_parent_sets.into_iter().any(|set| {
+        set.find_indexed_by_id(parent.ident())
+            .is_some_and(|clause| is_live_parent(clause) || set.iter().any(&is_live_parent))
+    }) {
+        return false;
+    }
+    let stable_unindexed_parent_sets = [
+        state.axioms(),
+        state.ax_archive(),
+        state.archive(),
+        state.definition_store(),
+    ];
+    !stable_unindexed_parent_sets
+        .into_iter()
+        .chain(state.watchlist())
+        .any(|set| set.iter().any(&is_live_parent))
 }
 
 /// Applies the currently ported local effects of C
@@ -4047,9 +4051,6 @@ pub fn proof_state_select_unprocessed_clause(
     let _timer = crate::basics::perf_counters::start(
         crate::basics::perf_counters::PerfCounter::SelectionTimer,
     );
-    // At the HCB boundary, generated children wait in tmp/eval/unprocessed;
-    // inference parents already live in source, processed, or archive owners.
-    let parent_liveness = ParentLivenessSnapshot::from_selection_state(state);
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -4065,18 +4066,22 @@ pub fn proof_state_select_unprocessed_clause(
                 "active proof-control heuristic handle is invalid",
             )
         })?;
+    // Generated children wait in tmp/eval/unprocessed. Detaching unprocessed
+    // lets the orphan check inspect only stable source, processed, and archive owners.
+    let mut unprocessed = std::mem::take(state.unprocessed_mut());
     let selected = match hcb.hcb_select() {
         HcbSelectFunction::StandardClauseSelect => {
-            hcb_standard_clause_select_with(hcb, state.unprocessed_mut(), |clause| {
-                clause_is_orphaned_with(clause, |parent| parent_liveness.parent_is_dead(parent))
+            hcb_standard_clause_select_with(hcb, &mut unprocessed, |clause| {
+                clause_is_orphaned_with(clause, |parent| selection_parent_is_dead(state, parent))
             })
         }
         HcbSelectFunction::SingleWeightClauseSelect => {
-            hcb_single_weight_clause_select_with(hcb, state.unprocessed_mut(), |clause| {
-                clause_is_orphaned_with(clause, |parent| parent_liveness.parent_is_dead(parent))
+            hcb_single_weight_clause_select_with(hcb, &mut unprocessed, |clause| {
+                clause_is_orphaned_with(clause, |parent| selection_parent_is_dead(state, parent))
             })
         }
     };
+    *state.unprocessed_mut() = unprocessed;
     Ok(selected)
 }
 
@@ -9679,13 +9684,13 @@ mod tests {
         proof_state_saturate_with_global_indices, proof_state_saturate_with_output,
         proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
         proof_state_simplify_watchlist_with_global_indices, proof_state_storage_estimate,
-        select_inherited_literal, write_cleanup_unprocessed_output, BackwardSimplificationOutcome,
-        CleanupUnprocessedOutcome, ForwardContractCounts, ForwardContractOptions,
-        GenerateNewClausesOutcome, LiteralSelectionOutcome, ParentLivenessSnapshot,
-        ProcessClauseOutcome, ProcessClauseReturnReason, ProcessedClauseClass,
-        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SatSolverBackendKind,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        select_inherited_literal, selection_parent_is_dead, write_cleanup_unprocessed_output,
+        BackwardSimplificationOutcome, CleanupUnprocessedOutcome, ForwardContractCounts,
+        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
+        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SatSolverBackendKind, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -12729,6 +12734,10 @@ mod tests {
         live_parent.set_ident(4_120);
         let live_ref = ClauseDerivationRef::from(&live_parent);
         state.processed_non_units_mut().insert(live_parent);
+        assert_eq!(
+            state.processed_non_units().find_indexed_by_id(4_120),
+            state.processed_non_units().find_by_id(4_120)
+        );
 
         let mut dead_parent = Clause::empty();
         dead_parent.set_ident(4_121);
@@ -12741,11 +12750,25 @@ mod tests {
         let waiting_ref = ClauseDerivationRef::from(&waiting_child);
         state.unprocessed_mut().insert(waiting_child);
 
-        let snapshot = ParentLivenessSnapshot::from_selection_state(&state);
-
-        assert!(!snapshot.parent_is_dead(DerivationParentRef::Clause(live_ref)));
-        assert!(snapshot.parent_is_dead(DerivationParentRef::Clause(dead_ref)));
-        assert!(snapshot.parent_is_dead(DerivationParentRef::Clause(waiting_ref)));
+        assert!(!selection_parent_is_dead(
+            &state,
+            DerivationParentRef::Clause(live_ref)
+        ));
+        assert!(selection_parent_is_dead(
+            &state,
+            DerivationParentRef::Clause(dead_ref)
+        ));
+        let mut live_alias = Clause::empty();
+        live_alias.set_ident(4_121);
+        state.processed_pos_eqns_mut().insert(live_alias);
+        assert!(!selection_parent_is_dead(
+            &state,
+            DerivationParentRef::Clause(dead_ref)
+        ));
+        assert!(selection_parent_is_dead(
+            &state,
+            DerivationParentRef::Clause(waiting_ref)
+        ));
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::terms::match_mgu::{subst_match_complete, subst_match_complete_with_ba
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -24,6 +25,26 @@ static CLAUSE_CLAUSE_SUBSUMPTION_CALLS: AtomicI64 = AtomicI64::new(0);
 static CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC: AtomicI64 = AtomicI64::new(0);
 static CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
 static UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS: AtomicI64 = AtomicI64::new(0);
+
+std::thread_local! {
+    static CLAUSE_SUBSUMPTION_PICKED: RefCell<Option<Vec<bool>>> = const { RefCell::new(None) };
+}
+
+fn with_clause_subsumption_picked<R>(
+    literal_count: usize,
+    compute: impl FnOnce(&mut [bool]) -> R,
+) -> R {
+    let mut picked = CLAUSE_SUBSUMPTION_PICKED
+        .with(|slot| slot.borrow_mut().take())
+        .unwrap_or_default();
+    picked.clear();
+    picked.resize(literal_count, false);
+    let result = compute(&mut picked);
+    CLAUSE_SUBSUMPTION_PICKED.with(|slot| {
+        slot.borrow_mut().replace(picked);
+    });
+    result
+}
 
 #[must_use]
 pub fn clause_clause_subsumption_calls() -> i64 {
@@ -741,7 +762,7 @@ pub fn clause_is_subsume_ordered(clause: &Clause, bank: &TermBank) -> bool {
 ///
 /// # Panics
 ///
-/// Panics if either clause is not subsumption ordered or if either cached
+/// Debug builds panic if either clause is not subsumption ordered or if either cached
 /// clause weight does not match `ClauseStandardWeight`, matching the C
 /// preconditions on `ClauseSubsumesClause`.
 #[must_use]
@@ -749,10 +770,10 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
     let _timer = crate::basics::perf_counters::start(
         crate::basics::perf_counters::PerfCounter::SubsumeTimer,
     );
-    assert!(clause_is_subsume_ordered(subsumer, bank));
-    assert!(clause_is_subsume_ordered(sub_candidate, bank));
-    assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
-    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    debug_assert!(clause_is_subsume_ordered(subsumer, bank));
+    debug_assert!(clause_is_subsume_ordered(sub_candidate, bank));
+    debug_assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
+    debug_assert_eq!(subsumer.weight(), subsumer.standard_weight());
 
     if subsumer.is_empty() {
         return true;
@@ -774,15 +795,16 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
     }
 
     let mut subst = Substitution::new();
-    let mut picked = vec![false; sub_candidate.literal_number()];
     CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC.fetch_add(1, Ordering::SeqCst);
-    let result = eqn_list_rec_subsume(
-        subsumer.literals().as_slice(),
-        sub_candidate.literals().as_slice(),
-        &mut subst,
-        &mut picked,
-        bank,
-    );
+    let result = with_clause_subsumption_picked(sub_candidate.literal_number(), |picked| {
+        eqn_list_rec_subsume(
+            subsumer.literals().as_slice(),
+            sub_candidate.literals().as_slice(),
+            &mut subst,
+            picked,
+            bank,
+        )
+    });
     subst.backtrack();
     if result {
         CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
@@ -798,7 +820,7 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
 ///
 /// # Panics
 ///
-/// Panics if either clause is not subsumption ordered or has a stale cached
+/// Debug builds panic if either clause is not subsumption ordered or has a stale cached
 /// standard weight, matching the C preconditions.
 pub fn clause_subsumes_clause_with_bank(
     subsumer: &Clause,
@@ -808,10 +830,10 @@ pub fn clause_subsumes_clause_with_bank(
     let _timer = crate::basics::perf_counters::start(
         crate::basics::perf_counters::PerfCounter::SubsumeTimer,
     );
-    assert!(clause_is_subsume_ordered(subsumer, bank));
-    assert!(clause_is_subsume_ordered(sub_candidate, bank));
-    assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
-    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    debug_assert!(clause_is_subsume_ordered(subsumer, bank));
+    debug_assert!(clause_is_subsume_ordered(sub_candidate, bank));
+    debug_assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
+    debug_assert_eq!(subsumer.weight(), subsumer.standard_weight());
 
     if subsumer.is_empty() {
         return Ok(true);
@@ -833,15 +855,16 @@ pub fn clause_subsumes_clause_with_bank(
     }
 
     let mut subst = Substitution::new();
-    let mut picked = vec![false; sub_candidate.literal_number()];
     CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC.fetch_add(1, Ordering::SeqCst);
-    let result = eqn_list_rec_subsume_with_bank(
-        subsumer.literals().as_slice(),
-        sub_candidate.literals().as_slice(),
-        &mut subst,
-        &mut picked,
-        bank,
-    );
+    let result = with_clause_subsumption_picked(sub_candidate.literal_number(), |picked| {
+        eqn_list_rec_subsume_with_bank(
+            subsumer.literals().as_slice(),
+            sub_candidate.literals().as_slice(),
+            &mut subst,
+            picked,
+            bank,
+        )
+    });
     subst.backtrack();
     let result = result?;
     if result {
@@ -2227,7 +2250,7 @@ mod tests {
         fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
         unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
         unit_clause_set_subsumes_clause_with_bank, unit_clause_set_subsumes_clause_with_strong,
-        unit_clause_subsumes_clause,
+        unit_clause_subsumes_clause, with_clause_subsumption_picked,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{set_problem_type, ProblemType};
@@ -2253,6 +2276,23 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    #[test]
+    fn clause_subsumption_picked_scratch_resets_and_supports_reentry() {
+        with_clause_subsumption_picked(3, |outer| {
+            assert_eq!(outer, [false, false, false]);
+            outer[1] = true;
+            with_clause_subsumption_picked(5, |inner| {
+                assert_eq!(inner, [false, false, false, false, false]);
+                inner[4] = true;
+            });
+            assert_eq!(outer, [false, true, false]);
+        });
+
+        with_clause_subsumption_picked(2, |picked| {
+            assert_eq!(picked, [false, false]);
+        });
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {

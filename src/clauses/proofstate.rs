@@ -525,7 +525,7 @@ impl ProofState {
             processed_pos_rules: ClauseSet::new_demod_indexed(),
             processed_pos_eqns: ClauseSet::new_demod_indexed(),
             processed_neg_units: ClauseSet::new_demod_indexed(),
-            processed_non_units: ClauseSet::new(),
+            processed_non_units: ClauseSet::new_position_indexed(),
             unprocessed: ClauseSet::new(),
             tmp_store: ClauseSet::new(),
             eval_store: ClauseSet::new(),

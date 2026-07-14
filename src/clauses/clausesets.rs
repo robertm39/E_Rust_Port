@@ -250,6 +250,7 @@ pub struct ClauseSet {
     identifier: String,
     demod_index: Option<PdTree>,
     demod_index_coverage: Cell<Option<bool>>,
+    position_indexed: bool,
     indexed_clause_positions: BTreeMap<i64, usize>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
@@ -276,6 +277,7 @@ impl ClauseSet {
             identifier: String::new(),
             demod_index: None,
             demod_index_coverage: Cell::new(None),
+            position_indexed: false,
             indexed_clause_positions: BTreeMap::new(),
             fv_anchor: None,
             eval_indices: Vec::new(),
@@ -289,6 +291,13 @@ impl ClauseSet {
     pub fn new_demod_indexed() -> Self {
         let mut set = Self::new();
         set.init_demod_index();
+        set
+    }
+
+    #[must_use]
+    pub fn new_position_indexed() -> Self {
+        let mut set = Self::new();
+        set.position_indexed = true;
         set
     }
 
@@ -810,7 +819,7 @@ impl ClauseSet {
             }
             self.eval_object_slots[object] = Some(slot);
         }
-        if self.demod_index.is_some() {
+        if self.demod_index.is_some() || self.position_indexed {
             self.indexed_clause_positions.entry(ident).or_insert(slot);
         }
     }
@@ -1652,7 +1661,7 @@ impl ClauseSet {
 
     fn rebuild_indexed_clause_positions(&mut self) {
         self.indexed_clause_positions.clear();
-        if self.demod_index.is_none() {
+        if self.demod_index.is_none() && !self.position_indexed {
             return;
         }
         for slot in self.clauses.occupied_slots() {
@@ -2484,6 +2493,45 @@ mod tests {
             set.find_indexed_position_by_id(7_001)
                 .map(|(position, clause)| (position, clause.derivation_generation())),
             Some((0, second_generation))
+        );
+    }
+
+    #[test]
+    fn position_indexed_lookup_survives_removal_sort_and_compaction() {
+        let clause_count = 2 * super::SPARSE_STORE_COMPACT_MIN_HOLES + 1;
+        let mut identifiers = Vec::with_capacity(clause_count);
+        let mut set = ClauseSet::new_position_indexed();
+
+        for offset in 0..clause_count {
+            let mut clause = Clause::empty();
+            clause.set_ident(8_000 + i64::try_from(offset).unwrap());
+            identifiers.push(clause.ident());
+            set.insert(clause);
+        }
+
+        let removed = super::SPARSE_STORE_COMPACT_MIN_HOLES + 1;
+        for &identifier in &identifiers[..removed] {
+            assert_eq!(
+                set.extract_first().map(|clause| clause.ident()),
+                Some(identifier)
+            );
+            assert!(set.find_indexed_by_id(identifier).is_none());
+        }
+
+        let mut appended = Clause::empty();
+        appended.set_ident(9_000);
+        set.insert(appended);
+        assert!(set.demod_index().is_none());
+        assert_eq!(set.clauses.slots.len(), set.len());
+        assert_eq!(
+            set.find_indexed_by_id(identifiers[removed])
+                .map(Clause::ident),
+            Some(identifiers[removed])
+        );
+        set.sort_by(|left, right| right.ident().cmp(&left.ident()));
+        assert_eq!(
+            set.find_indexed_by_id(9_000).map(Clause::ident),
+            Some(9_000)
         );
     }
 

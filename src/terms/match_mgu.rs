@@ -26,6 +26,43 @@ static UNIFICATION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
 
 pub const MATCH_FAILED: i32 = -1;
 
+const INLINE_MATCH_JOB_PAIRS: usize = 32;
+
+struct MatchJobStack {
+    inline: [Option<(Term, Term)>; INLINE_MATCH_JOB_PAIRS],
+    inline_len: usize,
+    overflow: Vec<(Term, Term)>,
+}
+
+impl MatchJobStack {
+    fn new(left: Term, right: Term) -> Self {
+        let mut stack = Self {
+            inline: std::array::from_fn(|_| None),
+            inline_len: 0,
+            overflow: Vec::new(),
+        };
+        stack.push(left, right);
+        stack
+    }
+
+    fn push(&mut self, left: Term, right: Term) {
+        if self.overflow.is_empty() && self.inline_len < INLINE_MATCH_JOB_PAIRS {
+            self.inline[self.inline_len] = Some((left, right));
+            self.inline_len += 1;
+        } else {
+            self.overflow.push((left, right));
+        }
+    }
+
+    fn pop(&mut self) -> Option<(Term, Term)> {
+        if let Some(pair) = self.overflow.pop() {
+            return Some(pair);
+        }
+        self.inline_len = self.inline_len.checked_sub(1)?;
+        self.inline[self.inline_len].take()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum UnifTermSide {
@@ -117,11 +154,10 @@ pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitu
     }
 
     let backtrack = subst.len();
-    let mut jobs = Vec::new();
-    push_lifo_pair(&mut jobs, matcher.clone(), to_match.clone());
+    let mut jobs = MatchJobStack::new(matcher.clone(), to_match.clone());
 
     let mut result = true;
-    while let Some((matcher, to_match)) = pop_lifo_pair(&mut jobs) {
+    while let Some((matcher, to_match)) = jobs.pop() {
         if matcher.is_free_var() {
             let matcher_type = matcher.type_().expect("matcher variable must have a type");
             let to_match_type = to_match.type_().expect("matched term must have a type");
@@ -154,8 +190,7 @@ pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitu
                 "matched terms with identical f-code have identical arity"
             );
             for index in (0..matcher.arity()).rev() {
-                push_lifo_pair(
-                    &mut jobs,
+                jobs.push(
                     required_arg(&matcher, index),
                     required_arg(&to_match, index),
                 );
@@ -369,11 +404,10 @@ fn subst_compute_match_ho_inner(
         return Ok(MATCH_FAILED);
     }
 
-    let mut jobs = Vec::new();
-    push_lifo_pair(&mut jobs, matcher.clone(), to_match.clone());
+    let mut jobs = MatchJobStack::new(matcher.clone(), to_match.clone());
     let mut result = 0;
 
-    while let Some((mut matcher, mut to_match)) = pop_lifo_pair(&mut jobs) {
+    while let Some((mut matcher, mut to_match)) = jobs.pop() {
         (matcher, to_match) = prune_lambda_prefix(bank, matcher, to_match)?;
         let start_index;
 
@@ -452,8 +486,7 @@ fn subst_compute_match_ho_inner(
         let matcher_offset = usize::from(matcher.is_applied_free_var());
         let target_offset = start_index + usize::from(to_match.is_applied_free_var());
         for index in 0..matcher.arity().saturating_sub(matcher_offset) {
-            push_lifo_pair(
-                &mut jobs,
+            jobs.push(
                 required_arg(&matcher, index + matcher_offset),
                 required_arg(&to_match, index + target_offset),
             );
@@ -770,17 +803,6 @@ pub fn verify_match(matcher: &Term, to_match: &Term) -> bool {
     term_struct_equal_deref(matcher, to_match, DerefType::Once, DerefType::Never)
 }
 
-fn push_lifo_pair(jobs: &mut Vec<Term>, left: Term, right: Term) {
-    jobs.push(left);
-    jobs.push(right);
-}
-
-fn pop_lifo_pair(jobs: &mut Vec<Term>) -> Option<(Term, Term)> {
-    let right = jobs.pop()?;
-    let left = jobs.pop().expect("match stack stores complete pairs");
-    Some((left, right))
-}
-
 fn required_arg(term: &Term, index: usize) -> Term {
     term.argument(index)
         .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
@@ -885,6 +907,30 @@ mod tests {
         assert_eq!(subst.len(), 1);
         assert_eq!(x.binding(), Some(a));
         assert!(verify_match(&pattern, &target));
+    }
+
+    #[test]
+    fn matching_preserves_lifo_order_after_inline_stack_overflow() {
+        let type_ = TypeBank::new().i_type();
+        let variables: Vec<_> = (0_i64..40)
+            .map(|index| typed_var(-2 - 2 * index, &type_))
+            .collect();
+        let constants: Vec<_> = (0_i64..40)
+            .map(|index| typed_const(100 + index, &type_))
+            .collect();
+        let pattern = typed_term(20, &variables, &type_);
+        let target = typed_term(20, &constants, &type_);
+        let mut subst = Substitution::new();
+
+        assert!(subst_compute_match(&pattern, &target, &mut subst));
+        assert_eq!(subst.len(), variables.len());
+        for (variable, constant) in variables.iter().zip(&constants) {
+            assert_eq!(variable.binding().as_ref(), Some(constant));
+        }
+        assert_eq!(subst.backtrack(), variables.len());
+        assert!(variables
+            .iter()
+            .all(|variable| variable.binding().is_none()));
     }
 
     #[test]

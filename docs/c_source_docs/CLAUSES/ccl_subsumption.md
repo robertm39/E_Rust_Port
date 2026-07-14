@@ -145,7 +145,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for indexed contextual-subsumption parity on 2026-07-13.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for indexed contextual-subsumption parity and HEN011 scratch profiling on 2026-07-13.
 
 Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 
@@ -167,6 +167,7 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 - Contextual simplify-reflect now reaches the same feature-vector subsumer and subsumed-clause queries as C whenever the clause set owns an FV anchor. The indexed subsumer wrapper deliberately accepts unit queries produced after an earlier contextual deletion; only the no-index linear fallback retains C's non-unit assertion.
 - Positive and negative simplify-reflect now record `DCSR` derivation entries with compact references to the simplifying unit clause when a literal is removed. Opt-in documenting helpers emit represented `DocClauseModificationDefault(..., inf_simplify_reflect, ...)` output before pushing the matching `DCSR` entry.
 - Executable-wide proof-output/session ownership and proof-object traversal remain pending. Rust stores C's process-global `StrongUnitForwardSubsumption` as proof-control session configuration for forward subsumption and positive simplify-reflect callers.
+- Release HEN011 profiling confirmed that recursive clause subsumption is reached more than 100 million times on a full proof. Rust now maps C's assertion-only ordering/weight preconditions to debug assertions and reuses the picked-candidate bitmap through reentrant thread-local scratch while keeping one fresh substitution per top-level call; this preserves direct LUSK6ext proof order better than reusing both allocations.
 
 ### Change Later
 
@@ -179,6 +180,8 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 - `eqn_list_rec_subsume` embeds each unoriented literal's direct/swapped alternatives inside recursive whole-clause search. The backtracking is semantically required, but the literal API does not expose an iterator or continuation over successful orientations, which made a locally successful direction easy to commit too early in the Rust port. After compatibility is secured, make orientation alternatives explicit while preserving substitution rollback and candidate-reservation semantics.
 - `ClauseSetSubsumesClause` has an index-dependent precondition: the plain scan asserts a non-unit target, while the FV-index branch accepts unit targets. Contextual simplify-reflect reaches both shapes during one mutation loop. Rust preserves the split and tests it, but a cleaned API should state one contract independent of storage representation.
 - FV-index leaves in C are pointer-keyed splay trees, so first-hit subsumer order can depend on allocator addresses and tree rotations even when feature vectors and candidate sets are identical. Repeated bounded GEO288 runs changed C's non-unit subsumption and retained-clause counts slightly under ASLR. Rust uses stable clause identifiers for deterministic leaf order. Do not emulate C allocator layout merely to reproduce identifier permutations; if exact first-hit order proves externally visible, define and test a semantic tie-break in both implementations.
+- C allocates and frees a `SubstCell` and zeroed `long` pick array for every recursive non-unit clause-subsumption attempt. The allocator's free lists make this cheaper than general allocation but also let unrelated allocation chronology affect pointer-keyed proof order. A later C implementation should accept reusable caller/session scratch with explicit reset and reentry semantics instead of relying on process-global allocator reuse.
+- The four subsumption counters are mutable process globals and assume one active proof search. Rust keeps compatibility-shaped atomics; a cleaned C/Rust interface should store counters in proof-session statistics so parallel or nested searches do not share them.
 
 ### Porting Focus
 

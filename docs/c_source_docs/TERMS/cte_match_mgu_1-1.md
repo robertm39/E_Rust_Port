@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching, `SubstMguComplete` production integration, and applied-variable dereference coverage on 2026-07-10.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching, `SubstMguComplete` production integration, applied-variable dereference coverage, and first-order matching-stack profiling through 2026-07-13.
 
 Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 
@@ -119,6 +119,7 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - `MEASURE_UNIFICATION` owns process-global `UnifAttempts`/`UnifSuccesses` counters around `SubstComputeMgu` and `SubstComputeMguHO`. Rust maps the first-order `SubstComputeMgu` side to the non-default `measure-unification` Cargo feature and exposes the same executable statistics lines over those counters.
 - In higher-order problem mode, `SubstMguComplete` eta-reduces both inputs, calls `SubstComputeMguHO`, and falls back to the higher-order pattern MGU when both original inputs are non-first-order patterns. Rust now takes the owning `TermBank` explicitly and routes production equation unification, equality resolution, factoring, condensation, BCE, predicate elimination, injectivity checks, paramodulation, and CSSCPA through that dispatch, with entry-position rollback on false results and diagnostics.
 - In higher-order problem mode, `SubstMatchComplete` eta-reduces both inputs, calls the directed `SubstComputeMatchHO`, and falls back to `SubstComputeMatchPattern` when both unreduced inputs are non-first-order patterns. Rust now ports that bank-aware dispatch, including application-variable prefix construction, exact complete-match checking, diagnostic-safe substitution rollback, and use by forward/backward demodulation and predicate-gate validation where a mutable owner bank is available.
+- C first-order matching uses a per-call `PLocalStack` for pending term pairs. Rust preserves LIFO argument order with 32 inline jobs and a vector spill path, avoiding heap allocation for common small matches while retaining focused overflow coverage.
 
 ### Porting Focus
 
@@ -135,5 +136,6 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - The C first-order helpers inherit LFHO `TermDeref` binding-cache refreshes when applied-variable dereferencing is active. Rust currently matches the expansion shape through no-cache term handles; add owner-bank/cache behavior only after profiling or trace tests show the cache side effects matter.
 - C terms can recover their owning bank through `TermGetBank`, so `SubstMatchComplete` and `SubstMguComplete` can remain three-argument functions while secretly reaching eta-reduction, type-bank sharing, and app-variable prefix construction. Rust exposes bank-aware wrappers for those HO branches; after compatibility is secured, prefer explicit proof/unification-session context over C-style owner-bank recovery.
 - C uses signed `long` globals for `UnifAttempts` and `UnifSuccesses`; Rust uses feature-gated atomic signed counters so tests and future threaded callers can read them safely. Revisit the exact overflow and reset story only if compatibility diagnostics depend on very long-running process-global counter behavior.
+- `SubstComputeMatch` allocates and frees a `PLocalStack` for each call even though most matches need only a small number of pending pairs. A later C implementation should benchmark inline or reusable caller-owned job storage, with explicit rollback/reentry rules, instead of depending on allocator free-list reuse.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
