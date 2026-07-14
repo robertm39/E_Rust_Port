@@ -1200,13 +1200,12 @@ pub fn term_collect_variables(term: &Term, vars: &mut BTreeMap<usize, Term>) -> 
                 count += 1;
             }
         } else {
-            stack.extend(
-                current
-                    .argument_clones()
-                    .into_iter()
-                    .flatten()
-                    .filter(|arg| !term_is_ground(arg)),
-            );
+            let arguments = current.arguments();
+            for argument in arguments.iter().flatten() {
+                if !term_is_ground(argument) {
+                    stack.push(argument.clone());
+                }
+            }
         }
     }
     count
@@ -2896,6 +2895,17 @@ mod tests {
         parent.set_argument(0, cached.clone());
         let mut vars = BTreeMap::new();
         assert_eq!(term_collect_variables(&parent, &mut vars), 0);
+
+        let visible_var = Term::const_cell_alloc(-6);
+        let mixed_parent = Term::top_alloc(51, 3);
+        mixed_parent.set_argument(0, cached.clone());
+        mixed_parent.set_argument(1, visible_var.clone());
+        let mut vars = BTreeMap::new();
+        assert_eq!(term_collect_variables(&mixed_parent, &mut vars), 1);
+        assert_eq!(
+            vars.get(&term_identity_id(&visible_var)),
+            Some(&visible_var)
+        );
 
         let mut cached_terms = BTreeMap::new();
         assert_eq!(
