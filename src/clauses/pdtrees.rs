@@ -9,6 +9,7 @@ use crate::basics::objmaps::size_of_obj_map_node_estimate;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
 use crate::terms::subst::Substitution;
 use crate::terms::termfunc::term_standard_weight;
@@ -125,6 +126,14 @@ struct PrefixQueryCell {
     type_uid: TypeUniqueId,
     weight: i64,
     term: Term,
+}
+
+struct PrefixQueryMetadata {
+    token: PrefixToken,
+    type_uid: TypeUniqueId,
+    weight: i64,
+    first_arg: usize,
+    traverses_arguments: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -534,14 +543,13 @@ impl PdTree {
             match frame {
                 PrefixQueryBuildFrame::Enter(term) => {
                     let start = query.len();
-                    let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+                    let metadata = prefix_query_metadata(&term);
                     let arity = term.arity();
-                    let traverses_arguments = !term.is_top_level_free_var();
 
-                    if traverses_arguments {
+                    if metadata.traverses_arguments {
                         build_stack.push(PrefixQueryBuildFrame::Exit(start));
                         let arguments = term.arguments();
-                        for index in (first_arg..arity).rev() {
+                        for index in (metadata.first_arg..arity).rev() {
                             let argument = arguments[index].clone().unwrap_or_else(|| {
                                 panic!("term argument {index} is uninitialized")
                             });
@@ -550,10 +558,10 @@ impl PdTree {
                     }
 
                     query.push(PrefixQueryCell {
-                        token: prefix_token(&term),
-                        span: usize::from(!traverses_arguments),
-                        type_uid: term_type_uid(&term),
-                        weight: term_standard_weight(&term),
+                        token: metadata.token,
+                        span: usize::from(!metadata.traverses_arguments),
+                        type_uid: metadata.type_uid,
+                        weight: metadata.weight,
                         term,
                     });
                 }
@@ -1592,6 +1600,62 @@ fn prefix_token(term: &Term) -> PrefixToken {
     }
 }
 
+fn prefix_query_metadata(term: &Term) -> PrefixQueryMetadata {
+    let f_code = term.f_code();
+    let is_db_var = term.is_db_var();
+    let is_free_var = f_code < 0;
+    let is_phony_app = !is_db_var && f_code == SIG_PHONY_APP_CODE;
+    let is_lambda = !is_db_var && matches!(f_code, SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE);
+    let head = if is_lambda {
+        Some(
+            term.argument(0)
+                .unwrap_or_else(|| panic!("DB/lambda term has no head argument")),
+        )
+    } else if is_phony_app {
+        term.argument(0)
+    } else {
+        None
+    };
+    let is_applied_free_var = is_phony_app && head.as_ref().is_some_and(Term::is_free_var);
+    let is_applied_db_var = is_phony_app && head.as_ref().is_some_and(Term::is_db_var);
+    let is_top_level_free_var = is_free_var || is_applied_free_var;
+    let type_uid = term_type_uid(term);
+    let weight = term_standard_weight(term);
+    let token = if is_top_level_free_var {
+        PrefixToken::FreeVar {
+            id: term_identity_id(term),
+            type_uid,
+            weight,
+        }
+    } else if is_db_var || is_applied_db_var || is_lambda {
+        PrefixToken::DbLike(term_identity_id(if is_db_var {
+            term
+        } else {
+            head.as_ref()
+                .expect("applied DB variables and lambdas have head arguments")
+        }))
+    } else {
+        PrefixToken::Fun(f_code)
+    };
+
+    let metadata = PrefixQueryMetadata {
+        token,
+        type_uid,
+        weight,
+        first_arg: usize::from(is_lambda || is_applied_db_var),
+        traverses_arguments: !is_top_level_free_var,
+    };
+    debug_assert_eq!(metadata.token, prefix_token(term));
+    debug_assert_eq!(metadata.type_uid, term_type_uid(term));
+    debug_assert_eq!(metadata.weight, term_standard_weight(term));
+    debug_assert_eq!(
+        metadata.first_arg,
+        usize::from(term.is_lambda() || term.is_applied_db_var())
+    );
+    debug_assert_eq!(metadata.traverses_arguments, !term.is_top_level_free_var());
+    metadata
+}
+
 fn term_type_uid(term: &Term) -> TypeUniqueId {
     term.type_()
         .map_or(INVALID_TYPE_UID, |type_| type_.type_uid())
@@ -1611,16 +1675,17 @@ mod tests {
     use super::pdt_node_counter;
     use super::{
         adjusted_variable_edge_weight, prefix_code_ref_count, prefix_compute_term_code,
-        prefix_match_counts, term_lr_traverse_query, PdTree, PdtIndexedOccurrence,
-        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
-        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT,
+        prefix_match_counts, prefix_query_metadata, prefix_token, term_lr_traverse_query,
+        term_type_uid, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
+        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
+        PDTREE_IGNORE_TERM_WEIGHT,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::eqn_props::EqnSide;
     use crate::inout::scanner::Scanner;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type, INVALID_TYPE_UID};
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
@@ -1890,6 +1955,48 @@ mod tests {
             query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
             vec![4, 2, 1, 1]
         );
+    }
+
+    #[test]
+    fn query_metadata_matches_independent_term_classification() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let type_ = bank.signature().type_bank().default_type();
+        let free = typed_var(&bank, -31);
+        let constant = typed_const(&mut bank, "pdt_metadata_constant");
+        let db = bank.request_db_var(&type_, 0);
+        let applied_free = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        applied_free.set_type(Some(type_.clone()));
+        applied_free.set_argument(0, free.clone());
+        applied_free.set_argument(1, constant.clone());
+        let applied_db = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        applied_db.set_type(Some(type_.clone()));
+        applied_db.set_argument(0, db.clone());
+        applied_db.set_argument(1, constant.clone());
+        let lambda = Term::top_alloc(SIG_DB_LAMBDA_CODE, 2);
+        lambda.set_type(Some(type_));
+        lambda.set_argument(0, db.clone());
+        lambda.set_argument(1, constant.clone());
+        let malformed_phony = Term::top_alloc(SIG_PHONY_APP_CODE, 0);
+
+        for term in [
+            constant,
+            free,
+            db,
+            applied_free,
+            applied_db,
+            lambda,
+            malformed_phony,
+        ] {
+            let metadata = prefix_query_metadata(&term);
+            assert_eq!(metadata.token, prefix_token(&term));
+            assert_eq!(metadata.type_uid, term_type_uid(&term));
+            assert_eq!(metadata.weight, term_standard_weight(&term));
+            assert_eq!(
+                metadata.first_arg,
+                usize::from(term.is_lambda() || term.is_applied_db_var())
+            );
+            assert_eq!(metadata.traverses_arguments, !term.is_top_level_free_var());
+        }
     }
 
     #[test]
