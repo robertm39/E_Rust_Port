@@ -151,6 +151,7 @@ pub struct PdTree {
     search_term_date: Cell<SysDate>,
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
+    search_query_scratch: RefCell<Vec<PrefixQueryCell>>,
     search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
     search_subst_cursor: RefCell<PdtSubstCursor>,
 }
@@ -360,6 +361,7 @@ impl PdTree {
             search_term_date: Cell::new(PDTREE_IGNORE_NF_DATE),
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
+            search_query_scratch: RefCell::new(Vec::new()),
             search_cursor: RefCell::new(None),
             search_subst_cursor: RefCell::new(PdtSubstCursor::new()),
         }
@@ -481,8 +483,9 @@ impl PdTree {
             !self.search_active.get(),
             "PDTreeSearchInit requires no active search"
         );
+        self.recycle_search_query();
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
-        let query = term_lr_traverse_query(term);
+        let query = self.build_search_query(term);
         let term_weight = term_standard_weight(term);
         self.search_traversal_order.set(traversal_order);
         self.search_term_weight.set(term_weight);
@@ -501,9 +504,29 @@ impl PdTree {
 
     pub fn record_search_exit(&self) {
         self.search_active.set(false);
-        *self.search_state.borrow_mut() = None;
+        self.recycle_search_query();
         *self.search_cursor.borrow_mut() = None;
         self.search_subst_cursor.borrow_mut().reset();
+    }
+
+    fn build_search_query(&self, term: &Term) -> Vec<PrefixQueryCell> {
+        let mut query = self.search_query_scratch.borrow_mut();
+        debug_assert!(
+            query.is_empty(),
+            "PDTree query scratch is empty between searches"
+        );
+        push_prefix_query_cell(&mut query, term.clone());
+        std::mem::take(&mut *query)
+    }
+
+    fn recycle_search_query(&self) {
+        let Some(mut state) = self.search_state.borrow_mut().take() else {
+            return;
+        };
+        state.query.clear();
+        let mut scratch = self.search_query_scratch.borrow_mut();
+        debug_assert!(scratch.is_empty(), "PDTree query scratch has one owner");
+        *scratch = state.query;
     }
 
     pub fn record_nodes_visited(&self, count: u64) {
@@ -1439,29 +1462,33 @@ fn term_lr_traverse_path(term: &Term) -> Vec<(PrefixToken, Option<Term>)> {
     path
 }
 
+#[cfg(test)]
 fn term_lr_traverse_query(term: &Term) -> Vec<PrefixQueryCell> {
     let mut query = Vec::new();
-    push_prefix_query_cell(&mut query, term);
+    push_prefix_query_cell(&mut query, term.clone());
     query
 }
 
-fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: &Term) -> usize {
+fn push_prefix_query_cell(query: &mut Vec<PrefixQueryCell>, term: Term) -> usize {
     let start = query.len();
+    let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+    let arity = term.arity();
+    let traverses_arguments = !term.is_top_level_free_var();
     query.push(PrefixQueryCell {
-        token: prefix_token(term),
+        token: prefix_token(&term),
         span: 0,
-        type_uid: term_type_uid(term),
-        weight: term_standard_weight(term),
-        term: term.clone(),
+        type_uid: term_type_uid(&term),
+        weight: term_standard_weight(&term),
+        term,
     });
 
-    if !term.is_top_level_free_var() {
-        let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
-        for index in first_arg..term.arity() {
-            let arg = term
+    if traverses_arguments {
+        for index in first_arg..arity {
+            let arg = query[start]
+                .term
                 .argument(index)
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            push_prefix_query_cell(query, &arg);
+            push_prefix_query_cell(query, arg);
         }
     }
 
@@ -1758,6 +1785,42 @@ mod tests {
             vec![3, 1, 1]
         );
         assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
+    }
+
+    #[test]
+    fn search_exit_recycles_query_storage_for_the_next_search() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let large = parse_in_bank(
+            &mut bank,
+            "pdt_reuse_f(pdt_reuse_g(a,b),pdt_reuse_h(c,d),pdt_reuse_i(e,f))",
+        );
+        let small = parse_in_bank(&mut bank, "pdt_reuse_j(a)");
+        let tree = PdTree::new();
+
+        tree.record_search_init(&large, PDTREE_IGNORE_NF_DATE, false);
+        let large_capacity = tree
+            .search_state
+            .borrow()
+            .as_ref()
+            .expect("search init stores query")
+            .query
+            .capacity();
+        tree.record_search_exit();
+        assert_eq!(
+            tree.search_query_scratch.borrow().capacity(),
+            large_capacity
+        );
+
+        tree.record_search_init(&small, PDTREE_IGNORE_NF_DATE, false);
+        assert_eq!(
+            tree.search_state
+                .borrow()
+                .as_ref()
+                .expect("next search reuses query storage")
+                .query
+                .capacity(),
+            large_capacity
+        );
     }
 
     #[test]
