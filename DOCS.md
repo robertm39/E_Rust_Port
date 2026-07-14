@@ -45,6 +45,8 @@ The 2026-07-14 PDTree-query-metadata follow-up applied this rule retroactively t
 
 The 2026-07-14 term-variable-traversal follow-up applied this rule retroactively to C's per-call generic `PStack` allocation in `TermCollectVariables`. The paired `cte_termfunc` review records caller-owned scratch or a small inline traversal stack as later cleanup options while retaining direct argument-array access, left-to-right pushes, and cached-ground pruning.
 
+The 2026-07-14 substitution-normalization traversal follow-up applied this rule retroactively to C's unused `Sig_p` parameter and process-global dereference selection in `SubstNormTerm`. The paired `cte_subst` review records an explicit dereference-policy API as a later cleanup while retaining C's inline local stack, direct reversed argument pushes, and left-to-right binding order.
+
 The 2026-07-13 retroactive follow-up reviewed proof-state temporary-term-bank ownership, forward-contraction tautology scratch storage, unconditional selected-clause disjoint-copy allocation, term-bank sharing-key commentary, and formula-simplification coupling to bank-global GC roots under this rule.
 
 Start here:

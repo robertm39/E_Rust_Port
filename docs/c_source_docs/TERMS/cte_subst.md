@@ -117,10 +117,12 @@ Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 ### Compatibility Notes
 
 - `SubstBindAppVar` calls `TermCreatePrefix`, overwrites the returned prefix type with the bound variable's type, and inserts any newly created non-shared prefix with `TBTermTopInsert` before storing it as the variable binding. Rust mirrors this with an explicit term-bank parameter and preserves the existing substitution-stack backtracking shape.
+- `SubstNormTerm` selects `WHNF_deref` for higher-order problems and `TermDerefAlways` otherwise before walking arguments right-to-left on its stack. Rust currently preserves the first-order path and binding order with generic `term_deref(Always)`; higher-order WHNF parity remains open because Rust's function does not yet receive the mutable term bank required by `whnf_deref`.
 
 ### Change Later
 
 - Because `TermCreatePrefix` can return the original already-shared term or the hidden head of an applied variable, `SubstBindAppVar` can mutate type metadata on a term it did not allocate. Keep this for compatibility, but a future cleaned API should consider returning a typed prefix view or fresh prefix only when type adjustment is required.
+- `SubstNormTerm` accepts an unused `Sig_p sig` parameter and selects `WHNF_deref` versus `TermDerefAlways` through process-global `problemType`. A later API should remove the unused signature and accept the problem type or dereference strategy explicitly, while retaining the allocation-free direct reversed argument pushes, 64-slot inline `PLocalStack`, and resulting left-to-right binding order.
 
 ### Porting Focus
 

@@ -115,9 +115,10 @@ impl Substitution {
                     self.add_binding(&current, &new_var);
                 }
             } else {
-                let mut args = current.argument_clones();
-                args.reverse();
-                stack.extend(args.into_iter().flatten());
+                let arguments = current.arguments();
+                for argument in arguments.iter().rev().flatten() {
+                    stack.push(argument.clone());
+                }
             }
         }
         previous
@@ -311,6 +312,7 @@ mod tests {
 
         assert_eq!(pos, 0);
         assert_eq!(subst.len(), 2);
+        assert_eq!(subst.bindings(), &[x.clone(), y.clone()]);
         assert!(x.binding().unwrap().query_prop(TP_SPECIAL_FLAG));
         assert!(y.binding().unwrap().query_prop(TP_SPECIAL_FLAG));
         assert_eq!(subst.backtrack(), 2);
