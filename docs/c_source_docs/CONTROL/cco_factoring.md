@@ -69,7 +69,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for branching-CSU trace coverage on 2026-07-15.
 
 Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 
@@ -88,6 +88,7 @@ Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 - `src/clauses/factor.rs` ports `ComputeAllEqualityFactors` for first-order complete-MGU candidates and higher-order CSU enumeration: it uses the C equality-factor side cursor, skips Horn clauses and `CPNoGeneration`, inserts generated factors into the caller-owned `ClauseSet`, and copies parent proof depth, proof size, TPTP type, and SOS status.
 - Derivation pushes (`ClausePushDerivation`) are ported for the all-factor wrappers through compact clause-parent references, including higher-order `DCEqFactor` tagging when the C candidate-level flag is set.
 - Opt-in proof-documentation wrappers emit represented `DocClauseCreationDefault(..., inf_factor, ...)` and `DocClauseCreationDefault(..., inf_efactor, ...)` output for all-factor generation while keeping the plain helpers output-free.
+- The 2026-07-15 branching-CSU fixture verifies the control wrapper's compatibility-visible stack drain: C and Rust both pop the projection factor before the imitation factor, assign proof records in that order, and report two generated equality factors. Reproduction scripts and the `1.044x` exact native-Linux batch ratio are recorded in `experiments/2026-07-15-001-equality-factor-multicsu/`.
 
 ### Change Later
 

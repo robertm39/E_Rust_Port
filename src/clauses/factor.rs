@@ -974,6 +974,20 @@ mod tests {
         init_unif_limits(&parms);
     }
 
+    fn init_branching_unif_limits_for_test() {
+        let parms = HeuristicParmsCell {
+            func_proj_limit: 1,
+            imit_limit: 1,
+            unif_mode: UnifMode::Multi,
+            pattern_oracle: false,
+            fixpoint_oracle: false,
+            max_unifiers: 4,
+            max_unif_steps: 32,
+            ..HeuristicParmsCell::default()
+        };
+        init_unif_limits(&parms);
+    }
+
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
@@ -1067,6 +1081,13 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_unary_n(bank: &mut TermBank, f_code: i64, mut arg: Term, repetitions: usize) -> Term {
+        for _ in 0..repetitions {
+            arg = typed_unary(bank, f_code, &arg);
+        }
+        arg
     }
 
     fn eta_expanded_arrow_const(bank: &mut TermBank, head: &Term) -> Term {
@@ -1563,6 +1584,88 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn compute_all_equality_factors_preserves_multi_csu_pop_and_doc_order() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_branching_unif_limits_for_test();
+        let mut bank = test_bank();
+        let function = typed_arrow_var(&mut bank, -2);
+        let shared_argument = typed_const(&mut bank, "ef_multi_a");
+        let projection_argument = typed_const(&mut bank, "ef_multi_b");
+        let partner_other_side = typed_const(&mut bank, "ef_multi_c");
+        let maximal_other_side = typed_const(&mut bank, "ef_multi_d");
+        let negative_other_side = typed_const(&mut bank, "ef_multi_e");
+        let q_code = typed_unary_code(&mut bank, "ef_multi_q");
+        let function_on_shared =
+            apply_terms(&mut bank, &function, std::slice::from_ref(&shared_argument)).unwrap();
+        let function_on_projection = apply_terms(
+            &mut bank,
+            &function,
+            std::slice::from_ref(&projection_argument),
+        )
+        .unwrap();
+        let wrapped_function = typed_unary_n(&mut bank, q_code, function_on_shared, 3);
+        let wrapped_partner = typed_unary_n(&mut bank, q_code, shared_argument, 3);
+        let mut first = lit(&mut bank, &wrapped_function, &maximal_other_side, true);
+        first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let second = lit(&mut bank, &wrapped_partner, &partner_other_side, true);
+        let third = lit(
+            &mut bank,
+            &function_on_projection,
+            &negative_other_side,
+            false,
+        );
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second, third]));
+        clause.set_ident(44);
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::HigherOrder);
+
+        let count = compute_all_equality_factors_with_docs(
+            &mut output,
+            &mut session,
+            &mut bank,
+            &mut ocb,
+            &clause,
+            &mut store,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        let factors: Vec<_> = store.iter().collect();
+        assert_eq!(factors.len(), 2);
+        assert_eq!(factors[0].ident(), 1);
+        assert_eq!(factors[1].ident(), 2);
+        for factor in &factors {
+            assert_eq!(
+                factor.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(set_is_ho(DC_EQ_FACTOR)),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+                ]
+            );
+        }
+        assert_eq!(
+            factors[0]
+                .literals()
+                .tstp_print_string(&bank, " | ", true, false),
+            "ef_multi_q(ef_multi_q(ef_multi_q(ef_multi_a)))=ef_multi_c | ef_multi_d!=ef_multi_c | ef_multi_b!=ef_multi_e"
+        );
+        assert_eq!(
+            factors[1]
+                .literals()
+                .tstp_print_string(&bank, " | ", true, false),
+            "ef_multi_q(ef_multi_q(ef_multi_q(ef_multi_a)))=ef_multi_c | ef_multi_d!=ef_multi_c | ef_multi_a!=ef_multi_e"
+        );
+        assert_eq!(
+            output,
+            "     1 : :[++equal(ef_multi_q(ef_multi_q(ef_multi_q(ef_multi_a))), ef_multi_c),--equal(ef_multi_d, ef_multi_c),--equal(ef_multi_b, ef_multi_e)] : ef(44)\n     2 : :[++equal(ef_multi_q(ef_multi_q(ef_multi_q(ef_multi_a))), ef_multi_c),--equal(ef_multi_d, ef_multi_c),--equal(ef_multi_a, ef_multi_e)] : ef(44)\n"
+        );
     }
 
     #[test]
