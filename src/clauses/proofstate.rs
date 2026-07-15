@@ -2432,7 +2432,7 @@ impl ProofState {
             temp.insert(clause);
         }
 
-        let inserted = watchlist.indexed_insert_clause_set_owned(&mut temp, terms);
+        let inserted = watchlist.indexed_insert_clause_set_owned_with_bank(&mut temp, terms)?;
         debug_assert!(temp.is_empty());
         Ok(inserted)
     }

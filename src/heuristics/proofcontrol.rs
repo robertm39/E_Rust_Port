@@ -1662,7 +1662,7 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
             if let Some(indices) = watchlist_indices.as_deref_mut() {
                 indices.insert_clause(&mut handle, terms, control.heuristic_parms().lambda_demod);
             }
-            watchlist.indexed_insert_clause_owned(handle, terms);
+            watchlist.indexed_insert_clause_owned_with_bank(handle, terms)?;
             simplified += 1;
         }
     }
@@ -3969,18 +3969,14 @@ pub fn proof_state_insert_processed_clause(
 ) -> Result<ProcessedClauseClass, Diagnostic> {
     let fresh_vars = state.fresh_vars().clone();
     clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
-    Ok(proof_state_insert_normalized_processed_clause(
-        state,
-        clause,
-        clause_date,
-    ))
+    proof_state_insert_normalized_processed_clause(state, clause, clause_date)
 }
 
 fn proof_state_insert_normalized_processed_clause(
     state: &mut ProofState,
     mut clause: Clause,
     clause_date: SysDate,
-) -> ProcessedClauseClass {
+) -> Result<ProcessedClauseClass, Diagnostic> {
     clause.set_date(clause_date);
     clause.set_prop(CP_LIMITED_RW);
     clause.set_weight(clause.standard_weight());
@@ -4013,27 +4009,27 @@ fn proof_state_insert_normalized_processed_clause(
             processed_sets.pos_rules.set_date(clause_date);
             processed_sets
                 .pos_rules
-                .indexed_insert_clause_owned(clause, terms);
+                .indexed_insert_clause_owned_with_bank(clause, terms)?;
         }
         ProcessedClauseClass::PositiveEquation => {
             processed_sets.pos_eqns.set_date(clause_date);
             processed_sets
                 .pos_eqns
-                .indexed_insert_clause_owned(clause, terms);
+                .indexed_insert_clause_owned_with_bank(clause, terms)?;
         }
         ProcessedClauseClass::NegativeUnit => {
             processed_sets
                 .neg_units
-                .indexed_insert_clause_owned(clause, terms);
+                .indexed_insert_clause_owned_with_bank(clause, terms)?;
         }
         ProcessedClauseClass::NonUnit => {
             processed_sets
                 .non_units
-                .indexed_insert_clause_owned(clause, terms);
+                .indexed_insert_clause_owned_with_bank(clause, terms)?;
         }
     }
 
-    class
+    Ok(class)
 }
 
 /// Selects and extracts the next unprocessed clause with the active HCB.
@@ -7291,7 +7287,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     renamed_clause.set_ident(clause.ident());
 
     let processed_ident = clause.ident();
-    let class = proof_state_insert_normalized_processed_clause(state, clause, clause_date);
+    let class = proof_state_insert_normalized_processed_clause(state, clause, clause_date)?;
     if let Some(indices) = indices.as_deref_mut() {
         proof_state_global_index_processed_clause(
             state,

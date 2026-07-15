@@ -4,14 +4,17 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::basics::error::Diagnostic;
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
+use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
 use crate::terms::subst::Substitution;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{term_identity_id, Term};
 
@@ -156,6 +159,7 @@ pub struct PdTree {
     variable_child_heads: Vec<u32>,
     variable_children: Vec<PdtVariableChild>,
     free_variable_child: u32,
+    normalized_occurrence_paths: BTreeMap<(i64, i32), PdtNormalizedOccurrence>,
     term_count: usize,
     live_node_count: usize,
     arr_storage_estimate: usize,
@@ -189,6 +193,12 @@ struct PdtVariableChild {
     next_sibling: u32,
     variable: Option<Term>,
     type_uid: TypeUniqueId,
+    weight: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtNormalizedOccurrence {
+    code: Vec<PrefixToken>,
     weight: i64,
 }
 
@@ -355,6 +365,10 @@ impl PdtIndexedOccurrence {
     }
 }
 
+const fn occurrence_key(occurrence: PdtIndexedOccurrence) -> (i64, i32) {
+    (occurrence.clause_id, occurrence.side as i32)
+}
+
 impl Default for PdTree {
     fn default() -> Self {
         Self::new()
@@ -369,6 +383,7 @@ impl PdTree {
             variable_child_heads: vec![PDT_NO_VARIABLE_CHILD],
             variable_children: Vec::new(),
             free_variable_child: PDT_NO_VARIABLE_CHILD,
+            normalized_occurrence_paths: BTreeMap::new(),
             term_count: 0,
             live_node_count: 0,
             arr_storage_estimate: 0,
@@ -530,6 +545,28 @@ impl PdTree {
         self.record_search_attempt();
     }
 
+    /// Initializes a search after applying C's `PDTree` eta-normalization rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if eta expansion or reduction cannot insert a
+    /// rebuilt term into `bank`.
+    pub fn record_search_init_with_bank(
+        &self,
+        bank: &mut TermBank,
+        term: &Term,
+        age_constraint: SysDate,
+        prefer_general: bool,
+    ) -> Result<(), Diagnostic> {
+        if pd_tree_term_needs_eta_normalization(term) {
+            let normalized = normalize_pd_tree_term(bank, term)?;
+            self.record_search_init(&normalized, age_constraint, prefer_general);
+        } else {
+            self.record_search_init(term, age_constraint, prefer_general);
+        }
+        Ok(())
+    }
+
     pub fn record_search_exit(&self) {
         self.search_active.set(false);
         self.recycle_search_query();
@@ -624,6 +661,53 @@ impl PdTree {
             occurrence,
         );
         self.insert_term_with_entry(term, entry)
+    }
+
+    /// Inserts an occurrence after applying C's `PDTree` eta-normalization rule.
+    ///
+    /// The normalized prefix code is retained so later clause extraction can
+    /// delete the occurrence without mutably borrowing the term bank again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if eta expansion or reduction cannot insert a
+    /// rebuilt term into `bank`.
+    pub fn insert_term_occurrence_with_bank(
+        &mut self,
+        bank: &mut TermBank,
+        term: &Term,
+        clause_date: SysDate,
+        occurrence: PdtIndexedOccurrence,
+    ) -> Result<bool, Diagnostic> {
+        if !pd_tree_term_needs_eta_normalization(term) {
+            return Ok(self.insert_term_occurrence(term, clause_date, occurrence));
+        }
+        let normalized = normalize_pd_tree_term(bank, term)?;
+        Ok(self.insert_normalized_term_occurrence(term, &normalized, clause_date, occurrence))
+    }
+
+    /// Inserts a caller-normalized occurrence and retains any changed path for deletion.
+    pub(crate) fn insert_normalized_term_occurrence(
+        &mut self,
+        original: &Term,
+        normalized: &Term,
+        clause_date: SysDate,
+        occurrence: PdtIndexedOccurrence,
+    ) -> bool {
+        let changed = normalized != original;
+        let weight = term_standard_weight(normalized);
+        let code = changed.then(|| term_lr_traverse_code(normalized));
+        let entry = PdTerminalEntry::with_occurrence(weight, Some(clause_date), occurrence);
+        let inserted = self.insert_term_with_entry(normalized, entry);
+        if inserted {
+            if let Some(code) = code {
+                self.normalized_occurrence_paths.insert(
+                    occurrence_key(occurrence),
+                    PdtNormalizedOccurrence { code, weight },
+                );
+            }
+        }
+        inserted
     }
 
     pub fn insert_code(&mut self, code: &[PrefixToken]) -> bool {
@@ -806,13 +890,20 @@ impl PdTree {
         clause_date: SysDate,
         occurrence: PdtIndexedOccurrence,
     ) -> bool {
-        let code = term_lr_traverse_code(term);
-        let entry = PdTerminalEntry::with_occurrence(
-            term_standard_weight(term),
-            Some(clause_date),
-            occurrence,
-        );
-        self.delete_code_with_entry(&code, Some(entry))
+        let key = occurrence_key(occurrence);
+        let normalized = self.normalized_occurrence_paths.get(&key).cloned();
+        let code = normalized
+            .as_ref()
+            .map_or_else(|| term_lr_traverse_code(term), |stored| stored.code.clone());
+        let weight = normalized
+            .as_ref()
+            .map_or_else(|| term_standard_weight(term), |stored| stored.weight);
+        let entry = PdTerminalEntry::with_occurrence(weight, Some(clause_date), occurrence);
+        let deleted = self.delete_code_with_entry(&code, Some(entry));
+        if deleted && normalized.is_some() {
+            self.normalized_occurrence_paths.remove(&key);
+        }
+        deleted
     }
 
     pub fn delete_code(&mut self, code: &[PrefixToken]) -> bool {
@@ -1513,6 +1604,18 @@ pub fn term_lr_traverse_code(term: &Term) -> Vec<PrefixToken> {
     code
 }
 
+pub(crate) fn pd_tree_term_needs_eta_normalization(term: &Term) -> bool {
+    term.is_non_fo_pattern() || term.has_lambda_subterm()
+}
+
+pub(crate) fn normalize_pd_tree_term(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    if term.is_non_fo_pattern() {
+        lambda_eta_expand_db(bank, term)
+    } else {
+        lambda_eta_reduce_db(bank, term)
+    }
+}
+
 fn term_lr_traverse_path(term: &Term) -> Vec<(PrefixToken, Option<Term>)> {
     let mut path = Vec::new();
     let mut stack = vec![term.clone()];
@@ -1695,17 +1798,18 @@ mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        adjusted_variable_edge_weight, prefix_code_ref_count, prefix_compute_term_code,
-        prefix_match_counts, prefix_query_metadata, prefix_token, term_lr_traverse_query,
-        term_type_uid, unpack_variable_child_index, PdTree, PdtIndexedOccurrence,
-        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
-        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
+        adjusted_variable_edge_weight, normalize_pd_tree_term, prefix_code_ref_count,
+        prefix_compute_term_code, prefix_match_counts, prefix_query_metadata, prefix_token,
+        term_lr_traverse_query, term_type_uid, unpack_variable_child_index, PdTree,
+        PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM,
+        PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::eqn_props::EqnSide;
     use crate::inout::scanner::Scanner;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type, INVALID_TYPE_UID};
     use crate::terms::subst::Substitution;
@@ -2307,6 +2411,141 @@ mod tests {
         assert_eq!(reused.weight, term_standard_weight(&applied_variable));
         assert_ne!(reused.type_uid, term_type_uid(&individual_variable));
         assert_ne!(reused.weight, term_standard_weight(&individual_variable));
+    }
+
+    #[test]
+    fn bank_aware_first_order_insertion_does_not_cache_unchanged_path() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let term = parse_in_bank(&mut bank, "pdt_eta_fo(pdt_eta_fo_arg)");
+        let occurrence = PdtIndexedOccurrence::new(121, EqnSide::LeftSide);
+        let date = SysDate::from_raw(8);
+        let mut tree = PdTree::new();
+
+        assert!(tree
+            .insert_term_occurrence_with_bank(&mut bank, &term, date, occurrence)
+            .unwrap());
+        assert!(tree.normalized_occurrence_paths.is_empty());
+        tree.record_search_init_with_bank(&mut bank, &term, PDTREE_IGNORE_NF_DATE, false)
+            .unwrap();
+        assert_eq!(tree.search_next_matching_occurrence(), Some(occurrence));
+        tree.record_search_exit();
+
+        assert!(tree.delete_term_occurrence(&term, date, occurrence));
+        assert_eq!(tree.term_count(), 0);
+    }
+
+    #[test]
+    fn bank_aware_eta_normalization_matches_and_deletes_original_term() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let variable = bank.vars().var_assert_alloc(-60, &binary);
+        let argument = typed_const(&mut bank, "pdt_eta_argument");
+        let non_pattern = apply_terms(&mut bank, &variable, &[argument]).unwrap();
+        let head = typed_const_with_type(&mut bank, "pdt_eta_head", &unary);
+        let db0 = bank.request_db_var(&individual, 0);
+        let matrix = apply_terms(&mut bank, &head, &[db0]).unwrap();
+        let eta_reducible =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &matrix).unwrap();
+        let wrapper_code = bank.signature_mut().insert_id("pdt_eta_wrapper", 2, false);
+        bank.signature_mut()
+            .declare_final_type(
+                wrapper_code,
+                alloc_arrow_type(vec![unary.clone(), unary, individual.clone()]),
+            )
+            .unwrap();
+        let wrapper = Term::top_alloc(wrapper_code, 2);
+        wrapper.set_type(Some(individual));
+        wrapper.set_argument(0, non_pattern);
+        wrapper.set_argument(1, eta_reducible);
+        let original = bank.insert(&wrapper, DerefType::Never).unwrap();
+        assert!(!original.is_non_fo_pattern());
+        let normalized = normalize_pd_tree_term(&mut bank, &original).unwrap();
+        assert_ne!(normalized, original);
+
+        let occurrence = PdtIndexedOccurrence::new(122, EqnSide::LeftSide);
+        let date = SysDate::from_raw(9);
+        let mut tree = PdTree::new();
+        assert!(tree
+            .insert_term_occurrence_with_bank(&mut bank, &original, date, occurrence)
+            .unwrap());
+        assert_ne!(tree.match_prefix(&original).remains, 0);
+        assert_eq!(tree.match_prefix(&normalized).remains, 0);
+
+        tree.record_search_init_with_bank(&mut bank, &original, PDTREE_IGNORE_NF_DATE, false)
+            .unwrap();
+        assert_eq!(tree.search_next_matching_occurrence(), Some(occurrence));
+        tree.record_search_exit();
+
+        assert!(tree.delete_term_occurrence(&original, date, occurrence));
+        assert_eq!(tree.term_count(), 0);
+        assert!(tree.normalized_occurrence_paths.is_empty());
+    }
+
+    #[test]
+    fn bank_aware_eta_expands_non_fo_pattern_before_indexing() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let head = typed_const_with_type(&mut bank, "pdt_eta_expand_head", &unary);
+        let collector_code = bank
+            .signature_mut()
+            .insert_id("pdt_eta_expand_collector", 2, false);
+        bank.signature_mut()
+            .declare_final_type(
+                collector_code,
+                alloc_arrow_type(vec![individual.clone(), unary, individual.clone()]),
+            )
+            .unwrap();
+        let db0 = bank.request_db_var(&individual, 0);
+        let matrix = Term::top_alloc(collector_code, 2);
+        matrix.set_type(Some(individual.clone()));
+        matrix.set_argument(0, db0);
+        matrix.set_argument(1, head);
+        let matrix = bank.insert(&matrix, DerefType::Never).unwrap();
+        let original =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &matrix).unwrap();
+        assert!(original.is_non_fo_pattern());
+        let normalized = normalize_pd_tree_term(&mut bank, &original).unwrap();
+        assert_ne!(normalized, original);
+
+        let occurrence = PdtIndexedOccurrence::new(123, EqnSide::RightSide);
+        let date = SysDate::from_raw(10);
+        let mut tree = PdTree::new();
+        assert!(tree
+            .insert_term_occurrence_with_bank(&mut bank, &original, date, occurrence)
+            .unwrap());
+        assert_ne!(tree.match_prefix(&original).remains, 0);
+        assert_eq!(tree.match_prefix(&normalized).remains, 0);
+
+        tree.record_search_init_with_bank(&mut bank, &original, PDTREE_IGNORE_NF_DATE, false)
+            .unwrap();
+        assert_eq!(tree.search_next_matching_occurrence(), Some(occurrence));
+        tree.record_search_exit();
+
+        assert!(tree.delete_term_occurrence(&original, date, occurrence));
+        assert_eq!(tree.term_count(), 0);
+        assert!(tree.normalized_occurrence_paths.is_empty());
     }
 
     #[test]

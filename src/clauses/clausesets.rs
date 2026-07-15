@@ -24,7 +24,10 @@ use crate::clauses::freqvectors::{
     FvIndexType, PermVector,
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
-use crate::clauses::pdtrees::{PdTree, PdtIndexedOccurrence, PdtSearchState, PdtTraversalOrder};
+use crate::clauses::pdtrees::{
+    normalize_pd_tree_term, pd_tree_term_needs_eta_normalization, PdTree, PdtIndexedOccurrence,
+    PdtSearchState, PdtTraversalOrder,
+};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
@@ -437,6 +440,25 @@ impl ClauseSet {
         if let Some(index) = &self.demod_index {
             index.record_search_init(term, age_constraint, prefer_general);
         }
+    }
+
+    /// Initializes demodulator search with C's `PDTree` eta normalization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if eta normalization cannot rebuild the query in
+    /// `bank`.
+    pub fn record_demod_index_search_init_with_bank(
+        &self,
+        bank: &mut TermBank,
+        term: &Term,
+        age_constraint: SysDate,
+        prefer_general: bool,
+    ) -> Result<(), Diagnostic> {
+        if let Some(index) = &self.demod_index {
+            index.record_search_init_with_bank(bank, term, age_constraint, prefer_general)?;
+        }
+        Ok(())
     }
 
     pub fn record_demod_index_search_exit(&self) {
@@ -867,6 +889,25 @@ impl ClauseSet {
         self.insert(clause);
     }
 
+    /// Inserts through owned indexes and applies C's bank-backed `PDTree` eta
+    /// normalization when this set owns a demodulator index.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if eta normalization cannot rebuild an indexed
+    /// demodulator side in `bank`.
+    pub fn indexed_insert_clause_owned_with_bank(
+        &mut self,
+        clause: Clause,
+        bank: &mut TermBank,
+    ) -> Result<(), Diagnostic> {
+        let mut clause = clause;
+        self.index_clause_demodulator_with_bank(&mut clause, bank)?;
+        let clause = indexed_clause_for_anchor(clause, self.fv_anchor.as_mut(), bank);
+        self.insert(clause);
+        Ok(())
+    }
+
     pub fn indexed_insert_clause_set(
         &mut self,
         source: &mut Self,
@@ -890,6 +931,26 @@ impl ClauseSet {
             moved += 1;
         }
         moved
+    }
+
+    /// Moves a set through owned indexes using bank-backed `PDTree` eta
+    /// normalization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if eta normalization fails for a moved clause.
+    pub fn indexed_insert_clause_set_owned_with_bank(
+        &mut self,
+        source: &mut Self,
+        bank: &mut TermBank,
+    ) -> Result<i64, Diagnostic> {
+        let mut moved = 0;
+        while let Some(mut clause) = source.extract_first() {
+            clause.set_weight(clause.standard_weight());
+            self.indexed_insert_clause_owned_with_bank(clause, bank)?;
+            moved += 1;
+        }
+        Ok(moved)
     }
 
     pub fn extract_first(&mut self) -> Option<Clause> {
@@ -1650,6 +1711,19 @@ impl ClauseSet {
         clause.set_prop(CP_IS_D_INDEXED);
     }
 
+    fn index_clause_demodulator_with_bank(
+        &mut self,
+        clause: &mut Clause,
+        bank: &mut TermBank,
+    ) -> Result<(), Diagnostic> {
+        let Some(index) = self.demod_index.as_mut() else {
+            return Ok(());
+        };
+        index_demodulator_clause_with_bank(index, clause, bank)?;
+        clause.set_prop(CP_IS_D_INDEXED);
+        Ok(())
+    }
+
     fn delete_clause_demodulator_index(&mut self, clause: &mut Clause) {
         if !clause.query_prop(CP_IS_D_INDEXED) {
             return;
@@ -1737,6 +1811,52 @@ fn index_demodulator_clause(index: &mut PdTree, clause: &Clause) {
             PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide),
         );
     }
+}
+
+fn index_demodulator_clause_with_bank(
+    index: &mut PdTree,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    assert!(
+        clause.is_unit(),
+        "demodulator-indexed clauses must be units"
+    );
+    let literal = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("unit clause has one literal");
+    let right_needs_normalization =
+        !literal.is_oriented() && pd_tree_term_needs_eta_normalization(literal.right());
+    if !pd_tree_term_needs_eta_normalization(literal.left()) && !right_needs_normalization {
+        index_demodulator_clause(index, clause);
+        return Ok(());
+    }
+
+    let normalized_left = normalize_pd_tree_term(bank, literal.left())?;
+    let normalized_right = if literal.is_oriented() {
+        None
+    } else {
+        Some(normalize_pd_tree_term(bank, literal.right())?)
+    };
+    let left = PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide);
+    let _ = index.insert_normalized_term_occurrence(
+        literal.left(),
+        &normalized_left,
+        clause.date(),
+        left,
+    );
+    if let Some(normalized_right) = normalized_right {
+        let right = PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide);
+        let _ = index.insert_normalized_term_occurrence(
+            literal.right(),
+            &normalized_right,
+            clause.date(),
+            right,
+        );
+    }
+    Ok(())
 }
 
 fn delete_demodulator_clause(index: &mut PdTree, clause: &Clause) {

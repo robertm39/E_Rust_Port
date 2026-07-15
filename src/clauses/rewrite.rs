@@ -279,7 +279,7 @@ fn rewrite_with_clause_set_plain_with_subst(
     debug_assert!(subst.is_empty(), "rewrite substitution must be backtracked");
 
     REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-    demodulators.record_demod_index_search_init(term, date, prefer_general);
+    demodulators.record_demod_index_search_init_with_bank(bank, term, date, prefer_general)?;
 
     let found = if demodulators.demod_index_search_may_have_match() {
         match find_plain_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw) {

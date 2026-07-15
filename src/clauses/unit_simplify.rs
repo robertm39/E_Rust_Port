@@ -431,7 +431,7 @@ fn find_top_simplifying_unit_with_sign_and_bank<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
-    units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
+    units.record_demod_index_search_init_with_bank(bank, left, PDTREE_IGNORE_NF_DATE, false)?;
     let result = if units.demod_index_search_may_have_match() {
         if units.demod_index_search_uses_compact_candidates() {
             find_indexed_top_simplifying_unit_with_bank(bank, units, left, right, sign)
