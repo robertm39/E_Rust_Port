@@ -5529,7 +5529,7 @@ fn run_proof_search<W: Write + ?Sized>(
             &fvi_params,
             wfcb_defs,
             &mut hcb_defs,
-            false,
+            problem_type() == ProblemType::HigherOrder,
         )?;
     }
     if config.output_level >= 6 {
@@ -26323,6 +26323,56 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_higher_order_ordering_preserves_c_equality_resolution_eligibility() {
+        let _guard = global_state_lock();
+        let path = temp_path("higher-order-equality-resolution-ordering");
+        std::fs::write(
+            &path,
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
+             thf(d_type, type, d: $i).\n\
+             thf(e_type, type, e: $i).\n\
+             thf(q_type, type, q: $i > $i).\n\
+             thf(seed, axiom, ! [F: $i > $i] :\n\
+               (((q @ (q @ (q @ (F @ a)))) = (d))\n\
+               | ((q @ (q @ (q @ a))) = (c))\n\
+               | ((F @ b) != (e)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--unif-mode=multi",
+                "--pattern-oracle=false",
+                "--fixpoint-oracle=false",
+                "--func-proj-limit=1",
+                "--imit-limit=1",
+                "--max-unifiers=4",
+                "--max-unif-steps=32",
+                "--output-level=0",
+                "--print-statistics",
+                "--processed-clauses-limit=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(printed.contains("% Generated clauses                    : 5\n"));
+        assert!(printed.contains("% Equation resolutions                 : 0\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
