@@ -495,6 +495,12 @@ impl PdTree {
             .set(self.match_count.get().saturating_add(1));
     }
 
+    /// Initializes this tree's single active search.
+    ///
+    /// # Panics
+    ///
+    /// Panics if query construction finds an uninitialized term argument or
+    /// fails to emit the root query cell.
     pub fn record_search_init(&self, term: &Term, age_constraint: SysDate, prefer_general: bool) {
         debug_assert!(
             !self.search_active.get(),
@@ -503,7 +509,10 @@ impl PdTree {
         self.recycle_search_query();
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
         let query = self.build_search_query(term);
-        let term_weight = term_standard_weight(term);
+        let term_weight = query
+            .first()
+            .expect("PDTree search query contains its root term")
+            .weight;
         self.search_traversal_order.set(traversal_order);
         self.search_term_weight.set(term_weight);
         self.search_term_date.set(age_constraint);
@@ -1858,6 +1867,7 @@ mod tests {
             state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
             vec![2, 1]
         );
+        assert_eq!(state.term_weight, state.query[0].weight);
         assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
         tree.record_search_exit();
