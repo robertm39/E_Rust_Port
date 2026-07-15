@@ -188,6 +188,8 @@ struct PdtVariableChild {
     node_index: usize,
     next_sibling: u32,
     variable: Option<Term>,
+    type_uid: TypeUniqueId,
+    weight: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -696,9 +698,12 @@ impl PdTree {
         token: PrefixToken,
         variable: Term,
     ) {
-        if !matches!(token, PrefixToken::FreeVar { .. }) {
+        let PrefixToken::FreeVar {
+            type_uid, weight, ..
+        } = token
+        else {
             return;
-        }
+        };
         let mut previous_link = PDT_NO_VARIABLE_CHILD;
         let mut current_link = self.variable_child_heads[parent_index];
         while let Some(current_index) = unpack_variable_child_index(current_link) {
@@ -721,7 +726,8 @@ impl PdTree {
             current_link = current.next_sibling;
         }
 
-        let child_link = self.allocate_variable_child(child_index, variable, current_link);
+        let child_link =
+            self.allocate_variable_child(child_index, variable, type_uid, weight, current_link);
         if let Some(previous_index) = unpack_variable_child_index(previous_link) {
             self.variable_children[previous_index].next_sibling = child_link;
         } else {
@@ -755,6 +761,8 @@ impl PdTree {
         &mut self,
         node_index: usize,
         variable: Term,
+        type_uid: TypeUniqueId,
+        weight: i64,
         next_sibling: u32,
     ) -> u32 {
         if let Some(index) = unpack_variable_child_index(self.free_variable_child) {
@@ -764,6 +772,8 @@ impl PdTree {
                 node_index,
                 next_sibling,
                 variable: Some(variable),
+                type_uid,
+                weight,
             };
             link
         } else {
@@ -772,6 +782,8 @@ impl PdTree {
                 node_index,
                 next_sibling,
                 variable: Some(variable),
+                type_uid,
+                weight,
             });
             link
         }
@@ -1170,7 +1182,7 @@ impl PdTree {
                     cursor.frames[frame_index].next_variable_child = variable_child.next_sibling;
                     let next_index = variable_child.node_index;
                     let variable = variable_child.variable.as_ref()?;
-                    if state.query[query_index].type_uid != term_type_uid(variable) {
+                    if state.query[query_index].type_uid != variable_child.type_uid {
                         continue;
                     }
                     let next_query_index =
@@ -1201,7 +1213,7 @@ impl PdTree {
                     let effective_term_weight = adjusted_variable_edge_weight(
                         cursor.frames[frame_index].effective_term_weight,
                         state.query[query_index].weight,
-                        term_standard_weight(variable),
+                        variable_child.weight,
                     );
                     cursor.frames.push(PdtTraversalFrame::new(
                         next_index,
@@ -1685,9 +1697,9 @@ mod tests {
     use super::{
         adjusted_variable_edge_weight, prefix_code_ref_count, prefix_compute_term_code,
         prefix_match_counts, prefix_query_metadata, prefix_token, term_lr_traverse_query,
-        term_type_uid, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
-        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
-        PDTREE_IGNORE_TERM_WEIGHT,
+        term_type_uid, unpack_variable_child_index, PdTree, PdtIndexedOccurrence,
+        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
+        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -2253,6 +2265,48 @@ mod tests {
         assert!(subst.is_empty());
         assert_eq!(first_variable.binding(), None);
         assert_eq!(second_variable.binding(), None);
+    }
+
+    #[test]
+    fn variable_child_reuse_refreshes_cached_type_and_weight() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let individual_variable = bank.vars().var_assert_alloc(-40, &individual);
+        let bool_variable = bank.vars().var_assert_alloc(-42, &bool_type);
+        let bool_argument = typed_const_with_type(&mut bank, "pdt_cache_bool", &bool_type);
+        let applied_variable = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        applied_variable.set_type(Some(bool_type));
+        applied_variable.set_argument(0, bool_variable);
+        applied_variable.set_argument(1, bool_argument);
+        let first_occurrence = PdtIndexedOccurrence::new(120, EqnSide::LeftSide);
+        let second_occurrence = PdtIndexedOccurrence::new(121, EqnSide::LeftSide);
+        let date = SysDate::from_raw(7);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term_occurrence(&individual_variable, date, first_occurrence,));
+        let first_link = tree.variable_child_heads[0];
+        let first_index = unpack_variable_child_index(first_link).unwrap();
+        assert_eq!(
+            tree.variable_children[first_index].type_uid,
+            term_type_uid(&individual_variable)
+        );
+        assert_eq!(
+            tree.variable_children[first_index].weight,
+            term_standard_weight(&individual_variable)
+        );
+
+        assert!(tree.delete_term_occurrence(&individual_variable, date, first_occurrence));
+        assert_eq!(tree.variable_child_heads[0], PDT_NO_VARIABLE_CHILD);
+        assert_eq!(tree.free_variable_child, first_link);
+
+        assert!(tree.insert_term_occurrence(&applied_variable, date, second_occurrence,));
+        assert_eq!(tree.variable_child_heads[0], first_link);
+        let reused = &tree.variable_children[first_index];
+        assert_eq!(reused.type_uid, term_type_uid(&applied_variable));
+        assert_eq!(reused.weight, term_standard_weight(&applied_variable));
+        assert_ne!(reused.type_uid, term_type_uid(&individual_variable));
+        assert_ne!(reused.weight, term_standard_weight(&individual_variable));
     }
 
     #[test]

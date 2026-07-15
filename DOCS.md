@@ -51,6 +51,8 @@ The 2026-07-14 term-top-comparator follow-up applied this rule retroactively to 
 
 The 2026-07-14 PDTree-root-weight follow-up applied this rule retroactively to C's duplicated `TermStandardWeight` evaluation in `PDTreeSearchInit`. The paired `ccl_pdtrees` review records an invariant root-weight snapshot as a later C cleanup while preserving query normalization, assertion behavior, and the per-node size-constraint contract.
 
+The 2026-07-14 PDTree-variable-metadata follow-up applied this rule retroactively to C's repeated direct reads of indexed-variable type and weight fields during backtracking search. The paired `ccl_pdtrees` review records the implicit shared-term immutability contract and when an explicit edge snapshot may make sense later, while retaining C's compact direct-field representation unless measurement justifies extra storage.
+
 The 2026-07-13 retroactive follow-up reviewed proof-state temporary-term-bank ownership, forward-contraction tautology scratch storage, unconditional selected-clause disjoint-copy allocation, term-bank sharing-key commentary, and formula-simplification coupling to bank-global GC roots under this rule.
 
 Start here:
