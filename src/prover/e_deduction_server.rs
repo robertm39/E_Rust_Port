@@ -1,4 +1,6 @@
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
+use std::net::TcpStream;
+use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::basics::error::{Diagnostic, ErrorCode};
@@ -304,33 +306,13 @@ fn serve_tcp(
     listen(&listener)?;
     loop {
         match listener.accept() {
-            Ok((mut stream, _address)) => {
-                writeln_diag(stdout, "Client connected ..")?;
-                stdout
-                    .flush()
-                    .map_err(|error| io_diagnostic(format!("Cannot flush output: {error}")))?;
-                let mut bank = new_term_bank()?;
-                let mut ctrl = StructFofSpec::new(bank.signature());
-                let mut backend = BatchProcCtrlRunnerSet::new();
-                start_deduction_server_tcp_with(
-                    &mut stream,
-                    server_lib.to_owned(),
-                    spec,
-                    &mut bank,
-                    &mut ctrl,
-                    |spec, bank, ctrl, job_name, input_axioms| {
-                        run_command_with_runner_backend(
-                            job_name,
-                            input_axioms,
-                            spec,
-                            bank,
-                            ctrl,
-                            current_time_seconds,
-                            &mut backend,
-                        )
-                        .and_then(|report| emit_run_report_global_output(report, stdout))
-                    },
-                )?;
+            Ok((stream, _address)) => {
+                if spawn_tcp_client(stream, server_lib.to_owned(), spec.clone()).is_ok() {
+                    writeln_diag(stdout, "Client connected ..")?;
+                    stdout
+                        .flush()
+                        .map_err(|error| io_diagnostic(format!("Cannot flush output: {error}")))?;
+                }
             }
             Err(error)
                 if matches!(
@@ -345,6 +327,56 @@ fn serve_tcp(
             }
         }
     }
+}
+
+fn spawn_tcp_client(
+    stream: TcpStream,
+    server_lib: String,
+    spec: BatchSpec,
+) -> io::Result<JoinHandle<Result<InteractiveServerReport, Diagnostic>>> {
+    thread::Builder::new()
+        .name("e-deduction-client".to_owned())
+        .spawn(move || {
+            let result = serve_tcp_client(stream, server_lib, &spec);
+            if let Err(error) = &result {
+                let stderr = io::stderr();
+                let mut stderr = stderr.lock();
+                let _ = writeln!(stderr, "{PROGRAM_NAME}: {}", error.message());
+            }
+            result
+        })
+}
+
+fn serve_tcp_client(
+    mut stream: TcpStream,
+    server_lib: String,
+    spec: &BatchSpec,
+) -> Result<InteractiveServerReport, Diagnostic> {
+    let mut bank = new_term_bank()?;
+    let mut ctrl = StructFofSpec::new(bank.signature());
+    let mut backend = BatchProcCtrlRunnerSet::new();
+    start_deduction_server_tcp_with(
+        &mut stream,
+        server_lib,
+        spec,
+        &mut bank,
+        &mut ctrl,
+        |spec, bank, ctrl, job_name, input_axioms| {
+            run_command_with_runner_backend(
+                job_name,
+                input_axioms,
+                spec,
+                bank,
+                ctrl,
+                current_time_seconds,
+                &mut backend,
+            )
+            .and_then(|report| {
+                let stdout = io::stdout();
+                emit_run_report_global_output(report, &mut stdout.lock())
+            })
+        },
+    )
 }
 
 fn emit_run_report_global_output<W: Write>(
@@ -449,12 +481,15 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Cursor, Write};
+    use std::{
+        io::{self, Cursor, Write},
+        net::{TcpListener, TcpStream},
+    };
 
     use super::{
         deduction_batch_spec, emit_run_report_global_output, parse_port, print_help,
-        process_options, run, run_text_server_with, DeductionServerConfig, RunCommand,
-        DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        process_options, run, run_text_server_with, spawn_tcp_client, DeductionServerConfig,
+        RunCommand, DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
         STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -465,6 +500,7 @@ mod tests {
         OK_SUCCESS_MESSAGE,
     };
     use crate::control::sine::{StructFofSpec, StructFofSpecBacktrackReport};
+    use crate::inout::network::{tcp_string_recv_from_or_error, tcp_string_send_to_or_error};
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::{footer, E_NICKNAME, VERSION};
@@ -487,6 +523,26 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    fn send_add(stream: &mut TcpStream, name: &str, input: &str) {
+        tcp_string_send_to_or_error(stream, &format!("ADD {name}")).unwrap();
+        tcp_string_send_to_or_error(stream, input).unwrap();
+        tcp_string_send_to_or_error(stream, END_OF_BLOCK_TOKEN).unwrap();
+        assert_eq!(
+            tcp_string_recv_from_or_error(stream).unwrap(),
+            crate::control::einteractive_mode::OK_ADDED_MESSAGE
+        );
+    }
+
+    fn download(stream: &mut TcpStream, name: &str) -> String {
+        tcp_string_send_to_or_error(stream, &format!("DOWNLOAD {name}")).unwrap();
+        let raw = tcp_string_recv_from_or_error(stream).unwrap();
+        assert_eq!(
+            tcp_string_recv_from_or_error(stream).unwrap(),
+            crate::control::einteractive_mode::OK_DOWNLOADED_MESSAGE
+        );
+        raw
     }
 
     #[allow(clippy::too_many_lines)]
@@ -565,8 +621,10 @@ mod tests {
         input_axioms: &str,
     ) -> InteractiveCommandOutput {
         jobs.push((job_name.to_owned(), input_axioms.to_owned()));
+        let output = format!("proof for {job_name}\n");
         InteractiveCommandOutput {
-            output: format!("proof for {job_name}\n"),
+            frame_offsets: vec![output.len()],
+            output,
             status: OK_SUCCESS_MESSAGE,
         }
     }
@@ -702,6 +760,38 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_tcp_clients_keep_isolated_axioms_and_parser_dialects() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let mut first_client = TcpStream::connect(address).unwrap();
+        let (first_server, _) = listener.accept().unwrap();
+        let mut second_client = TcpStream::connect(address).unwrap();
+        let (second_server, _) = listener.accept().unwrap();
+
+        let spec = deduction_batch_spec(DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT);
+        let first_worker = spawn_tcp_client(first_server, String::new(), spec.clone()).unwrap();
+        let second_worker = spawn_tcp_client(second_server, String::new(), spec).unwrap();
+
+        let first_axioms = "fof(first, axiom, p(a)).\n";
+        let second_axioms = "thf(second, axiom, q(a)).\n";
+        send_add(&mut first_client, "shared", first_axioms);
+        send_add(&mut second_client, "shared", second_axioms);
+
+        assert_eq!(download(&mut first_client, "shared"), first_axioms);
+        assert_eq!(download(&mut second_client, "shared"), second_axioms);
+
+        tcp_string_send_to_or_error(&mut first_client, "QUIT").unwrap();
+        tcp_string_send_to_or_error(&mut second_client, "QUIT").unwrap();
+
+        for worker in [first_worker, second_worker] {
+            let report = worker.join().unwrap().unwrap();
+            assert_eq!(report.commands, 3);
+            assert!(report.done);
+        }
+    }
+
+    #[test]
     fn text_server_dispatches_immediate_commands_until_quit() {
         let mut input = Cursor::new(b"HELP\nLIST\nQUIT\n".to_vec());
         let mut output = Vec::new();
@@ -832,6 +922,7 @@ mod tests {
         let report = InteractiveRunReport {
             command: InteractiveCommandOutput {
                 output: "socket output\n".to_owned(),
+                frame_offsets: vec!["socket output\n".len()],
                 status: OK_SUCCESS_MESSAGE,
             },
             process: BatchProcessProblemReport {
@@ -858,6 +949,7 @@ mod tests {
             command,
             InteractiveCommandOutput {
                 output: "socket output\n".to_owned(),
+                frame_offsets: vec!["socket output\n".len()],
                 status: OK_SUCCESS_MESSAGE,
             }
         );

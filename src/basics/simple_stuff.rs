@@ -1,9 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-#[cfg(test)]
 use std::cell::RefCell;
 use std::cmp::Ordering;
-#[cfg(not(test))]
-use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub const MAX_INDENT_SPACES: usize = 72;
@@ -102,11 +99,8 @@ impl RandState {
     }
 }
 
-#[cfg(not(test))]
-static PROBLEM_TYPE: AtomicI32 = AtomicI32::new(ProblemType::NotInitialized as i32);
-#[cfg(test)]
 thread_local! {
-    static TEST_PROBLEM_TYPE: RefCell<ProblemType> =
+    static PROBLEM_TYPE: RefCell<ProblemType> =
         const { RefCell::new(ProblemType::NotInitialized) };
 }
 static GLOBAL_JKISS_STATE: OnceLock<Mutex<RandState>> = OnceLock::new();
@@ -256,46 +250,17 @@ fn c_strings_equal(left: &str, right: &str) -> bool {
 }
 
 #[must_use]
-#[cfg(not(test))]
 pub fn problem_type() -> ProblemType {
-    match PROBLEM_TYPE.load(AtomicOrdering::Relaxed) {
-        -1 => ProblemType::NotInitialized,
-        0 => ProblemType::FirstOrder,
-        1 => ProblemType::HigherOrder,
-        value => unreachable!("invalid stored problem type {value}"),
-    }
+    PROBLEM_TYPE.with(|current| *current.borrow())
 }
 
-#[cfg(not(test))]
 pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
-    let desired = problem_type as i32;
-    match PROBLEM_TYPE.compare_exchange(
-        ProblemType::NotInitialized as i32,
-        desired,
-        AtomicOrdering::Relaxed,
-        AtomicOrdering::Relaxed,
-    ) {
-        Ok(_) => Ok(()),
-        Err(current) if current == desired => Ok(()),
-        Err(_) => Err(problem_type_conflict_diagnostic()),
-    }
-}
-
-#[cfg(test)]
-#[must_use]
-pub fn problem_type() -> ProblemType {
-    TEST_PROBLEM_TYPE.with(|current| *current.borrow())
-}
-
-#[cfg(test)]
-pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
-    TEST_PROBLEM_TYPE.with(|current| {
+    PROBLEM_TYPE.with(|current| {
         let mut current = current.borrow_mut();
         set_problem_type_value(&mut current, problem_type)
     })
 }
 
-#[cfg(test)]
 fn set_problem_type_value(
     current: &mut ProblemType,
     problem_type: ProblemType,
@@ -315,14 +280,8 @@ fn problem_type_conflict_diagnostic() -> Diagnostic {
     )
 }
 
-#[cfg(not(test))]
 pub fn reset_problem_type() {
-    PROBLEM_TYPE.store(ProblemType::NotInitialized as i32, AtomicOrdering::Relaxed);
-}
-
-#[cfg(test)]
-pub fn reset_problem_type() {
-    TEST_PROBLEM_TYPE.with(|current| {
+    PROBLEM_TYPE.with(|current| {
         *current.borrow_mut() = ProblemType::NotInitialized;
     });
 }
@@ -348,7 +307,10 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use std::cmp::Ordering;
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        sync::{Arc, Barrier, Mutex, OnceLock},
+        thread,
+    };
 
     fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -513,5 +475,26 @@ mod tests {
             "Mixing of first order and higher order syntax is not allowed."
         );
         reset_problem_type_for_tests();
+    }
+
+    #[test]
+    fn problem_type_is_isolated_between_concurrent_server_threads() {
+        let barrier = Arc::new(Barrier::new(2));
+        let threads: Vec<_> = [ProblemType::FirstOrder, ProblemType::HigherOrder]
+            .into_iter()
+            .map(|expected| {
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    reset_problem_type_for_tests();
+                    super::set_problem_type(expected).unwrap();
+                    barrier.wait();
+                    assert_eq!(problem_type(), expected);
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            thread.join().unwrap();
+        }
     }
 }

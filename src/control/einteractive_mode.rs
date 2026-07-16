@@ -167,12 +167,14 @@ impl From<(String, String, BatchProblemData)> for AxiomSet {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveCommandOutput {
     pub output: String,
+    pub frame_offsets: Vec<usize>,
     pub status: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveDispatchResult {
     pub output: String,
+    pub frame_offsets: Vec<usize>,
     pub done: bool,
 }
 
@@ -447,8 +449,10 @@ impl InteractiveSpec {
             output.push_str("\tCould not open current directory.\n");
         }
 
+        let frame_offsets = vec![output.len()];
         InteractiveCommandOutput {
             output,
+            frame_offsets,
             status: OK_SUCCESS_MESSAGE,
         }
     }
@@ -462,11 +466,17 @@ impl InteractiveSpec {
             .map_or(
                 InteractiveCommandOutput {
                     output: String::new(),
+                    frame_offsets: Vec::new(),
                     status: ERR_UNKNOWN_AXIOM_SET_MESSAGE,
                 },
-                |handle| InteractiveCommandOutput {
-                    output: handle.raw_data().to_owned(),
-                    status: OK_DOWNLOADED_MESSAGE,
+                |handle| {
+                    let output = handle.raw_data().to_owned();
+                    let frame_offsets = vec![output.len()];
+                    InteractiveCommandOutput {
+                        output,
+                        frame_offsets,
+                        status: OK_DOWNLOADED_MESSAGE,
+                    }
                 },
             )
     }
@@ -598,8 +608,10 @@ impl InteractiveSpec {
             Ok(dispatch_command_output(self.list_command(), false))
         } else if scanner.test_id(HELP_COMMAND) {
             scanner.accept_id(HELP_COMMAND)?;
+            let output = format!("{HELP_MESSAGE}{OK_SUCCESS_MESSAGE}");
             Ok(InteractiveDispatchResult {
-                output: format!("{HELP_MESSAGE}{OK_SUCCESS_MESSAGE}"),
+                frame_offsets: vec![HELP_MESSAGE.len(), output.len()],
+                output,
                 done: false,
             })
         } else if scanner.test_id(QUIT_COMMAND) {
@@ -607,6 +619,7 @@ impl InteractiveSpec {
             self.quit_command(ctrl, bank.signature());
             Ok(InteractiveDispatchResult {
                 output: String::new(),
+                frame_offsets: Vec::new(),
                 done: true,
             })
         } else {
@@ -693,7 +706,7 @@ impl InteractiveSpec {
 /// The C implementation has a file/stdout parameter, but exits immediately
 /// for that path. This adapter covers the real socket branch: receive one TCP
 /// string command at a time, use TCP text-block reads for `ADD`/`RUN`, and send
-/// each non-empty command response as one TCP string.
+/// each command response using the same TCP-string frame boundaries as C.
 ///
 /// # Errors
 ///
@@ -734,8 +747,22 @@ where
         )?;
         report.commands += 1;
         report.done = result.done;
-        if !result.output.is_empty() {
-            tcp_string_send_to_or_error(stream, &result.output)?;
+        let mut start = 0;
+        for end in result.frame_offsets {
+            let frame = result.output.get(start..end).ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "Invalid interactive TCP frame boundary",
+                )
+            })?;
+            tcp_string_send_to_or_error(stream, frame)?;
+            start = end;
+        }
+        if start != result.output.len() {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Interactive TCP frame boundaries did not cover the complete response",
+            ));
         }
     }
 
@@ -811,7 +838,8 @@ where
 {
     let mut global_output = Vec::new();
     global_output.extend_from_slice(job_name.as_bytes());
-    let mut outstream_output = format!("\n% Processing started for {job_name}\n").into_bytes();
+    let mut outstream_output = InteractiveFrameWriter::default();
+    outstream_output.push_frame(format!("\n% Processing started for {job_name}\n").as_bytes());
 
     let problem = parse_interactive_axioms(job_name, input_axioms, spec, bank, ctrl)?;
     let mut ignored_external_output = Vec::new();
@@ -833,12 +861,13 @@ where
         spawn_runner,
         poll_runners,
     )?;
-    outstream_output
-        .extend_from_slice(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+    outstream_output.push_frame(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+    let (outstream_output, frame_offsets) = outstream_output.into_string_parts()?;
 
     Ok(InteractiveRunReport {
         command: InteractiveCommandOutput {
-            output: bytes_to_string(outstream_output)?,
+            output: outstream_output,
+            frame_offsets,
             status: OK_SUCCESS_MESSAGE,
         },
         process,
@@ -870,7 +899,8 @@ where
 {
     let mut global_output = Vec::new();
     global_output.extend_from_slice(job_name.as_bytes());
-    let mut outstream_output = format!("\n% Processing started for {job_name}\n").into_bytes();
+    let mut outstream_output = InteractiveFrameWriter::default();
+    outstream_output.push_frame(format!("\n% Processing started for {job_name}\n").as_bytes());
 
     let problem = parse_interactive_axioms(job_name, input_axioms, spec, bank, ctrl)?;
     let mut ignored_external_output = Vec::new();
@@ -892,12 +922,13 @@ where
         clock_seconds,
         backend,
     )?;
-    outstream_output
-        .extend_from_slice(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+    outstream_output.push_frame(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+    let (outstream_output, frame_offsets) = outstream_output.into_string_parts()?;
 
     Ok(InteractiveRunReport {
         command: InteractiveCommandOutput {
-            output: bytes_to_string(outstream_output)?,
+            output: outstream_output,
+            frame_offsets,
             status: OK_SUCCESS_MESSAGE,
         },
         process,
@@ -943,6 +974,7 @@ fn accept_command_axiom_set_name(scanner: &mut Scanner) -> Result<String, Diagno
 fn dispatch_status(status: &'static str, done: bool) -> InteractiveDispatchResult {
     InteractiveDispatchResult {
         output: status.to_owned(),
+        frame_offsets: vec![status.len()],
         done,
     }
 }
@@ -952,8 +984,43 @@ fn dispatch_command_output(
     done: bool,
 ) -> InteractiveDispatchResult {
     let mut output = result.output;
+    let mut frame_offsets = result.frame_offsets;
     output.push_str(result.status);
-    InteractiveDispatchResult { output, done }
+    frame_offsets.push(output.len());
+    InteractiveDispatchResult {
+        output,
+        frame_offsets,
+        done,
+    }
+}
+
+#[derive(Debug, Default)]
+struct InteractiveFrameWriter {
+    bytes: Vec<u8>,
+    frame_offsets: Vec<usize>,
+}
+
+impl InteractiveFrameWriter {
+    fn push_frame(&mut self, frame: &[u8]) {
+        self.bytes.extend_from_slice(frame);
+        self.frame_offsets.push(self.bytes.len());
+    }
+
+    fn into_string_parts(self) -> Result<(String, Vec<usize>), Diagnostic> {
+        Ok((bytes_to_string(self.bytes)?, self.frame_offsets))
+    }
+}
+
+impl Write for InteractiveFrameWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.frame_offsets.push(self.bytes.len());
+        Ok(())
+    }
 }
 
 const fn run_command_wct_limit(spec: &BatchSpec) -> i64 {
@@ -1120,6 +1187,18 @@ mod tests {
             bytes.extend_from_slice(TcpMessage::pack(message).unwrap().content_bytes());
         }
         bytes
+    }
+
+    fn output_frames(output: &str, frame_offsets: &[usize]) -> Vec<String> {
+        let mut start = 0;
+        frame_offsets
+            .iter()
+            .map(|&end| {
+                let frame = output[start..end].to_owned();
+                start = end;
+                frame
+            })
+            .collect()
     }
 
     #[derive(Debug)]
@@ -1856,6 +1935,78 @@ mod tests {
     }
 
     #[test]
+    fn add_command_accepts_every_tstp_input_form_supported_by_c_server_parser() {
+        let scratch = ScratchDir::new();
+        let include_path = scratch.path.join("included.ax");
+        fs::write(
+            &include_path,
+            "fof(included_formula, axiom, included_p(a)).\n",
+        )
+        .unwrap();
+        let include_path = include_path.to_string_lossy().replace('\\', "/");
+        let first_order_input = format!(
+            "cnf(cnf_axiom, axiom, p(a)).\n\
+             cnf(cnf_watch, watchlist, ~p(a)|q(a)).\n\
+             fof(fof_axiom, axiom, r(a)).\n\
+             fof(fof_distinct, axiom, $distinct(a,b)).\n\
+             tff(person_type, type, person: $tType).\n\
+             tff(typed_a_type, type, typed_a: person).\n\
+             tff(typed_p_type, type, typed_p: person > $o).\n\
+             tff(tff_axiom, axiom, typed_p(typed_a)).\n\
+             tcf(tcf_watch, watchlist, s(X)|t(X)).\n\
+             include('{include_path}', [included_formula]).\n"
+        );
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut bank = parser_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let mut interactive = InteractiveSpec::new("");
+
+        assert_eq!(
+            interactive
+                .add_command(
+                    "all_first_order",
+                    &first_order_input,
+                    &spec,
+                    &mut bank,
+                    &ctrl
+                )
+                .unwrap(),
+            OK_ADDED_MESSAGE
+        );
+        let first_order = interactive.axiom_sets().next().unwrap();
+        assert_eq!(first_order.problem_type(), ProblemType::FirstOrder);
+        assert_eq!(first_order.clause_set().len(), 2);
+        assert_eq!(first_order.formula_set().cardinality(), 8);
+        assert!(bank.signature().typed_symbols());
+
+        let higher_order_input = "thf(person_type, type, person: $tType).\n\
+                                  thf(a_type, type, a: person).\n\
+                                  thf(p_type, type, p: person > $o).\n\
+                                  thf(thf_axiom, axiom, p @ a).\n";
+        let mut bank = parser_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let mut interactive = InteractiveSpec::new("");
+
+        assert_eq!(
+            interactive
+                .add_command(
+                    "all_higher_order",
+                    higher_order_input,
+                    &spec,
+                    &mut bank,
+                    &ctrl
+                )
+                .unwrap(),
+            OK_ADDED_MESSAGE
+        );
+        let higher_order = interactive.axiom_sets().next().unwrap();
+        assert_eq!(higher_order.problem_type(), ProblemType::HigherOrder);
+        assert_eq!(higher_order.clause_set().len(), 0);
+        assert_eq!(higher_order.formula_set().cardinality(), 4);
+        assert!(bank.signature().typed_symbols());
+    }
+
+    #[test]
     fn start_deduction_server_tcp_processes_messages_until_quit() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
@@ -1886,10 +2037,10 @@ mod tests {
             }
         );
         let messages = stream.written_messages();
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0], OK_ADDED_MESSAGE);
         assert!(messages[1].contains("Unstaged :\n  uploaded\n"));
-        assert!(messages[1].ends_with(OK_SUCCESS_MESSAGE));
+        assert_eq!(messages[2], OK_SUCCESS_MESSAGE);
     }
 
     #[test]
@@ -1969,6 +2120,7 @@ mod tests {
                     seen_run = Some((job_name.to_owned(), input_axioms.to_owned()));
                     Ok(InteractiveCommandOutput {
                         output: String::from("run output\n"),
+                        frame_offsets: vec!["run output\n".len()],
                         status: OK_SUCCESS_MESSAGE,
                     })
                 },
@@ -1984,6 +2136,10 @@ mod tests {
             ))
         );
         assert_eq!(result.output, format!("run output\n{OK_SUCCESS_MESSAGE}"));
+        assert_eq!(
+            output_frames(&result.output, &result.frame_offsets),
+            ["run output\n", OK_SUCCESS_MESSAGE]
+        );
         assert!(!result.done);
     }
 
@@ -2040,11 +2196,30 @@ mod tests {
             report.command.output,
             "\n% Processing started for job1\n% run proof\n\n% Processing finished for job1\n\n"
         );
+        assert_eq!(
+            output_frames(&report.command.output, &report.command.frame_offsets),
+            [
+                "\n% Processing started for job1\n",
+                "% run proof\n",
+                "\n% Processing finished for job1\n\n",
+            ]
+        );
         assert!(report.global_output.starts_with("job1"));
         assert!(report
             .global_output
             .contains("% SZS status Theorem for job1\n"));
         assert!(report.global_output.ends_with("% run proof\n"));
+
+        let dispatched = super::dispatch_command_output(report.command, false);
+        assert_eq!(
+            output_frames(&dispatched.output, &dispatched.frame_offsets),
+            [
+                "\n% Processing started for job1\n",
+                "% run proof\n",
+                "\n% Processing finished for job1\n\n",
+                OK_SUCCESS_MESSAGE,
+            ]
+        );
     }
 
     #[test]
@@ -2100,6 +2275,10 @@ mod tests {
             interactive.add_axiom_set(axiom_set("download_me", "raw axioms\n", false)),
             OK_ADDED_MESSAGE
         );
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("empty_download", "", false)),
+            OK_ADDED_MESSAGE
+        );
 
         let download = interactive
             .dispatch_command_with(
@@ -2116,7 +2295,26 @@ mod tests {
             download.output,
             format!("raw axioms\n{OK_DOWNLOADED_MESSAGE}")
         );
+        assert_eq!(
+            output_frames(&download.output, &download.frame_offsets),
+            ["raw axioms\n", OK_DOWNLOADED_MESSAGE]
+        );
         assert!(!download.done);
+
+        let empty_download = interactive
+            .dispatch_command_with(
+                "DOWNLOAD empty_download",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+        assert_eq!(
+            output_frames(&empty_download.output, &empty_download.frame_offsets),
+            ["", OK_DOWNLOADED_MESSAGE]
+        );
 
         let list = interactive
             .dispatch_command_with(
@@ -2131,6 +2329,10 @@ mod tests {
 
         assert!(list.output.contains("Unstaged :\n  download_me\n"));
         assert!(list.output.ends_with(OK_SUCCESS_MESSAGE));
+        let list_frames = output_frames(&list.output, &list.frame_offsets);
+        assert_eq!(list_frames.len(), 2);
+        assert!(list_frames[0].contains("Unstaged :\n  download_me\n"));
+        assert_eq!(list_frames[1], OK_SUCCESS_MESSAGE);
         assert!(!list.done);
 
         let help = interactive
@@ -2145,6 +2347,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(help.output, format!("{HELP_MESSAGE}{OK_SUCCESS_MESSAGE}"));
+        assert_eq!(
+            output_frames(&help.output, &help.frame_offsets),
+            [HELP_MESSAGE, OK_SUCCESS_MESSAGE]
+        );
         assert!(!help.done);
     }
 
@@ -2177,6 +2383,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.output, "");
+        assert!(result.frame_offsets.is_empty());
         assert!(result.done);
         assert!(!interactive.axiom_set_mut("first").unwrap().is_staged());
         assert!(!interactive.axiom_set_mut("second").unwrap().is_staged());
@@ -2204,6 +2411,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.output, ERR_UNKNOWN_COMMAND_MESSAGE);
+        assert_eq!(result.frame_offsets, [ERR_UNKNOWN_COMMAND_MESSAGE.len()]);
         assert!(!result.done);
     }
 
