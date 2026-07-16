@@ -420,6 +420,37 @@ class ComparisonTests(unittest.TestCase):
                 ("classify_problem/help", ["--help"]),
                 ("classify_problem/version", ["--version"]),
                 ("classify_problem/parse-features-standard", ["--parse-features"]),
+                (
+                    "classify_problem/raw-lop",
+                    ["--raw-class", "--lop-in"],
+                ),
+                ("classify_problem/old-tptp-records", ["--tptp-in"]),
+                (
+                    "classify_problem/tstp-first-order-record-mix",
+                    ["--tstp-format"],
+                ),
+                ("classify_problem/fool-term-let", ["--tstp-format"]),
+                (
+                    "classify_problem/raw-thf",
+                    ["--raw-class", "--tstp-format"],
+                ),
+                ("classify_problem/include-selector", ["main.p"]),
+                (
+                    "classify_problem/merged-positive-cnf",
+                    ["--tstp-format", "--merged-classification=2"],
+                ),
+                (
+                    "classify_problem/merged-positive-fool",
+                    ["--tstp-format", "--merged-classification=2"],
+                ),
+                (
+                    "classify_problem/merged-zero-fallback",
+                    ["--tstp-format", "--merged-classification=0"],
+                ),
+                (
+                    "classify_problem/merged-negative-unbounded",
+                    ["--tstp-format", "--merged-classification=-2"],
+                ),
                 ("direct_examples/help", ["--help"]),
                 ("direct_examples/version", ["--version"]),
                 ("direct_examples/stdin-basic", []),
@@ -716,6 +747,44 @@ class ComparisonTests(unittest.TestCase):
         )
         classify_case = cases_by_name["classify_problem/parse-features-standard"]
         self.assertIn("prob : (1,2,3,4,5,6,7,8,9,10", classify_case["stdin"])
+        self.assertEqual(
+            cases_by_name["classify_problem/raw-lop"]["stdin"],
+            "p(a).\nq(a).\n",
+        )
+        self.assertIn(
+            "input_formula(f1,axiom,p(a))",
+            cases_by_name["classify_problem/old-tptp-records"]["stdin"],
+        )
+        self.assertIn(
+            "tcf(c1,axiom,![X:person]:p(X))",
+            cases_by_name["classify_problem/tstp-first-order-record-mix"]["stdin"],
+        )
+        self.assertIn(
+            "$let(f:$i,f:=a,f)",
+            cases_by_name["classify_problem/fool-term-let"]["stdin"],
+        )
+        self.assertIn(
+            "thf(fact,axiom,p@a)",
+            cases_by_name["classify_problem/raw-thf"]["stdin"],
+        )
+        classify_include_case = cases_by_name[
+            "classify_problem/include-selector"
+        ]
+        self.assertIsNone(classify_include_case["stdin"])
+        self.assertIn("selected.p", classify_include_case["workdir_files"])
+        self.assertIn(
+            "[selected]", classify_include_case["workdir_files"]["main.p"]
+        )
+        self.assertIn(
+            "$let(f:$i,f:=a,f)",
+            cases_by_name["classify_problem/merged-positive-fool"]["stdin"],
+        )
+        self.assertEqual(
+            cases_by_name["classify_problem/merged-negative-unbounded"][
+                "arguments"
+            ],
+            ["--tstp-format", "--merged-classification=-2"],
+        )
         direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
         self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
         branching_case = cases_by_name["direct_examples/branching-protocol"]

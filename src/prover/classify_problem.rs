@@ -1051,7 +1051,7 @@ fn classify_current_cnf_state(
     problem_type: ProblemType,
     state: &mut ProofState,
 ) -> Result<String, Diagnostic> {
-    if cnf_timeout <= 0 {
+    if cnf_timeout == 0 {
         return Ok(cnf_timeout_fallback_class());
     }
 
@@ -2936,6 +2936,39 @@ mod tests {
     }
 
     #[test]
+    fn real_input_dispatcher_accepts_lop_old_tptp_and_mixed_tstp_records() {
+        let _guard = global_state_lock();
+        let cases: &[(&[&str], &str)] = &[
+            (&[PROGRAM_NAME, "--raw-class", "--lop-in"], "p(a).\nq(a).\n"),
+            (
+                &[PROGRAM_NAME, "--tptp-in"],
+                "input_formula(f1,axiom,p(a)).\ninput_clause(c1,axiom,[++p(a)]).\n",
+            ),
+            (
+                &[PROGRAM_NAME, "--tstp-format"],
+                "tff(person_type,type,person:$tType).\n\
+                 tff(a_type,type,a:person).\n\
+                 tff(p_type,type,p:person>$o).\n\
+                 fof(f1,axiom,p(a)).\n\
+                 tcf(c1,axiom,![X:person]:p(X)).\n\
+                 cnf(c2,axiom,p(a)).\n",
+            ),
+        ];
+
+        for (arguments, input) in cases {
+            let (status, stdout, stderr) =
+                run_with_stdin(arguments, input).expect("dispatcher input succeeds");
+
+            assert_eq!(status, 0, "arguments {arguments:?}");
+            assert!(
+                stdout.starts_with("- : ("),
+                "arguments {arguments:?}: {stdout}"
+            );
+            assert!(stderr.is_empty(), "arguments {arguments:?}");
+        }
+    }
+
+    #[test]
     fn stdin_standard_real_problem_can_print_specs_sig_features() {
         let _guard = global_state_lock();
         let input = "cnf(c1, axiom, (p(a))).\n";
@@ -3041,6 +3074,27 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(stdout.trim_end().ends_with(&"-".repeat(21)));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn merged_negative_timeout_other_than_minus_one_is_effectively_unbounded() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--tstp-format", "--merged-classification=-2"],
+            input,
+        )
+        .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        let classes = stdout
+            .strip_prefix("- : (NULL) : ")
+            .expect("merged output prefix")
+            .trim_end();
+        assert_eq!(classes.len(), 36);
+        assert!(!classes.ends_with(&"-".repeat(super::SPEC_STRING_MEM - 1)));
         assert!(stderr.is_empty());
     }
 

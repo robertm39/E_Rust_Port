@@ -435,6 +435,88 @@ TOOL_FUNCTIONAL_CASES = {
                 "UHSMG\n"
             ),
         ),
+        (
+            "raw-lop",
+            ("--raw-class", "--lop-in"),
+            "p(a).\nq(a).\n",
+        ),
+        (
+            "old-tptp-records",
+            ("--tptp-in",),
+            (
+                "input_formula(f1,axiom,p(a)).\n"
+                "input_clause(c1,axiom,[++p(a)]).\n"
+            ),
+        ),
+        (
+            "tstp-first-order-record-mix",
+            ("--tstp-format",),
+            (
+                "tff(person_type,type,person:$tType).\n"
+                "tff(a_type,type,a:person).\n"
+                "tff(p_type,type,p:person>$o).\n"
+                "fof(f1,axiom,p(a)).\n"
+                "tcf(c1,axiom,![X:person]:p(X)).\n"
+                "cnf(c2,axiom,p(a)).\n"
+            ),
+        ),
+        (
+            "fool-term-let",
+            ("--tstp-format",),
+            (
+                "tff(a_type,type,a:$i).\n"
+                "tff(p_type,type,p:$i>$o).\n"
+                "fof(fool_owner,axiom,p($let(f:$i,f:=a,f))).\n"
+            ),
+        ),
+        (
+            "raw-thf",
+            ("--raw-class", "--tstp-format"),
+            (
+                "thf(person_type,type,person:$tType).\n"
+                "thf(a_type,type,a:person).\n"
+                "thf(p_type,type,p:person>$o).\n"
+                "thf(fact,axiom,p@a).\n"
+            ),
+        ),
+        (
+            "include-selector",
+            ("main.p",),
+            None,
+            {
+                "workdir_files": {
+                    "main.p": "include('selected.p',[selected]).\nfof(local,axiom,q(a)).\n",
+                    "selected.p": (
+                        "fof(selected,axiom,p(a)).\n"
+                        "fof(dropped,axiom,r(a)).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "merged-positive-cnf",
+            ("--tstp-format", "--merged-classification=2"),
+            "cnf(c1,axiom,p(a)).\n",
+        ),
+        (
+            "merged-positive-fool",
+            ("--tstp-format", "--merged-classification=2"),
+            (
+                "tff(a_type,type,a:$i).\n"
+                "tff(p_type,type,p:$i>$o).\n"
+                "fof(fool_owner,axiom,p($let(f:$i,f:=a,f))).\n"
+            ),
+        ),
+        (
+            "merged-zero-fallback",
+            ("--tstp-format", "--merged-classification=0"),
+            "cnf(c1,axiom,p(a)).\n",
+        ),
+        (
+            "merged-negative-unbounded",
+            ("--tstp-format", "--merged-classification=-2"),
+            "cnf(c1,axiom,p(a)).\n",
+        ),
     ),
     "direct_examples": (
         (
