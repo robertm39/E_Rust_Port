@@ -66,6 +66,11 @@ the fixed LTB child CPU limit's success, reduction, and OS-error warning
 mapping. Generic-controller tests continue to exercise cleanup and process-set
 ownership on the native Windows hard-termination fallback.
 
+The later reconciliation of migrated Bead `E_Rust_Port-j76.1.45` adds a native
+public `--variants28` regression across the real LTB parent, hidden child, and
+prover process. That end-to-end evidence is recorded in
+[`experiments/2026-07-16-054-ltb-variant-worker-boundary/FINDINGS.md`](../2026-07-16-054-ltb-variant-worker-boundary/FINDINGS.md).
+
 ## Performance decision
 
 The worker executable boundary predates this slice and is used only at process
