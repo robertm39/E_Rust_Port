@@ -182,6 +182,13 @@ pub const DC_CHOICE_INST: i64 = DO_CHOICE_INST | ARG1_CNF | ARG2_CNF | ARG_IS_HO
 pub const DC_TRIGGER: i64 = DO_TRIGGER | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
 pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
 
+/// Stable process-local identity for a clause proof node.
+///
+/// C stores a `Clause_p` in derivation stacks. Rust keeps the visible clause
+/// identifier and CSSCPA source for rendering, then uses `generation` to
+/// distinguish archive/requeue copies that intentionally retain both values.
+/// Moving a clause between sets or compacting set storage does not change this
+/// key.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ClauseDerivationRef {
     ident: i64,

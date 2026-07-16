@@ -2274,7 +2274,7 @@ mod tests {
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED,
         CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
-    use crate::clauses::derivation::{DerivationEntry, DC_CNF_EVAL_GC};
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CNF_EVAL_GC};
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
@@ -2668,6 +2668,50 @@ mod tests {
             set.find_indexed_by_id(9_000).map(Clause::ident),
             Some(9_000)
         );
+    }
+
+    #[test]
+    fn derivation_refs_survive_sparse_store_compaction_and_set_transfer() {
+        let mut original = Clause::empty();
+        original.set_ident(8_500);
+        original.set_csscpa_source(7);
+        original.refresh_derivation_generation();
+        let snapshot = original.clone();
+        let original_ref = ClauseDerivationRef::from(&original);
+
+        let mut requeued = original.clone();
+        requeued.refresh_derivation_generation();
+        let requeued_ref = ClauseDerivationRef::from(&requeued);
+        assert_eq!(ClauseDerivationRef::from(&snapshot), original_ref);
+        assert_ne!(requeued_ref, original_ref);
+
+        let mut set = ClauseSet::new_position_indexed();
+        set.insert(original);
+        set.insert(requeued);
+        for offset in 0..super::SPARSE_STORE_COMPACT_MIN_HOLES {
+            let mut filler = Clause::empty();
+            filler.set_ident(9_000 + i64::try_from(offset).unwrap());
+            set.insert(filler);
+        }
+        for offset in 0..super::SPARSE_STORE_COMPACT_MIN_HOLES {
+            assert!(set
+                .extract_by_id(9_000 + i64::try_from(offset).unwrap())
+                .is_some());
+        }
+        assert!(set.clauses.slots.len() > set.len());
+
+        let mut trigger = Clause::empty();
+        trigger.set_ident(9_500);
+        set.insert(trigger);
+        assert_eq!(set.clauses.slots.len(), set.len());
+        assert!(set.find_by_derivation_ref(original_ref).is_some());
+        assert!(set.find_by_derivation_ref(requeued_ref).is_some());
+
+        let mut target = ClauseSet::new_position_indexed();
+        assert_eq!(target.insert_set(&mut set), 3);
+        assert!(set.is_empty());
+        assert!(target.find_by_derivation_ref(original_ref).is_some());
+        assert!(target.find_by_derivation_ref(requeued_ref).is_some());
     }
 
     #[test]
