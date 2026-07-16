@@ -252,6 +252,10 @@ struct LegacyActiveConnection {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "fields record independent observable events from one legacy server poll"
+)]
 struct LegacyServerStepReport {
     active_read: bool,
     accepted: bool,

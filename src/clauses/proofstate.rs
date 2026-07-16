@@ -2811,6 +2811,8 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         cached_rewrite_steps, derived_dot_clause_link_colour, derived_dot_formula_link_colour,
         derived_dot_node_colour, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
@@ -3895,7 +3897,7 @@ mod tests {
         let graph = ProofObjectGraph {
             clauses: vec![&clause_axiom, &shared, &left_sibling, &clause_root],
             formulas: vec![&formula_axiom, &right_sibling, &formula_root],
-            clause_aliases: Default::default(),
+            clause_aliases: BTreeMap::default(),
             edges: Vec::new(),
             mixed_edges: vec![
                 ProofObjectGraphMixedEdge {

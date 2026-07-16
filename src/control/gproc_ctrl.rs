@@ -679,8 +679,8 @@ mod tests {
 
         let usage = last_reported_resource_usage(output).unwrap();
 
-        assert_eq!(usage.user_time_seconds, 3.75);
-        assert_eq!(usage.system_time_seconds, 1.125);
+        assert_eq!(usage.user_time_seconds.to_bits(), 3.75_f64.to_bits());
+        assert_eq!(usage.system_time_seconds.to_bits(), 1.125_f64.to_bits());
     }
 
     #[test]

@@ -2980,7 +2980,9 @@ fn run_schedule_worker_from_args(
         EProverAction::Run(config) => {
             let mut config = *config;
             config.internal_schedule_worker = Some(worker.internal_config());
-            config.schedule_stdin_snapshot = worker.stdin_snapshot.clone();
+            config
+                .schedule_stdin_snapshot
+                .clone_from(&worker.stdin_snapshot);
             let cpu_limit = i64_from_u64_saturating(worker.worker_cpu_limit());
             config.cpu_limit = Some(cpu_limit);
             config.schedule_time_limit = Some(cpu_limit);
@@ -10423,6 +10425,10 @@ fn parse_old_tptp_clause_record(
     result
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the linear dispatch preserves C parser precedence and include-stack unwinding"
+)]
 fn parse_tptp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -10538,6 +10544,10 @@ fn parse_tptp_entry_list(
     Ok(result)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the linear dispatch preserves C parser precedence and include-stack unwinding"
+)]
 fn parse_tstp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -16841,6 +16851,11 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    #[expect(
+        clippy::similar_names,
+        clippy::too_many_lines,
+        reason = "parallel TPTP and TSTP fixtures intentionally keep dialect names and cases together"
+    )]
     fn shared_formula_and_clause_parser_accepts_c_record_dispatch_matrix() {
         let _guard = global_state_lock();
         reset_problem_type();

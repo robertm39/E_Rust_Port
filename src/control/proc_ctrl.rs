@@ -312,7 +312,7 @@ impl EPCtrl {
             .ok_or_else(|| proc_ctrl_error("Cannot read from closed eprover subprocess pipe"))?
             .recv()
             .map_err(|_| proc_ctrl_error("Eprover subprocess output reader closed"))?;
-        self.apply_output_message(message, buffer)
+        Ok(self.apply_output_message(message, buffer))
     }
 
     pub fn try_read_result_line(
@@ -335,27 +335,19 @@ impl EPCtrl {
                 return Err(proc_ctrl_error("Eprover subprocess output reader closed"));
             }
         };
-        self.apply_output_message(message, buffer).map(Some)
+        Ok(Some(self.apply_output_message(message, buffer)))
     }
 
-    fn apply_output_message(
-        &mut self,
-        message: ProcessOutputMessage,
-        buffer: &mut String,
-    ) -> Result<bool, Diagnostic> {
+    fn apply_output_message(&mut self, message: ProcessOutputMessage, buffer: &mut String) -> bool {
         buffer.clear();
         match message {
             ProcessOutputMessage::Line(line) => {
                 buffer.push_str(&line);
-                Ok(self.get_result_from_optional_line(Some(buffer)))
+                self.get_result_from_optional_line(Some(buffer))
             }
-            ProcessOutputMessage::Eof => {
+            ProcessOutputMessage::Eof | ProcessOutputMessage::Error => {
                 self.output_eof = true;
-                Ok(self.get_result_from_optional_line(None))
-            }
-            ProcessOutputMessage::Error => {
-                self.output_eof = true;
-                Ok(self.get_result_from_optional_line(None))
+                self.get_result_from_optional_line(None)
             }
         }
     }

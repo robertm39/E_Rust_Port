@@ -276,7 +276,7 @@ pub fn get_int_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<i64, Diagn
     match parse_c_long(arg) {
         CNumberParse::Value(value) => Ok(value),
         CNumberParse::Invalid => Err(Diagnostic::new(ErrorCode::USAGE_ERROR, message)),
-        CNumberParse::Range => Err(c_number_range_diagnostic(message)),
+        CNumberParse::Range => Err(c_number_range_diagnostic(&message)),
     }
 }
 
@@ -308,7 +308,7 @@ pub fn get_float_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<f64, Dia
     match parse_c_double(arg) {
         CNumberParse::Value(value) => Ok(value),
         CNumberParse::Invalid => Err(Diagnostic::new(ErrorCode::USAGE_ERROR, message)),
-        CNumberParse::Range => Err(c_number_range_diagnostic(message)),
+        CNumberParse::Range => Err(c_number_range_diagnostic(&message)),
     }
 }
 
@@ -320,7 +320,7 @@ enum CNumberParse<T> {
     Range,
 }
 
-fn c_number_range_diagnostic(message: String) -> Diagnostic {
+fn c_number_range_diagnostic(message: &str) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::USAGE_ERROR,
         format!(

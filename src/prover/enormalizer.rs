@@ -1822,6 +1822,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the compatibility matrix is clearest as one table-driven test"
+    )]
     fn tstp_formula_target_wrapper_name_role_and_source_matrix_matches_c() {
         let _guard = global_state_lock();
         let cases = [

@@ -986,6 +986,7 @@ mod tests {
     use crate::basics::verbose::verbose_level;
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
+    use std::fmt::Write as _;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
 
@@ -1571,9 +1572,10 @@ mod tests {
     #[test]
     fn large_protocol_uses_c_single_precision_relative_limit() {
         let _guard = global_state_lock();
-        let input = (1..=1_010)
-            .map(|id| format!("{id} : : [++p(a)] : initial\n"))
-            .collect::<String>();
+        let mut input = String::new();
+        for id in 1..=1_010 {
+            writeln!(input, "{id} : : [++p(a)] : initial").unwrap();
+        }
         let (status, output, stderr) =
             run_with_stdin(&[PROGRAM_NAME, "--min-lemma-quality=0"], &input);
 

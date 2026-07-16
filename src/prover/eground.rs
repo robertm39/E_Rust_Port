@@ -1163,14 +1163,14 @@ fn write_input_open_progress(file: &str, stderr: &mut impl Write) -> Result<(), 
     } else {
         verbout_arg2(stderr, PROGRAM_NAME, "Trying file ", file)
             .map(|_| ())
-            .map_err(verbose_io_diagnostic)
+            .map_err(|error| verbose_io_diagnostic(&error))
     }
 }
 
 fn write_verbose_progress(stderr: &mut impl Write, message: &str) -> Result<(), Diagnostic> {
     verbout(stderr, PROGRAM_NAME, message)
         .map(|_| ())
-        .map_err(verbose_io_diagnostic)
+        .map_err(|error| verbose_io_diagnostic(&error))
 }
 
 fn write_verbose_arg_progress(
@@ -1180,10 +1180,10 @@ fn write_verbose_arg_progress(
 ) -> Result<(), Diagnostic> {
     verbout_arg(stderr, PROGRAM_NAME, first, second)
         .map(|_| ())
-        .map_err(verbose_io_diagnostic)
+        .map_err(|error| verbose_io_diagnostic(&error))
 }
 
-fn verbose_io_diagnostic(error: io::Error) -> Diagnostic {
+fn verbose_io_diagnostic(error: &io::Error) -> Diagnostic {
     io_diagnostic(format!("Cannot write verbose output: {error}"))
 }
 

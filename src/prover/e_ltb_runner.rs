@@ -745,6 +745,10 @@ fn apply_variant_child_cpu_limit(stderr: &mut impl Write) -> Result<(), Diagnost
 }
 
 #[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "cfg variants intentionally share the Linux implementation's fallible signature"
+)]
 fn apply_variant_child_cpu_limit(_stderr: &mut impl Write) -> Result<(), Diagnostic> {
     Ok(())
 }

@@ -338,11 +338,7 @@ fn seconds_to_100ns_saturating(seconds: f64) -> u64 {
         return 0;
     }
     let ticks = seconds * 10_000_000.0;
-    if ticks >= u64::MAX as f64 {
-        u64::MAX
-    } else {
-        ticks.round() as u64
-    }
+    ticks.round() as u64
 }
 
 #[must_use]
@@ -1335,6 +1331,17 @@ mod tests {
             Some(30_000_000)
         );
         assert_eq!(super::windows_kernel32::seconds_to_100ns(u64::MAX), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reported_seconds_convert_to_saturating_time_units() {
+        assert_eq!(super::seconds_to_100ns_saturating(1.25), 12_500_000);
+        assert_eq!(super::seconds_to_100ns_saturating(0.0), 0);
+        assert_eq!(super::seconds_to_100ns_saturating(-1.0), 0);
+        assert_eq!(super::seconds_to_100ns_saturating(f64::NAN), 0);
+        assert_eq!(super::seconds_to_100ns_saturating(f64::INFINITY), 0);
+        assert_eq!(super::seconds_to_100ns_saturating(f64::MAX), u64::MAX);
     }
 
     #[cfg(target_os = "linux")]
