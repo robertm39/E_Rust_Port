@@ -3152,6 +3152,47 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_formula_parent_lookup_survives_storage_growth_and_set_move() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = wrapped_formula(&mut state, "stable_formula_parent");
+        let original_ref = original.derivation_ref();
+        let mut quote = original.flat_copy();
+        quote.push_formula_derivation(DC_FOF_QUOTE, Some(original_ref), None);
+        let quote_ref = quote.derivation_ref();
+
+        state.f_axioms_mut().insert(original);
+        for _ in 0..4_096 {
+            state.f_axioms_mut().insert(WrappedFormula::default_alloc());
+        }
+        let original = state
+            .f_axioms_mut()
+            .extract_entry(original_ref.source())
+            .expect("stable entry id must resolve after formula-set growth");
+        state.f_ax_archive_mut().insert(original);
+        for _ in 0..4_096 {
+            state
+                .f_ax_archive_mut()
+                .insert(WrappedFormula::default_alloc());
+        }
+        state.f_axioms_mut().insert(quote);
+
+        assert_eq!(
+            state
+                .proof_formula_by_derivation_ref(original_ref)
+                .map(WrappedFormula::entry_id),
+            Some(original_ref.source())
+        );
+        let quote = state
+            .proof_formula_by_derivation_ref(quote_ref)
+            .expect("flat-copy source must remain independently addressable");
+        assert_eq!(quote.entry_id(), quote_ref.source());
+        assert_eq!(
+            state.proof_object_first_formula(quote).entry_id(),
+            original_ref.source()
+        );
+    }
+
+    #[test]
     fn proof_state_records_formula_extraction_roots() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let formula = wrapped_formula(&mut state, "formula_extraction_root");

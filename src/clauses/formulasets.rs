@@ -1515,6 +1515,12 @@ pub struct FormulaSetDocInitialResult {
     pub write_results: Vec<ProofDocWriteResult>,
 }
 
+/// An owned formula wrapper with identity independent of its storage address.
+///
+/// Moving or cloning a wrapper preserves its logical `entry_id`. Operations
+/// corresponding to C `WFormulaFlatCopy` use [`Self::flat_copy`] instead, which
+/// allocates a distinct wrapper identity while preserving the visible formula
+/// identifier.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WrappedFormula {
     entry_id: u64,
@@ -5012,8 +5018,12 @@ mod tests {
         formula.set_is_clause(true);
         formula.set_info(Some(ClauseInfo::new(Some("copy_source"), None, 1, 1)));
 
+        let cloned = formula.clone();
         let copied = formula.flat_copy();
 
+        assert_eq!(cloned.entry_id(), formula.entry_id());
+        assert_eq!(cloned.derivation_ref(), formula.derivation_ref());
+        assert_eq!(cloned.info(), formula.info());
         assert_ne!(copied.entry_id(), formula.entry_id());
         assert_eq!(copied.ident(), formula.ident());
         assert_eq!(copied.properties(), formula.properties());
