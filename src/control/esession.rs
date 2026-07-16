@@ -186,6 +186,9 @@ where
     }
 
     pub fn do_io(&mut self, interests: &DescriptorInterestSet) -> Result<(), Diagnostic> {
+        // C `ESessionDoIO` tests `session->running` here, but the subprocess
+        // I/O block is intentionally empty. Process descriptors participate in
+        // readiness collection without being consumed by the session loop.
         if matches!(self.state, ESessionState::NoState | ESessionState::Stale) {
             return Ok(());
         }
@@ -253,7 +256,7 @@ fn session_error(message: impl Into<String>) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::{Descriptor, DescriptorInterestSet, ESession, ESessionState};
+    use super::{Descriptor, DescriptorInterestSet, ESession, ESessionState, SessionProcessSet};
     use crate::inout::network::{MsgStatus, TcpMessage};
     use std::io::{self, Cursor, Read, Write};
 
@@ -303,6 +306,18 @@ mod tests {
         ESession::new(stream, descriptor)
     }
 
+    #[derive(Debug)]
+    struct DescriptorOnlyProcessSet {
+        descriptor: Descriptor,
+    }
+
+    impl SessionProcessSet for DescriptorOnlyProcessSet {
+        fn init_read_fd_set(&self, interests: &mut DescriptorInterestSet) -> Descriptor {
+            interests.set_read(self.descriptor);
+            self.descriptor
+        }
+    }
+
     #[test]
     fn session_state_values_match_c_enum() {
         assert_eq!(ESessionState::NoState.c_value(), 0);
@@ -332,6 +347,34 @@ mod tests {
         assert_eq!(session.init_fd_set(&mut interests), Descriptor::new(8));
         assert!(interests.contains_read(Descriptor::new(8)));
         assert!(interests.contains_write(Descriptor::new(8)));
+    }
+
+    #[test]
+    fn running_process_readiness_is_registered_but_io_is_a_c_compatible_no_op() {
+        let socket_descriptor = Descriptor::new(8);
+        let process_descriptor = Descriptor::new(12);
+        let mut session = ESession::new(
+            Duplex::new(packed("unread"), usize::MAX, usize::MAX),
+            socket_descriptor,
+        );
+        session.set_state(ESessionState::Active);
+        session.set_running(Some(DescriptorOnlyProcessSet {
+            descriptor: process_descriptor,
+        }));
+        let mut interests = DescriptorInterestSet::default();
+
+        assert_eq!(session.init_fd_set(&mut interests), process_descriptor);
+        assert!(interests.contains_read(socket_descriptor));
+        assert!(interests.contains_read(process_descriptor));
+
+        let mut process_ready = DescriptorInterestSet::default();
+        process_ready.set_read(process_descriptor);
+        session.do_io(&process_ready).unwrap();
+
+        assert_eq!(session.state(), ESessionState::Active);
+        assert!(session.running().is_some());
+        assert!(!session.channel().has_in_msg());
+        assert!(!session.channel().has_out_msg());
     }
 
     #[test]

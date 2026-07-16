@@ -97,9 +97,9 @@ Source files reviewed: `CONTROL/cco_esession.h`, `CONTROL/cco_esession.c`.
 
 ### Rust Port Status Notes
 
-- `src/control/esession.rs` ports the `ESessionState` discriminants, session allocation around the ported `TcpChannel`, descriptor-interest collection corresponding to C `fd_set` registration, no-state/stale readiness filtering, write readiness when outbound messages are queued, optional subprocess descriptor delegation through a trait, and stale transition with channel close on read/write error or closed input.
+- `src/control/esession.rs` ports the `ESessionState` discriminants, session allocation around the ported `TcpChannel`, descriptor-interest collection corresponding to C `fd_set` registration, no-state/stale readiness filtering, write readiness when outbound messages are queued, optional subprocess descriptor delegation through a trait, the intentional no-op when only a registered subprocess descriptor is ready, and stale transition with channel close on read/write error or closed input.
 - The Rust I/O path preserves the C session skeleton: complete inbound messages enqueue a literal `"wait"` reply, queued outbound messages are written when the descriptor is write-ready, and `ESessionProcessCmds`-style command draining renders `Received: ...` through an explicit writer for testability.
-- Tests cover enum values, new-session readiness, active-session read/write interest registration, read-side command capture plus `"wait"` reply writing, and stale marking on closed input.
+- Tests cover enum values, new-session readiness, active-session read/write interest registration, the asymmetric subprocess registration/no-I/O boundary, read-side command capture plus `"wait"` reply writing, and stale marking on closed input.
 
 ### Porting Focus
 
@@ -109,7 +109,7 @@ Source files reviewed: `CONTROL/cco_esession.h`, `CONTROL/cco_esession.c`.
 
 ### Change Later
 
-- `ESessionDoIO` registers descriptors for `running` subprocess controls through `EPCtrlSetFDSet`, but the actual subprocess I/O branch is still a TODO in this file. Rust should keep the descriptor-registration boundary visible and defer process-control I/O until `cco_proc_ctrl` ownership is ported.
+- `ESessionDoIO` registers descriptors for `running` subprocess controls through `EPCtrlSetFDSet`, but its actual subprocess I/O branch is an empty placeholder. Rust preserves that observable asymmetry even though `cco_proc_ctrl` result polling is now ported for scheduler/batch callers. A future functional server protocol may call the process-control API deliberately, but doing so in the compatibility session loop would add behavior absent from C.
 - After every successful channel read, the C code blindly queues the literal string `"wait"` before command processing. Preserve this handshake for compatibility, but a cleaned server protocol should make request parsing and reply policy explicit after reference tests cover the server mode.
 - `ESessionProcessCmds` drains queued messages by printing `Received: %s\n` directly to stdout and freeing the unpacked string; it does not update session state or dispatch commands. Rust should route this through explicit writers in reusable APIs, then reproduce direct stdout only in the executable compatibility layer if server mode needs it.
 - The C session owns a raw socket through `TCPChannel_p` and uses `fd_set` readiness directly. Rust safe APIs should keep descriptor readiness as an adapter boundary so socket ownership, close diagnostics, and platform event-loop behavior can be audited separately from the session state machine.
