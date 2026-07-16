@@ -1,5 +1,9 @@
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+#[cfg(any(test, target_os = "linux"))]
+use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
+#[cfg(all(target_os = "linux", not(test)))]
+use crate::basics::os_wrapper::{set_soft_rlimit_with_error, RLIMIT_CPU_COMPAT};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{
     parse_ltb_header, BatchProcCtrlRunnerSet, BatchProcessFileConfig, BatchProcessProblemConfig,
@@ -265,19 +269,23 @@ struct LtbVariantChildConfig {
 pub fn run<I, S>(
     argv: I,
     stdout: &mut impl Write,
-    _stderr: &mut impl Write,
+    stderr: &mut impl Write,
 ) -> Result<u8, Diagnostic>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
     init_io(PROGRAM_NAME);
-    let result = run_inner(argv, stdout);
+    let result = run_inner(argv, stdout, stderr);
     exit_io();
     result
 }
 
-fn run_inner<I, S>(argv: I, stdout: &mut impl Write) -> Result<u8, Diagnostic>
+fn run_inner<I, S>(
+    argv: I,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<u8, Diagnostic>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -287,7 +295,7 @@ where
         .get(1)
         .is_some_and(|arg| arg == INTERNAL_VARIANT_CHILD_ARG)
     {
-        return run_variant_child_from_args(&argv[2..], stdout);
+        return run_variant_child_from_args(&argv[2..], stdout, stderr);
     }
 
     match process_options(argv, stdout)? {
@@ -711,9 +719,51 @@ fn spawn_ltb_variant_child<W: Write + ?Sized>(
     )
 }
 
-fn run_variant_child_from_args(args: &[String], stdout: &mut impl Write) -> Result<u8, Diagnostic> {
+fn run_variant_child_from_args(
+    args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<u8, Diagnostic> {
     let config = parse_variant_child_args(args)?;
+    apply_variant_child_cpu_limit(stderr)?;
     execute_variant_child(&config, stdout)
+}
+
+#[cfg(target_os = "linux")]
+fn apply_variant_child_cpu_limit(stderr: &mut impl Write) -> Result<(), Diagnostic> {
+    let outcome = set_soft_rlimit_with_error(RLIMIT_CPU_COMPAT, VARIANT_CHILD_CPU_LIMIT);
+    if let Some(warning) = variant_child_cpu_limit_warning(outcome) {
+        stderr
+            .write_all(warning.render_warning(PROGRAM_NAME).as_bytes())
+            .map_err(|error| {
+                io_diagnostic(format!(
+                    "Cannot write LTB variant child resource-limit warning: {error}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_variant_child_cpu_limit(_stderr: &mut impl Write) -> Result<(), Diagnostic> {
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn variant_child_cpu_limit_warning(outcome: RLimitOutcome) -> Option<Diagnostic> {
+    let message = match outcome.result() {
+        RLimResult::Failed => {
+            let base =
+                format!("Could not set limit RLIMIT_CPU (subprocess) to {VARIANT_CHILD_CPU_LIMIT}");
+            match outcome.os_error() {
+                Some(error) => format!("{base} ({})", resource_limit_error_message(error)),
+                None => base,
+            }
+        }
+        RLimResult::Reduced => "Had to reduce limit RLIMIT_CPU (subprocess)".to_owned(),
+        RLimResult::Success => return None,
+    };
+    Some(Diagnostic::new(ErrorCode::SYSTEM_ERROR, message))
 }
 
 fn parse_variant_child_args(args: &[String]) -> Result<LtbVariantChildConfig, Diagnostic> {
@@ -954,11 +1004,12 @@ mod tests {
         create_output_file, execute_config_to_configured_output, execute_config_with_processor,
         execute_config_with_processors, execute_variant_child_with_backend, new_term_bank,
         parse_variant_child_args, print_help, process_interactive_batch_with_backend,
-        process_options, remaining_total_wtc_limit, run, LtbBatchJob, LtbRunnerConfig,
-        LtbVariantChildConfig, LtbVariantMode, RunCommand, C_USAGE_ERROR, DEFAULT_PROVER,
-        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        process_options, remaining_total_wtc_limit, run, variant_child_cpu_limit_warning,
+        LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig, LtbVariantMode, RunCommand,
+        C_USAGE_ERROR, DEFAULT_PROVER, OUTPUT_CLOSE_ERROR, PROGRAM_NAME, VARIANT_CHILD_CPU_LIMIT,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::os_wrapper::{RLimResult, RLimitOutcome};
     use crate::basics::simple_stuff::ProverResult;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::control::batch_spec::{
@@ -1538,6 +1589,28 @@ mod tests {
 
         let invalid = parse_variant_child_args(&args[..6]).unwrap_err();
         assert_eq!(invalid.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn variant_child_cpu_limit_warnings_match_c_process_setup() {
+        assert!(
+            variant_child_cpu_limit_warning(RLimitOutcome::new(RLimResult::Success, None,))
+                .is_none()
+        );
+
+        let reduced =
+            variant_child_cpu_limit_warning(RLimitOutcome::new(RLimResult::Reduced, None)).unwrap();
+        assert_eq!(
+            reduced.message(),
+            "Had to reduce limit RLIMIT_CPU (subprocess)"
+        );
+
+        let failed =
+            variant_child_cpu_limit_warning(RLimitOutcome::new(RLimResult::Failed, Some(22)))
+                .unwrap();
+        assert!(failed.message().starts_with(&format!(
+            "Could not set limit RLIMIT_CPU (subprocess) to {VARIANT_CHILD_CPU_LIMIT} ("
+        )));
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcess
 use crate::control::proc_ctrl::{
     SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
 };
+use crate::inout::signals::terminate_process;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -547,7 +548,9 @@ fn output_error(error: &std::io::Error) -> Diagnostic {
 }
 
 fn cleanup_child(child: &mut Child) {
-    let _kill_result = child.kill();
+    if !terminate_process(child.id()) {
+        let _kill_result = child.kill();
+    }
     let _wait_result = child.wait();
 }
 

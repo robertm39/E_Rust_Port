@@ -120,9 +120,12 @@ Source files reviewed: `CONTROL/cco_gproc_ctrl.h`, `CONTROL/cco_gproc_ctrl.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
+### Rust Port Status Notes
+
+- `EGPCtrlCreate` is represented by an explicit executable worker boundary rather than a direct Rust `fork()` API. The fresh child process captures stdout through `Command::stdout(Stdio::piped())`, uses stdout as its logical `GlobalOut`, starts with exec-reset caught-signal state, and applies the requested child CPU limit on Linux. This preserves the caller-visible parent/child behavior without exposing C's child-side `NULL` return through unsafe post-fork Rust control flow. Generic cleanup sends Unix `SIGTERM` before waiting and retains a hard-termination fallback. The source comparison and safety decision are recorded in [`experiments/2026-07-16-031-gproc-worker-boundary/FINDINGS.md`](../../../experiments/2026-07-16-031-gproc-worker-boundary/FINDINGS.md).
+
 ### Change Later
 
-- `EGPCtrlCreate` mixes fork-based control flow, pipe ownership, child stdout redirection, `GlobalOut` reassignment, SIGTERM policy, and subprocess CPU-limit setup. Preserve compatibility expectations in tests, but consider splitting those responsibilities behind an explicit worker-process boundary rather than exposing a direct fork-shaped API in Rust.
 - `EGPCtrlGetResult` reads raw chunks and derives the SZS result only after EOF by scanning the accumulated output. That differs from the line-oriented `cco_proc_ctrl` path; keep it until multicore scheduler traces prove whether early status detection would be observable.
 - `EGPCtrlSetFree` delegates to `EGPCtrlSetDeleteProc`, and when `kill_proc` is false the C path frees the control cell without closing the pipe or terminating a live child. Rust ownership should prefer cleanup-on-drop unless a reference scenario relies on the leak-like lifetime.
 - `cores_reserved` is maintained by unchecked integer addition/subtraction in C. Rust tracks it with safe `usize` accounting; revisit only if exact overflow behavior becomes part of a compatibility test.
