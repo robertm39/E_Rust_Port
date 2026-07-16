@@ -71,7 +71,9 @@ pub struct Clause {
     properties: FormulaProperties,
     weight: i64,
     evaluations: Option<EvalCell>,
-    info: Option<ClauseInfo>,
+    // C keeps the rarely populated ClauseInfo behind a nullable pointer so
+    // derived clauses do not pay for its two strings and source positions.
+    info: Option<Box<ClauseInfo>>,
     create_date: i64,
     proof_depth: i64,
     proof_size: i64,
@@ -383,16 +385,16 @@ impl Clause {
     }
 
     #[must_use]
-    pub const fn info(&self) -> Option<&ClauseInfo> {
-        self.info.as_ref()
+    pub fn info(&self) -> Option<&ClauseInfo> {
+        self.info.as_deref()
     }
 
     pub fn set_info(&mut self, info: Option<ClauseInfo>) {
-        self.info = info;
+        self.info = info.map(Box::new);
     }
 
     pub fn take_info(&mut self) -> Option<ClauseInfo> {
-        self.info.take()
+        self.info.take().map(|info| *info)
     }
 
     #[must_use]

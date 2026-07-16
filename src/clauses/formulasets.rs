@@ -1509,7 +1509,9 @@ pub struct WrappedFormula {
     properties: FormulaProperties,
     is_clause: bool,
     ident: i64,
-    info: Option<ClauseInfo>,
+    // C keeps the rarely populated ClauseInfo behind a nullable pointer so
+    // copied and derived formula wrappers retain the compact empty-info shape.
+    info: Option<Box<ClauseInfo>>,
     derivation: Option<PStack<DerivationEntry>>,
     formula: Option<Term>,
 }
@@ -1647,12 +1649,12 @@ impl WrappedFormula {
     }
 
     #[must_use]
-    pub const fn info(&self) -> Option<&ClauseInfo> {
-        self.info.as_ref()
+    pub fn info(&self) -> Option<&ClauseInfo> {
+        self.info.as_deref()
     }
 
     pub fn set_info(&mut self, info: Option<ClauseInfo>) {
-        self.info = info;
+        self.info = info.map(Box::new);
     }
 
     #[must_use]
@@ -1985,7 +1987,7 @@ impl WrappedFormula {
     #[must_use]
     pub fn get_id(&self, keep_input_names: bool) -> String {
         if keep_input_names {
-            if let Some(name) = self.info.as_ref().and_then(ClauseInfo::name) {
+            if let Some(name) = self.info.as_deref().and_then(ClauseInfo::name) {
                 return name.to_owned();
             }
         }
@@ -2151,7 +2153,7 @@ impl WrappedFormula {
     pub fn form_clause_to_clause(&self, bank: &mut TermBank) -> Result<Clause, Diagnostic> {
         let mut clause = tformula_collect_clause(bank, self.formula(), None)?;
         clause.set_properties(self.properties);
-        clause.set_info(self.info.clone());
+        clause.set_info(self.info.as_deref().cloned());
         Ok(clause)
     }
 
@@ -2170,7 +2172,7 @@ impl WrappedFormula {
         let mut wrapped = Self::wt_formula_alloc(formula);
         wrapped.is_clause = true;
         wrapped.properties = clause.properties();
-        wrapped.info = clause.take_info();
+        wrapped.set_info(clause.take_info());
         Ok(wrapped)
     }
 
