@@ -9726,7 +9726,7 @@ fn parse_formula_file(
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
     let mut scanner = problem_input_scanner(file, false)?;
-    parse_clause_scanner_into_formula_print_set_with_options(
+    let parsed = parse_clause_scanner_into_formula_print_set_with_options(
         &mut scanner,
         parse_format,
         formula_preprocessing,
@@ -9734,7 +9734,9 @@ fn parse_formula_file(
         bank,
         formulas,
         watchlist,
-    )
+    )?;
+    scanner.check_tok(TokenType::NO_TOKEN)?;
+    Ok(parsed)
 }
 
 fn problem_input_scanner(file: &str, ignore_comments: bool) -> Result<Scanner, Diagnostic> {
@@ -9813,7 +9815,7 @@ fn parse_clause_formula_file(
 ) -> Result<ParsedClauseFile, Diagnostic> {
     let mut scanner = problem_input_scanner(file, false)?;
     let mut destination = InputOwnerDestination::FormulasForCnf(formulas);
-    parse_clause_scanner_into_destination_with_options(
+    let parsed = parse_clause_scanner_into_destination_with_options(
         &mut scanner,
         parse_format,
         formula_preprocessing,
@@ -9821,7 +9823,9 @@ fn parse_clause_formula_file(
         bank,
         &mut destination,
         watchlist,
-    )
+    )?;
+    scanner.check_tok(TokenType::NO_TOKEN)?;
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -10060,16 +10064,6 @@ fn parse_clause_scanner_into_destination_with_options(
             result_problem_type = ProblemType::FirstOrder;
         }
     }
-    if !scanner.test_tok(TokenType::NO_TOKEN) {
-        return Err(Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            format!(
-                "{}(just read '{}'): Unexpected token after clause list",
-                token_pos_rep(scanner.current_token()),
-                scanner.current_token().literal()
-            ),
-        ));
-    }
     Ok(ParsedClauseFile {
         detected_format,
         input_owner_seen,
@@ -10111,16 +10105,7 @@ fn parse_app_encode_file(
             ));
         }
     };
-    if !scanner.test_tok(TokenType::NO_TOKEN) {
-        return Err(Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            format!(
-                "{}(just read '{}'): Unexpected token after app-encode input",
-                token_pos_rep(scanner.current_token()),
-                scanner.current_token().literal()
-            ),
-        ));
-    }
+    scanner.check_tok(TokenType::NO_TOKEN)?;
     Ok(ParsedAppEncodeFile {
         detected_format,
         saw_input_owner: parsed_entries.saw_input_owner,
@@ -10308,7 +10293,7 @@ fn parse_tptp_app_encode_entry_list(
     include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeEntries, Diagnostic> {
     let mut result = ParsedAppEncodeEntries::new();
-    while !scanner.test_tok(TokenType::NO_TOKEN) {
+    while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
         if scanner.test_id("input_clause") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
@@ -10323,17 +10308,23 @@ fn parse_tptp_app_encode_entry_list(
             if tstp_entry_selected(formula.name(), selectors.as_deref_mut()) {
                 result.add_formula_owner(formula, bank, formulas)?;
             }
-        } else if scanner.test_id("include") {
-            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
+        } else if scanner.test_id("cnf") {
+            set_problem_type(ProblemType::FirstOrder)?;
+            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            if tstp_entry_selected(
+                clause.info().and_then(ClauseInfo::name),
+                selectors.as_deref_mut(),
+            ) {
+                result.saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+            }
+        } else if scanner.test_id("fof|tff|tcf|thf") {
+            let formula = parse_tptp_app_encode_formula(scanner, bank)?;
+            if tstp_entry_selected(formula.name(), selectors.as_deref_mut()) {
+                result.add_formula_owner(formula, bank, formulas)?;
+            }
         } else {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                format!(
-                    "{}(just read '{}'): --app-encode currently supports input_clause clauses and input_formula formula entries for old TPTP input",
-                    token_pos_rep(scanner.current_token()),
-                    scanner.current_token().literal()
-                ),
-            ));
+            debug_assert!(scanner.test_id("include"));
+            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
         }
     }
     if let Some(selector_tree) = selectors.as_ref() {
@@ -10350,7 +10341,7 @@ fn parse_tstp_app_encode_entry_list(
     include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeEntries, Diagnostic> {
     let mut result = ParsedAppEncodeEntries::new();
-    while !scanner.test_tok(TokenType::NO_TOKEN) {
+    while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
         if scanner.test_id("input_clause") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = parse_old_tptp_clause_record(
@@ -10387,17 +10378,9 @@ fn parse_tstp_app_encode_entry_list(
                     result.add_formula_owner(formula, bank, formulas)?;
                 }
             }
-        } else if scanner.test_id("include") {
-            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
         } else {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                format!(
-                    "{}(just read '{}'): --app-encode currently supports legacy input_clause/input_formula records, cnf clauses, and fof/tff/tcf/thf formula entries for TSTP input",
-                    token_pos_rep(scanner.current_token()),
-                    scanner.current_token().literal()
-                ),
-            ));
+            debug_assert!(scanner.test_id("include"));
+            include_echoes.push_str(&parse_app_encode_ignored_include(scanner)?);
         }
     }
     if let Some(selector_tree) = selectors.as_ref() {
@@ -10450,7 +10433,7 @@ fn parse_tptp_entry_list(
     clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
-    while !scanner.test_tok(TokenType::NO_TOKEN) {
+    while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
         if scanner.test_id("input_clause") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse_with_options(
@@ -10487,7 +10470,44 @@ fn parse_tptp_entry_list(
                 }
                 insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
-        } else if scanner.test_id("include") {
+        } else if scanner.test_id("cnf") {
+            set_problem_type(ProblemType::FirstOrder)?;
+            let clause = clause_parse_with_options(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                clause_parse_options,
+            )?;
+            let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
+            if tstp_entry_selected_by_include_stack(
+                clause.info().and_then(ClauseInfo::name),
+                include_selector_stack,
+            ) {
+                result.input_owner_seen |= is_input_owner;
+                insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
+            }
+        } else if scanner.test_id("fof|tff|tcf|thf") {
+            let parsed = parse_simple_tptp_formula_clause(
+                scanner,
+                bank,
+                formula_preprocessing,
+                destination.formula_owner_handling(),
+            )?;
+            if tstp_entry_selected_by_include_stack(
+                Some(parsed.name.as_str()),
+                include_selector_stack,
+            ) {
+                if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.input_owner_seen = true;
+                    result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                    result.raw_formula_features.add(parsed.raw_formula_features);
+                    result.problem_type =
+                        combine_problem_types(result.problem_type, parsed.problem_type);
+                }
+                insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
+            }
+        } else {
+            debug_assert!(scanner.test_id("include"));
             let mut include_selectors = StrTree::new();
             let skip_includes = StrTree::new();
             if let Some(mut included) =
@@ -10510,15 +10530,6 @@ fn parse_tptp_entry_list(
                 );
                 result.add(included_result?);
             }
-        } else {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                format!(
-                    "{}(just read '{}'): TPTP input currently supports input_clause clauses and the temporary atomic/connective-fragment input_formula bridge",
-                    token_pos_rep(scanner.current_token()),
-                    scanner.current_token().literal()
-                ),
-            ));
         }
     }
     if let Some(selector_tree) = include_selector_stack.last() {
@@ -10537,7 +10548,7 @@ fn parse_tstp_entry_list(
     clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
-    while !scanner.test_tok(TokenType::NO_TOKEN) {
+    while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
         if scanner.test_id("input_clause") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = parse_old_tptp_clause_record(
@@ -10613,7 +10624,8 @@ fn parse_tstp_entry_list(
                 }
                 insert_parsed_formula_or_watchlist_clause(destination, watchlist, bank, parsed)?;
             }
-        } else if scanner.test_id("include") {
+        } else {
+            debug_assert!(scanner.test_id("include"));
             let mut include_selectors = StrTree::new();
             let skip_includes = StrTree::new();
             if let Some(mut included) =
@@ -10636,15 +10648,6 @@ fn parse_tstp_entry_list(
                 );
                 result.add(included_result?);
             }
-        } else {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                format!(
-                    "{}(just read '{}'): TSTP input currently supports legacy input_clause/input_formula records, cnf clauses, fof/tff/tcf/thf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf/thf bridge",
-                    token_pos_rep(scanner.current_token()),
-                    scanner.current_token().literal()
-                ),
-            ));
         }
     }
     if let Some(selector_tree) = include_selector_stack.last() {
@@ -16954,6 +16957,134 @@ input_clause(c2,axiom,[++q(X)]).
         reset_problem_type();
     }
 
+    #[test]
+    fn shared_formula_and_clause_parser_stops_at_unrecognized_tail_like_c() {
+        let _guard = global_state_lock();
+        for (format, source, expected_tail) in [
+            (IoFormat::Lop, "p(a). ) q(a).", ")"),
+            (
+                IoFormat::Tptp,
+                "input_formula(f,axiom,p(a)). bogus_record(x).",
+                "bogus_record",
+            ),
+            (
+                IoFormat::Tstp,
+                "fof(f,axiom,p(a)). bogus_record(x).",
+                "bogus_record",
+            ),
+        ] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut formulas = FormulaSet::new();
+            let mut watchlist = ClauseSet::new();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+
+            let parsed = super::parse_clause_scanner_into_formula_set_with_options(
+                &mut scanner,
+                format,
+                FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                ClauseParseOptions::default(),
+                &mut bank,
+                &mut formulas,
+                &mut watchlist,
+            )
+            .unwrap();
+
+            assert!(parsed.input_owner_seen);
+            assert_eq!(formulas.cardinality(), 1);
+            assert!(watchlist.is_empty());
+            assert_eq!(scanner.current_token().literal(), expected_tail);
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn shared_tptp_parser_dispatches_c_known_modern_records_to_lower_parser() {
+        let _guard = global_state_lock();
+        for (source, expected_record) in [
+            ("cnf(c,axiom,p(a)).", "input_clause"),
+            ("fof(f,axiom,p(a)).", "input_formula"),
+        ] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut formulas = FormulaSet::new();
+            let mut watchlist = ClauseSet::new();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+
+            let error = super::parse_clause_scanner_into_formula_set_with_options(
+                &mut scanner,
+                IoFormat::Tptp,
+                FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                ClauseParseOptions::default(),
+                &mut bank,
+                &mut formulas,
+                &mut watchlist,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(error.message().contains(expected_record));
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn app_encode_formula_and_clause_parser_stops_at_unrecognized_tail_like_c() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formulas = FormulaSet::new();
+        let mut scanner =
+            Scanner::from_user_string("fof(f,axiom,p(a)). bogus_record(x).", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        let mut include_echoes = String::new();
+
+        let parsed = super::parse_tstp_app_encode_entry_list(
+            &mut scanner,
+            &mut bank,
+            &mut formulas,
+            None,
+            &mut include_echoes,
+        )
+        .unwrap();
+
+        assert!(parsed.saw_input_owner);
+        assert!(parsed.saw_formula_owner);
+        assert_eq!(formulas.cardinality(), 1);
+        assert!(include_echoes.is_empty());
+        assert_eq!(scanner.current_token().literal(), "bogus_record");
+        reset_problem_type();
+    }
+
+    #[test]
+    fn app_encode_tptp_dispatches_c_known_modern_records_to_lower_parser() {
+        let _guard = global_state_lock();
+        for (source, expected_record) in [
+            ("cnf(c,axiom,p(a)).", "input_clause"),
+            ("fof(f,axiom,p(a)).", "input_formula"),
+        ] {
+            reset_problem_type();
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut formulas = FormulaSet::new();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+            scanner.set_format(IoFormat::Tptp);
+            let mut include_echoes = String::new();
+
+            let error = super::parse_tptp_app_encode_entry_list(
+                &mut scanner,
+                &mut bank,
+                &mut formulas,
+                None,
+                &mut include_echoes,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(error.message().contains(expected_record));
+        }
+        reset_problem_type();
+    }
+
     fn without_selected_clause_progress(output: &str) -> String {
         let normalized_szs = output.replace("\n%% SZS", "\n% SZS");
         let mut lines = Vec::new();
@@ -21140,6 +21271,29 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_rejects_unrecognized_tail_at_c_caller_eof_check() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-unrecognized-tail");
+        std::fs::write(&path, "fof(f,axiom,p(a)). bogus_record(x).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("No token (probably EOF) expected"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -33608,7 +33762,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
-    fn run_syntax_only_rejects_trailing_tokens_after_clause_list() {
+    fn run_syntax_only_rejects_trailing_tokens_like_c_caller() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-junk");
         std::fs::write(&path, "p(a). )").unwrap();
@@ -33624,9 +33778,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error
-            .message()
-            .contains("Unexpected token after clause list"));
+        assert!(error.message().contains("No token (probably EOF) expected"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

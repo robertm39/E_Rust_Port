@@ -28,7 +28,7 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::{IoFormat, Scanner};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::prover::eprover::{
     parse_clause_scanner_into_formula_set_with_options, FoolUnroll, FormulaPreprocessing,
@@ -744,6 +744,7 @@ fn parse_input_files_to_formula_set_with_progress(
             formulas,
             &mut ignored_watchlist,
         )?;
+        scanner.check_tok(TokenType::NO_TOKEN)?;
         write_verbose_progress(stderr, "Closing input\n")?;
         if config.parse_format == IoFormat::Auto && parsed.detected_format == IoFormat::Tstp {
             output_format = IoFormat::Tstp;
@@ -1483,6 +1484,30 @@ mod tests {
         assert_eq!(
             error.message(),
             "-:1:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn trailing_token_preserves_c_caller_eof_check() {
+        let _guard = global_state_lock();
+        let mut stdin: &[u8] = b"p(a). ,\n";
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, "--lop-in"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("eground checks for EOF after FormulaAndClauseSetParse");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(
+            error.message(),
+            "-:1:(Column 7):(just read ','): No token (probably EOF) expected, but Comma (',') read "
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());

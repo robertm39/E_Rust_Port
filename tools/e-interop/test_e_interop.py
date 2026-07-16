@@ -853,6 +853,9 @@ class ComparisonTests(unittest.TestCase):
                 ("epatternize/help", ["--help"]),
                 ("epatternize/version", ["--version"]),
                 ("epatternize/lop-basic", ["--lop-in"]),
+                ("epatternize/lop-unrecognized-tail", ["--lop-in"]),
+                ("epatternize/tptp-unrecognized-tail", ["--tptp-in"]),
+                ("epatternize/tstp-unrecognized-tail", ["--tstp-in"]),
                 ("epatternize/old-tptp-record-mix", ["--tptp-in"]),
                 ("epatternize/tstp-mixed-corpus", ["--tstp-in"]),
                 (
@@ -1505,6 +1508,18 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(epcllemma_output_case["stdin"], "")
         epatternize_case = cases_by_name["epatternize/lop-basic"]
         self.assertEqual(epatternize_case["stdin"], "p(a).\n")
+        self.assertEqual(
+            cases_by_name["epatternize/lop-unrecognized-tail"]["stdin"],
+            "p(a). ) q(a).\n",
+        )
+        self.assertIn(
+            "bogus_record",
+            cases_by_name["epatternize/tptp-unrecognized-tail"]["stdin"],
+        )
+        self.assertIn(
+            "bogus_record",
+            cases_by_name["epatternize/tstp-unrecognized-tail"]["stdin"],
+        )
         epatternize_mixed_case = cases_by_name["epatternize/tstp-mixed-corpus"]
         self.assertIn("input_formula(old_formula", epatternize_mixed_case["stdin"])
         self.assertIn("tcf(typed_clause", epatternize_mixed_case["stdin"])

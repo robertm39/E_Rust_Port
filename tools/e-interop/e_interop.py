@@ -1486,6 +1486,17 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "epatternize": (
         ("lop-basic", ("--lop-in",), "p(a).\n"),
+        ("lop-unrecognized-tail", ("--lop-in",), "p(a). ) q(a).\n"),
+        (
+            "tptp-unrecognized-tail",
+            ("--tptp-in",),
+            "input_formula(f,axiom,p(a)). bogus_record(x).\n",
+        ),
+        (
+            "tstp-unrecognized-tail",
+            ("--tstp-in",),
+            "fof(f,axiom,p(a)). bogus_record(x).\n",
+        ),
         (
             "old-tptp-record-mix",
             ("--tptp-in",),

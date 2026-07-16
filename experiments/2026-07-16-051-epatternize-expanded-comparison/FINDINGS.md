@@ -8,6 +8,10 @@ nested selected includes, a larger mixed formula/clause corpus, multi-file
 output, and stable filesystem failures. The vendored C source remained
 unchanged.
 
+Historical note: experiment 052 later extends the permanent matrix from 13 to
+16 cases with the shared parser's unrecognized-tail contract. This experiment
+and its runner intentionally retain the exact 13-case snapshot validated here.
+
 ## C execution path
 
 `epatternize.c` processes options before opening `GlobalOut`, inserts `-` only
