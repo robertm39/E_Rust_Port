@@ -27,11 +27,12 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses_with_bank,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, clause_push_formula_derivation, derivation_entries,
-    ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef, DC_APPLY_DEF,
-    DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF,
-    DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_FOF_QUOTE, DC_LEIBNIZ_ELIM,
-    DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM, DC_SPLIT_EQUIV, DC_TRIGGER,
+    clause_push_derivation, clause_push_derivation_refs, clause_push_formula_derivation,
+    derivation_entries, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+    FormulaDerivationRef, DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC,
+    DC_CNF_QUOTE, DC_DYNAMIC_CNF, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP,
+    DC_FOF_QUOTE, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM, DC_SPLIT_EQUIV,
+    DC_TRIGGER,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -58,7 +59,7 @@ use crate::clauses::formulasets::{
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
-use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
+use crate::clauses::neweval::{EvalObjectHandle, PRIO_LARGEST_REASONABLE};
 use crate::clauses::paramodulation::{
     compute_all_paramodulants, compute_all_paramodulants_indexed,
     compute_all_paramodulants_indexed_with_docs, compute_all_paramodulants_with_docs,
@@ -1098,7 +1099,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
         hcb_clause_set_reweight_with_bank(uniq_hcb, wfcbs, ocb, terms, axioms)?;
     }
 
-    let ordered_axioms = state.axioms().eval_order_cloned(0);
+    let ordered_axioms = state.axioms().eval_order_objects(0);
     let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
     let static_watchlist = control.heuristic_parms.watchlist_is_static;
     let lambda_demod = control.heuristic_parms.lambda_demod;
@@ -1122,8 +1123,8 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             )
         })?;
 
-        for source in ordered_axioms {
-            let mut new = source.copy_to_bank(state.terms_mut())?;
+        for source_object in ordered_axioms {
+            let (mut new, source_ref) = proof_state_copy_evaluated_axiom(state, source_object)?;
             new.refresh_derivation_generation();
             new.set_prop(CP_INITIAL);
             let watchlist_outcome = proof_state_check_watchlist_maybe_output(
@@ -1145,7 +1146,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             if let Some((output, session)) = doc_context.as_mut() {
                 session.doc_clause_quote(output, state.terms(), 6, &mut new, Some("eval"), None)?;
             }
-            clause_push_derivation(&mut new, DC_CNF_QUOTE, Some(&source), None);
+            clause_push_derivation_refs(&mut new, DC_CNF_QUOTE, Some(source_ref), None);
             if record_gc_selection {
                 clause_push_derivation(&mut new, DC_CNF_EVAL_GC, None, None);
             }
@@ -1170,6 +1171,23 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
         watchlist_matches,
         watchlist_removed,
     })
+}
+
+fn proof_state_copy_evaluated_axiom(
+    state: &mut ProofState,
+    source_object: EvalObjectHandle,
+) -> Result<(Clause, ClauseDerivationRef), Diagnostic> {
+    let (terms, axioms) = state.terms_and_axioms_mut();
+    let source = axioms.find_by_eval_object(source_object).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProofStateInit axiom evaluation index references a missing clause",
+        )
+    })?;
+    Ok((
+        source.copy_to_bank(terms)?,
+        ClauseDerivationRef::from(source),
+    ))
 }
 
 /// Runs C `check_watchlist` against the proof-state watchlist.

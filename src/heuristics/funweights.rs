@@ -16,7 +16,7 @@ use crate::terms::signature::Signature;
 use crate::terms::simpletypes::Type;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_parse_operator;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
@@ -50,6 +50,7 @@ pub struct FunWeightParam {
     weight_stack: Vec<(String, i64)>,
     axioms: Option<ClauseSet>,
     formula_axioms: Option<FormulaSet>,
+    conjecture_symbols: BTreeSet<FunCode>,
     init_kind: FunWeightInitKind,
     flimit: FunCode,
     fweights: Option<Vec<i64>>,
@@ -92,6 +93,7 @@ impl FunWeightParam {
             weight_stack,
             axioms: None,
             formula_axioms: None,
+            conjecture_symbols: BTreeSet::new(),
             init_kind: FunWeightInitKind::ExplicitSymbols,
             flimit: 0,
             fweights: None,
@@ -120,6 +122,13 @@ impl FunWeightParam {
         axioms: &ClauseSet,
         app_var_mult: f64,
     ) -> Self {
+        let mut conjecture_symbols = BTreeSet::new();
+        for clause in axioms.iter() {
+            if clause.query_tptp_type() == CP_TYPE_NEG_CONJECTURE {
+                clause.collect_fcodes(&mut conjecture_symbols);
+            }
+        }
+
         Self {
             max_term_multiplier,
             max_literal_multiplier,
@@ -137,8 +146,9 @@ impl FunWeightParam {
             level_poly_square: 0.0,
             default_level_penalty: 0,
             weight_stack: Vec::new(),
-            axioms: Some(axioms.clone()),
+            axioms: None,
             formula_axioms: None,
+            conjecture_symbols,
             init_kind: FunWeightInitKind::ConjectureSymbols,
             flimit: 0,
             fweights: None,
@@ -258,6 +268,7 @@ impl FunWeightParam {
             weight_stack: Vec::new(),
             axioms: Some(axioms.clone()),
             formula_axioms: None,
+            conjecture_symbols: BTreeSet::new(),
             init_kind: if special_symbols_level_one {
                 FunWeightInitKind::RelevanceLevelsSpecialOne
             } else {
@@ -441,6 +452,10 @@ impl FunWeightParam {
                 self.init_relevance_level_weights(bank.signature(), true);
             }
         }
+
+        self.axioms = None;
+        self.formula_axioms = None;
+        self.conjecture_symbols.clear();
     }
 
     fn init_explicit_fun_weights(&mut self, signature: &Signature) {
@@ -567,22 +582,10 @@ impl FunWeightParam {
             .unwrap_or_else(|_| panic!("signature f-count must fit vector length"));
         let mut fweights = vec![0; len];
 
-        let axioms = self
-            .axioms
-            .as_ref()
-            .unwrap_or_else(|| panic!("ConjectureSymbolWeight requires proof-state axioms"));
-        for clause in axioms.iter() {
-            if clause.query_tptp_type() == CP_TYPE_NEG_CONJECTURE {
-                clause.add_symbol_distribution(&mut fweights);
-            }
-        }
-
         for f_code in 1..self.flimit {
             let index = usize::try_from(f_code)
                 .unwrap_or_else(|_| panic!("positive f-code must fit vector index"));
-            fweights[index] = if fweights[index] == 0 {
-                typed_symbol_weight(signature, f_code, self.fweight, self.cweight, self.pweight)
-            } else {
+            fweights[index] = if self.conjecture_symbols.contains(&f_code) {
                 typed_symbol_weight(
                     signature,
                     f_code,
@@ -590,6 +593,8 @@ impl FunWeightParam {
                     self.conj_cweight,
                     self.conj_pweight,
                 )
+            } else {
+                typed_symbol_weight(signature, f_code, self.fweight, self.cweight, self.pweight)
             };
         }
 
@@ -2383,6 +2388,9 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{err}"));
         let mut wfcb = conjecture_simplified_symbol_weight_parse(&mut scanner, &axioms)
             .unwrap_or_else(|err| panic!("{err}"));
+        let pending_data = wfcb.data().expect("parser should install funweight data");
+        assert!(pending_data.axioms().is_none());
+        assert!(!pending_data.conjecture_symbols.is_empty());
 
         assert_close(wfcb.compute_eval(&bank, &clause), 22.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
@@ -2394,7 +2402,8 @@ mod tests {
         assert_eq!(data.conj_fweight(), 1);
         assert_eq!(data.conj_cweight(), 1);
         assert_eq!(data.conj_pweight(), 88);
-        assert_eq!(data.axioms().map(ClauseSet::len), Some(1));
+        assert!(data.axioms().is_none());
+        assert!(data.conjecture_symbols.is_empty());
         assert_eq!(data.flimit(), bank.signature().f_count() + 1);
     }
 
@@ -2535,8 +2544,8 @@ mod tests {
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
         assert_eq!(scanner.current_token().literal(), "tail");
         let data = wfcb.data().expect("parser should install funweight data");
-        assert_eq!(data.axioms().map(ClauseSet::len), Some(0));
-        assert_eq!(data.formula_axioms().map(FormulaSet::cardinality), Some(2));
+        assert!(data.axioms().is_none());
+        assert!(data.formula_axioms().is_none());
     }
 
     #[test]

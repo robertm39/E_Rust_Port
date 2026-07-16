@@ -1649,7 +1649,9 @@ impl ClauseSet {
         })
     }
 
-    fn find_by_eval_object(&self, object: EvalObjectHandle) -> Option<&Clause> {
+    /// Returns the clause identified by a stable evaluation-object handle.
+    #[must_use]
+    pub fn find_by_eval_object(&self, object: EvalObjectHandle) -> Option<&Clause> {
         let slot = self.eval_object_slots.get(object).copied().flatten()?;
         self.clauses.get_slot(slot)
     }
@@ -3298,11 +3300,21 @@ mod tests {
         let second_id = second.ident();
         let mut set = ClauseSet::from_clauses([first, second]);
 
-        assert_eq!(set.eval_order_objects(0).len(), 2);
+        let objects = set.eval_order_objects(0);
+        assert_eq!(objects.len(), 2);
+        assert_eq!(
+            set.find_by_eval_object(objects[0]).map(Clause::ident),
+            Some(first_id)
+        );
         assert_eq!(set.find_best(0).map(Clause::ident), Some(first_id));
         assert_eq!(
             set.extract_best(0).map(|clause| clause.ident()),
             Some(first_id)
+        );
+        assert!(set.find_by_eval_object(objects[0]).is_none());
+        assert_eq!(
+            set.find_by_eval_object(objects[1]).map(Clause::ident),
+            Some(second_id)
         );
         assert_eq!(set.find_best(0).map(Clause::ident), Some(second_id));
         assert_eq!(set.members(), 1);

@@ -375,6 +375,32 @@ pub fn clause_push_derivation(
     );
 }
 
+/// Pushes a clause derivation operation with optional compact clause-parent
+/// references.
+///
+/// This is equivalent to [`clause_push_derivation`] when the caller has
+/// already captured the stable parent references and no longer needs to keep
+/// the parent clauses borrowed.
+///
+/// # Panics
+///
+/// Panics if `op` is `DCNop`, if a provided clause parent is not permitted by
+/// the opcode argument bits, or if a second CNF parent is requested without a
+/// first CNF parent.
+pub fn clause_push_derivation_refs(
+    clause: &mut Clause,
+    op: i64,
+    arg1: Option<ClauseDerivationRef>,
+    arg2: Option<ClauseDerivationRef>,
+) {
+    push_derivation_args(
+        clause,
+        op,
+        arg1.map(DerivationArg::Clause),
+        arg2.map(DerivationArg::Clause),
+    );
+}
+
 /// Pushes a clause derivation operation with optional represented formula
 /// parents.
 ///
@@ -1448,8 +1474,8 @@ mod tests {
     use super::{
         clause_deriv_find_first, clause_dummy_fof_quote_parent_ref, clause_dummy_quote_parent_ref,
         clause_is_dummy_fof_quote, clause_is_dummy_quote, clause_is_eval_gc,
-        clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
-        clause_push_numeric_derivation, demodulator_clause_refs,
+        clause_push_ac_res_derivation, clause_push_derivation, clause_push_derivation_refs,
+        clause_push_formula_derivation, clause_push_numeric_derivation, demodulator_clause_refs,
         deriv_stack_count_search_inferences, deriv_stack_extract_opt_parents,
         deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
@@ -1686,6 +1712,22 @@ mod tests {
             &[
                 DerivationEntry::Operation(DC_EQ_RES),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(42, 7)),
+            ]
+        );
+    }
+
+    #[test]
+    fn clause_push_derivation_refs_records_captured_parent() {
+        let parent = ClauseDerivationRef::new_with_generation(43, 8, 3);
+        let mut child = Clause::alloc(EqnList::new());
+
+        clause_push_derivation_refs(&mut child, DC_EQ_RES, Some(parent), None);
+
+        assert_eq!(
+            derivation_entries(&child),
+            &[
+                DerivationEntry::Operation(DC_EQ_RES),
+                DerivationEntry::ClauseParent(parent),
             ]
         );
     }
