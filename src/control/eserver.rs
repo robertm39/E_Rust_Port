@@ -5,7 +5,10 @@ use crate::control::esession::{
 };
 use crate::inout::network::{create_server_socket_no_fail, listen};
 use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+
+const PROGRAM_NAME: &str = "e_server";
 
 #[derive(Debug)]
 pub struct EServer<P = NoProcessControlSet> {
@@ -79,7 +82,7 @@ impl<P> EServer<P> {
             .map_err(|error| server_error(format!("Could not read server socket address: {error}")))
     }
 
-    pub fn accept(&mut self) -> Result<bool, Diagnostic> {
+    pub fn accept(&mut self, stderr: &mut impl Write) -> Result<bool, Diagnostic> {
         let listener = self
             .listener
             .as_ref()
@@ -90,9 +93,10 @@ impl<P> EServer<P> {
                 self.sessions.push_back(ESession::new(stream, descriptor));
                 Ok(true)
             }
-            Err(error) => Err(server_error(format!(
-                "Failure to accept connection: {error}"
-            ))),
+            Err(error) => {
+                write_accept_warning(stderr, &error)?;
+                Ok(false)
+            }
         }
     }
 
@@ -110,6 +114,15 @@ impl<P> EServer<P> {
         }
         max_descriptor
     }
+}
+
+fn write_accept_warning(output: &mut impl Write, error: &io::Error) -> Result<(), Diagnostic> {
+    writeln!(
+        output,
+        "{PROGRAM_NAME}: Warning: Failure to accept connection"
+    )
+    .and_then(|()| writeln!(output, "{PROGRAM_NAME}: {error}"))
+    .map_err(|write_error| server_error(format!("Could not write accept warning: {write_error}")))
 }
 
 #[cfg(unix)]
@@ -135,7 +148,7 @@ fn server_error(message: impl Into<String>) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::EServer;
+    use super::{write_accept_warning, EServer};
     use crate::control::esession::{Descriptor, DescriptorInterestSet, NoProcessControlSet};
     use std::net::TcpStream;
 
@@ -160,7 +173,9 @@ mod tests {
         }
         let _client = TcpStream::connect(address).unwrap();
 
-        assert!(server.accept().unwrap());
+        let mut stderr = Vec::new();
+        assert!(server.accept(&mut stderr).unwrap());
+        assert!(stderr.is_empty());
 
         assert_eq!(server.session_count(), 1);
         let listening = server.listening_descriptor().unwrap();
@@ -171,5 +186,18 @@ mod tests {
         assert!(max_descriptor >= listening);
         assert!(interests.contains_read(listening));
         assert!(!interests.contains_read(session.descriptor()));
+    }
+
+    #[test]
+    fn failed_accept_warning_preserves_c_stable_lines_and_host_suffix() {
+        let mut output = Vec::new();
+        let error = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "host suffix");
+
+        write_accept_warning(&mut output, &error).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "e_server: Warning: Failure to accept connection\ne_server: host suffix\n"
+        );
     }
 }

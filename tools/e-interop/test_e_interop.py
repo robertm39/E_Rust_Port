@@ -61,6 +61,14 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(windows),
         )
 
+    def test_normalization_canonicalizes_only_successful_server_descriptors(self):
+        output = "Main loop\nAccepted 123\nAccepted -1\n"
+
+        self.assertEqual(
+            e_interop.normalize_output(output),
+            "Main loop\nAccepted <DESCRIPTOR>\nAccepted -1",
+        )
+
     def test_normalization_sorts_only_saturation_blocks(self):
         saturation_a = (
             "% SZS output start Saturation\n"

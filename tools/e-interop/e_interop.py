@@ -45,6 +45,7 @@ PLATFORM_NAN_PERCENT_RE = re.compile(
     r"\s+percent\b",
     re.IGNORECASE,
 )
+LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE = re.compile(r"^Accepted [0-9]+$")
 PLATFORM_ERROR_SUFFIXES = {
     "<OS ERROR: NOT FOUND>": (
         "No such file or directory",
@@ -961,6 +962,8 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
 
 def normalize_platform_line(line: str) -> str:
     normalized = PLATFORM_NAN_PERCENT_RE.sub("successes, <NAN> percent", line)
+    if LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE.fullmatch(normalized):
+        return "Accepted <DESCRIPTOR>"
     for replacement, suffixes in PLATFORM_ERROR_SUFFIXES.items():
         for suffix in suffixes:
             if normalized.endswith(suffix):

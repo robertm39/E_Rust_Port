@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -255,13 +255,40 @@ struct LegacyActiveConnection {
 struct LegacyServerStepReport {
     active_read: bool,
     accepted: bool,
+    accept_failed: bool,
     rejected: bool,
 }
 
 impl LegacyServerStepReport {
     #[must_use]
     const fn made_progress(self) -> bool {
-        self.active_read || self.accepted || self.rejected
+        self.active_read || self.accepted || self.accept_failed || self.rejected
+    }
+}
+
+#[derive(Debug, Default)]
+struct LegacyLoopMarker {
+    printed: bool,
+}
+
+impl LegacyLoopMarker {
+    fn begin_wait(&mut self, output: &mut impl Write) -> Result<(), Diagnostic> {
+        if !self.printed {
+            writeln_diag(output, "Main loop")?;
+            output.flush().map_err(|error| {
+                io_diagnostic(format!("Cannot flush legacy server output: {error}"))
+            })?;
+            self.printed = true;
+        }
+        Ok(())
+    }
+
+    fn finish_poll(&mut self, report: LegacyServerStepReport) -> bool {
+        let made_progress = report.made_progress();
+        if made_progress {
+            self.printed = false;
+        }
+        made_progress
     }
 }
 
@@ -432,18 +459,11 @@ fn serve_legacy_server(port: u16, stdout: &mut impl Write) -> Result<(), Diagnos
         )
     })?;
     let mut active = None;
-    let mut printed_loop_marker = false;
+    let mut loop_marker = LegacyLoopMarker::default();
     loop {
-        if !printed_loop_marker {
-            writeln_diag(stdout, "Main loop")?;
-            stdout.flush().map_err(|error| {
-                io_diagnostic(format!("Cannot flush legacy server output: {error}"))
-            })?;
-            printed_loop_marker = true;
-        }
-        if poll_legacy_server_once(&listener, &mut active, stdout)?.made_progress() {
-            printed_loop_marker = false;
-        } else {
+        loop_marker.begin_wait(stdout)?;
+        let report = poll_legacy_server_once(&listener, &mut active, stdout)?;
+        if !loop_marker.finish_poll(report) {
             thread::sleep(Duration::from_millis(10));
         }
     }
@@ -454,11 +474,22 @@ fn poll_legacy_server_once(
     active: &mut Option<LegacyActiveConnection>,
     output: &mut impl Write,
 ) -> Result<LegacyServerStepReport, Diagnostic> {
+    poll_legacy_server_once_with(active, output, || listener.accept())
+}
+
+fn poll_legacy_server_once_with<A>(
+    active: &mut Option<LegacyActiveConnection>,
+    output: &mut impl Write,
+    mut accept: A,
+) -> Result<LegacyServerStepReport, Diagnostic>
+where
+    A: FnMut() -> io::Result<(TcpStream, SocketAddr)>,
+{
     let mut report = LegacyServerStepReport::default();
     if process_active_connection_once(active, output)? {
         report.active_read = true;
     }
-    match listener.accept() {
+    match accept() {
         Ok((stream, _addr)) => {
             if active.is_none() {
                 *active = Some(accept_legacy_connection(stream, output)?);
@@ -469,11 +500,13 @@ fn poll_legacy_server_once(
             }
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-        Err(error) => {
-            return Err(Diagnostic::new(
-                ErrorCode::SYSTEM_ERROR,
-                format!("Failure to accept connection: {error}"),
-            ));
+        Err(_error) => {
+            if active.is_none() {
+                writeln_diag(output, "Accepted -1")?;
+                report.accept_failed = true;
+            } else {
+                report.rejected = true;
+            }
         }
     }
     Ok(report)
@@ -768,13 +801,15 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Cursor, Read, Write};
-    use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+    use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use super::{
         init_domain_spec, load_filters, open_output_file, parse_port, poll_legacy_server_once,
-        print_help, process_legacy_connection, process_options, run, EServerConfig,
-        LegacyServerReport, RunCommand, C_USAGE_ERROR, DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
+        poll_legacy_server_once_with, print_help, process_legacy_connection, process_options, run,
+        EServerConfig, LegacyLoopMarker, LegacyServerReport, LegacyServerStepReport, RunCommand,
+        C_USAGE_ERROR, DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -816,6 +851,27 @@ mod tests {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.output.extend_from_slice(buf);
             Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ReadErrorDuplex;
+
+    impl Read for ReadErrorDuplex {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "forced read failure",
+            ))
+        }
+    }
+
+    impl Write for ReadErrorDuplex {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -1226,6 +1282,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_connection_reports_read_error_without_platform_suffix() {
+        let mut stream = ReadErrorDuplex;
+        let mut output = Vec::new();
+
+        let report = process_legacy_connection(&mut stream, &mut output).expect("session");
+
+        assert_eq!(
+            report,
+            LegacyServerReport {
+                received: 0,
+                closed: false,
+                read_error: true,
+            }
+        );
+        assert_eq!(String::from_utf8(output).unwrap(), "Read error\n");
+    }
+
+    #[test]
+    fn legacy_loop_marker_prints_once_per_blocking_wait_cycle() {
+        let mut marker = LegacyLoopMarker::default();
+        let mut output = Vec::new();
+
+        marker.begin_wait(&mut output).unwrap();
+        marker.begin_wait(&mut output).unwrap();
+        assert!(!marker.finish_poll(LegacyServerStepReport::default()));
+        marker.begin_wait(&mut output).unwrap();
+        assert_eq!(String::from_utf8(output.clone()).unwrap(), "Main loop\n");
+
+        assert!(marker.finish_poll(LegacyServerStepReport {
+            accepted: true,
+            ..LegacyServerStepReport::default()
+        }));
+        marker.begin_wait(&mut output).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "Main loop\nMain loop\n");
+    }
+
+    #[test]
     fn legacy_poll_keeps_one_active_connection_and_rejects_second_client() {
         let (listener, address) = loopback_listener();
         let _first_client = TcpStream::connect(address).expect("first client connects");
@@ -1239,7 +1332,7 @@ mod tests {
         assert!(!accepted.rejected);
         assert!(active.is_some());
 
-        let _second_client = TcpStream::connect(address).expect("second client connects");
+        let mut second_client = TcpStream::connect(address).expect("second client connects");
         let rejected =
             poll_legacy_server_once(&listener, &mut active, &mut output).expect("reject second");
 
@@ -1247,7 +1340,84 @@ mod tests {
         assert!(rejected.rejected);
         assert!(active.is_some());
         let output = String::from_utf8(output).expect("output utf8");
-        assert_eq!(output.matches("Accepted ").count(), 1);
+        let active_descriptor = active.as_ref().unwrap().descriptor;
+        assert_eq!(output, format!("Accepted {active_descriptor}\n"));
+
+        second_client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut byte = [0];
+        match second_client.read(&mut byte) {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
+                ) => {}
+            result => panic!("rejected client was not closed: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_poll_preserves_c_failed_accept_minus_one_output() {
+        let mut active = None;
+        let mut output = Vec::new();
+
+        let report = poll_legacy_server_once_with(&mut active, &mut output, || {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "forced accept failure",
+            ))
+        })
+        .unwrap();
+
+        assert!(report.accept_failed);
+        assert!(!report.accepted);
+        assert!(!report.rejected);
+        assert!(active.is_none());
+        assert_eq!(String::from_utf8(output).unwrap(), "Accepted -1\n");
+    }
+
+    #[test]
+    fn legacy_poll_silently_ignores_failed_accept_with_active_client() {
+        let (listener, address) = loopback_listener();
+        let _client = TcpStream::connect(address).unwrap();
+        let mut active = None;
+        let mut output = Vec::new();
+        poll_legacy_server_once(&listener, &mut active, &mut output).unwrap();
+        output.clear();
+
+        let report = poll_legacy_server_once_with(&mut active, &mut output, || {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "forced accept failure",
+            ))
+        })
+        .unwrap();
+
+        assert!(!report.accept_failed);
+        assert!(report.rejected);
+        assert!(active.is_some());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn legacy_poll_reports_active_socket_close_and_releases_slot() {
+        let (listener, address) = loopback_listener();
+        let client = TcpStream::connect(address).expect("client connects");
+        let mut active = None;
+        let mut output = Vec::new();
+        poll_legacy_server_once(&listener, &mut active, &mut output).expect("accept client");
+        output.clear();
+
+        client.shutdown(Shutdown::Both).unwrap();
+        drop(client);
+        let report = poll_legacy_server_once(&listener, &mut active, &mut output)
+            .expect("observe client close");
+
+        assert!(report.active_read);
+        assert!(active.is_none());
+        assert_eq!(String::from_utf8(output).unwrap(), "Connection closed\n");
     }
 
     #[test]

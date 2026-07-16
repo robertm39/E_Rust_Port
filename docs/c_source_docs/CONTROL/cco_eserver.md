@@ -98,9 +98,9 @@ Source files reviewed: `CONTROL/cco_eserver.h`, `CONTROL/cco_eserver.c`.
 
 ### Rust Port Status Notes
 
-- `src/control/eserver.rs` ports the initial server owner surface with a safe `TcpListener`/`TcpStream` backend, the C not-listening allocation shape, listener descriptor capture, accepted-session queueing through `ESession`, listener/readiness descriptor registration, and maximum-descriptor calculation across listener and queued sessions.
+- `src/control/eserver.rs` ports the initial server owner surface with a safe `TcpListener`/`TcpStream` backend, the C not-listening allocation shape, listener descriptor capture, accepted-session queueing through `ESession`, listener/readiness descriptor registration, and maximum-descriptor calculation across listener and queued sessions. `EServer::accept` also mirrors `EServerAccept` failure behavior by writing `e_server: Warning: Failure to accept connection` followed by `e_server: <host error>` and returning false.
 - Rust keeps `reset` as a no-op compatibility surface matching the current C body, while ordinary owned Rust values release listener/session resources through normal ownership when dropped.
-- Tests cover newly allocated server state, pre-listen readiness, ephemeral-port listening, accepting a client connection, accepted-session queueing, listener read-interest registration, and max-descriptor calculation.
+- Tests cover newly allocated server state, pre-listen readiness, ephemeral-port listening, accepting a client connection, accepted-session queueing, listener read-interest registration, max-descriptor calculation, and the exact stable accept-warning lines with an arbitrary platform error suffix.
 
 ### Porting Focus
 
