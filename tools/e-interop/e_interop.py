@@ -928,6 +928,7 @@ TOOL_FUNCTIONAL_CASES = {
     "edpll": (
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
+        ("contradictory-units-no-solver", (), "p.\n<- p.\n"),
         ("trailing-non-clause", (), "p. ,\n"),
         (
             "output-file",

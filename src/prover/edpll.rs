@@ -750,6 +750,19 @@ mod tests {
     }
 
     #[test]
+    fn contradictory_units_preserve_c_trace_only_no_solver_contract() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME], "p.\n<- p.\n");
+
+        assert_eq!(status, 0);
+        assert_eq!(
+            output,
+            "New clause: p<-....accepted\nNew clause: <-p....accepted\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn tptp_input_clause_mode_uses_old_tptp_parser() {
         let _guard = global_state_lock();
         let (status, output, stderr) = run_with_stdin(

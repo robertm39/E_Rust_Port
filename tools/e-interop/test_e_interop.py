@@ -597,6 +597,7 @@ class ComparisonTests(unittest.TestCase):
                 ("edpll/version", ["--version"]),
                 ("edpll/lop-basic", ["--dimacs"]),
                 ("edpll/tptp-input-clause", ["--tptp-in"]),
+                ("edpll/contradictory-units-no-solver", []),
                 ("edpll/trailing-non-clause", []),
                 ("edpll/output-file", ["-o", "trace.out"]),
                 ("edpll/malformed-term-after-prefix", []),
@@ -1079,6 +1080,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             edpll_tptp_case["stdin"], "input_clause(c_0_1,axiom,[++p,--q])."
         )
+        edpll_no_solver_case = cases_by_name[
+            "edpll/contradictory-units-no-solver"
+        ]
+        self.assertEqual(edpll_no_solver_case["stdin"], "p.\n<- p.\n")
         edpll_trailing_case = cases_by_name["edpll/trailing-non-clause"]
         self.assertEqual(edpll_trailing_case["stdin"], "p. ,\n")
         edpll_output_case = cases_by_name["edpll/output-file"]

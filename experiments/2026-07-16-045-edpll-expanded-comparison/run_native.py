@@ -37,9 +37,13 @@ def main() -> None:
     if not binary.is_file():
         raise SystemExit(f"missing release binary: {binary}")
 
-    cases = e_interop.tool_comparison_cases(["edpll"])
+    cases = [
+        case
+        for case in e_interop.tool_comparison_cases(["edpll"])
+        if case["name"] in EXPECTED_EXIT_CODES
+    ]
     if [case["name"] for case in cases] != list(EXPECTED_EXIT_CODES):
-        raise AssertionError("permanent edpll case order changed; update this experiment")
+        raise AssertionError("historical edpll case order changed; update this experiment")
 
     with tempfile.TemporaryDirectory(prefix="edpll-native-") as temporary:
         temporary_root = Path(temporary)
