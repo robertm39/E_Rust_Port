@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 use crate::basics::error::Diagnostic;
@@ -61,7 +62,7 @@ static INDEX_COUNTER: AtomicI64 = AtomicI64::new(0);
 #[derive(Clone, Debug)]
 pub struct IndexTerm {
     term: Term,
-    subst: PatternSubst,
+    subst: Rc<PatternSubst>,
     key: i64,
 }
 
@@ -71,14 +72,18 @@ pub struct TSMIndex {
     index_type: IndexType,
     depth: i32,
     count: i64,
-    subst: PatternSubst,
+    subst: Rc<PatternSubst>,
     symbol_index: BTreeMap<FunCode, i64>,
     term_index: BTreeSet<IndexTerm>,
 }
 
 impl IndexTerm {
     #[must_use]
-    pub const fn new(term: Term, subst: PatternSubst, key: i64) -> Self {
+    pub fn new(term: Term, subst: PatternSubst, key: i64) -> Self {
+        Self::new_shared(term, Rc::new(subst), key)
+    }
+
+    fn new_shared(term: Term, subst: Rc<PatternSubst>, key: i64) -> Self {
         Self { term, subst, key }
     }
 
@@ -123,6 +128,10 @@ impl TSMIndex {
     /// code expects one concrete index kind.
     #[must_use]
     pub fn new(index_type: IndexType, depth: i32, subst: PatternSubst) -> Self {
+        Self::new_shared(index_type, depth, Rc::new(subst))
+    }
+
+    pub(crate) fn new_shared(index_type: IndexType, depth: i32, subst: Rc<PatternSubst>) -> Self {
         assert_ne!(index_type, IndexType::NO_INDEX);
         match index_type {
             IndexType::ARITY | IndexType::SYMBOL | IndexType::IDENTITY | IndexType::EMPTY => {}
@@ -160,6 +169,11 @@ impl TSMIndex {
     #[must_use]
     pub const fn count(&self) -> i64 {
         self.count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_subst(&self, subst: &Rc<PatternSubst>) -> bool {
+        Rc::ptr_eq(&self.subst, subst)
     }
 
     /// Returns the index key for `term`, or `-1` when the term is absent.
@@ -214,7 +228,7 @@ impl TSMIndex {
                 Ok(result)
             }
             IndexType::SYMBOL => {
-                let key = index_symbol_key(term, &self.subst);
+                let key = index_symbol_key(term, self.subst.as_ref());
                 if let Some(existing) = self.symbol_index.get(&key) {
                     Ok(*existing)
                 } else {
@@ -256,14 +270,14 @@ impl TSMIndex {
     }
 
     fn insert_term_index(&mut self, term: &Term, bank: &mut TermBank) -> Result<i64, Diagnostic> {
-        let query = IndexTerm::new(term.clone(), self.subst.clone(), -1);
+        let query = IndexTerm::new_shared(term.clone(), Rc::clone(&self.subst), -1);
         if let Some(entry) = self.term_index.get(&query) {
             return Ok(entry.key);
         }
 
         let shared = bank.insert(term, DerefType::Never)?;
         let result = self.count;
-        let entry = IndexTerm::new(shared, self.subst.clone(), result);
+        let entry = IndexTerm::new_shared(shared, Rc::clone(&self.subst), result);
         assert!(self.term_index.insert(entry));
         self.count += 1;
         Ok(result)
@@ -274,10 +288,9 @@ impl TSMIndex {
             "# {indent}Index {} is symbol index!\n# {indent}PSymbol         Index  FCode     (Symbol)\n",
             self.ident
         );
-        let mut subst = self.subst.clone();
         let mut alternatives = 0_i64;
         for (symbol, index) in &self.symbol_index {
-            let f_code = subst.original_symbol(*symbol);
+            let f_code = self.subst.original_symbol(*symbol);
             let name = if f_code > 0 && f_code <= bank.signature().f_count() {
                 bank.signature().find_name(f_code).unwrap_or("variable")
             } else {
@@ -297,7 +310,7 @@ impl TSMIndex {
         let mut output = format!("# Index is {} index!\n", get_index_name(self.index_type));
         let mut alternatives = 0_i64;
         for entry in &self.term_index {
-            let mut subst = self.subst.clone();
+            let mut subst = self.subst.as_ref().clone();
             let _ = writeln!(
                 output,
                 "# {:3} : {}",
@@ -366,6 +379,15 @@ pub fn tsm_index_alloc(index_type: IndexType, depth: i32, subst: PatternSubst) -
     TSMIndex::new(index_type, depth, subst)
 }
 
+#[must_use]
+pub(crate) fn tsm_index_alloc_shared(
+    index_type: IndexType,
+    depth: i32,
+    subst: Rc<PatternSubst>,
+) -> TSMIndex {
+    TSMIndex::new_shared(index_type, depth, subst)
+}
+
 /// Returns the index key for `term`, or `-1` when absent.
 ///
 /// # Panics
@@ -409,8 +431,8 @@ pub fn tsm_index_print_string(index: &TSMIndex, bank: &TermBank, depth: i32) -> 
 }
 
 fn index_term_order(left: &IndexTerm, right: &IndexTerm) -> Ordering {
-    let mut left_subst = left.subst.clone();
-    let mut right_subst = right.subst.clone();
+    let mut left_subst = left.subst.as_ref().clone();
+    let mut right_subst = right.subst.as_ref().clone();
     compare_result_to_ordering(pattern_term_compare(
         &mut left_subst,
         &left.term,
@@ -435,7 +457,6 @@ fn index_symbol_key(term: &Term, subst: &PatternSubst) -> FunCode {
     if term.is_free_var() && is_alt_var(term) {
         return term.f_code();
     }
-    let mut subst = subst.clone();
     let key = subst.symbol_value(term.f_code());
     assert_ne!(key, 0, "index symbol must be bound by pattern substitution");
     key
@@ -459,8 +480,8 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         get_index_name, get_index_type, index_term_alloc, index_term_compare_fun, tsm_index_alloc,
-        tsm_index_find, tsm_index_insert, tsm_index_print_string, IndexType, INDEX_DYNAMIC_DEPTH,
-        INDEX_FUN_NAMES,
+        tsm_index_find, tsm_index_insert, tsm_index_print_string, IndexType, TSMIndex,
+        INDEX_DYNAMIC_DEPTH, INDEX_FUN_NAMES,
     };
     use crate::inout::scanner::Scanner;
     use crate::learn::patterns::{pattern_term_compute, PatternSubst};
@@ -468,6 +489,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+    use std::rc::Rc;
 
     #[test]
     fn index_type_names_and_values_match_c_surface() {
@@ -510,6 +532,17 @@ mod tests {
         assert_eq!(get_index_name(IndexType::NO_INDEX), "IndexNoIndex");
         assert_eq!(get_index_name(IndexType::TOP), "IndexTop");
         assert_eq!(get_index_name(IndexType::DYNAMIC), "IndexDynamic");
+    }
+
+    #[test]
+    fn shared_constructor_reuses_pattern_substitution() {
+        let bank = test_bank();
+        let subst = Rc::new(PatternSubst::new(bank.signature()));
+
+        let index = TSMIndex::new_shared(IndexType::SYMBOL, 0, Rc::clone(&subst));
+
+        assert!(Rc::ptr_eq(&index.subst, &subst));
+        assert_eq!(Rc::strong_count(&subst), 2);
     }
 
     #[test]

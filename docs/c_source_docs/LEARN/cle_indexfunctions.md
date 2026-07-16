@@ -117,6 +117,8 @@ Source files reviewed: `LEARN/cle_indexfunctions.h`, `LEARN/cle_indexfunctions.c
 
 - `index_counter` is file-static and only used for debug identities in `TSMIndexPrint`; it is incremented on allocation and is not reset by `TSMIndexFree` or TSM admin cleanup.
 - `TSMIndexCell` and `IndexTermCell` store shared `PatternSubst_p` pointers. `IndexTermCompareFun` asserts total substitutions, and the object-tree ordering assumes those substitutions remain stable after insertion.
+- Rust mirrors those shared pointers with `Rc<PatternSubst>` in `TSMIndex` and `IndexTerm`; regression tests pin pointer identity. This avoids recursively deep-copying the substitution and its signature while retaining owned public constructors for callers that need an independent substitution.
+- `TSMIndexFind` obtains an `IndexSymbol` key through the side-effect-free `PatSymbValue` accessor. Rust symbol-index lookup likewise borrows the stored substitution and does not clone it; profiling a 1,000-term recursive corpus showed that the former per-lookup deep copy accounted for 51.59% of executed instructions.
 - `IndexTermAlloc` only stores the term pointer and substitution pointer. Despite comments about references and bank mutation, `IndexTermFree` just asserts the bank pointer and frees the wrapper cell.
 - `IndexEmpty` can be allocated and found against, returning `-1`, but insertion asserts; higher-level parsers reject it for active TSM weight parameters.
 

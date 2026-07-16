@@ -5,8 +5,8 @@ use crate::learn::flatannoterms::{
     flat_anno_set_eval_weighted_average, flat_anno_set_flatten, FlatAnnoSet, FlatAnnoTerm,
 };
 use crate::learn::indexfunctions::{
-    tsm_index_alloc, tsm_index_find, tsm_index_insert, tsm_index_print_string, IndexType, TSMIndex,
-    INDEX_DYNAMIC_DEPTH,
+    tsm_index_alloc, tsm_index_alloc_shared, tsm_index_find, tsm_index_insert,
+    tsm_index_print_string, IndexType, TSMIndex, INDEX_DYNAMIC_DEPTH,
 };
 use crate::learn::patterns::PatternSubst;
 use crate::terms::signature::Signature;
@@ -14,6 +14,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_weight;
 use crate::terms::termtypes::Term;
 use std::fmt::Write as _;
+use std::rc::Rc;
 
 pub type TsmPartition = Vec<Option<FlatAnnoTerm>>;
 pub type TsmId = usize;
@@ -69,7 +70,7 @@ pub struct TsmAdmin {
     empty_tsm: TsmId,
     tsm_stack: Vec<TsmId>,
     cache_stack: Vec<PDIntArray>,
-    subst: Option<PatternSubst>,
+    subst: Option<Rc<PatternSubst>>,
     tsms: Vec<Tsm>,
 }
 
@@ -114,8 +115,12 @@ impl Tsm {
     /// [`tsm_index_alloc`].
     #[must_use]
     pub fn new(index_type: IndexType, depth: i32, subst: PatternSubst) -> Self {
+        Self::new_shared(index_type, depth, Rc::new(subst))
+    }
+
+    fn new_shared(index_type: IndexType, depth: i32, subst: Rc<PatternSubst>) -> Self {
         Self {
-            index: tsm_index_alloc(index_type, depth, subst),
+            index: tsm_index_alloc_shared(index_type, depth, subst),
             max_index: -1,
             tsas: None,
         }
@@ -150,8 +155,8 @@ impl TsmAdmin {
     /// invariants.
     pub fn new(sig: Signature, tsm_type: TsmType) -> Result<Self, Diagnostic> {
         let index_bank = TermBank::new(sig)?;
-        let empty_subst = PatternSubst::new(index_bank.signature());
-        let tsms = vec![Tsm::new(IndexType::EMPTY, 0, empty_subst)];
+        let empty_subst = Rc::new(PatternSubst::new(index_bank.signature()));
+        let tsms = vec![Tsm::new_shared(IndexType::EMPTY, 0, empty_subst)];
         Ok(Self {
             tsm_type,
             index_bank,
@@ -238,7 +243,7 @@ impl TsmAdmin {
 
     #[must_use]
     pub fn subst(&self) -> Option<&PatternSubst> {
-        self.subst.as_ref()
+        self.subst.as_deref()
     }
 
     #[must_use]
@@ -275,9 +280,9 @@ impl TsmAdmin {
         let subst = self
             .subst
             .clone()
-            .unwrap_or_else(|| PatternSubst::new(self.index_bank.signature()));
+            .unwrap_or_else(|| Rc::new(PatternSubst::new(self.index_bank.signature())));
         let id = self.tsms.len();
-        self.tsms.push(Tsm::new(index_type, depth, subst));
+        self.tsms.push(Tsm::new_shared(index_type, depth, subst));
         id
     }
 
@@ -286,10 +291,11 @@ impl TsmAdmin {
             .unwrap_or_else(|| panic!("TSM admin has no root TSM"))
     }
 
-    fn required_subst(&self) -> &PatternSubst {
-        self.subst
-            .as_ref()
-            .unwrap_or_else(|| panic!("TSM admin has no pattern substitution"))
+    fn required_subst_shared(&self) -> Rc<PatternSubst> {
+        self.subst.as_ref().map_or_else(
+            || panic!("TSM admin has no pattern substitution"),
+            Rc::clone,
+        )
     }
 }
 
@@ -609,7 +615,7 @@ pub fn tsm_admin_build_tsm(
     assert_ne!(index_type, IndexType::NO_INDEX);
     admin.index_type = index_type;
     admin.index_depth = depth;
-    admin.subst = Some(subst);
+    admin.subst = Some(Rc::new(subst));
     admin.limit = flat_anno_set_eval_average(set);
     admin.eval_limit = admin.limit;
 
@@ -665,11 +671,11 @@ pub fn tsm_create(admin: &mut TsmAdmin, set: &FlatAnnoSet) -> Result<TsmId, Diag
     } else {
         admin.limit
     };
-    let subst = admin.required_subst().clone();
+    let subst = admin.required_subst_shared();
     let index_type = tsm_find_optimal_index(
         set,
         &mut admin.index_bank,
-        &subst,
+        subst.as_ref(),
         &mut depth,
         admin.index_type,
         limit,
@@ -751,7 +757,7 @@ pub fn tsm_eval_term(admin: &mut TsmAdmin, term: &Term, subst: &PatternSubst) ->
 /// Panics if the admin has no root TSM or no stored substitution.
 #[must_use]
 pub fn tsm_compute_classification_limit(admin: &mut TsmAdmin, set: &FlatAnnoSet) -> f64 {
-    let subst = admin.required_subst().clone();
+    let subst = admin.required_subst_shared();
     let mut pos_eval = 0.0;
     let mut neg_eval = 0.0;
     let mut pos = 0_i64;
@@ -759,7 +765,7 @@ pub fn tsm_compute_classification_limit(admin: &mut TsmAdmin, set: &FlatAnnoSet)
 
     for (_key, entry) in set.iter() {
         let flat = &entry.val1;
-        let eval = tsm_eval_term(admin, flat.term(), &subst);
+        let eval = tsm_eval_term(admin, flat.term(), subst.as_ref());
         if flat.eval() < admin.limit {
             pos_eval += eval * i64_to_f64(flat.sources());
             pos += flat.sources();
@@ -791,12 +797,12 @@ pub fn tsm_compute_average_eval(admin: &mut TsmAdmin, set: &FlatAnnoSet) -> f64 
         return 0.0;
     }
 
-    let subst = admin.required_subst().clone();
+    let subst = admin.required_subst_shared();
     let mut eval = 0.0;
     let mut count = 0_i64;
     for (_key, entry) in set.iter() {
         let flat = &entry.val1;
-        eval += tsm_eval_term(admin, flat.term(), &subst) * i64_to_f64(flat.sources());
+        eval += tsm_eval_term(admin, flat.term(), subst.as_ref()) * i64_to_f64(flat.sources());
         count += flat.sources();
     }
     eval / i64_to_f64(count)
@@ -1575,6 +1581,12 @@ mod tests {
 
         assert_eq!(admin.tsm_stack().len(), 22);
         assert_eq!(admin.cache_stack().len(), 22);
+        let shared_subst = admin.subst.as_ref().expect("stored substitution");
+        assert!(admin
+            .tsms
+            .iter()
+            .skip(1)
+            .all(|tsm| tsm.index.shares_subst(shared_subst)));
         assert!(admin
             .root_tsm()
             .is_some_and(|root| admin.tsm_stack().contains(&root)));

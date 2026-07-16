@@ -162,22 +162,22 @@ impl PatternSubst {
     /// # Panics
     ///
     /// Panics if `f_code` is zero.
-    pub fn symbol_value(&mut self, f_code: FunCode) -> FunCode {
+    pub fn symbol_value(&self, f_code: FunCode) -> FunCode {
         assert_ne!(f_code, 0, "pattern symbols must be non-zero");
         if f_code > 0 {
             if self.sig.is_special(f_code) {
                 return f_code;
             }
-            self.fun_subst.element_int(pd_index(f_code))
+            subst_array_value(&self.fun_subst, pd_index(f_code))
         } else if f_code_is_alt_code(f_code) {
             f_code
         } else {
-            self.var_subst.element_int(pd_index(-f_code))
+            subst_array_value(&self.var_subst, pd_index(-f_code))
         }
     }
 
     #[must_use]
-    pub fn symbol_is_bound(&mut self, f_code: FunCode) -> bool {
+    pub fn symbol_is_bound(&self, f_code: FunCode) -> bool {
         self.symbol_value(f_code) != 0
     }
 
@@ -214,10 +214,10 @@ impl PatternSubst {
     }
 
     #[must_use]
-    pub fn original_symbol(&mut self, f_code: FunCode) -> FunCode {
+    pub fn original_symbol(&self, f_code: FunCode) -> FunCode {
         if f_code > 0 {
             for index in 0..self.fun_subst.size() {
-                if self.fun_subst.element_int(index_to_pd(index)) == f_code {
+                if subst_array_value(&self.fun_subst, index_to_pd(index)) == f_code {
                     return usize_to_f_code(index);
                 }
             }
@@ -229,7 +229,7 @@ impl PatternSubst {
         }
 
         for index in 0..self.fun_subst.size() {
-            if self.var_subst.element_int(index_to_pd(index)) == f_code {
+            if subst_array_value(&self.var_subst, index_to_pd(index)) == f_code {
                 return usize_to_f_code(index);
             }
         }
@@ -239,7 +239,7 @@ impl PatternSubst {
     fn comparison_value(&mut self, f_code: FunCode) -> FunCode {
         assert_ne!(f_code, 0, "pattern symbols must be non-zero");
         if f_code > 0 {
-            let value = self.fun_subst.element_int(pd_index(f_code));
+            let value = subst_array_value(&self.fun_subst, pd_index(f_code));
             if value == f_code {
                 i64::from(self.sig.get_alpha_rank(f_code))
             } else {
@@ -248,7 +248,7 @@ impl PatternSubst {
         } else if f_code_is_alt_code(f_code) {
             f_code
         } else {
-            self.var_subst.element_int(pd_index(-f_code))
+            subst_array_value(&self.var_subst, pd_index(-f_code))
         }
     }
 
@@ -1074,6 +1074,10 @@ fn pd_index(value: i64) -> isize {
     isize::try_from(value).unwrap_or(isize::MAX)
 }
 
+fn subst_array_value(array: &PDIntArray, index: isize) -> i64 {
+    array.existing_element(index).copied().unwrap_or(0)
+}
+
 fn index_to_pd(index: usize) -> isize {
     isize::try_from(index).unwrap_or(isize::MAX)
 }
@@ -1098,7 +1102,7 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::PatEqnDirection;
     use crate::clauses::eqnlist::EqnList;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, DEFAULT_SIGNATURE_SIZE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_IS_SHARED};
@@ -1124,12 +1128,27 @@ mod tests {
         let mut sig = Signature::new(TypeBank::new());
         let special = sig.insert_id("special", 0, true);
         let ordinary = sig.insert_id("ordinary", 0, false);
-        let mut subst = PatternSubst::default_subst(&sig);
+        let subst = PatternSubst::default_subst(&sig);
 
         assert_eq!(subst.symbol_value(special), special);
         assert!(subst.symbol_is_bound(special));
         assert_eq!(subst.symbol_value(ordinary), 0);
         assert!(!subst.symbol_is_bound(ordinary));
+    }
+
+    #[test]
+    fn symbol_lookup_does_not_grow_substitution_arrays() {
+        let mut sig = Signature::new(TypeBank::new());
+        let mut outside = 0;
+        for index in 0..=DEFAULT_SIGNATURE_SIZE {
+            outside = sig.insert_id(&format!("outside{index}"), 0, false);
+        }
+        let subst = PatternSubst::new(&sig);
+        let original_size = subst.fun_subst.size();
+        assert!(usize::try_from(outside).is_ok_and(|index| index >= original_size));
+
+        assert_eq!(subst.symbol_value(outside), 0);
+        assert_eq!(subst.fun_subst.size(), original_size);
     }
 
     #[test]

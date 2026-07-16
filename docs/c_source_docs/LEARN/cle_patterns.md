@@ -158,6 +158,7 @@ Source files reviewed: `LEARN/cle_patterns.h`, `LEARN/cle_patterns.c`.
 ### Compatibility Notes
 
 - `PatternSubstCell` stores a raw `Sig_p`; C pattern substitutions can observe later signature mutations. A Rust port should make that ownership/session boundary explicit before TSM construction mutates signatures while substitutions are live.
+- `PatSymbValue`, `PatSymbolIsBound`, and `PatternSubstGetOriginalSymbol` are documented and implemented as read-only queries even though `PDArrayElementInt` may enlarge a backing array while returning zero for an out-of-capacity unbound symbol. Rust preserves the returned value without the unobservable capacity mutation, allowing shared TSM substitutions to be queried without a deep copy.
 - `pat_symbol_compare` checks whether `f2` is bound in `subst1` in the second one-bound branch. This appears suspicious but is observable ordering behavior and should be preserved until reference tests justify a cleanup.
 - Normalized function ids are allocated in ascending per-arity order via `used_idents`, while normalized variable ids decrement from `NORM_VAR_INIT`; alternate variable f-codes pass through unchanged and are not stored in `var_subst`.
 - `PatternLitListCompare` compares raw stack pointer lengths before pairwise comparison, so the C result is based on the alternating pointer/int stack size rather than a typed literal-count abstraction.
