@@ -52,6 +52,8 @@ use std::path::{Path, PathBuf};
 pub const PROGRAM_NAME: &str = "enormalizer";
 const ENORMALIZER_CNF_MINISCOPE_LIMIT: i64 = 1000;
 const ENORMALIZER_CNF_DEF_LIMIT: i64 = 24;
+const LOP_FORMULA_OUTPUT_WARNING: &str =
+    "enormalizer: Warning: Currently no LOP FOF format, using TPTP";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
@@ -564,7 +566,7 @@ fn execute_config(
         process_clauses(name, config, stdin, &mut output, &mut runtime)?;
     }
     if let Some(name) = config.formula_file.as_deref() {
-        process_formulas(name, config, stdin, &mut output, &mut runtime)?;
+        process_formulas(name, config, stdin, &mut output, stderr, &mut runtime)?;
     }
     if config.print_rusage {
         write_all(
@@ -750,11 +752,13 @@ fn process_formulas(
     config: &EnormalizerConfig,
     stdin: &mut impl Read,
     output: &mut impl Write,
+    stderr: &mut impl Write,
     runtime: &mut RewriteRuntime<'_>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = formatted_scanner_for_input(name, stdin, config.parse_format)?;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         let mut target = parse_wrapped_formula(&mut scanner, runtime.bank)?;
+        warn_about_lop_formula_output(config, stderr)?;
         let original = render_formula(runtime.bank, &target.formula, target.problem_type, config)?;
         let normalized = normalize_term(
             runtime.bank,
@@ -763,9 +767,20 @@ fn process_formulas(
             runtime.demodulators,
         )?;
         target.formula.set_formula(normalized);
+        warn_about_lop_formula_output(config, stderr)?;
         let normalized =
             render_formula(runtime.bank, &target.formula, target.problem_type, config)?;
         writeln_diag(output, &format!("{original} ==> {normalized}"))?;
+    }
+    Ok(())
+}
+
+fn warn_about_lop_formula_output(
+    config: &EnormalizerConfig,
+    stderr: &mut impl Write,
+) -> Result<(), Diagnostic> {
+    if config.output_format == IoFormat::Lop {
+        writeln_diag(stderr, LOP_FORMULA_OUTPUT_WARNING)?;
     }
     Ok(())
 }
@@ -796,8 +811,8 @@ fn parse_wrapped_formula(
         IoFormat::Tptp => parse_old_tptp_wrapped_formula(scanner, bank),
         IoFormat::Tstp => parse_tstp_wrapped_formula(scanner, bank),
         IoFormat::Lop | IoFormat::Auto => Err(Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            "Formula parsing is only supported for TPTP/TSTP input",
+            ErrorCode::OTHER_ERROR,
+            "LOP currently does not support full FOF!",
         )),
     }
 }
@@ -1281,17 +1296,21 @@ mod tests {
     use super::{
         auto_memory_mb, clausify_rule_formulas, memory_limit_bytes_from_mb, memory_limit_warnings,
         new_term_bank, parse_rule_file, parse_wrapped_formula, print_help, process_options, run,
-        EnormalizerConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE, VERSION,
+        EnormalizerConfig, RunCommand, LOP_FORMULA_OUTPUT_WARNING, OUTPUT_CLOSE_ERROR,
+        PROGRAM_NAME, TSTP_FORMULA_FREE_VARIABLES_MESSAGE, VERSION,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{get_system_phys_memory, RLimResult};
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::set_verbose_level;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM};
+    use crate::clauses::clause_props::{
+        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+        CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+        CP_TYPE_UNKNOWN, CP_TYPE_WATCH_CLAUSE,
+    };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
-    use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::prover::version::footer;
     use crate::test_support::global_state_lock;
     use std::fs;
@@ -1765,6 +1784,294 @@ mod tests {
             assert!(target.formula.query_prop(CP_INITIAL));
             assert!(target.formula.query_prop(CP_INPUT_FORMULA));
         }
+    }
+
+    #[test]
+    fn old_tptp_formula_target_wrapper_matrix_matches_c() {
+        let _guard = global_state_lock();
+        let cases = [
+            ("old_axiom", "axiom", CP_TYPE_AXIOM),
+            ("17", "hypothesis", CP_TYPE_HYPOTHESIS),
+            (
+                "\"old negated\"",
+                "negated_conjecture",
+                CP_TYPE_NEG_CONJECTURE,
+            ),
+            ("old_conjecture", "conjecture", CP_TYPE_CONJECTURE),
+            ("old_question", "question", CP_TYPE_QUESTION),
+            ("old_lemma", "lemma", CP_TYPE_AXIOM),
+            ("old_unknown", "unknown", CP_TYPE_AXIOM),
+        ];
+
+        for (name, role, expected_type) in cases {
+            reset_problem_type();
+            let mut bank = new_term_bank().expect("term bank");
+            let input = format!("input_formula({name},{role},p(a)).");
+            let mut scanner = Scanner::from_user_string(&input, true).expect("scanner");
+            scanner.set_format(IoFormat::Tptp);
+
+            let target = parse_wrapped_formula(&mut scanner, &mut bank).expect("old TPTP target");
+
+            assert_eq!(target.problem_type, ProblemType::FirstOrder);
+            assert_eq!(target.formula.get_id(true), name);
+            assert_eq!(target.formula.query_tptp_type(), expected_type);
+            assert!(target.formula.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+            assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn tstp_formula_target_wrapper_name_role_and_source_matrix_matches_c() {
+        let _guard = global_state_lock();
+        let cases = [
+            (
+                "fof",
+                "fof_axiom",
+                "axiom",
+                ", 42",
+                CP_TYPE_AXIOM,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "tff",
+                "18",
+                "hypothesis",
+                ", [source(foo)]",
+                CP_TYPE_HYPOTHESIS,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "'quoted-definition'",
+                "definition",
+                ", file('matrix.p',quoted_definition), [status(thm)]",
+                CP_TYPE_AXIOM,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "\"string assumption\"",
+                "assumption",
+                "",
+                CP_TYPE_NEG_CONJECTURE,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_lemma",
+                "lemma",
+                "",
+                CP_TYPE_LEMMA,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_theorem",
+                "theorem",
+                "",
+                CP_TYPE_AXIOM,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_conjecture",
+                "conjecture",
+                "",
+                CP_TYPE_CONJECTURE,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_question",
+                "question",
+                "",
+                CP_TYPE_QUESTION,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_negated",
+                "negated_conjecture",
+                "",
+                CP_TYPE_NEG_CONJECTURE,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_plain",
+                "plain",
+                "",
+                CP_TYPE_UNKNOWN,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "fof",
+                "fof_unknown",
+                "unknown",
+                "",
+                CP_TYPE_UNKNOWN,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "tcf",
+                "tcf_watch",
+                "watchlist",
+                "",
+                CP_TYPE_WATCH_CLAUSE,
+                ProblemType::FirstOrder,
+                false,
+            ),
+            (
+                "thf",
+                "thf_definition",
+                "definition",
+                "",
+                CP_TYPE_AXIOM,
+                ProblemType::HigherOrder,
+                true,
+            ),
+        ];
+
+        for (kind, name, role, optional_fields, expected_type, problem_type, lambda_definition) in
+            cases
+        {
+            reset_problem_type();
+            let mut bank = new_term_bank().expect("term bank");
+            let input = format!("{kind}({name},{role},$true{optional_fields}).");
+            let mut scanner = Scanner::from_user_string(&input, true).expect("scanner");
+            scanner.set_format(IoFormat::Tstp);
+
+            let target = parse_wrapped_formula(&mut scanner, &mut bank).expect("TSTP target");
+
+            assert_eq!(target.problem_type, problem_type, "{input}");
+            assert_eq!(target.formula.get_id(true), name, "{input}");
+            assert_eq!(target.formula.query_tptp_type(), expected_type, "{input}");
+            assert_eq!(
+                target.formula.query_prop(CP_IS_LAMBDA_DEF),
+                lambda_definition,
+                "{input}"
+            );
+            assert!(target.formula.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+            assert!(scanner.test_tok(TokenType::NO_TOKEN), "{input}");
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn every_tstp_formula_wrapper_accepts_type_records_like_c() {
+        let _guard = global_state_lock();
+        for (kind, problem_type) in [
+            ("fof", ProblemType::FirstOrder),
+            ("tff", ProblemType::FirstOrder),
+            ("tcf", ProblemType::FirstOrder),
+            ("thf", ProblemType::HigherOrder),
+        ] {
+            reset_problem_type();
+            let mut bank = new_term_bank().expect("term bank");
+            let name = format!("{kind}_type");
+            let input = format!(
+                "{kind}({name},type,{kind}_symbol:$i,file('types.p',{name}),[status(thm)])."
+            );
+            let mut scanner = Scanner::from_user_string(&input, true).expect("scanner");
+            scanner.set_format(IoFormat::Tstp);
+
+            let target = parse_wrapped_formula(&mut scanner, &mut bank).expect("type target");
+
+            assert_eq!(target.problem_type, problem_type, "{input}");
+            assert_eq!(target.formula.get_id(true), name, "{input}");
+            assert_eq!(target.formula.query_tptp_type(), CP_TYPE_AXIOM, "{input}");
+            assert_eq!(target.formula.formula(), bank.true_term(), "{input}");
+            assert!(target.formula.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+            assert!(scanner.test_tok(TokenType::NO_TOKEN), "{input}");
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn lop_formula_targets_use_c_other_error() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("lop_formula_error_rules");
+        let formula_path = temp_path("lop_formula_error_target");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(&formula_path, "p(a).\n").expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("LOP formula targets are unsupported");
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), "LOP currently does not support full FOF!");
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
+    }
+
+    #[test]
+    fn lop_formula_output_warns_for_both_c_wformula_print_calls() {
+        let _guard = global_state_lock();
+        let rule_path = temp_path("lop_formula_output_rules");
+        let formula_path = temp_path("lop_formula_output_target");
+        fs::write(&rule_path, "").expect("rules written");
+        fs::write(&formula_path, "fof(form1,axiom,p(a)).\n").expect("formulas written");
+
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                formula_path.to_str().expect("utf8 path"),
+                rule_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("TSTP input with default LOP output");
+
+        assert_eq!(status, 0);
+        assert_eq!(
+            String::from_utf8(stdout).expect("utf8"),
+            "input_formula(form1,axiom,p(a)). ==> input_formula(form1,axiom,p(a)).\n"
+        );
+        assert_eq!(
+            String::from_utf8(stderr).expect("utf8"),
+            format!("{LOP_FORMULA_OUTPUT_WARNING}\n{LOP_FORMULA_OUTPUT_WARNING}\n")
+        );
+
+        let _ = fs::remove_file(rule_path);
+        let _ = fs::remove_file(formula_path);
     }
 
     #[test]

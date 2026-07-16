@@ -736,6 +736,26 @@ class ComparisonTests(unittest.TestCase):
                     ],
                 ),
                 (
+                    "enormalizer/tstp-fo-wrapper-matrix",
+                    [
+                        "--tstp-in",
+                        "--tstp-out",
+                        "-f",
+                        "formulas.p",
+                        "rules.p",
+                    ],
+                ),
+                (
+                    "enormalizer/thf-wrapper-matrix",
+                    [
+                        "--tstp-in",
+                        "--tstp-out",
+                        "-f",
+                        "formulas.p",
+                        "rules.p",
+                    ],
+                ),
+                (
                     "enormalizer/stdin-include-rules",
                     ["--tstp-in", "-t", "terms.p"],
                 ),
@@ -763,6 +783,14 @@ class ComparisonTests(unittest.TestCase):
                         "normalized.out",
                         "rules.lop",
                     ],
+                ),
+                (
+                    "enormalizer/lop-formula-output-fallback",
+                    ["--tstp-in", "-f", "formulas.p", "rules.p"],
+                ),
+                (
+                    "enormalizer/lop-formula-unsupported",
+                    ["--lop-in", "-f", "formulas.lop", "rules.lop"],
                 ),
                 ("enormalizer/malformed-rule", ["--lop-in"]),
                 (
@@ -1511,6 +1539,24 @@ class ComparisonTests(unittest.TestCase):
                 "output_absent_files"
             ],
             ["missing/normalized.out"],
+        )
+        self.assertIn(
+            "tcf(tcf_watch,watchlist,$true).",
+            cases_by_name["enormalizer/tstp-fo-wrapper-matrix"]["workdir_files"][
+                "formulas.p"
+            ],
+        )
+        self.assertIn(
+            "thf('quoted-thf',definition,$true,",
+            cases_by_name["enormalizer/thf-wrapper-matrix"]["workdir_files"][
+                "formulas.p"
+            ],
+        )
+        self.assertEqual(
+            cases_by_name["enormalizer/lop-formula-unsupported"]["workdir_files"][
+                "formulas.lop"
+            ],
+            "p(a).\n",
         )
 
     def test_tool_companion_substitution_preserves_argument_prefix(self):

@@ -1117,10 +1117,60 @@ TOOL_FUNCTIONAL_CASES = {
                 "workdir_files": {
                     "rules.p": "input_clause(rule,axiom,[++equal(f(X),a)]).\n",
                     "formulas.p": (
+                        "input_formula(old_axiom,axiom,p(f(a))).\n"
+                        "input_formula(17,hypothesis,q(f(b))).\n"
+                        'input_formula("old negated",negated_conjecture,r(f(c))).\n'
+                        "input_formula(old_conjecture,conjecture,s(f(d))).\n"
+                        "input_formula(old_question,question,t(f(e))).\n"
                         "input_formula(lemma_form,lemma,p(f(b))).\n"
                         "input_formula(12,unknown,q(f(c))).\n"
-                        "input_formula(question_form,question,r(f(d))).\n"
-                        "input_formula(neg_form,negated_conjecture,s(f(e))).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "tstp-fo-wrapper-matrix",
+            ("--tstp-in", "--tstp-out", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "",
+                    "formulas.p": (
+                        "fof(fof_type,type,fof_symbol:$i,"
+                        "file('types.p',fof_type),[status(thm)]).\n"
+                        "tff(tff_type,type,tff_symbol:$i).\n"
+                        "tcf(tcf_type,type,tcf_symbol:$i).\n"
+                        "fof(fof_axiom,axiom,$true,42).\n"
+                        "tff(18,hypothesis,$true,[source(foo)]).\n"
+                        "fof('quoted-definition',definition,$true,"
+                        "file('matrix.p',quoted_definition),[status(thm)]).\n"
+                        'fof("string assumption",assumption,$true).\n'
+                        "fof(fof_lemma,lemma,$true).\n"
+                        "fof(fof_theorem,theorem,$true).\n"
+                        "fof(fof_conjecture,conjecture,$true).\n"
+                        "fof(fof_question,question,$true).\n"
+                        "fof(fof_negated,negated_conjecture,$true).\n"
+                        "fof(fof_plain,plain,$true).\n"
+                        "fof(fof_unknown,unknown,$true).\n"
+                        "tcf(tcf_watch,watchlist,$true).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "thf-wrapper-matrix",
+            ("--tstp-in", "--tstp-out", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "",
+                    "formulas.p": (
+                        "thf(person_type,type,person:$tType).\n"
+                        "thf('quoted-thf',definition,$true,"
+                        "file('matrix.p',quoted_thf),[status(thm)]).\n"
+                        "thf(19,question,$true).\n"
                     ),
                 },
             },
@@ -1165,6 +1215,30 @@ TOOL_FUNCTIONAL_CASES = {
                     "terms.lop": "f(b)\n",
                 },
                 "output_files": ("normalized.out",),
+            },
+        ),
+        (
+            "lop-formula-output-fallback",
+            ("--tstp-in", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "",
+                    "formulas.p": "fof(form1,axiom,p(a)).\n",
+                },
+            },
+        ),
+        (
+            "lop-formula-unsupported",
+            ("--lop-in", "-f", "formulas.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "",
+                    "formulas.lop": "p(a).\n",
+                },
             },
         ),
         (
