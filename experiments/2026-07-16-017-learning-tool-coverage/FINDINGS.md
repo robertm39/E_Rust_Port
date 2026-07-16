@@ -2,11 +2,11 @@
 
 ## Status
 
-This is an in-progress expansion for Bead `E_Rust_Port-j76.1.2`. The permanent
-case definitions, harness unit coverage, and optimized Windows candidate checks
-are complete. The new cases have not yet run against the archived Linux C tools
-because this desktop environment has no installed WSL distribution or locally
-executable C reference-tool cache. The Bead therefore remains open.
+Complete for Bead `E_Rust_Port-j76.1.2`. The permanent cases, harness coverage,
+optimized Windows candidate checks, archived-C differential, and native-Linux
+recursive-TSM benchmark have all run. The differential exposed one real
+missing-input diagnostic mismatch; Rust now preserves C's pre-open `stat`
+boundary, and the final 14-case tool comparison is exact.
 
 ## Added cases
 
@@ -71,16 +71,10 @@ file-not-found equivalence class.
 The Python harness passes all 25 unit tests and all three edited Python files
 pass bytecode compilation.
 
-## Reference-environment limitation
+## Final C/Rust differential
 
-`wsl -l -q` reports no installed distributions. Attempting the configured
-`Ubuntu-24.04` distro returns `Wsl/Service/WSL_E_DISTRO_NOT_FOUND`. The Windows
-`~/.cache/e-rust-port` tree has a copied source tree but no `reference.json` or
-cached executable tools. Consequently neither the new C/Rust differential nor
-native-Linux TSM performance comparison can be produced honestly in this
-environment.
-
-Once the archived reference environment is available, run:
+The archived reference environment later became available under WSL. The exact
+command was:
 
 ```text
 python3 tools/e-interop/e_interop.py compare-tools \
@@ -89,15 +83,47 @@ python3 tools/e-interop/e_interop.py compare-tools \
   --tool direct_examples --tool ekb_delete --tool tsm_classify --timeout 30
 ```
 
-Then add an interleaved native-Linux benchmark for
-`tsm_classify/recursive-mixed`. The known upstream `ekb_ginsert` heap-corruption
-abort is unchanged and is not conflated with these five new exact-comparison
-cases.
+The first run, artifact
+`.artifacts/e-compare/20260716-171657-148910-tools`, found one mismatch:
+`direct_examples/missing-input` had the same exit status and normalized OS
+suffix, but Rust reported `Cannot open file` where C's `InputOpen` first reports
+`Cannot stat file`. Rust now routes named direct-example inputs through the
+already ported `input_open` boundary before scanner construction. Permanent
+unit coverage pins the `stat` diagnostic and the existing output-file-before-
+input-failure side effect.
+
+The final report is
+`.artifacts/e-compare/20260716-172050-819680-tools`: all 14 cases match, including
+all five additions in this experiment. The known upstream `ekb_ginsert`
+heap-corruption abort is unchanged and is not conflated with these cases.
+
+## Native-Linux recursive-TSM benchmark
+
+`benchmark-recursive-tsm-wsl.sh` runs the exact `recursive-mixed` input in
+alternating C/Rust order. Each of 11 batches launches the tool 200 times with
+`IndexSymbol`, depth three, and recursive TSM construction. The script stages
+both executables together on WSL's native filesystem before timing; an initial
+exploratory run with Rust executed from `/mnt/c` was rejected because mounted-
+filesystem executable startup dominated the wall result.
+
+The accepted raw data is
+`.artifacts/learning-tool-coverage/recursive-tsm-native-batches.csv`:
+
+| Implementation | Median wall / 200 | Median user | Median system | Median CPU | Peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Archived C | 0.87 s | 0.24 s | 0.12 s | 0.36 s | 3,200 KiB |
+| Rust | 1.05 s | 0.29 s | 0.13 s | 0.42 s | 3,200 KiB |
+
+Rust/C is `1.207x` by batch wall time and `1.167x` by median batch CPU. This is
+an exact small-workload/startup-sensitive performance baseline, not evidence of
+comparable performance under the repository's `1.10x` target. The residual gap
+is tracked as Bead `E_Rust_Port-j76.5.1` so completion of the requested coverage
+does not hide it.
 
 ## Decision
 
-Retain and publish the expanded harness coverage, but do not close
-`E_Rust_Port-j76.1.2` until the new C/Rust differential and TSM performance run
-are available. This checkpoint is useful independently: it makes the intended
-corpora and platform equivalences executable and prevents the missing reference
-environment from erasing completed candidate-side work.
+Retain and publish the expanded harness coverage, the exact C pre-open `stat`
+fix, the reproducible recursive corpus, and the unbiased benchmark harness.
+Close `E_Rust_Port-j76.1.2`: every coverage item named by the migrated pending
+work now has executable evidence. Continue the measured recursive-TSM
+performance work in follow-up Bead `E_Rust_Port-j76.5.1`.

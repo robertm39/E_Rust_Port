@@ -7,6 +7,7 @@ use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::inout::commandline::{
     get_float_arg, get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
+use crate::inout::fileops::input_open;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::pcl2::analysis::{
@@ -285,8 +286,15 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         Scanner::from_file_content("-", data, true)?
     } else {
-        Scanner::from_file(Path::new(name), true)
-            .map_err(direct_examples_scanner_open_diagnostic)?
+        let path = Path::new(name);
+        let mut source = input_open(Some(path), true)
+            .map_err(direct_examples_input_open_diagnostic)?
+            .ok_or_else(|| io_diagnostic(format!("Cannot open file {name} for reading")))?;
+        let mut data = Vec::new();
+        source.read_to_end(&mut data).map_err(|error| {
+            direct_examples_sys_error_diagnostic(format!("Cannot read file {name}"), &error)
+        })?;
+        Scanner::from_file_content(name, data, true)?
     };
     scanner.set_format(IoFormat::Tptp);
     Ok(scanner)
@@ -381,8 +389,11 @@ fn direct_examples_sys_error_diagnostic(
     )
 }
 
-fn direct_examples_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+fn direct_examples_input_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -617,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn input_file_open_failure_uses_c_syserror_shape() {
+    fn missing_input_file_uses_c_stat_syserror_shape() {
         let _guard = global_state_lock();
         let missing_path = temp_path("missing-input");
         remove_if_present(&missing_path);
@@ -634,10 +645,9 @@ mod tests {
         .expect_err("missing input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -668,10 +678,9 @@ mod tests {
         .expect_err("missing input file is reported after output creation");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(
             std::fs::read_to_string(&output_path).expect("output file is readable"),
