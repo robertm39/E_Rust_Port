@@ -33420,9 +33420,9 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
-    fn run_syntax_only_rejects_thf_lambda_until_full_formula_pipeline() {
+    fn run_syntax_only_rejects_non_boolean_thf_lambda_root_like_c() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-thf-lambda-requires-full-pipeline");
+        let path = temp_path("syntax-thf-lambda-non-boolean-root");
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\

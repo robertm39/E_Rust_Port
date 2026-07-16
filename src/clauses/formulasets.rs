@@ -31,18 +31,18 @@ use crate::clauses::derivation::{
     DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_EQUIV,
     DC_VAR_RENAME,
 };
-use crate::clauses::eqn_props::{EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
+use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::inferencedoc::{
     FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationInference,
     ProofDocSession, ProofDocWriteResult,
 };
+use crate::clauses::pdtrees::{PdTree, PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
     abstract_vars, apply_terms, beta_normalize_db, decode_formulas_for_cnf, lambda_eta_reduce_db,
     lambda_normalize_db, lambda_to_forall, named_to_db, unfold_lambda, whnf_step,
 };
-use crate::terms::match_mgu::subst_compute_match;
 use crate::terms::signature::{Signature, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::{arrow_type_flattened, type_is_predicate};
 use crate::terms::subst::Substitution;
@@ -52,8 +52,8 @@ use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_has_interpreted_symbol, term_identity_id, DerefType, Term, TermProperties,
-    TP_CHECK_FLAG, TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
+    term_del_prop, term_has_interpreted_symbol, DerefType, Term, TermProperties, TP_CHECK_FLAG,
+    TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
 };
 use crate::terms::termvars::VarBank;
 use std::collections::{BTreeMap, BTreeSet};
@@ -773,12 +773,6 @@ fn lift_lambda_prefix(
         closed = crate::terms::lambda::close_with_db_var(bank, &type_, &closed)?;
     }
     bind_loose_db_replacements(&loose_replacements);
-    let lifting_key = term_identity_id(&closed);
-    if let Some(entry) = state.exact_liftings.get(&lifting_key).cloned() {
-        clear_loose_db_replacements(&loose_replacements);
-        used_defs.push(entry.definition);
-        return Ok(entry.lifted);
-    }
     if let Some(entry) = state.find_generalization(bank, &closed)? {
         clear_loose_db_replacements(&loose_replacements);
         used_defs.push(entry.definition);
@@ -837,20 +831,9 @@ fn lift_lambda_prefix(
 
     let mut wrapped = WrappedFormula::wt_formula_alloc(definition);
     wrapped.push_formula_derivation(DC_INTRO_DEF, None, None);
+    state.store_lifting(bank, &closed, lhs_wo_bound, wrapped.clone())?;
     state.definitions.push(wrapped.clone());
-    used_defs.push(wrapped.clone());
-    state.exact_liftings.insert(
-        lifting_key,
-        LambdaLiftReuseEntry {
-            lifted: lifted.clone(),
-            definition: wrapped.clone(),
-        },
-    );
-    state.general_liftings.push(LambdaLiftGeneralizationEntry {
-        closed,
-        lifted_template: lhs_wo_bound,
-        definition: wrapped,
-    });
+    used_defs.push(wrapped);
     Ok(lifted)
 }
 
@@ -1399,7 +1382,7 @@ pub struct ClauseSetLiftLambdasResult {
 #[derive(Default)]
 struct LambdaLiftState {
     definitions: Vec<WrappedFormula>,
-    exact_liftings: BTreeMap<usize, LambdaLiftReuseEntry>,
+    lifting_index: PdTree,
     general_liftings: Vec<LambdaLiftGeneralizationEntry>,
 }
 
@@ -1411,57 +1394,99 @@ struct LambdaLiftReuseEntry {
 
 #[derive(Clone)]
 struct LambdaLiftGeneralizationEntry {
-    closed: Term,
     lifted_template: Term,
     definition: WrappedFormula,
 }
 
 impl LambdaLiftState {
+    fn store_lifting(
+        &mut self,
+        bank: &mut TermBank,
+        closed: &Term,
+        lifted_template: Term,
+        definition: WrappedFormula,
+    ) -> Result<(), Diagnostic> {
+        let entry_index = i64::try_from(self.general_liftings.len()).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Lambda-lift PDTree entry index exceeds C's signed identifier range",
+            )
+        })?;
+        let occurrence = PdtIndexedOccurrence::new(entry_index, EqnSide::LeftSide);
+        self.lifting_index.insert_term_occurrence_with_bank(
+            bank,
+            closed,
+            PDTREE_IGNORE_NF_DATE,
+            occurrence,
+        )?;
+        self.general_liftings.push(LambdaLiftGeneralizationEntry {
+            lifted_template,
+            definition,
+        });
+        Ok(())
+    }
+
     fn find_generalization(
-        &self,
+        &mut self,
         bank: &mut TermBank,
         query: &Term,
     ) -> Result<Option<LambdaLiftReuseEntry>, Diagnostic> {
         let mut subst = Substitution::new();
-        for entry in &self.general_liftings {
-            let subst_start = subst.len();
-            if !subst_compute_match(&entry.closed, query, &mut subst) {
-                continue;
-            }
+        self.lifting_index.record_search_init_with_bank(
+            bank,
+            query,
+            PDTREE_IGNORE_NF_DATE,
+            false,
+        )?;
+        let result = (|| {
+            while let Some(occurrence) = self
+                .lifting_index
+                .search_next_matching_occurrence_with_subst(&mut subst)
+            {
+                let entry_index = usize::try_from(occurrence.clause_id()).map_err(|_| {
+                    Diagnostic::new(
+                        ErrorCode::OTHER_ERROR,
+                        "Lambda-lift PDTree returned a negative entry index",
+                    )
+                })?;
+                let entry = self.general_liftings.get(entry_index).ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorCode::OTHER_ERROR,
+                        "Lambda-lift PDTree returned an unknown entry index",
+                    )
+                })?;
 
-            let matcher_derefed = match bank.insert_instantiated_ho(&entry.lifted_template, true) {
-                Ok(term) => term,
-                Err(err) => {
-                    subst.backtrack_to_pos(subst_start);
-                    return Err(err);
+                let matcher_derefed = bank.insert_instantiated_ho(&entry.lifted_template, true)?;
+                let matched_vars = subst.bindings().to_vec();
+                let saved_bindings = matched_vars.iter().map(Term::binding).collect::<Vec<_>>();
+                for variable in &matched_vars {
+                    variable.set_binding(None);
                 }
-            };
-            let matched_vars = subst.bindings()[subst_start..].to_vec();
-            let saved_bindings = matched_vars.iter().map(Term::binding).collect::<Vec<_>>();
-            for var in &matched_vars {
-                var.set_binding(None);
-            }
 
-            let candidate = (|| {
-                let matcher_derefed = bank.insert_instantiated_ho(&matcher_derefed, true)?;
-                let beta_normal = beta_normalize_db(bank, &matcher_derefed)?;
-                lambda_eta_reduce_db(bank, &beta_normal)
-            })();
+                let candidate = (|| {
+                    let matcher_derefed = bank.insert_instantiated_ho(&matcher_derefed, true)?;
+                    let beta_normal = beta_normalize_db(bank, &matcher_derefed)?;
+                    lambda_eta_reduce_db(bank, &beta_normal)
+                })();
 
-            for (var, binding) in matched_vars.iter().zip(saved_bindings) {
-                var.set_binding(binding);
-            }
-            subst.backtrack_to_pos(subst_start);
+                for (variable, binding) in matched_vars.iter().zip(saved_bindings) {
+                    variable.set_binding(binding);
+                }
+                subst.backtrack_to_pos(0);
 
-            let candidate = candidate?;
-            if !candidate.has_lambda_subterm() {
-                return Ok(Some(LambdaLiftReuseEntry {
-                    lifted: candidate,
-                    definition: entry.definition.clone(),
-                }));
+                let candidate = candidate?;
+                if !candidate.has_lambda_subterm() {
+                    return Ok(Some(LambdaLiftReuseEntry {
+                        lifted: candidate,
+                        definition: entry.definition.clone(),
+                    }));
+                }
             }
-        }
-        Ok(None)
+            Ok(None)
+        })();
+        self.lifting_index.record_search_exit();
+        subst.backtrack_to_pos(0);
+        result
     }
 }
 
@@ -4688,8 +4713,8 @@ mod tests {
         clause_set_lift_lambdas, formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, wformula_deriv_find_first, wformula_dummy_quote_parent_ref,
         FormulaDefinitionStatistics, FormulaPrintFormat, FormulaProofDocRenderOptions, FormulaSet,
-        FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
-        WrappedFormulaCnfDocContext,
+        FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, LambdaLiftState,
+        WrappedFormula, WrappedFormulaCnfDocContext,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -7012,6 +7037,123 @@ mod tests {
             formulas[1].derivation_entries(),
             &[DerivationEntry::Operation(DC_INTRO_DEF)]
         );
+    }
+
+    #[test]
+    fn formula_set_lift_lambdas_uses_c_pdtree_general_first_order() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let x = typed_var(&bank, -903);
+        let a = typed_const(&mut bank, "set_lift_pdtree_a");
+        let specific_body = typed_unary(&mut bank, "set_lift_pdtree_body", &a);
+        let generic_body = typed_unary(&mut bank, "set_lift_pdtree_body", &x);
+        let specific_lambda = close_with_db_var(&mut bank, &i_type, &specific_body).unwrap();
+        let generic_lambda = close_with_db_var(&mut bank, &i_type, &generic_body).unwrap();
+        let lambda_type = specific_lambda.type_().expect("lambda term is typed");
+        let first_specific = typed_unary_with_types(
+            &mut bank,
+            "set_lift_pdtree_wrapper",
+            &specific_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let generic = typed_unary_with_types(
+            &mut bank,
+            "set_lift_pdtree_wrapper",
+            &generic_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let second_specific = typed_unary_with_types(
+            &mut bank,
+            "set_lift_pdtree_wrapper",
+            &specific_lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let first_target = typed_const(&mut bank, "set_lift_pdtree_target_1");
+        let second_target = typed_const(&mut bank, "set_lift_pdtree_target_2");
+        let third_target = typed_const(&mut bank, "set_lift_pdtree_target_3");
+        let eqn_code = bank.signature().eqn_code();
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &first_specific,
+            &first_target,
+        )));
+        set.insert(WrappedFormula::wt_formula_alloc(bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &generic,
+            &second_target,
+        )));
+        set.insert(WrappedFormula::wt_formula_alloc(bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &second_specific,
+            &third_target,
+        )));
+
+        let result = set
+            .lift_lambdas(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lambdas_lifted, 3);
+        assert_eq!(set.cardinality(), 5);
+        let formulas = set.iter().take(3).collect::<Vec<_>>();
+        let lifted = formulas
+            .iter()
+            .map(|formula| {
+                formula
+                    .formula()
+                    .argument(0)
+                    .and_then(|wrapper| wrapper.argument(0))
+                    .expect("source formula contains a lifted lambda replacement")
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(lifted[0].f_code(), lifted[1].f_code());
+        assert_eq!(lifted[1].f_code(), lifted[2].f_code());
+        assert_eq!(lifted[2].argument(0).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn lambda_lift_pdtree_prunes_unrelated_generalizations() {
+        const ENTRY_COUNT: usize = 1024;
+
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -904);
+        let query_arg = typed_const(&mut bank, "lift_pdtree_query_arg");
+        let mut state = LambdaLiftState::default();
+        let mut expected = None;
+
+        for index in 0..ENTRY_COUNT {
+            let pattern = typed_unary(&mut bank, &format!("lift_pdtree_pattern_{index}"), &x);
+            let template = typed_const(&mut bank, &format!("lift_pdtree_template_{index}"));
+            let definition = WrappedFormula::wt_formula_alloc(pattern.clone());
+            state
+                .store_lifting(&mut bank, &pattern, template.clone(), definition)
+                .unwrap();
+            expected = Some(template);
+        }
+        let query = typed_unary(
+            &mut bank,
+            &format!("lift_pdtree_pattern_{}", ENTRY_COUNT - 1),
+            &query_arg,
+        );
+
+        let result = state
+            .find_generalization(&mut bank, &query)
+            .unwrap()
+            .expect("last indexed pattern generalizes the query");
+        let visited = state.lifting_index.visited_count();
+
+        assert_eq!(result.lifted, expected.expect("the loop stores a template"));
+        assert!(
+            visited <= 4,
+            "PDTree should visit one indexed path, visited {visited} nodes"
+        );
+        assert!(visited * 32 < u64::try_from(ENTRY_COUNT).unwrap());
     }
 
     #[test]

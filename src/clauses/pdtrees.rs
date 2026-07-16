@@ -363,6 +363,11 @@ impl PdtIndexedOccurrence {
     pub const fn new(clause_id: i64, side: EqnSide) -> Self {
         Self { clause_id, side }
     }
+
+    #[must_use]
+    pub const fn clause_id(self) -> i64 {
+        self.clause_id
+    }
 }
 
 const fn occurrence_key(occurrence: PdtIndexedOccurrence) -> (i64, i32) {
