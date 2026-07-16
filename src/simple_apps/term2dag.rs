@@ -408,6 +408,59 @@ mod tests {
     }
 
     #[test]
+    fn typed_shared_corpus_pins_signature_dag_and_property_masks() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(
+            concat!(
+                "a f(a,a) g(f(a,a)) ",
+                "h(g(f(a,a)),f(a,a),X:$i) h(g(f(a,a)),f(a,a),X) ",
+                "apply(F:$i > $i,a) apply(F,a) q(Y:$o) q(Y) 42 \"obj\"\n",
+            )
+            .as_bytes()
+            .to_vec(),
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect("typed term2dag corpus succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("output is utf8"),
+            concat!(
+                "% Signature (11 symbols out of 20 allocated):\n",
+                "%     -Symbol-    -Arity- -Encoding-\n",
+                "   $true         :  0    %   1 72 $o\n",
+                "   $false        :  0    %   2 72 $o\n",
+                "   a             :  0    %   3  1 $i\n",
+                "   f             :  2    %   4  1 $i > $i > $i\n",
+                "   g             :  1    %   5  1 $i > $i\n",
+                "   h             :  3    %   6  0 $i > $i > $i > $i\n",
+                "   apply         :  2    %   7  0 ($i > $i) > $i > $i\n",
+                "   q             :  1    %   8  0 $o > $i\n",
+                "   $eq           :  2    %   9 14 (no type)\n",
+                "   42            :  0    %  10 128 $int\n",
+                "   \"obj\"         :  0    %  11 1024 $i\n",
+                "*1 : $true   =   $true\t/*  Properties: 1073758220 */\n",
+                "*2 : $false   =   $false\t/*  Properties: 1073758220 */\n",
+                "*3 : a   =   a\t/*  Properties:      16390 */\n",
+                "*4 : f(*3,*3)   =   f(a,a)\t/*  Properties:      16390 */\n",
+                "*5 : g(*4)   =   g(f(a,a))\t/*  Properties:      16390 */\n",
+                "*6 : h(*5,*4,*-2)   =   h(g(f(a,a)),f(a,a),X1)",
+                "\t/*  Properties:      16386 */\n",
+                "*7 : apply(*-4,*3)   =   apply(X2,a)",
+                "\t/*  Properties:   33570818 */\n",
+                "*8 : q(*-6)   =   q(X3)\t/*  Properties: 1073758210 */\n",
+                "*9 : $eq(*-6,*1)   =   X3\t/*  Properties: 1610629120 */\n",
+                "*10 : 42   =   42\t/*  Properties:      16390 */\n",
+                "*11 : \"obj\"   =   \"obj\"\t/*  Properties:      16390 */\n",
+            )
+        );
+    }
+
+    #[test]
     fn distinct_number_with_arguments_is_rejected_like_tb_term_parse() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(b"1(a)\n".to_vec());

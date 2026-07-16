@@ -438,6 +438,8 @@ class ComparisonTests(unittest.TestCase):
                 ),
                 ("term2dag/help", ["--help"]),
                 ("term2dag/stdin-basic", []),
+                ("term2dag/shared-typed-boundary", []),
+                ("term2dag/missing-input", ["missing-term2dag-input"]),
                 ("termprops/help", ["--help"]),
                 ("termprops/stdin-basic", []),
                 ("termprops/empty-input", []),
@@ -647,6 +649,14 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(ex_case["stdin"])
         term2dag_case = cases_by_name["term2dag/stdin-basic"]
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
+        term2dag_typed_case = cases_by_name["term2dag/shared-typed-boundary"]
+        self.assertIn("apply(F:$i > $i,a)", term2dag_typed_case["stdin"])
+        self.assertIn("q(Y:$o) q(Y)", term2dag_typed_case["stdin"])
+        term2dag_missing_case = cases_by_name["term2dag/missing-input"]
+        self.assertTrue(term2dag_missing_case["isolated_workdir"])
+        self.assertEqual(
+            term2dag_missing_case["arguments"], ["missing-term2dag-input"]
+        )
         termprops_case = cases_by_name["termprops/stdin-basic"]
         self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
         termprops_empty_case = cases_by_name["termprops/empty-input"]

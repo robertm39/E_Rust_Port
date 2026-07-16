@@ -254,7 +254,15 @@ impl TypeBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Type, Diagnostic> {
-        self.parse_type(scanner, problem_type())
+        let parser_mode = match problem_type() {
+            // C's release build disables the assertion in the non-FO branch
+            // of `TypeBankParseType`, so an uninitialized problem type parses
+            // with the higher-order grammar. Standalone tools such as
+            // `term2dag` intentionally leave `problemType` uninitialized.
+            ProblemType::NotInitialized => ProblemType::HigherOrder,
+            initialized => initialized,
+        };
+        self.parse_type(scanner, parser_mode)
     }
 
     pub fn parse_type(

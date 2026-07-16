@@ -680,6 +680,21 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "term2dag": (
         ("stdin-basic", (), "f(a,a) g(f(a,a))\n"),
+        (
+            "shared-typed-boundary",
+            (),
+            (
+                "a f(a,a) g(f(a,a)) "
+                "h(g(f(a,a)),f(a,a),X:$i) h(g(f(a,a)),f(a,a),X) "
+                "apply(F:$i > $i,a) apply(F,a) q(Y:$o) q(Y) 42 \"obj\"\n"
+            ),
+        ),
+        (
+            "missing-input",
+            ("missing-term2dag-input",),
+            None,
+            {"isolated_workdir": True},
+        ),
     ),
     "termprops": (
         ("stdin-basic", (), "a f(a,a) g(f(a),a)\n"),
