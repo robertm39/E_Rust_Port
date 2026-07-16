@@ -432,6 +432,19 @@ class ComparisonTests(unittest.TestCase):
                 ("epclextract/help", ["--help"]),
                 ("epclextract/version", ["--version"]),
                 ("epclextract/stdin-basic", []),
+                ("epclextract/mixed-logic-proof-closure", []),
+                (
+                    "epclextract/multi-file-comments",
+                    [
+                        "--forward-comments",
+                        "{fixture:first.pcl}",
+                        "{fixture:second.pcl}",
+                    ],
+                ),
+                (
+                    "epclextract/missing-input",
+                    ["missing-epclextract-input.pcl"],
+                ),
                 ("epcllemma/help", ["--help"]),
                 ("epcllemma/version", ["--version"]),
                 (
@@ -656,6 +669,29 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
         epclextract_case = cases_by_name["epclextract/stdin-basic"]
         self.assertIn("3 : : [] : 2 : 'final'", epclextract_case["stdin"])
+        epclextract_mixed_case = cases_by_name[
+            "epclextract/mixed-logic-proof-closure"
+        ]
+        self.assertIn("2 : : : 1", epclextract_mixed_case["stdin"])
+        self.assertIn("3 : : q(a)|r(b) : 2", epclextract_mixed_case["stdin"])
+        self.assertIn("6 : : [++unused] : initial", epclextract_mixed_case["stdin"])
+        epclextract_comments_case = cases_by_name[
+            "epclextract/multi-file-comments"
+        ]
+        self.assertIsNone(epclextract_comments_case["stdin"])
+        self.assertEqual(
+            epclextract_comments_case["fixture_files"],
+            {
+                "first.pcl": "% first lead\n1 : : p(a) : initial\n% first tail\n",
+                "second.pcl": "% second lead\n2 : : : 1 : 'final'\n% second tail\n",
+            },
+        )
+        epclextract_missing_case = cases_by_name["epclextract/missing-input"]
+        self.assertTrue(epclextract_missing_case["isolated_workdir"])
+        self.assertEqual(
+            epclextract_missing_case["arguments"],
+            ["missing-epclextract-input.pcl"],
+        )
         epcllemma_case = cases_by_name["epcllemma/stdin-basic"]
         self.assertIn("5 : : [++t(a)] : er(4)", epcllemma_case["stdin"])
         epatternize_case = cases_by_name["epatternize/lop-basic"]

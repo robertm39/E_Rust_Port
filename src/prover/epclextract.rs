@@ -778,6 +778,33 @@ mod tests {
     }
 
     #[test]
+    fn full_extract_follows_and_renders_mixed_logic_proof_closure() {
+        let _guard = global_state_lock();
+        let input = "\
+1 : : p(a) : initial
+2 : : : 1
+3 : : q(a)|r(b) : 2
+4 : lemma : [++s(a)] : pm(1,3)
+5 : : : 4 : 'final'
+6 : : [++unused] : initial
+";
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME], input);
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            output,
+            concat!(
+                "      1 :  : p(a) : initial\n",
+                "      2 :  :  : 1\n",
+                "      3 :  : (q(a)|r(b)) : 2\n",
+                "      4 : lemma : [++s(a)] : pm(1,3) : 'lemma'\n",
+                "      5 :  :  : 4 : 'final'\n",
+            )
+        );
+    }
+
+    #[test]
     fn fast_extract_uses_contiguous_extract_suffix() {
         let _guard = global_state_lock();
         let input = "\
@@ -812,10 +839,16 @@ mod tests {
         let second_path = temp_path("comments-second");
         remove_if_present(&first_path);
         remove_if_present(&second_path);
-        std::fs::write(&first_path, "% first\n1 : : [++p] : initial\n")
-            .expect("first input fixture is written");
-        std::fs::write(&second_path, "% second\n2 : : [] : 1 : 'final'\n")
-            .expect("second input fixture is written");
+        std::fs::write(
+            &first_path,
+            "% first lead\n1 : : p(a) : initial\n% first tail\n",
+        )
+        .expect("first input fixture is written");
+        std::fs::write(
+            &second_path,
+            "% second lead\n2 : : : 1 : 'final'\n% second tail\n",
+        )
+        .expect("second input fixture is written");
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -836,9 +869,17 @@ mod tests {
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
         let output = String::from_utf8(stdout).expect("stdout is utf8");
-        assert!(output.starts_with("% first\n% second\n"));
-        assert!(output.contains("      1 :  : [++p] : initial\n"));
-        assert!(output.contains("      2 :  : [] : 1 : 'final'\n"));
+        assert_eq!(
+            output,
+            concat!(
+                "% first lead\n",
+                "% first tail\n",
+                "% second lead\n",
+                "% second tail\n",
+                "      1 :  : p(a) : initial\n",
+                "      2 :  :  : 1 : 'final'\n",
+            )
+        );
 
         remove_if_present(&first_path);
         remove_if_present(&second_path);

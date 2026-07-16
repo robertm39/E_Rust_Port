@@ -662,6 +662,45 @@ TOOL_FUNCTIONAL_CASES = {
                 "4 : : [++r] : initial\n"
             ),
         ),
+        (
+            "mixed-logic-proof-closure",
+            (),
+            (
+                "1 : : p(a) : initial\n"
+                "2 : : : 1\n"
+                "3 : : q(a)|r(b) : 2\n"
+                "4 : lemma : [++s(a)] : pm(1,3)\n"
+                "5 : : : 4 : 'final'\n"
+                "6 : : [++unused] : initial\n"
+            ),
+        ),
+        (
+            "multi-file-comments",
+            (
+                "--forward-comments",
+                "{fixture:first.pcl}",
+                "{fixture:second.pcl}",
+            ),
+            None,
+            {
+                "first.pcl": (
+                    "% first lead\n"
+                    "1 : : p(a) : initial\n"
+                    "% first tail\n"
+                ),
+                "second.pcl": (
+                    "% second lead\n"
+                    "2 : : : 1 : 'final'\n"
+                    "% second tail\n"
+                ),
+            },
+        ),
+        (
+            "missing-input",
+            ("missing-epclextract-input.pcl",),
+            None,
+            {"isolated_workdir": True},
+        ),
     ),
     "epcllemma": (
         (
