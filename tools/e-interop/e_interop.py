@@ -39,10 +39,17 @@ VOLATILE_LINE_RE = re.compile(
     r"(?:User time|System time|Total time|Maximum resident|date|timestamp)\s*:",
     re.IGNORECASE,
 )
+PLATFORM_NAN_TOKEN = (
+    r"(?:[-+]?nan(?:\([^)]*\))?|[-+]?1\.\#(?:ind|qnan|snan)\d*)"
+)
 PLATFORM_NAN_PERCENT_RE = re.compile(
     r"\bsuccesses,\s+"
-    r"(?:[-+]?nan(?:\([^)]*\))?|[-+]?1\.\#(?:ind|qnan|snan))"
-    r"\s+percent\b",
+    + PLATFORM_NAN_TOKEN
+    + r"\s+percent\b",
+    re.IGNORECASE,
+)
+PLATFORM_TERMPROPS_NAN_RE = re.compile(
+    r"(?P<label>\b(?:ASize|ADepth):\s*)" + PLATFORM_NAN_TOKEN + r"(?=\s)",
     re.IGNORECASE,
 )
 LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE = re.compile(r"^Accepted [0-9]+$")
@@ -676,6 +683,13 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "termprops": (
         ("stdin-basic", (), "a f(a,a) g(f(a),a)\n"),
+        ("empty-input", (), ""),
+        (
+            "missing-input",
+            ("missing-termprops-input",),
+            None,
+            {"isolated_workdir": True},
+        ),
     ),
     "tsm_classify": (
         (
@@ -1051,6 +1065,8 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
 
 def normalize_platform_line(line: str) -> str:
     normalized = PLATFORM_NAN_PERCENT_RE.sub("successes, <NAN> percent", line)
+    if normalized.startswith("% Terms: "):
+        normalized = PLATFORM_TERMPROPS_NAN_RE.sub(r"\g<label><NAN>", normalized)
     if LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE.fullmatch(normalized):
         return "Accepted <DESCRIPTOR>"
     for replacement, suffixes in PLATFORM_ERROR_SUFFIXES.items():

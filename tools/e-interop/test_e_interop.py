@@ -48,11 +48,13 @@ class OutputParsingTests(unittest.TestCase):
         linux = (
             "direct_examples: No such file or directory\n"
             " 0 terms, 0 successes,  -nan percent\n"
+            "% Terms: 0  ASize: -nan MSize: 0, ADepth: -nan MDepth: 0\n"
             "direct_examples: Broken pipe\n"
         )
         windows = (
             "direct_examples: The system cannot find the file specified. (os error 2)\n"
             " 0 terms, 0 successes,   NaN percent\n"
+            "% Terms: 0  ASize: nan MSize: 0, ADepth: nan MDepth: 0\n"
             "direct_examples: The pipe is being closed. (os error 232)\n"
         )
 
@@ -61,12 +63,37 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(windows),
         )
 
+        legacy_msvcrt = (
+            " 0 terms, 0 successes,  -1.#IND00 percent\n"
+            "% Terms: 0  ASize: -1.#IND00 MSize: 0, ADepth: 1.#QNAN0 MDepth: 0\n"
+        )
+        portable = (
+            " 0 terms, 0 successes,  nan percent\n"
+            "% Terms: 0  ASize: nan MSize: 0, ADepth: nan MDepth: 0\n"
+        )
+        self.assertEqual(
+            e_interop.normalize_output(legacy_msvcrt),
+            e_interop.normalize_output(portable),
+        )
+
     def test_normalization_canonicalizes_only_successful_server_descriptors(self):
         output = "Main loop\nAccepted 123\nAccepted -1\n"
 
         self.assertEqual(
             e_interop.normalize_output(output),
             "Main loop\nAccepted <DESCRIPTOR>\nAccepted -1",
+        )
+
+    def test_termprops_nan_normalization_is_summary_field_scoped(self):
+        output = (
+            "% unrelated ASize: -nan, ADepth: nan\n"
+            "% Terms: 0  ASize: -nan MSize: 0, ADepth: nan(ind) MDepth: 0\n"
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(output),
+            "% unrelated ASize: -nan, ADepth: nan\n"
+            "% Terms: 0  ASize: <NAN> MSize: 0, ADepth: <NAN> MDepth: 0",
         )
 
     def test_normalization_sorts_only_saturation_blocks(self):
@@ -413,6 +440,8 @@ class ComparisonTests(unittest.TestCase):
                 ("term2dag/stdin-basic", []),
                 ("termprops/help", ["--help"]),
                 ("termprops/stdin-basic", []),
+                ("termprops/empty-input", []),
+                ("termprops/missing-input", ["missing-termprops-input"]),
                 ("tsm_classify/help", ["--help"]),
                 ("tsm_classify/version", ["--version"]),
                 (
@@ -620,6 +649,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
         termprops_case = cases_by_name["termprops/stdin-basic"]
         self.assertEqual(termprops_case["stdin"], "a f(a,a) g(f(a),a)\n")
+        termprops_empty_case = cases_by_name["termprops/empty-input"]
+        self.assertEqual(termprops_empty_case["stdin"], "")
+        termprops_missing_case = cases_by_name["termprops/missing-input"]
+        self.assertTrue(termprops_missing_case["isolated_workdir"])
         tsm_case = cases_by_name["tsm_classify/stdin-basic"]
         self.assertIn("Training:\n", tsm_case["stdin"])
         self.assertIn("Test:\n", tsm_case["stdin"])
