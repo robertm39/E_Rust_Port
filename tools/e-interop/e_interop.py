@@ -209,6 +209,67 @@ TSM_RECURSIVE_CORPUS = (
     "g(g(b,a),f(b)) : 2:(1,1).\n"
     ".\n"
 )
+
+
+def csscpa_large_stateful_corpus() -> str:
+    """Build a deterministic corpus spanning every CSSCPA clause outcome."""
+
+    lines = ["output_level 0", "state:"]
+    for index in range(24):
+        source = 2 + index % 14
+        lines.append(
+            f"accept from {source}: "
+            f"cnf(csscpa_seed_{index},axiom,csscpa_seed_{index}(a))."
+        )
+    for index in range(8):
+        lines.append(
+            f"accept: cnf(csscpa_negative_{index},axiom,~csscpa_negative_{index}(a))."
+        )
+    for index in range(8):
+        lines.append(
+            f"accept: cnf(csscpa_wide_{index},axiom,"
+            f"(csscpa_wide_{index}(a)|csscpa_side_{index}(a)))."
+        )
+
+    lines.extend(("output_level 1", "state:"))
+    for index in range(12):
+        lines.append(
+            "check improve(0.0,0.0): "
+            f"cnf(csscpa_subsumed_{index},axiom,"
+            f"(csscpa_seed_{index}(a)|csscpa_extra_{index}(a)))."
+        )
+    for index in range(4):
+        lines.append(
+            f"check: cnf(csscpa_tautology_{index},axiom,"
+            f"(csscpa_taut_{index}(a)|~csscpa_taut_{index}(a)))."
+        )
+    for index in range(8):
+        lines.append(
+            "check improve(0.0,1.0): "
+            f"cnf(csscpa_improved_{index},axiom,csscpa_wide_{index}(a))."
+        )
+    for index in range(4):
+        lines.append(
+            "check improve(1.0,1.0): "
+            f"cnf(csscpa_contradiction_{index},axiom,csscpa_negative_{index}(a))."
+        )
+    for index in range(4):
+        lines.append(
+            "check improve(1.0,1.0): "
+            f"cnf(csscpa_weighty_{index},axiom,"
+            f"(csscpa_heavy_{index}(f(a))|csscpa_other_{index}(g(a))))."
+        )
+    lines.extend(
+        (
+            "Please process clauses now, I beg you, great shining CSSCPA,",
+            "wonder of the world, most beautiful program ever written.",
+            "state:",
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
+CSSCPA_LARGE_STATEFUL_CORPUS = csscpa_large_stateful_corpus()
 TOOL_FUNCTIONAL_CASES = {
     "CSSCPA_filter": (
         (
@@ -230,6 +291,17 @@ TOOL_FUNCTIONAL_CASES = {
                 "wonder of the world, most beautiful program ever written.\n"
                 "state:\n"
             ),
+        ),
+        (
+            "large-stateful-corpus",
+            (),
+            CSSCPA_LARGE_STATEFUL_CORPUS,
+        ),
+        (
+            "missing-input",
+            ("missing-csscpa-input.csscpa",),
+            None,
+            {"isolated_workdir": True},
         ),
     ),
     "checkproof": (

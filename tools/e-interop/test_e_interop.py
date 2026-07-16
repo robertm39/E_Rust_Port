@@ -275,6 +275,11 @@ class ComparisonTests(unittest.TestCase):
                 ("CSSCPA_filter/version", ["--version"]),
                 ("CSSCPA_filter/silent-accept", ["--silent"]),
                 ("CSSCPA_filter/trace-state-check", []),
+                ("CSSCPA_filter/large-stateful-corpus", []),
+                (
+                    "CSSCPA_filter/missing-input",
+                    ["missing-csscpa-input.csscpa"],
+                ),
                 ("checkproof/help", ["--help"]),
                 ("checkproof/version", ["--version"]),
                 ("checkproof/assumption-only", []),
@@ -400,6 +405,20 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("output_level 0\nstate:\noutput_level 1", csscpa_trace_case["stdin"])
         self.assertIn("check improve(0.0,0.0)", csscpa_trace_case["stdin"])
         self.assertIn("great shining CSSCPA", csscpa_trace_case["stdin"])
+        csscpa_large_case = cases_by_name["CSSCPA_filter/large-stateful-corpus"]
+        self.assertEqual(
+            csscpa_large_case["stdin"], e_interop.CSSCPA_LARGE_STATEFUL_CORPUS
+        )
+        self.assertEqual(csscpa_large_case["stdin"].count("accept"), 40)
+        self.assertEqual(csscpa_large_case["stdin"].count("check"), 32)
+        self.assertIn("csscpa_tautology_3", csscpa_large_case["stdin"])
+        self.assertIn("csscpa_contradiction_3", csscpa_large_case["stdin"])
+        self.assertIn("csscpa_weighty_3", csscpa_large_case["stdin"])
+        csscpa_missing_case = cases_by_name["CSSCPA_filter/missing-input"]
+        self.assertTrue(csscpa_missing_case["isolated_workdir"])
+        self.assertEqual(
+            csscpa_missing_case["arguments"], ["missing-csscpa-input.csscpa"]
+        )
         checkproof_case = cases_by_name["checkproof/assumption-only"]
         self.assertEqual(checkproof_case["stdin"], "1 : : [++p(a)] : initial\n")
         classify_case = cases_by_name["classify_problem/parse-features-standard"]

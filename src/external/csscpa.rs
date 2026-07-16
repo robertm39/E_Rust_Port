@@ -145,7 +145,13 @@ pub struct CsscpaState {
 
 impl CsscpaState {
     pub fn new() -> Result<Self, Diagnostic> {
-        let terms = TermBank::new(Signature::new(TypeBank::new()))?;
+        let mut signature = Signature::new(TypeBank::new());
+        // The C FOL build compiles phony-application checks away. Rust selects
+        // FOL/HO behavior at runtime, so fixed helper codes must remain reserved
+        // even for this first-order-only parser or ordinary user symbols can be
+        // mistaken for lambda/application cells once the signature grows.
+        signature.insert_internal_codes()?;
+        let terms = TermBank::new(signature)?;
         Ok(Self {
             terms,
             pos_units: ClauseSet::new(),
@@ -286,7 +292,10 @@ impl CsscpaState {
             }
 
             if status.is_accepted() {
-                for entry in subsumed {
+                // C collects matching clauses onto a stack and removes them by
+                // popping that stack, so observable removal traces run in the
+                // reverse of clause-set traversal order.
+                for entry in subsumed.into_iter().rev() {
                     if let Some(removed) = self.remove_subsumed(entry.bucket, entry.ident) {
                         self.clauses -= 1;
                         self.literals -= usize_to_i64(removed.literal_number());
@@ -849,6 +858,58 @@ mod tests {
             "% Clause {wide_ident} removed from list (subsumed by {narrow_ident})\n"
         )));
         assert!(result.trace().contains("% CSSCPAState: improved  "));
+    }
+
+    #[test]
+    fn improving_clause_removes_all_subsumed_entries_in_c_stack_order() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let positive = parse_clause(&mut state, "p(a).");
+        let positive_ident = positive.ident();
+        assert!(state
+            .process_clause(positive, true, 0.0, 0.0)
+            .expect("positive unit accepted"));
+
+        let first_wide = parse_clause(&mut state, "cnf(csscpa_first,axiom,(p(b)|q(b))).");
+        let first_wide_ident = first_wide.ident();
+        assert!(state
+            .process_clause(first_wide, true, 0.0, 0.0)
+            .expect("first wide clause accepted"));
+        let second_wide = parse_clause(&mut state, "cnf(csscpa_second,axiom,(p(c)|r(c))).");
+        let second_wide_ident = second_wide.ident();
+        assert!(state
+            .process_clause(second_wide, true, 0.0, 0.0)
+            .expect("second wide clause accepted"));
+
+        let general = parse_clause(&mut state, "p(X).");
+        let general_ident = general.ident();
+        let result = state
+            .process_clause_with_trace(general, false, 0.0, 1.0, 1)
+            .expect("generalizing check succeeds");
+
+        assert_eq!(result.status(), CsscpaClauseStatus::Improved);
+        assert_eq!(state.clauses(), 1);
+        assert_eq!(state.pos_units().len(), 1);
+        assert!(state.pos_units().find_by_id(general_ident).is_some());
+        let second_removal = format!(
+            "% Clause {second_wide_ident} removed from list (subsumed by {general_ident})\n"
+        );
+        let first_removal = format!(
+            "% Clause {first_wide_ident} removed from list (subsumed by {general_ident})\n"
+        );
+        let positive_removal =
+            format!("% Clause {positive_ident} removed from list (subsumed by {general_ident})\n");
+        let trace = result.trace();
+        let second_offset = trace
+            .find(&second_removal)
+            .expect("second wide removal traced");
+        let first_offset = trace
+            .find(&first_removal)
+            .expect("first wide removal traced");
+        let positive_offset = trace
+            .find(&positive_removal)
+            .expect("positive unit removal traced");
+        assert!(second_offset < first_offset);
+        assert!(first_offset < positive_offset);
     }
 
     #[test]

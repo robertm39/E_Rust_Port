@@ -388,8 +388,11 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
-    use crate::basics::error::ErrorCode;
+    use super::{
+        csscpa_scanner_open_diagnostic, csscpa_sys_error_diagnostic, print_help, run,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+    };
+    use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::verbose::verbose_level;
     use crate::prover::version::{footer, VERSION};
     use crate::test_support::global_state_lock;
@@ -511,6 +514,58 @@ mod tests {
         expected
     }
 
+    fn large_stateful_corpus() -> String {
+        let mut lines = vec!["output_level 0".to_owned(), "state:".to_owned()];
+        for index in 0..24 {
+            let source = 2 + index % 14;
+            lines.push(format!(
+                "accept from {source}: cnf(csscpa_seed_{index},axiom,csscpa_seed_{index}(a))."
+            ));
+        }
+        for index in 0..8 {
+            lines.push(format!(
+                "accept: cnf(csscpa_negative_{index},axiom,~csscpa_negative_{index}(a))."
+            ));
+        }
+        for index in 0..8 {
+            lines.push(format!(
+                "accept: cnf(csscpa_wide_{index},axiom,(csscpa_wide_{index}(a)|csscpa_side_{index}(a)))."
+            ));
+        }
+        lines.extend(["output_level 1".to_owned(), "state:".to_owned()]);
+        for index in 0..12 {
+            lines.push(format!(
+                "check improve(0.0,0.0): cnf(csscpa_subsumed_{index},axiom,(csscpa_seed_{index}(a)|csscpa_extra_{index}(a)))."
+            ));
+        }
+        for index in 0..4 {
+            lines.push(format!(
+                "check: cnf(csscpa_tautology_{index},axiom,(csscpa_taut_{index}(a)|~csscpa_taut_{index}(a)))."
+            ));
+        }
+        for index in 0..8 {
+            lines.push(format!(
+                "check improve(0.0,1.0): cnf(csscpa_improved_{index},axiom,csscpa_wide_{index}(a))."
+            ));
+        }
+        for index in 0..4 {
+            lines.push(format!(
+                "check improve(1.0,1.0): cnf(csscpa_contradiction_{index},axiom,csscpa_negative_{index}(a))."
+            ));
+        }
+        for index in 0..4 {
+            lines.push(format!(
+                "check improve(1.0,1.0): cnf(csscpa_weighty_{index},axiom,(csscpa_heavy_{index}(f(a))|csscpa_other_{index}(g(a))))."
+            ));
+        }
+        lines.extend([
+            "Please process clauses now, I beg you, great shining CSSCPA,".to_owned(),
+            "wonder of the world, most beautiful program ever written.".to_owned(),
+            "state:".to_owned(),
+        ]);
+        lines.join("\n") + "\n"
+    }
+
     #[test]
     fn help_and_version_exit_before_filter_execution() {
         let _guard = global_state_lock();
@@ -565,6 +620,36 @@ mod tests {
         assert!(output.contains("\n% Resulting clause set:\n"));
         assert!(output.contains("cnf("));
         assert!(output.contains("p(a)"));
+    }
+
+    #[test]
+    fn large_stateful_corpus_covers_all_clause_outcomes_and_final_buckets() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(large_stateful_corpus().into_bytes());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect("large CSSCPA corpus succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("output is utf8");
+        assert_eq!(output.matches("rejected (subsumed by").count(), 12);
+        assert_eq!(output.matches("rejected (Tautology)").count(), 4);
+        assert_eq!(output.matches("accepted from 0 (improved)").count(), 8);
+        assert_eq!(output.matches("accepted from 0 (contradicts)").count(), 4);
+        assert_eq!(output.matches("rejected (weighty)").count(), 4);
+        assert!(output.contains("% CSSCPAState: requested  by 0, 44, 44,"));
+        let result = output
+            .split_once("% Resulting clause set:\n")
+            .map(|(_, result)| result)
+            .expect("result clause-set marker is present");
+        assert_eq!(result.matches("cnf(").count(), 44);
+        assert!(result.contains("csscpa_seed_23(a)"));
+        assert!(result.contains("csscpa_wide_7(a)"));
+        assert!(result.contains("csscpa_negative_3(a)"));
+        assert!(!result.contains("csscpa_side_0(a)"));
     }
 
     #[test]
@@ -755,6 +840,36 @@ check improve(1.0,0.0): cnf(csscpa_pos,axiom,p(a)).\n"
         assert!(stderr.is_empty());
 
         std::fs::remove_dir(&output_path).expect("output fixture directory is removed");
+    }
+
+    #[test]
+    fn syserror_diagnostic_preserves_host_error_suffix_exactly() {
+        let source = io::Error::other("host-specific suffix (os error 1234)");
+        let diagnostic = csscpa_sys_error_diagnostic("Cannot open file output.csscpa", &source);
+
+        assert_eq!(diagnostic.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(
+            diagnostic.message(),
+            "Cannot open file output.csscpa\n\
+CSSCPA_filter: host-specific suffix (os error 1234)"
+        );
+    }
+
+    #[test]
+    fn scanner_open_diagnostic_preserves_path_and_host_suffix_exactly() {
+        let source = Diagnostic::new(
+            ErrorCode::FILE_ERROR,
+            "Cannot open file C:\\csscpa cases\\missing.csscpa for reading: host suffix",
+        );
+
+        let diagnostic = csscpa_scanner_open_diagnostic(source);
+
+        assert_eq!(diagnostic.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(
+            diagnostic.message(),
+            "Cannot open file C:\\csscpa cases\\missing.csscpa for reading\n\
+CSSCPA_filter: host suffix"
+        );
     }
 
     #[test]
