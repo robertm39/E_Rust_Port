@@ -130,6 +130,10 @@ impl SparseClauseStore {
         self.slots.iter_mut().flatten()
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        self.slots.reserve_exact(additional);
+    }
+
     fn occupied_slots(&self) -> impl Iterator<Item = ClauseSlot> + '_ {
         self.slots
             .iter()
@@ -202,10 +206,9 @@ impl SparseClauseStore {
     }
 
     fn sort_unstable_by(&mut self, mut compare: impl FnMut(&Clause, &Clause) -> Ordering) {
-        let mut clauses = std::mem::take(&mut self.slots)
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let slots = std::mem::take(&mut self.slots);
+        let mut clauses = Vec::with_capacity(self.len);
+        clauses.extend(slots.into_iter().flatten());
         clauses.sort_unstable_by(|left, right| compare(left, right));
         self.len = clauses.len();
         self.slots = clauses.into_iter().map(Some).collect();
@@ -506,6 +509,15 @@ impl ClauseSet {
     #[must_use]
     pub fn len(&self) -> usize {
         self.clauses.len()
+    }
+
+    /// Reserves storage for a known batch of clauses without geometric slack.
+    ///
+    /// C clause sets are intrusive lists and allocate exactly one cell per
+    /// insertion. Batch-copy callers use this hook to keep the Rust sparse
+    /// owner from retaining power-of-two `Vec` growth above the known count.
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.clauses.reserve_exact(additional);
     }
 
     #[must_use]
@@ -2301,6 +2313,24 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    #[test]
+    fn exact_batch_reservation_avoids_clause_store_growth() {
+        const CLAUSE_COUNT: usize = 257;
+        let mut set = ClauseSet::new();
+        set.reserve_exact(CLAUSE_COUNT);
+        let reserved_capacity = set.clauses.slots.capacity();
+
+        for ident in 0..CLAUSE_COUNT {
+            let mut clause = Clause::empty();
+            clause.set_ident(i64::try_from(ident).unwrap());
+            set.insert(clause);
+        }
+
+        assert!(reserved_capacity >= CLAUSE_COUNT);
+        assert_eq!(set.clauses.slots.capacity(), reserved_capacity);
+        assert_eq!(set.len(), CLAUSE_COUNT);
     }
 
     struct ProblemTypeReset;

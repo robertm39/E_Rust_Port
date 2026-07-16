@@ -1115,6 +1115,8 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
     let mut watchlist_matches = 0;
     let mut watchlist_removed = 0;
 
+    state.unprocessed_mut().reserve_exact(ordered_axioms.len());
+
     {
         let ProofControl {
             hcbs, wfcbs, ocb, ..

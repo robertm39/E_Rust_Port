@@ -374,6 +374,7 @@ pub fn clause_set_archive_copy(
     set: &mut ClauseSet,
     bank: &mut TermBank,
 ) -> Result<i64, Diagnostic> {
+    archive.reserve_exact(set.len());
     let mut archived = 0;
     for clause in set.iter_mut() {
         let _ = clause_archive_copy(archive, clause, bank)?;
