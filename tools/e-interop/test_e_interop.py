@@ -63,6 +63,13 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(windows),
         )
 
+        self.assertEqual(
+            e_interop.normalize_output(
+                "ex_commandline: Numerical result out of range\n"
+            ),
+            e_interop.normalize_output("ex_commandline: Result too large\n"),
+        )
+
         legacy_msvcrt = (
             " 0 terms, 0 successes,  -1.#IND00 percent\n"
             "% Terms: 0  ASize: -1.#IND00 MSize: 0, ADepth: 1.#QNAN0 MDepth: 0\n"
@@ -436,6 +443,14 @@ class ComparisonTests(unittest.TestCase):
                     "ex_commandline/options-basic",
                     ["--int_example=42", "--float_example", "one.p", "two.p"],
                 ),
+                ("ex_commandline/unknown-long-option", ["--unknown"]),
+                ("ex_commandline/missing-required-argument", ["--int_example"]),
+                ("ex_commandline/invalid-integer", ["--int_example=bad"]),
+                (
+                    "ex_commandline/integer-range",
+                    ["--int_example=9223372036854775808"],
+                ),
+                ("ex_commandline/float-range", ["--float_example=1e9999"]),
                 ("term2dag/help", ["--help"]),
                 ("term2dag/stdin-basic", []),
                 ("term2dag/shared-typed-boundary", []),
@@ -647,6 +662,14 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(epatternize_case["stdin"], "p(a).\n")
         ex_case = cases_by_name["ex_commandline/options-basic"]
         self.assertIsNone(ex_case["stdin"])
+        self.assertEqual(
+            cases_by_name["ex_commandline/integer-range"]["arguments"],
+            ["--int_example=9223372036854775808"],
+        )
+        self.assertEqual(
+            cases_by_name["ex_commandline/float-range"]["arguments"],
+            ["--float_example=1e9999"],
+        )
         term2dag_case = cases_by_name["term2dag/stdin-basic"]
         self.assertEqual(term2dag_case["stdin"], "f(a,a) g(f(a,a))\n")
         term2dag_typed_case = cases_by_name["term2dag/shared-typed-boundary"]

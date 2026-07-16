@@ -1,4 +1,4 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_runtime_error_message, program_name, Diagnostic, ErrorCode};
 
 pub const FORMAT_WIDTH: usize = 78;
 
@@ -269,15 +269,15 @@ pub fn append_option_desc<Code>(option: &OptCell<Code>) -> String {
 }
 
 pub fn get_int_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<i64, Diagnostic> {
-    parse_c_long(arg).ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::USAGE_ERROR,
-            format!(
-                "{} expects integer instead of '{arg}'",
-                append_option_desc(option)
-            ),
-        )
-    })
+    let message = format!(
+        "{} expects integer instead of '{arg}'",
+        append_option_desc(option)
+    );
+    match parse_c_long(arg) {
+        CNumberParse::Value(value) => Ok(value),
+        CNumberParse::Invalid => Err(Diagnostic::new(ErrorCode::USAGE_ERROR, message)),
+        CNumberParse::Range => Err(c_number_range_diagnostic(message)),
+    }
 }
 
 pub fn get_int_arg_check_range<Code>(
@@ -301,15 +301,34 @@ pub fn get_int_arg_check_range<Code>(
 }
 
 pub fn get_float_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<f64, Diagnostic> {
-    parse_c_double(arg).ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::USAGE_ERROR,
-            format!(
-                "{} expects float instead of '{arg}'",
-                append_option_desc(option)
-            ),
-        )
-    })
+    let message = format!(
+        "{} expects float instead of '{arg}'",
+        append_option_desc(option)
+    );
+    match parse_c_double(arg) {
+        CNumberParse::Value(value) => Ok(value),
+        CNumberParse::Invalid => Err(Diagnostic::new(ErrorCode::USAGE_ERROR, message)),
+        CNumberParse::Range => Err(c_number_range_diagnostic(message)),
+    }
+}
+
+const C_ERANGE: i32 = 34;
+
+enum CNumberParse<T> {
+    Value(T),
+    Invalid,
+    Range,
+}
+
+fn c_number_range_diagnostic(message: String) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::USAGE_ERROR,
+        format!(
+            "{message}\n{}: {}",
+            program_name(),
+            c_runtime_error_message(C_ERANGE)
+        ),
+    )
 }
 
 pub fn get_bool_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<bool, Diagnostic> {
@@ -408,9 +427,9 @@ fn find_short_opt<Code>(option: char, options: &[OptCell<Code>]) -> Option<&OptC
         .find(|candidate| candidate.shortopt == Some(option))
 }
 
-fn parse_c_long(argument: &str) -> Option<i64> {
+fn parse_c_long(argument: &str) -> CNumberParse<i64> {
     if argument.is_empty() {
-        return Some(0);
+        return CNumberParse::Value(0);
     }
 
     let trimmed = argument.trim_start_matches(|character: char| character.is_ascii_whitespace());
@@ -419,7 +438,7 @@ fn parse_c_long(argument: &str) -> Option<i64> {
         Some((_, '+')) => (false, 1),
         Some((_, '-')) => (true, 1),
         Some((index, character)) if character.is_ascii_digit() => (false, index),
-        _ => return None,
+        _ => return CNumberParse::Invalid,
     };
 
     let limit = if negative {
@@ -438,51 +457,63 @@ fn parse_c_long(argument: &str) -> Option<i64> {
         consumed_digit = true;
         end = digit_start + index + character.len_utf8();
         let digit = u64::from(character as u8 - b'0');
-        value = value.checked_mul(10)?.checked_add(digit)?;
+        let Some(next) = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(digit))
+        else {
+            return CNumberParse::Range;
+        };
+        value = next;
         if value > limit {
-            return None;
+            return CNumberParse::Range;
         }
     }
 
     if !consumed_digit || !trimmed[end..].is_empty() {
-        return None;
+        return CNumberParse::Invalid;
     }
     if negative {
         if value == i64::MIN.unsigned_abs() {
-            Some(i64::MIN)
+            CNumberParse::Value(i64::MIN)
         } else {
-            i64::try_from(value).ok().map(|value| -value)
+            i64::try_from(value).map_or(CNumberParse::Range, |value| CNumberParse::Value(-value))
         }
     } else {
-        i64::try_from(value).ok()
+        i64::try_from(value).map_or(CNumberParse::Range, CNumberParse::Value)
     }
 }
 
-fn parse_c_double(argument: &str) -> Option<f64> {
+fn parse_c_double(argument: &str) -> CNumberParse<f64> {
     if argument.is_empty() {
-        return Some(0.0);
+        return CNumberParse::Value(0.0);
     }
 
     let trimmed = argument.trim_start_matches(|character: char| character.is_ascii_whitespace());
     if trimmed.is_empty() {
-        return None;
+        return CNumberParse::Invalid;
     }
 
     if let Some(value) = parse_c_named_double(trimmed) {
-        return Some(value);
+        return CNumberParse::Value(value);
     }
-    if let Some(value) = parse_c_hex_double(trimmed) {
-        return Some(value);
+    let unsigned = trimmed
+        .strip_prefix('+')
+        .or_else(|| trimmed.strip_prefix('-'))
+        .unwrap_or(trimmed);
+    if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
+        return parse_c_hex_double(trimmed);
     }
 
-    let value = trimmed.parse::<f64>().ok()?;
+    let Ok(value) = trimmed.parse::<f64>() else {
+        return CNumberParse::Invalid;
+    };
     if value.is_infinite() && !is_named_infinite(trimmed) {
-        return None;
+        return CNumberParse::Range;
     }
     if decimal_double_underflowed(trimmed, value) {
-        return None;
+        return CNumberParse::Range;
     }
-    Some(value)
+    CNumberParse::Value(value)
 }
 
 fn parse_c_named_double(argument: &str) -> Option<f64> {
@@ -500,11 +531,14 @@ fn parse_c_named_double(argument: &str) -> Option<f64> {
     Some(if negative { -value } else { value })
 }
 
-fn parse_c_hex_double(argument: &str) -> Option<f64> {
+fn parse_c_hex_double(argument: &str) -> CNumberParse<f64> {
     let (negative, unsigned) = split_c_float_sign(argument);
-    let rest = unsigned
+    let Some(rest) = unsigned
         .strip_prefix("0x")
-        .or_else(|| unsigned.strip_prefix("0X"))?;
+        .or_else(|| unsigned.strip_prefix("0X"))
+    else {
+        return CNumberParse::Invalid;
+    };
     let bytes = rest.as_bytes();
     let mut index = 0_usize;
     let mut significand = 0.0_f64;
@@ -532,28 +566,47 @@ fn parse_c_hex_double(argument: &str) -> Option<f64> {
         .get(index)
         .copied()
         .is_some_and(|byte| matches!(byte, b'p' | b'P'));
-    if hex_digits == 0 || !has_exponent_marker || !significand.is_finite() {
-        return None;
+    if hex_digits == 0 || !has_exponent_marker {
+        return CNumberParse::Invalid;
+    }
+    if !significand.is_finite() {
+        return CNumberParse::Range;
     }
     index += 1;
 
-    let (exponent_negative, exponent, next_index) = parse_decimal_exponent(&rest[index..])?;
+    let (exponent_negative, exponent, next_index) = match parse_decimal_exponent(&rest[index..]) {
+        CNumberParse::Value(exponent) => exponent,
+        CNumberParse::Invalid => return CNumberParse::Invalid,
+        CNumberParse::Range => return CNumberParse::Range,
+    };
     index += next_index;
     if index != bytes.len() {
-        return None;
+        return CNumberParse::Invalid;
     }
 
     let signed_exponent = if exponent_negative {
-        exponent.checked_neg()?
+        let Some(exponent) = exponent.checked_neg() else {
+            return CNumberParse::Range;
+        };
+        exponent
     } else {
         exponent
     };
-    let fractional_offset = i64::try_from(fractional_digits).ok()?.checked_mul(4)?;
-    let binary_exponent = signed_exponent.checked_sub(fractional_offset)?;
+    let Some(fractional_offset) = i64::try_from(fractional_digits)
+        .ok()
+        .and_then(|digits| digits.checked_mul(4))
+    else {
+        return CNumberParse::Range;
+    };
+    let Some(binary_exponent) = signed_exponent.checked_sub(fractional_offset) else {
+        return CNumberParse::Range;
+    };
     if significand == 0.0 {
-        return Some(if negative { -0.0 } else { 0.0 });
+        return CNumberParse::Value(if negative { -0.0 } else { 0.0 });
     }
-    let binary_exponent = i32::try_from(binary_exponent).ok()?;
+    let Ok(binary_exponent) = i32::try_from(binary_exponent) else {
+        return CNumberParse::Range;
+    };
     let value = significand * 2.0_f64.powi(binary_exponent);
     if matches!(
         value.classify(),
@@ -561,10 +614,10 @@ fn parse_c_hex_double(argument: &str) -> Option<f64> {
             | std::num::FpCategory::Zero
             | std::num::FpCategory::Subnormal
     ) {
-        return None;
+        return CNumberParse::Range;
     }
 
-    Some(if negative { -value } else { value })
+    CNumberParse::Value(if negative { -value } else { value })
 }
 
 fn decimal_double_underflowed(argument: &str, value: f64) -> bool {
@@ -600,7 +653,7 @@ fn hex_digit_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn parse_decimal_exponent(argument: &str) -> Option<(bool, i64, usize)> {
+fn parse_decimal_exponent(argument: &str) -> CNumberParse<(bool, i64, usize)> {
     let bytes = argument.as_bytes();
     let (negative, mut index) = match bytes.first() {
         Some(b'+') => (false, 1_usize),
@@ -611,14 +664,20 @@ fn parse_decimal_exponent(argument: &str) -> Option<(bool, i64, usize)> {
     let digit_start = index;
 
     while let Some(byte @ b'0'..=b'9') = bytes.get(index).copied() {
-        value = value.checked_mul(10)?.checked_add(i64::from(byte - b'0'))?;
+        let Some(next) = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+        else {
+            return CNumberParse::Range;
+        };
+        value = next;
         index += 1;
     }
 
     if index == digit_start {
-        None
+        CNumberParse::Invalid
     } else {
-        Some((negative, value, index))
+        CNumberParse::Value((negative, value, index))
     }
 }
 
@@ -693,8 +752,8 @@ fn split_c_style(text: &str, width: usize) -> (&str, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_bool_arg, get_float_arg, get_int_arg, get_int_arg_check_range, print_options,
-        CommandLineState, OptArgType, OptCell, FORMAT_WIDTH,
+        c_runtime_error_message, get_bool_arg, get_float_arg, get_int_arg, get_int_arg_check_range,
+        print_options, CommandLineState, OptArgType, OptCell, C_ERANGE, FORMAT_WIDTH,
     };
     use crate::basics::error::ErrorCode;
 
@@ -835,6 +894,7 @@ mod tests {
     #[test]
     fn float_arg_matches_c_strtod_shape() {
         let option = &OPTIONS[1];
+        let range_message = c_runtime_error_message(C_ERANGE);
         assert_eq!(
             get_float_arg(option, "").unwrap().to_bits(),
             0.0_f64.to_bits()
@@ -845,10 +905,9 @@ mod tests {
         );
         assert!(get_float_arg(option, "1.25x").is_err());
         assert!(get_float_arg(option, " ").is_err());
-        assert_eq!(
-            get_float_arg(option, "1e9999").unwrap_err().code(),
-            ErrorCode::USAGE_ERROR
-        );
+        let decimal_overflow = get_float_arg(option, "1e9999").unwrap_err();
+        assert_eq!(decimal_overflow.code(), ErrorCode::USAGE_ERROR);
+        assert!(decimal_overflow.message().ends_with(&range_message));
         assert!(get_float_arg(option, "inf").unwrap().is_infinite());
         assert!(get_float_arg(option, "INFINITY").unwrap().is_infinite());
         assert!(get_float_arg(option, "-INF").unwrap().is_sign_negative());
@@ -888,10 +947,11 @@ mod tests {
             0.0_f64.to_bits()
         );
         assert!(get_float_arg(option, "0x1.2").is_err());
-        assert!(get_float_arg(option, "0x1p1024").is_err());
-        assert!(get_float_arg(option, "1e-309").is_err());
-        assert!(get_float_arg(option, "5e-324").is_err());
-        assert!(get_float_arg(option, "0x1p-1074").is_err());
+        for range_error in ["0x1p1024", "1e-309", "5e-324", "0x1p-1074"] {
+            let error = get_float_arg(option, range_error).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+            assert!(error.message().ends_with(&range_message));
+        }
     }
 
     #[test]

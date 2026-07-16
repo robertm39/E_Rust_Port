@@ -457,7 +457,7 @@ C source references:
 
 Implemented:
 
-- Standalone `ex_commandline` demo binary integration, including exact C-shaped help text through the shared option renderer, underscore long-option spellings, required integer example output, optional floating-point example output with the default `3.1415` and `%f`-style six-decimal rendering, remaining-argument printing, default stdin marker insertion through `-`, and unit coverage for the full help stream, defaults, option output ordering, and numeric validation.
+- Standalone `ex_commandline` demo binary integration, including exact C-shaped help text through the shared option renderer, underscore long-option spellings, required integer example output, optional floating-point example output with the default `3.1415` and `%f`-style six-decimal rendering, remaining-argument printing, default stdin marker insertion through `-`, and unit coverage for the full help stream, defaults, option output ordering, and numeric validation. Expanded comparison cases now cover unknown long options, missing required arguments, malformed integers, and integer/float range errors. Shared numeric parsing distinguishes ordinary malformed text from C `ERANGE`, preserves `SysError`'s second program-prefixed line through the active CRT `strerror`, and canonicalizes only the runtime-owned glibc/Windows range suffix in cross-platform comparison; the evidence and current reference-environment limitation are recorded in [`experiments/2026-07-16-038-ex-commandline-diagnostics/FINDINGS.md`](../experiments/2026-07-16-038-ex-commandline-diagnostics/FINDINGS.md).
 
 Pending:
 

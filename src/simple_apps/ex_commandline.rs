@@ -2,6 +2,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::inout::commandline::{
     get_float_arg, get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
+use crate::inout::initio::{exit_io, init_io};
 use std::io::{Read, Write};
 
 pub const PROGRAM_NAME: &str = "ex_commandline";
@@ -51,7 +52,8 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    match process_options(argv, stdout)? {
+    init_io(PROGRAM_NAME);
+    let result = (|| match process_options(argv, stdout)? {
         RunCommand::Exit(status) => Ok(status),
         RunCommand::Execute(files) => {
             for file in files {
@@ -59,7 +61,9 @@ where
             }
             Ok(0)
         }
-    }
+    })();
+    exit_io();
+    result
 }
 
 enum RunCommand {
@@ -131,7 +135,8 @@ fn writeln_diag(output: &mut impl Write, line: &str) -> Result<(), Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::{print_help, run, PROGRAM_NAME};
-    use crate::basics::error::ErrorCode;
+    use crate::basics::error::{c_runtime_error_message, ErrorCode};
+    use crate::test_support::global_state_lock;
     use std::io::Cursor;
 
     const EXPECTED_HELP: &str = concat!(
@@ -163,6 +168,7 @@ mod tests {
 
     #[test]
     fn help_exits_before_file_defaults() {
+        let _guard = global_state_lock();
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -183,6 +189,7 @@ mod tests {
 
     #[test]
     fn no_files_defaults_to_stdin_marker() {
+        let _guard = global_state_lock();
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -200,6 +207,7 @@ mod tests {
 
     #[test]
     fn options_print_values_before_remaining_files() {
+        let _guard = global_state_lock();
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -231,6 +239,7 @@ File to process: two.p\n"
 
     #[test]
     fn required_int_argument_is_validated() {
+        let _guard = global_state_lock();
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -244,13 +253,85 @@ File to process: two.p\n"
         .expect_err("bad int is rejected");
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
-        assert!(error.message().contains("expects integer"));
+        assert_eq!(
+            error.message(),
+            "-i or --int_example expects integer instead of 'bad'"
+        );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
     }
 
     #[test]
+    fn numeric_range_errors_keep_c_syserror_second_line() {
+        let _guard = global_state_lock();
+        let range_message = c_runtime_error_message(34);
+
+        for (argument, expected) in [
+            (
+                "--int_example=9223372036854775808",
+                format!(
+                    "-i or --int_example expects integer instead of \
+                     '9223372036854775808'\n{PROGRAM_NAME}: {range_message}"
+                ),
+            ),
+            (
+                "--float_example=1e9999",
+                format!(
+                    "-f or --float_example expects float instead of \
+                     '1e9999'\n{PROGRAM_NAME}: {range_message}"
+                ),
+            ),
+        ] {
+            let mut stdin = Cursor::new(Vec::new());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let error = run(
+                [PROGRAM_NAME, argument],
+                &mut stdin,
+                &mut stdout,
+                &mut stderr,
+            )
+            .expect_err("range error is rejected");
+
+            assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+            assert_eq!(error.message(), expected);
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+        }
+    }
+
+    #[test]
+    fn option_parser_diagnostics_keep_exact_c_text() {
+        let _guard = global_state_lock();
+        for (argument, expected) in [
+            (
+                "--unknown",
+                "Unknown Option: --unknown (Use -h for a list of valid options)",
+            ),
+            ("--int_example", "--int_example requires an argument!"),
+            ("--help=value", "--help=value does not accept an argument!"),
+        ] {
+            let mut stdin = Cursor::new(Vec::new());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let error = run(
+                [PROGRAM_NAME, argument],
+                &mut stdin,
+                &mut stdout,
+                &mut stderr,
+            )
+            .expect_err("invalid option is rejected");
+
+            assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+            assert_eq!(error.message(), expected);
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+        }
+    }
+
+    #[test]
     fn explicit_float_argument_uses_c_six_decimal_shape() {
+        let _guard = global_state_lock();
         let mut stdin = Cursor::new(Vec::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

@@ -63,6 +63,10 @@ PLATFORM_ERROR_SUFFIXES = {
         "The pipe has been ended. (os error 109)",
         "The pipe is being closed. (os error 232)",
     ),
+    "<C ERROR: RANGE>": (
+        "Numerical result out of range",
+        "Result too large",
+    ),
 }
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
 TOOL_CASE_METADATA_KEYS = frozenset(
@@ -677,6 +681,11 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),
+        ("unknown-long-option", ("--unknown",), None),
+        ("missing-required-argument", ("--int_example",), None),
+        ("invalid-integer", ("--int_example=bad",), None),
+        ("integer-range", ("--int_example=9223372036854775808",), None),
+        ("float-range", ("--float_example=1e9999",), None),
     ),
     "term2dag": (
         ("stdin-basic", (), "f(a,a) g(f(a,a))\n"),

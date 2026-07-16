@@ -6,6 +6,33 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+// Allowed external shared-library boundary: C `strerror` is required for the
+// exact `SysError` text emitted for saved C-runtime errno values. The raw
+// pointer never leaves this module.
+#[allow(unsafe_code)]
+mod c_runtime {
+    use std::ffi::{c_char, c_int, CStr};
+
+    unsafe extern "C" {
+        fn strerror(errnum: c_int) -> *mut c_char;
+    }
+
+    pub(super) fn error_message(error_code: i32) -> String {
+        // SAFETY: strerror accepts every c_int errno value and returns either
+        // null or a pointer to a nul-terminated C-runtime-owned string. The
+        // result is checked and copied immediately.
+        let message = unsafe { strerror(error_code) };
+        if message.is_null() {
+            return format!("Unknown error {error_code}");
+        }
+        // SAFETY: the non-null strerror result is guaranteed to be
+        // nul-terminated and remains valid for this immediate owned copy.
+        unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 static PROGRAM_NAME: OnceLock<Mutex<String>> = OnceLock::new();
 static TMP_ERRNO: AtomicI32 = AtomicI32::new(0);
 
@@ -130,6 +157,11 @@ pub fn set_tmp_errno(errno: i32) -> i32 {
 }
 
 #[must_use]
+pub fn c_runtime_error_message(error_code: i32) -> String {
+    c_runtime::error_message(error_code)
+}
+
+#[must_use]
 pub fn render_error_message(program_name: &str, message: &str) -> String {
     format!("{program_name}: {message}\n")
 }
@@ -161,15 +193,19 @@ pub fn render_sys_warning_message(program_name: &str, message: &str, error: &io:
 #[must_use]
 pub fn render_tmp_errno_error_message(message: &str) -> String {
     let program_name = program_name();
-    let error = io::Error::from_raw_os_error(tmp_errno());
-    render_sys_error_message(&program_name, message, &error)
+    let system_message = c_runtime_error_message(tmp_errno());
+    render_sys_message(&program_name, message, &system_message)
 }
 
 #[must_use]
 pub fn render_tmp_errno_warning_message(message: &str) -> String {
     let program_name = program_name();
-    let error = io::Error::from_raw_os_error(tmp_errno());
-    render_sys_warning_message(&program_name, message, &error)
+    let system_message = c_runtime_error_message(tmp_errno());
+    render_sys_message(
+        &program_name,
+        &format!("Warning: {message}"),
+        &system_message,
+    )
 }
 
 pub fn write_error_message(
@@ -286,11 +322,11 @@ pub fn check_option_letter_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_option_letter_string, elog_file_name, elog_in_dir_with_stderr, init_error,
-        program_name, render_elog_record, render_error_message, render_sys_error_message,
-        render_sys_warning_message, render_tmp_errno_error_message,
-        render_tmp_errno_warning_message, render_warning_message, set_tmp_errno,
-        test_letter_string, tmp_errno, write_elog_message, write_error_message,
+        c_runtime_error_message, check_option_letter_string, elog_file_name,
+        elog_in_dir_with_stderr, init_error, program_name, render_elog_record,
+        render_error_message, render_sys_error_message, render_sys_warning_message,
+        render_tmp_errno_error_message, render_tmp_errno_warning_message, render_warning_message,
+        set_tmp_errno, test_letter_string, tmp_errno, write_elog_message, write_error_message,
         write_sys_error_message, write_sys_warning_message, write_warning_message, Diagnostic,
         ErrorCode,
     };
@@ -369,7 +405,7 @@ mod tests {
         init_error("eprover");
         set_tmp_errno(2);
 
-        let system_error = io::Error::from_raw_os_error(2);
+        let system_error = c_runtime_error_message(2);
         assert_eq!(
             render_tmp_errno_error_message("cannot open input"),
             format!("eprover: cannot open input\neprover: {system_error}\n")
