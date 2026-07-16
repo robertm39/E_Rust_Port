@@ -853,6 +853,42 @@ class ComparisonTests(unittest.TestCase):
                 ("epatternize/help", ["--help"]),
                 ("epatternize/version", ["--version"]),
                 ("epatternize/lop-basic", ["--lop-in"]),
+                ("epatternize/old-tptp-record-mix", ["--tptp-in"]),
+                ("epatternize/tstp-mixed-corpus", ["--tstp-in"]),
+                (
+                    "epatternize/nested-selected-include",
+                    ["--tstp-in", "main.p"],
+                ),
+                (
+                    "epatternize/multi-file-output",
+                    [
+                        "--tstp-in",
+                        "-o",
+                        "patterns.out",
+                        "first.p",
+                        "second.p",
+                    ],
+                ),
+                ("epatternize/malformed-lop", ["--lop-in"]),
+                ("epatternize/malformed-tstp", ["--tstp-in"]),
+                (
+                    "epatternize/missing-include",
+                    ["--tstp-in", "main.p"],
+                ),
+                (
+                    "epatternize/missing-input",
+                    ["missing-epatternize-input.p"],
+                ),
+                (
+                    "epatternize/missing-output-parent",
+                    [
+                        "--tstp-in",
+                        "-o",
+                        "missing/patterns.out",
+                        "problem.p",
+                    ],
+                ),
+                ("epatternize/invalid-class-mask", ["--class-mask=short"]),
                 ("epclanalyse/help", ["--help"]),
                 ("epclanalyse/version", ["--version"]),
                 ("epclanalyse/stdin-basic", []),
@@ -1469,6 +1505,35 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(epcllemma_output_case["stdin"], "")
         epatternize_case = cases_by_name["epatternize/lop-basic"]
         self.assertEqual(epatternize_case["stdin"], "p(a).\n")
+        epatternize_mixed_case = cases_by_name["epatternize/tstp-mixed-corpus"]
+        self.assertIn("input_formula(old_formula", epatternize_mixed_case["stdin"])
+        self.assertIn("tcf(typed_clause", epatternize_mixed_case["stdin"])
+        self.assertIn("cnf(watch,watchlist", epatternize_mixed_case["stdin"])
+        epatternize_include_case = cases_by_name[
+            "epatternize/nested-selected-include"
+        ]
+        self.assertTrue(epatternize_include_case["isolated_workdir"])
+        self.assertIn(
+            "include('grandchild.p'",
+            epatternize_include_case["workdir_files"]["child.p"],
+        )
+        self.assertIn(
+            "input_clause(old_clause",
+            epatternize_include_case["workdir_files"]["grandchild.p"],
+        )
+        epatternize_output_case = cases_by_name["epatternize/multi-file-output"]
+        self.assertEqual(epatternize_output_case["output_files"], ["patterns.out"])
+        self.assertEqual(
+            sorted(epatternize_output_case["workdir_files"]),
+            ["first.p", "second.p"],
+        )
+        self.assertTrue(cases_by_name["epatternize/missing-input"]["isolated_workdir"])
+        self.assertEqual(
+            cases_by_name["epatternize/missing-output-parent"][
+                "output_absent_files"
+            ],
+            ["missing/patterns.out"],
+        )
         ex_case = cases_by_name["ex_commandline/options-basic"]
         self.assertIsNone(ex_case["stdin"])
         self.assertEqual(

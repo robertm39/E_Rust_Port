@@ -1486,6 +1486,111 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "epatternize": (
         ("lop-basic", ("--lop-in",), "p(a).\n"),
+        (
+            "old-tptp-record-mix",
+            ("--tptp-in",),
+            (
+                "input_formula(old_formula,axiom,p(a)).\n"
+                "input_clause(old_clause,axiom,[++q(b),--r(X)]).\n"
+            ),
+        ),
+        (
+            "tstp-mixed-corpus",
+            ("--tstp-in",),
+            (
+                "tff(a_type,type,a:$i).\n"
+                "tff(b_type,type,b:$i).\n"
+                "tff(f_type,type,f:$i>$i).\n"
+                "tff(p_type,type,p:$i>$o).\n"
+                "tff(q_type,type,q:$i>$o).\n"
+                "input_formula(old_formula,axiom,p(a)).\n"
+                "input_clause(old_clause,axiom,[++q(b)]).\n"
+                "fof(unit_formula,axiom,p(f(a))).\n"
+                "fof(conjunction,axiom,(p(a)&q(b))).\n"
+                "fof(implication,axiom,(p(a)=>q(a))).\n"
+                "fof(existential,axiom,?[X]:(p(X)&q(f(X)))).\n"
+                "tff(typed_formula,axiom,![X:$i]:(p(X)|q(f(X)))).\n"
+                "tcf(typed_clause,axiom,![X:$i]:(p(X)|~q(X))).\n"
+                "cnf(binary_clause,axiom,(p(a)|~q(b))).\n"
+                "cnf(equality_clause,axiom,(f(a)=b|p(b))).\n"
+                "cnf(watch,watchlist,p(a)).\n"
+            ),
+        ),
+        (
+            "nested-selected-include",
+            ("--tstp-in", "main.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "main.p": (
+                        "include('child.p',[old_formula,old_clause,modern_formula,"
+                        "modern_clause,typed_formula,tcf_formula,watch_clause]).\n"
+                        "fof(local_formula,axiom,local(a)).\n"
+                    ),
+                    "child.p": (
+                        "include('grandchild.p',[old_formula,old_clause,"
+                        "modern_formula,modern_clause]).\n"
+                        "tff(a_type,type,a:$i).\n"
+                        "tff(typed_pred_type,type,typed_pred:$i>$o).\n"
+                        "tff(typed_formula,axiom,typed_pred(a)).\n"
+                        "tcf(tcf_formula,axiom,![X:$i]:typed_pred(X)).\n"
+                        "tcf(watch_clause,watchlist,typed_pred(a)).\n"
+                        "fof(dropped_child,axiom,dropped(a)).\n"
+                    ),
+                    "grandchild.p": (
+                        "input_formula(old_formula,axiom,oldp(a)).\n"
+                        "input_clause(old_clause,axiom,[++oldq(a)]).\n"
+                        "fof(modern_formula,axiom,modernp(a),"
+                        "file('grandchild.p',modern_formula),[status(thm)]).\n"
+                        "cnf(modern_clause,axiom,modernq(a),"
+                        "file('grandchild.p',modern_clause),[status(thm)]).\n"
+                        "fof(dropped_grandchild,axiom,nope(a)).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "multi-file-output",
+            ("--tstp-in", "-o", "patterns.out", "first.p", "second.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "first.p": "fof(first,axiom,p(a)).\n",
+                    "second.p": "cnf(second,axiom,q(b)).\n",
+                },
+                "output_files": ("patterns.out",),
+            },
+        ),
+        ("malformed-lop", ("--lop-in",), "p(f(a).\n"),
+        ("malformed-tstp", ("--tstp-in",), "fof(bad,axiom,p(a).\n"),
+        (
+            "missing-include",
+            ("--tstp-in", "main.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"main.p": "include('missing-include.p').\n"},
+            },
+        ),
+        (
+            "missing-input",
+            ("missing-epatternize-input.p",),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-output-parent",
+            ("--tstp-in", "-o", "missing/patterns.out", "problem.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"problem.p": "fof(a,axiom,p(a)).\n"},
+                "output_absent_files": ("missing/patterns.out",),
+            },
+        ),
+        ("invalid-class-mask", ("--class-mask=short",), None),
     ),
     "ex_commandline": (
         ("options-basic", ("--int_example=42", "--float_example", "one.p", "two.p"), None),

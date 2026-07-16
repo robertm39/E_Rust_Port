@@ -811,7 +811,8 @@ fn parse_input_file(
         terms,
         f_axioms,
         watchlist,
-    )?;
+    )
+    .map_err(epatternize_scanner_open_diagnostic)?;
     Ok(parsed_file.problem_type)
 }
 
@@ -1815,6 +1816,40 @@ mod tests {
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn included_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let input_dir = temp_path("epatternize-missing-include-dir");
+        let input_path = input_dir.join("main.p");
+        let _ = fs::remove_dir_all(&input_dir);
+        fs::create_dir(&input_dir).unwrap();
+        fs::write(&input_path, "include('missing-include.p').\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"";
+
+        let error = run(
+            ["epatternize", "--tstp-in", input_path.to_str().unwrap()],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(
+            error
+                .message()
+                .contains("missing-include.p for reading\nepatternize: "),
+            "unexpected include diagnostic: {}",
+            error.message()
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        fs::remove_dir_all(input_dir).unwrap();
     }
 
     #[test]

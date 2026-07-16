@@ -99,6 +99,7 @@ Source files reviewed: `PROVER/epatternize.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `src/prover/epatternize.rs` and `src/bin/epatternize.rs` port the standalone executable wrapper. The Rust path preserves exact C-shaped full help text, the long-only `--version`, default stdin input, LOP/TPTP/TSTP parse selectors, TPTP3 aliases, output-file routing including `-o -`, C-shaped file-open and output-close diagnostics, exact C mask-length checks, explicit `--sine` filtering, compatibility acceptance of parsed classification/preprocessing options, represented formula-owner parsing/CNF for currently supported parser fragments, pattern computation, flat clause-list encoding, and pattern-term output.
+- The permanent executable matrix covers old-TPTP owners, a larger mixed first-order TSTP corpus, nested selected includes across every first-order outer record family, source/useful-info and watchlist routing, multi-file output, malformed scanner inputs, and stable file/usage failures. The binary returns the diagnostic's C status, and recursive include-open failures are normalized to the same two-line `SysError` form as top-level opens. `experiments/2026-07-16-051-epatternize-expanded-comparison/` records the source audit, exact optimized output, archived C evidence, and the host-specific broken-pipe boundary.
 
 ### Porting Focus
 
