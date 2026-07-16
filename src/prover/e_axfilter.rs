@@ -1622,8 +1622,11 @@ mod tests {
         std::fs::write(
             &problem_path,
             "fof(goal, conjecture, p(goal_a)).\n\
-             fof(link, axiom, (p(goal_a) => q(link_b))).\n\
-             fof(far, axiom, r(far_c)).\n",
+             fof(link1, axiom, (p(goal_a) => q(link_b))).\n\
+             fof(link2, axiom, (q(link_b) => s(link_c))).\n\
+             fof(link3, axiom, (s(link_c) => t(link_d))).\n\
+             fof(far1, axiom, r(far_c)).\n\
+             fof(far2, axiom, u(far_d)).\n",
         )
         .expect("problem written");
         std::fs::write(
@@ -1651,8 +1654,11 @@ mod tests {
         assert!(stderr.is_empty());
         let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
         assert!(generated.contains("fof(goal, conjecture"));
-        assert!(generated.contains("fof(link, axiom"));
-        assert!(!generated.contains("fof(far,"));
+        assert!(generated.contains("fof(link1, axiom"));
+        assert!(generated.contains("fof(link2, axiom"));
+        assert!(generated.contains("fof(link3, axiom"));
+        assert!(!generated.contains("fof(far1,"));
+        assert!(!generated.contains("fof(far2,"));
 
         for path in [&problem_path, &filter_path, &generated_path] {
             remove_if_present(path);
@@ -1674,9 +1680,13 @@ mod tests {
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
              thf(q_type, type, q: person > $o).\n\
-             thf(lambda_def, definition, p = (^[X: person]: q @ X)).\n\
+             thf(r_type, type, r: person > $o).\n\
+             thf(lambda_def1, definition, p = (^[X: person]: q @ X)).\n\
+             thf(lambda_def2, definition, q = (^[X: person]: r @ X)).\n\
              thf(goal, conjecture, p @ a).\n\
-             thf(far, axiom, q @ a).\n",
+             thf(hyp, hypothesis, q @ a).\n\
+             thf(question, question, r @ a).\n\
+             thf(far, axiom, r @ a).\n",
         )
         .expect("problem written");
         std::fs::write(&filter_path, "defs=LambdaDef\n").expect("filters written");
@@ -1699,8 +1709,11 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(stderr.is_empty());
         let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
-        assert!(generated.contains("thf(lambda_def,"));
+        assert!(generated.contains("thf(lambda_def1,"));
+        assert!(generated.contains("thf(lambda_def2,"));
         assert!(generated.contains("thf(goal, conjecture"));
+        assert!(generated.contains("thf(hyp, hypothesis"));
+        assert!(generated.contains("thf(question, question"));
         assert!(!generated.contains("thf(far,"));
 
         for path in [&problem_path, &filter_path, &generated_path] {
@@ -1926,6 +1939,86 @@ mod tests {
         assert!(diverse.contains("% Seeds      : Diverse"));
 
         for path in [&problem_path, &filter_path, &largest_path, &diverse_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn seeded_all_methods_fixture_pins_names_routing_and_generated_files() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("seeded-all-methods-problem");
+        let filter_path = temp_path("seeded-all-methods-filters");
+        let output_path = temp_path("seeded-all-methods-global-output");
+        for path in [&problem_path, &filter_path, &output_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(
+            &problem_path,
+            "fof(seed_small, axiom, p(a)).\n\
+             fof(seed_large, axiom, p(f(g(a)))).\n\
+             fof(other, axiom, q(b)).\n",
+        )
+        .expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "seed=GSinE(CountTerms,hypos,false,10.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                "--seed-method=lda",
+                "--seeds=p",
+                "-o",
+                output_path.to_str().expect("test path is utf8"),
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("seeded all-method run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let stdout = String::from_utf8(stdout).expect("stdout is utf8");
+        let corename = problem_path
+            .file_stem()
+            .expect("problem has a stem")
+            .to_string_lossy();
+        let expected_names = [
+            format!("{corename}_SA_P1_24"),
+            format!("{corename}_SL_P1_24"),
+            format!("{corename}_SD_P1_24"),
+        ];
+        assert_eq!(seed_names(&stdout), expected_names);
+        assert!(!stdout.contains("% Filter: seed goes into file"));
+
+        let global_output = std::fs::read_to_string(&output_path).expect("global output exists");
+        for name in &expected_names {
+            assert!(global_output.contains(&format!("% Filter: seed goes into file {name}_seed.p")));
+        }
+
+        let generated_paths = expected_names
+            .iter()
+            .map(|name| PathBuf::from(format!("{name}_seed.p")))
+            .collect::<Vec<_>>();
+        let all = std::fs::read_to_string(&generated_paths[0]).expect("all output exists");
+        let largest = std::fs::read_to_string(&generated_paths[1]).expect("largest output exists");
+        let diverse = std::fs::read_to_string(&generated_paths[2]).expect("diverse output exists");
+        assert!(all.contains("% Seeds      : All"));
+        assert!(largest.contains("% Seeds      : Largest"));
+        assert!(diverse.contains("% Seeds      : Diverse"));
+
+        for path in [&problem_path, &filter_path, &output_path] {
+            remove_if_present(path);
+        }
+        for path in &generated_paths {
             remove_if_present(path);
         }
     }

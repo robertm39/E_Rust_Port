@@ -366,8 +366,11 @@ TOOL_FUNCTIONAL_CASES = {
                     ),
                     "problem.p": (
                         "fof(goal, conjecture, p(goal_a)).\n"
-                        "fof(link, axiom, (p(goal_a) => q(link_b))).\n"
-                        "fof(far, axiom, r(far_c)).\n"
+                        "fof(link1, axiom, (p(goal_a) => q(link_b))).\n"
+                        "fof(link2, axiom, (q(link_b) => s(link_c))).\n"
+                        "fof(link3, axiom, (s(link_c) => t(link_d))).\n"
+                        "fof(far1, axiom, r(far_c)).\n"
+                        "fof(far2, axiom, u(far_d)).\n"
                     ),
                 },
                 "output_files": ("global.out", "problem_formulas.p"),
@@ -385,13 +388,61 @@ TOOL_FUNCTIONAL_CASES = {
                         "thf(a_type, type, a: person).\n"
                         "thf(p_type, type, p: person > $o).\n"
                         "thf(q_type, type, q: person > $o).\n"
-                        "thf(lambda_def, definition, p = (^[X: person]: q @ X)).\n"
+                        "thf(r_type, type, r: person > $o).\n"
+                        "thf(lambda_def1, definition, p = (^[X: person]: q @ X)).\n"
+                        "thf(lambda_def2, definition, q = (^[X: person]: r @ X)).\n"
                         "thf(goal, conjecture, p @ a).\n"
-                        "thf(far, axiom, q @ a).\n"
+                        "thf(hyp, hypothesis, q @ a).\n"
+                        "thf(question, question, r @ a).\n"
+                        "thf(far, axiom, r @ a).\n"
                     ),
                 },
                 "output_files": ("global.out", "problem_defs.p"),
             },
+        ),
+        (
+            "tstp-seeded-all-methods",
+            (
+                "--tstp-in",
+                "-f",
+                "filters.axf",
+                "--seed-method=lda",
+                "--seeds=p",
+                "-o",
+                "global.out",
+                "problem.p",
+            ),
+            None,
+            {
+                "workdir_files": {
+                    "filters.axf": (
+                        "seed=GSinE(CountTerms,hypos,false,10.0,100,100,10000,1.0)\n"
+                    ),
+                    "problem.p": (
+                        "fof(seed_small, axiom, p(a)).\n"
+                        "fof(seed_large, axiom, p(f(g(a)))).\n"
+                        "fof(other, axiom, q(b)).\n"
+                    ),
+                },
+                "output_files": (
+                    "global.out",
+                    "problem_SA_P1_24_seed.p",
+                    "problem_SL_P1_24_seed.p",
+                    "problem_SD_P1_24_seed.p",
+                ),
+            },
+        ),
+        (
+            "output-open-missing-parent",
+            ("-o", "missing/global.out", "problem.p"),
+            None,
+            {"workdir_files": {"problem.p": "fof(a, axiom, p(a)).\n"}},
+        ),
+        (
+            "filter-open-missing",
+            ("-f", "missing.axf", "problem.p"),
+            None,
+            {"workdir_files": {"problem.p": "fof(a, axiom, p(a)).\n"}},
         ),
     ),
     "e_client": (

@@ -317,6 +317,27 @@ class ComparisonTests(unittest.TestCase):
                     "e_axfilter/tstp-lambda-def-formulas",
                     ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
                 ),
+                (
+                    "e_axfilter/tstp-seeded-all-methods",
+                    [
+                        "--tstp-in",
+                        "-f",
+                        "filters.axf",
+                        "--seed-method=lda",
+                        "--seeds=p",
+                        "-o",
+                        "global.out",
+                        "problem.p",
+                    ],
+                ),
+                (
+                    "e_axfilter/output-open-missing-parent",
+                    ["-o", "missing/global.out", "problem.p"],
+                ),
+                (
+                    "e_axfilter/filter-open-missing",
+                    ["-f", "missing.axf", "problem.p"],
+                ),
                 ("e_client/help", ["--help"]),
                 ("e_client/version", ["--version"]),
                 ("e_client/invalid-port", ["--port=70000"]),
@@ -468,12 +489,38 @@ class ComparisonTests(unittest.TestCase):
         )
         e_axfilter_lambda_case = cases_by_name["e_axfilter/tstp-lambda-def-formulas"]
         self.assertIn(
-            "thf(lambda_def, definition",
+            "thf(lambda_def1, definition",
             e_axfilter_lambda_case["workdir_files"]["problem.p"],
         )
         self.assertEqual(
             e_axfilter_lambda_case["output_files"],
             ["global.out", "problem_defs.p"],
+        )
+        e_axfilter_seeded_case = cases_by_name["e_axfilter/tstp-seeded-all-methods"]
+        self.assertEqual(
+            e_axfilter_seeded_case["output_files"],
+            [
+                "global.out",
+                "problem_SA_P1_24_seed.p",
+                "problem_SL_P1_24_seed.p",
+                "problem_SD_P1_24_seed.p",
+            ],
+        )
+        self.assertIn(
+            "GSinE(CountTerms,hypos",
+            e_axfilter_seeded_case["workdir_files"]["filters.axf"],
+        )
+        e_axfilter_output_error_case = cases_by_name[
+            "e_axfilter/output-open-missing-parent"
+        ]
+        self.assertEqual(
+            e_axfilter_output_error_case["workdir_files"],
+            {"problem.p": "fof(a, axiom, p(a)).\n"},
+        )
+        e_axfilter_filter_error_case = cases_by_name["e_axfilter/filter-open-missing"]
+        self.assertEqual(
+            e_axfilter_filter_error_case["arguments"],
+            ["-f", "missing.axf", "problem.p"],
         )
         e_client_case = cases_by_name["e_client/invalid-port"]
         self.assertIsNone(e_client_case["stdin"])
