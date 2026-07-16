@@ -163,9 +163,26 @@ fn execute_process_set(
     controls: &mut EPCtrlSet,
     stdout: &mut impl Write,
 ) -> Result<u8, Diagnostic> {
+    execute_process_set_with_poll(controls, stdout, |controls, output| {
+        controls.get_result(false, output)
+    })
+}
+
+fn execute_process_set_with_poll<W, F>(
+    controls: &mut EPCtrlSet,
+    stdout: &mut W,
+    mut poll: F,
+) -> Result<u8, Diagnostic>
+where
+    W: Write,
+    F: FnMut(
+        &mut EPCtrlSet,
+        &mut W,
+    ) -> Result<Option<crate::control::esession::Descriptor>, Diagnostic>,
+{
     let mut proof_descriptor = None;
     while !controls.is_empty() {
-        proof_descriptor = controls.get_result(false, stdout)?;
+        proof_descriptor = poll(controls, stdout)?;
         if proof_descriptor.is_some() {
             break;
         }
@@ -233,11 +250,13 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        execute_with_spawner, print_help, process_options, run, strategy_specs, RunCommand,
-        StratparConfig, C_USAGE_ERROR, DEFAULT_PROVER, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        execute_process_set_with_poll, execute_with_spawner, print_help, process_options, run,
+        strategy_specs, RunCommand, StratparConfig, C_USAGE_ERROR, DEFAULT_PROVER,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
-    use crate::control::proc_ctrl::EPCtrl;
+    use crate::control::esession::{Descriptor, DescriptorInterestSet};
+    use crate::control::proc_ctrl::{EPCtrl, EPCtrlSet};
     use crate::prover::version::{footer, E_NICKNAME, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Write};
@@ -422,6 +441,41 @@ mod tests {
         assert!((1..=8).contains(&no_proof_messages));
         assert!(!printed.contains("% SZS status Theorem"));
         assert!(printed.ends_with("% SZS status GaveUp\n"));
+    }
+
+    #[test]
+    fn simultaneous_proofs_replay_highest_ready_descriptor_like_c() {
+        let _guard = global_state_lock();
+        let mut controls = EPCtrlSet::new();
+        controls
+            .add_proc(EPCtrl::with_descriptor("lower", Descriptor::new(2)))
+            .unwrap();
+        controls
+            .add_proc(EPCtrl::with_descriptor("higher", Descriptor::new(7)))
+            .unwrap();
+        let mut stdout = Vec::new();
+        let mut polls = 0;
+
+        let status =
+            execute_process_set_with_poll(&mut controls, &mut stdout, |controls, output| {
+                polls += 1;
+                let mut ready = DescriptorInterestSet::default();
+                ready.set_read(Descriptor::new(2));
+                ready.set_read(Descriptor::new(7));
+                controls.get_result_from_ready(&ready, false, output, |proc, _buffer| {
+                    let line = format!("% output from {}\n% SZS status Theorem\n", proc.name());
+                    let _eof = proc.get_result_from_optional_line(Some(&line));
+                    Ok(proc.get_result_from_optional_line(None))
+                })
+            })
+            .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(polls, 1);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "% output from higher\n% SZS status Theorem\n"
+        );
     }
 
     #[test]
