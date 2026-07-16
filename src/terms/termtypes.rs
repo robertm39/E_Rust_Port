@@ -206,22 +206,30 @@ impl RewriteDemodulator {
 #[derive(Clone, Debug)]
 pub struct Term(Rc<TermCell>);
 
+#[derive(Debug, Default)]
+struct TermLinks {
+    binding: Option<Term>,
+    rw_replace: Option<Term>,
+    type_: Option<Type>,
+    left: Option<Term>,
+    right: Option<Term>,
+}
+
 #[derive(Debug)]
 struct TermCell {
     f_code: Cell<FunCode>,
     properties: Cell<TermProperties>,
     args: RefCell<Vec<Option<Term>>>,
-    binding: RefCell<Option<Term>>,
+    // C stores these five nullable pointers inline in TermCell. One shared
+    // interior-mutation boundary preserves that compact shape without unsafe
+    // access or one borrow flag per pointer.
+    links: RefCell<TermLinks>,
     entry_no: Cell<i64>,
     weight: Cell<i64>,
     v_count: Cell<u32>,
     f_count: Cell<u32>,
     nf_date: [Cell<SysDate>; 2],
-    rw_replace: RefCell<Option<Term>>,
     rw_demod: Cell<Option<RewriteDemodulator>>,
-    type_: RefCell<Option<Type>>,
-    left: RefCell<Option<Term>>,
-    right: RefCell<Option<Term>>,
 }
 
 impl PartialEq for Term {
@@ -341,11 +349,11 @@ impl Term {
 
     #[must_use]
     pub fn binding(&self) -> Option<Term> {
-        self.0.binding.borrow().clone()
+        self.0.links.borrow().binding.clone()
     }
 
     pub fn set_binding(&self, binding: Option<Term>) {
-        *self.0.binding.borrow_mut() = binding;
+        self.0.links.borrow_mut().binding = binding;
     }
 
     #[must_use]
@@ -386,39 +394,39 @@ impl Term {
 
     #[must_use]
     pub fn type_(&self) -> Option<Type> {
-        self.0.type_.borrow().clone()
+        self.0.links.borrow().type_.clone()
     }
 
     pub fn set_type(&self, type_: Option<Type>) {
-        *self.0.type_.borrow_mut() = type_;
+        self.0.links.borrow_mut().type_ = type_;
     }
 
     #[must_use]
     pub fn left_son(&self) -> Option<Term> {
-        self.0.left.borrow().clone()
+        self.0.links.borrow().left.clone()
     }
 
     pub fn set_left_son(&self, term: Option<Term>) {
-        *self.0.left.borrow_mut() = term;
+        self.0.links.borrow_mut().left = term;
     }
 
     #[must_use]
     pub fn right_son(&self) -> Option<Term> {
-        self.0.right.borrow().clone()
+        self.0.links.borrow().right.clone()
     }
 
     pub fn set_right_son(&self, term: Option<Term>) {
-        *self.0.right.borrow_mut() = term;
+        self.0.links.borrow_mut().right = term;
     }
 
     #[must_use]
     pub fn take_left_son(&self) -> Option<Term> {
-        self.0.left.borrow_mut().take()
+        self.0.links.borrow_mut().left.take()
     }
 
     #[must_use]
     pub fn take_right_son(&self) -> Option<Term> {
-        self.0.right.borrow_mut().take()
+        self.0.links.borrow_mut().right.take()
     }
 
     pub fn clear_tree_links(&self) {
@@ -443,11 +451,11 @@ impl Term {
 
     #[must_use]
     pub fn rw_replace_field(&self) -> Option<Term> {
-        self.0.rw_replace.borrow().clone()
+        self.0.links.borrow().rw_replace.clone()
     }
 
     pub fn set_rw_replace_field(&self, replacement: Option<Term>) {
-        *self.0.rw_replace.borrow_mut() = replacement;
+        self.0.links.borrow_mut().rw_replace = replacement;
     }
 
     #[must_use]
@@ -666,7 +674,7 @@ impl Term {
             f_code: Cell::new(0),
             properties: Cell::new(TP_IGNORE_PROPS),
             args: RefCell::new(vec![None; arity]),
-            binding: RefCell::new(None),
+            links: RefCell::new(TermLinks::default()),
             entry_no: Cell::new(0),
             weight: Cell::new(0),
             v_count: Cell::new(0),
@@ -675,11 +683,7 @@ impl Term {
                 Cell::new(SysDate::creation_time()),
                 Cell::new(SysDate::creation_time()),
             ],
-            rw_replace: RefCell::new(None),
             rw_demod: Cell::new(None),
-            type_: RefCell::new(None),
-            left: RefCell::new(None),
-            right: RefCell::new(None),
         }))
     }
 }
@@ -1046,6 +1050,36 @@ mod tests {
         assert_eq!(copy.argument(1), Some(right));
         assert!(copy.left_son().is_none());
         assert!(copy.right_son().is_none());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn term_links_share_one_compact_interior_mutation_boundary() {
+        assert_eq!(std::mem::size_of::<super::TermLinks>(), 40);
+        assert_eq!(
+            std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
+            48
+        );
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 152);
+
+        let term = Term::const_cell_alloc(1);
+        let binding = Term::const_cell_alloc(2);
+        let replacement = Term::const_cell_alloc(3);
+        let left = Term::const_cell_alloc(4);
+        let right = Term::const_cell_alloc(5);
+        let type_ = alloc_simple_sort(ST_INTEGER);
+
+        term.set_binding(Some(binding.clone()));
+        term.set_rw_replace_field(Some(replacement.clone()));
+        term.set_type(Some(type_.clone()));
+        term.set_left_son(Some(left.clone()));
+        term.set_right_son(Some(right.clone()));
+
+        assert_eq!(term.binding(), Some(binding));
+        assert_eq!(term.rw_replace_field(), Some(replacement));
+        assert_eq!(term.type_(), Some(type_));
+        assert_eq!(term.take_left_son(), Some(left));
+        assert_eq!(term.take_right_son(), Some(right));
     }
 
     #[test]
