@@ -56,6 +56,11 @@ PLATFORM_EPCLANALYSE_NAN_RE = re.compile(
     r"(?P<label>:)\s*" + PLATFORM_NAN_TOKEN + r"$",
     re.IGNORECASE,
 )
+CLASSIFY_LEGACY_FEATURE_SUFFIX_RE = re.compile(
+    r"^(?P<prefix>.* : \(.*),\s*[-+]?\d+,\s*[-+]?\d+,\s*[^,]+,\s*[^,]+,"
+    r"\s*(?:true|false),\s*(?:true|false)\s+\) : "
+    r"(?P<class_prefix>[A-Z0-9-]{14})[A-Z0-9-]{7}$"
+)
 EPCLANALYSE_AVERAGE_PREFIXES = (
     "% Average number of ",
     "% ...in ",
@@ -92,6 +97,7 @@ TOOL_CASE_METADATA_KEYS = frozenset(
         "output_files",
         "output_absent_files",
         "output_directories",
+        "normalize_legacy_classify_feature_suffix",
     }
 )
 PROBLEM_SUFFIXES = {".p", ".lop"}
@@ -434,6 +440,48 @@ TOOL_FUNCTIONAL_CASES = {
                 "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): "
                 "UHSMG\n"
             ),
+            {"normalize_legacy_classify_feature_suffix": True},
+        ),
+        (
+            "parse-features-raw",
+            ("--parse-features", "--raw-class"),
+            (
+                "raw : (1,2,3,4,5,6,7,8,0.125,9,true,2,0,false): "
+                "FSSMMLLCCSSNAA\n"
+            ),
+        ),
+        (
+            "parse-features-missing-colon",
+            ("--parse-features",),
+            "broken\n",
+        ),
+        (
+            "parse-features-short-class",
+            ("--parse-features",),
+            (
+                "prob : "
+                "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): "
+                "H\n"
+            ),
+        ),
+        (
+            "parse-features-raw-short-class",
+            ("--parse-features", "--raw-class"),
+            "raw : (1,2,3,4,5,6,7,8,0.125,9,true,2,0,false): short\n",
+        ),
+        (
+            "parse-features-output-file",
+            ("--parse-features", "-o", "features.out"),
+            (
+                "fileprob : "
+                "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): "
+                "UHSMG\n"
+            ),
+            {
+                "isolated_workdir": True,
+                "output_files": ("features.out",),
+                "normalize_legacy_classify_feature_suffix": True,
+            },
         ),
         (
             "raw-lop",
@@ -446,6 +494,22 @@ TOOL_FUNCTIONAL_CASES = {
             (
                 "input_formula(f1,axiom,p(a)).\n"
                 "input_clause(c1,axiom,[++p(a)]).\n"
+            ),
+        ),
+        (
+            "raw-fof-definition-conjecture",
+            ("--raw-class", "--tstp-format"),
+            (
+                "fof(definition,axiom,![X]:(f(X)=X)).\n"
+                "fof(goal,conjecture,?[X]:p(f(X))).\n"
+            ),
+        ),
+        (
+            "standard-fof-definition-conjecture",
+            ("--tstp-format",),
+            (
+                "fof(definition,axiom,![X]:(f(X)=X)).\n"
+                "fof(goal,conjecture,?[X]:p(f(X))).\n"
             ),
         ),
         (
@@ -477,6 +541,22 @@ TOOL_FUNCTIONAL_CASES = {
                 "thf(a_type,type,a:person).\n"
                 "thf(p_type,type,p:person>$o).\n"
                 "thf(fact,axiom,p@a).\n"
+            ),
+        ),
+        (
+            "specsig-mixed-arities",
+            ("--tstp-format", "--specsig"),
+            (
+                "cnf(c1,axiom,(p(a)|q(f(a),X))).\n"
+                "cnf(c2,negated_conjecture,(~p(b)|f(Y)=Y)).\n"
+            ),
+        ),
+        (
+            "tptp-header-mixed-shape",
+            ("--tstp-format", "--generate-tptp-header"),
+            (
+                "cnf(c1,axiom,(p(a)|q(f(a),X))).\n"
+                "cnf(c2,negated_conjecture,(~p(b)|f(Y)=Y)).\n"
             ),
         ),
         (
@@ -516,6 +596,45 @@ TOOL_FUNCTIONAL_CASES = {
             "merged-negative-unbounded",
             ("--tstp-format", "--merged-classification=-2"),
             "cnf(c1,axiom,p(a)).\n",
+        ),
+        (
+            "merged-minus-one-standard",
+            ("--tstp-format", "--merged-classification=-1"),
+            "cnf(c1,axiom,p(a)).\n",
+        ),
+        (
+            "merged-positive-thf",
+            ("--tstp-format", "--merged-classification=2"),
+            (
+                "thf(a_type,type,a:$i).\n"
+                "thf(p_type,type,p:$i>$o).\n"
+                "thf(fact,axiom,p@a).\n"
+            ),
+        ),
+        (
+            "missing-feature-input",
+            ("--parse-features", "missing-classify-features.txt"),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-real-input",
+            ("--tstp-format", "missing-classify-problem.p"),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-output-parent",
+            ("--parse-features", "-o", "missing/features.out"),
+            (
+                "prob : "
+                "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): "
+                "UHSMG\n"
+            ),
+            {
+                "isolated_workdir": True,
+                "output_absent_files": ("missing/features.out",),
+            },
         ),
     ),
     "direct_examples": (
@@ -1348,7 +1467,12 @@ def szs_status(text: str) -> str | None:
     return matches[-1] if matches else None
 
 
-def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) -> str:
+def normalize_output(
+    text: str,
+    replacements: Iterable[tuple[str, str]] = (),
+    *,
+    normalize_legacy_classify_feature_suffix: bool = False,
+) -> str:
     normalized = text.replace("\r\n", "\n")
     for old, new in replacements:
         if old:
@@ -1358,6 +1482,8 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
         for line in normalized.splitlines()
         if not VOLATILE_LINE_RE.search(line)
     ]
+    if normalize_legacy_classify_feature_suffix:
+        lines = [normalize_classify_legacy_feature_suffix(line) for line in lines]
     lines = normalize_app_encode_type_declarations(lines)
     lines = normalize_saturation_blocks(lines)
     return "\n".join(lines).strip()
@@ -1378,6 +1504,18 @@ def normalize_platform_line(line: str) -> str:
             if normalized.endswith(suffix):
                 return normalized[: -len(suffix)] + replacement
     return normalized
+
+
+def normalize_classify_legacy_feature_suffix(line: str) -> str:
+    """Canonicalize only the fields that C leaves uninitialized after legacy parsing."""
+
+    match = CLASSIFY_LEGACY_FEATURE_SUFFIX_RE.fullmatch(line)
+    if match is None:
+        return line
+    return (
+        f"{match.group('prefix')}, <UNINITIALIZED-LEGACY-SUFFIX> ) : "
+        f"{match.group('class_prefix')}<UNINITIALIZED-LEGACY-CLASS>"
+    )
 
 
 def normalize_app_encode_type_declarations(lines: Iterable[str]) -> list[str]:
@@ -1957,6 +2095,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             "output_files": [],
             "output_absent_files": [],
             "output_directories": [],
+            "normalize_legacy_classify_feature_suffix": False,
         }
     if len(fixture_tail) != 1:
         raise InteropError("Functional support-tool cases accept at most one metadata argument")
@@ -1978,6 +2117,9 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         output_files = tail.get("output_files", ())
         output_absent_files = tail.get("output_absent_files", ())
         output_directories = tail.get("output_directories", ())
+        normalize_legacy_classify_feature_suffix = tail.get(
+            "normalize_legacy_classify_feature_suffix", False
+        )
     else:
         fixture_files = tail
         isolated_workdir = False
@@ -1986,6 +2128,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         output_files = ()
         output_absent_files = ()
         output_directories = ()
+        normalize_legacy_classify_feature_suffix = False
 
     return {
         "fixture_files": dict(fixture_files),
@@ -1995,6 +2138,9 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         "output_files": list(output_files),
         "output_absent_files": list(output_absent_files),
         "output_directories": list(output_directories),
+        "normalize_legacy_classify_feature_suffix": bool(
+            normalize_legacy_classify_feature_suffix
+        ),
     }
 
 
@@ -2093,6 +2239,8 @@ def compare_tool_output_files(
     reference_cwd: Path,
     candidate_cwd: Path,
     replacements: Iterable[tuple[str, str]],
+    *,
+    normalize_legacy_classify_feature_suffix: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     records: list[dict[str, Any]] = []
     details: dict[str, dict[str, Any]] = {}
@@ -2114,12 +2262,24 @@ def compare_tool_output_files(
             else None
         )
         reference_normalized = (
-            normalize_output(reference_text, replacement_list)
+            normalize_output(
+                reference_text,
+                replacement_list,
+                normalize_legacy_classify_feature_suffix=(
+                    normalize_legacy_classify_feature_suffix
+                ),
+            )
             if reference_text is not None
             else None
         )
         candidate_normalized = (
-            normalize_output(candidate_text, replacement_list)
+            normalize_output(
+                candidate_text,
+                replacement_list,
+                normalize_legacy_classify_feature_suffix=(
+                    normalize_legacy_classify_feature_suffix
+                ),
+            )
             if candidate_text is not None
             else None
         )
@@ -2326,10 +2486,29 @@ def compare_tools(args: argparse.Namespace) -> None:
                 fixture_replacements.extend(
                     cross_platform_path_replacements(workdir_path, "<WORKDIR_FILE>")
                 )
-        reference_normalized_stdout = normalize_output(reference["stdout"], fixture_replacements)
-        candidate_normalized_stdout = normalize_output(candidate["stdout"], fixture_replacements)
-        reference_normalized_stderr = normalize_output(reference["stderr"], fixture_replacements)
-        candidate_normalized_stderr = normalize_output(candidate["stderr"], fixture_replacements)
+        normalize_legacy_classify_feature_suffix = case.get(
+            "normalize_legacy_classify_feature_suffix", False
+        )
+        reference_normalized_stdout = normalize_output(
+            reference["stdout"],
+            fixture_replacements,
+            normalize_legacy_classify_feature_suffix=(
+                normalize_legacy_classify_feature_suffix
+            ),
+        )
+        candidate_normalized_stdout = normalize_output(
+            candidate["stdout"],
+            fixture_replacements,
+            normalize_legacy_classify_feature_suffix=(
+                normalize_legacy_classify_feature_suffix
+            ),
+        )
+        reference_normalized_stderr = normalize_output(
+            reference["stderr"], fixture_replacements
+        )
+        candidate_normalized_stderr = normalize_output(
+            candidate["stderr"], fixture_replacements
+        )
         normalized_stdout_equal = reference_normalized_stdout == candidate_normalized_stdout
         normalized_stderr_equal = reference_normalized_stderr == candidate_normalized_stderr
         if not normalized_stdout_equal:
@@ -2341,6 +2520,9 @@ def compare_tools(args: argparse.Namespace) -> None:
             reference_cwd,
             candidate_cwd,
             fixture_replacements,
+            normalize_legacy_classify_feature_suffix=(
+                normalize_legacy_classify_feature_suffix
+            ),
         )
         output_files_equal = all(record["normalized_equal"] for record in output_file_records)
         if not output_files_equal:

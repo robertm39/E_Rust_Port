@@ -2580,7 +2580,7 @@ mod tests {
     #[test]
     fn malformed_feature_line_reports_syntax_error_without_output() {
         let _guard = global_state_lock();
-        let mut stdin = Cursor::new(b"broken-feature-line\n".to_vec());
+        let mut stdin = Cursor::new(b"broken\n".to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -2593,9 +2593,42 @@ mod tests {
         .expect_err("malformed feature line is reported");
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("Colon"));
+        assert_eq!(
+            error.message(),
+            "-:2:(Column 1):(just read ''): Colon (':') expected, but No token (probably EOF) read "
+        );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn malformed_feature_classes_preserve_c_error_wording() {
+        let _guard = global_state_lock();
+        let cases = [
+            (
+                vec![PROGRAM_NAME, "--parse-features"],
+                "prob : (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): H\n",
+                "Insufficient class information in class name(s) (to short)",
+            ),
+            (
+                vec![PROGRAM_NAME, "--parse-features", "--raw-class"],
+                "raw : (1,2,3,4,5,6,7,8,0.125,9,true,2,0,false): short\n",
+                "Raw class name must have 10 characters",
+            ),
+        ];
+
+        for (arguments, input, expected) in cases {
+            let mut stdin = Cursor::new(input.as_bytes().to_vec());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let error = run(arguments, &mut stdin, &mut stdout, &mut stderr)
+                .expect_err("malformed feature class is reported");
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert_eq!(error.message(), expected);
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+        }
     }
 
     #[test]

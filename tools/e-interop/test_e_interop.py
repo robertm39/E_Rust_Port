@@ -83,6 +83,33 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(portable),
         )
 
+    def test_classify_legacy_feature_suffix_normalization_is_explicit(self):
+        reference = (
+            "prob : (   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,"
+            "  12,  13,  14,  15, -0.714286, 0.933333,  16,  17,  18,  19,  20,"
+            " 22319, 32767, 0.000000, 0.000000, true, false ) :"
+            " FUHS-NFFSM3-MDHHMFFBN\n"
+        )
+        candidate = (
+            "prob : (   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,"
+            "  12,  13,  14,  15, -0.714286, 0.933333,  16,  17,  18,  19,  20,"
+            "   0,   0, 0.000000, 0.000000, false, false ) :"
+            " FUHS-NFFSM3-MDFFFFFNN\n"
+        )
+
+        self.assertNotEqual(
+            e_interop.normalize_output(reference),
+            e_interop.normalize_output(candidate),
+        )
+        self.assertEqual(
+            e_interop.normalize_output(
+                reference, normalize_legacy_classify_feature_suffix=True
+            ),
+            e_interop.normalize_output(
+                candidate, normalize_legacy_classify_feature_suffix=True
+            ),
+        )
+
     def test_normalization_canonicalizes_only_successful_server_descriptors(self):
         output = "Main loop\nAccepted 123\nAccepted -1\n"
 
@@ -421,10 +448,38 @@ class ComparisonTests(unittest.TestCase):
                 ("classify_problem/version", ["--version"]),
                 ("classify_problem/parse-features-standard", ["--parse-features"]),
                 (
+                    "classify_problem/parse-features-raw",
+                    ["--parse-features", "--raw-class"],
+                ),
+                (
+                    "classify_problem/parse-features-missing-colon",
+                    ["--parse-features"],
+                ),
+                (
+                    "classify_problem/parse-features-short-class",
+                    ["--parse-features"],
+                ),
+                (
+                    "classify_problem/parse-features-raw-short-class",
+                    ["--parse-features", "--raw-class"],
+                ),
+                (
+                    "classify_problem/parse-features-output-file",
+                    ["--parse-features", "-o", "features.out"],
+                ),
+                (
                     "classify_problem/raw-lop",
                     ["--raw-class", "--lop-in"],
                 ),
                 ("classify_problem/old-tptp-records", ["--tptp-in"]),
+                (
+                    "classify_problem/raw-fof-definition-conjecture",
+                    ["--raw-class", "--tstp-format"],
+                ),
+                (
+                    "classify_problem/standard-fof-definition-conjecture",
+                    ["--tstp-format"],
+                ),
                 (
                     "classify_problem/tstp-first-order-record-mix",
                     ["--tstp-format"],
@@ -433,6 +488,14 @@ class ComparisonTests(unittest.TestCase):
                 (
                     "classify_problem/raw-thf",
                     ["--raw-class", "--tstp-format"],
+                ),
+                (
+                    "classify_problem/specsig-mixed-arities",
+                    ["--tstp-format", "--specsig"],
+                ),
+                (
+                    "classify_problem/tptp-header-mixed-shape",
+                    ["--tstp-format", "--generate-tptp-header"],
                 ),
                 ("classify_problem/include-selector", ["main.p"]),
                 (
@@ -450,6 +513,26 @@ class ComparisonTests(unittest.TestCase):
                 (
                     "classify_problem/merged-negative-unbounded",
                     ["--tstp-format", "--merged-classification=-2"],
+                ),
+                (
+                    "classify_problem/merged-minus-one-standard",
+                    ["--tstp-format", "--merged-classification=-1"],
+                ),
+                (
+                    "classify_problem/merged-positive-thf",
+                    ["--tstp-format", "--merged-classification=2"],
+                ),
+                (
+                    "classify_problem/missing-feature-input",
+                    ["--parse-features", "missing-classify-features.txt"],
+                ),
+                (
+                    "classify_problem/missing-real-input",
+                    ["--tstp-format", "missing-classify-problem.p"],
+                ),
+                (
+                    "classify_problem/missing-output-parent",
+                    ["--parse-features", "-o", "missing/features.out"],
                 ),
                 ("direct_examples/help", ["--help"]),
                 ("direct_examples/version", ["--version"]),
@@ -747,6 +830,26 @@ class ComparisonTests(unittest.TestCase):
         )
         classify_case = cases_by_name["classify_problem/parse-features-standard"]
         self.assertIn("prob : (1,2,3,4,5,6,7,8,9,10", classify_case["stdin"])
+        self.assertTrue(classify_case["normalize_legacy_classify_feature_suffix"])
+        classify_raw_feature_case = cases_by_name[
+            "classify_problem/parse-features-raw"
+        ]
+        self.assertIn("FSSMMLLCCSSNAA", classify_raw_feature_case["stdin"])
+        self.assertEqual(
+            cases_by_name["classify_problem/parse-features-missing-colon"]["stdin"],
+            "broken\n",
+        )
+        self.assertTrue(
+            cases_by_name["classify_problem/parse-features-output-file"][
+                "normalize_legacy_classify_feature_suffix"
+            ]
+        )
+        self.assertEqual(
+            cases_by_name["classify_problem/parse-features-output-file"][
+                "output_files"
+            ],
+            ["features.out"],
+        )
         self.assertEqual(
             cases_by_name["classify_problem/raw-lop"]["stdin"],
             "p(a).\nq(a).\n",
@@ -754,6 +857,12 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn(
             "input_formula(f1,axiom,p(a))",
             cases_by_name["classify_problem/old-tptp-records"]["stdin"],
+        )
+        self.assertIn(
+            "fof(goal,conjecture,?[X]:p(f(X)))",
+            cases_by_name[
+                "classify_problem/raw-fof-definition-conjecture"
+            ]["stdin"],
         )
         self.assertIn(
             "tcf(c1,axiom,![X:person]:p(X))",
@@ -766,6 +875,14 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn(
             "thf(fact,axiom,p@a)",
             cases_by_name["classify_problem/raw-thf"]["stdin"],
+        )
+        self.assertIn(
+            "negated_conjecture",
+            cases_by_name["classify_problem/specsig-mixed-arities"]["stdin"],
+        )
+        self.assertIn(
+            "q(f(a),X)",
+            cases_by_name["classify_problem/tptp-header-mixed-shape"]["stdin"],
         )
         classify_include_case = cases_by_name[
             "classify_problem/include-selector"
@@ -784,6 +901,26 @@ class ComparisonTests(unittest.TestCase):
                 "arguments"
             ],
             ["--tstp-format", "--merged-classification=-2"],
+        )
+        self.assertIn(
+            "thf(fact,axiom,p@a)",
+            cases_by_name["classify_problem/merged-positive-thf"]["stdin"],
+        )
+        self.assertTrue(
+            cases_by_name["classify_problem/missing-feature-input"][
+                "isolated_workdir"
+            ]
+        )
+        self.assertTrue(
+            cases_by_name["classify_problem/missing-real-input"][
+                "isolated_workdir"
+            ]
+        )
+        self.assertEqual(
+            cases_by_name["classify_problem/missing-output-parent"][
+                "output_absent_files"
+            ],
+            ["missing/features.out"],
         )
         direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
         self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
@@ -1129,6 +1266,38 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(all(record["normalized_equal"] for record in records))
         self.assertTrue(details["global.out"]["normalized_equal"])
         self.assertTrue(details["generated/result.p"]["normalized_equal"])
+
+    def test_tool_output_file_can_opt_into_legacy_classify_normalization(self):
+        reference = (
+            "prob : (   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,"
+            "  12,  13,  14,  15, -0.714286, 0.933333,  16,  17,  18,  19,  20,"
+            " 22319, 32767, 0.000000, 0.000000, true, false ) :"
+            " FUHS-NFFSM3-MDHHMFFBN\n"
+        )
+        candidate = (
+            "prob : (   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,"
+            "  12,  13,  14,  15, -0.714286, 0.933333,  16,  17,  18,  19,  20,"
+            "   0,   0, 0.000000, 0.000000, false, false ) :"
+            " FUHS-NFFSM3-MDFFFFFNN\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_cwd = root / "reference"
+            candidate_cwd = root / "candidate"
+            reference_cwd.mkdir()
+            candidate_cwd.mkdir()
+            (reference_cwd / "features.out").write_text(reference, encoding="utf-8")
+            (candidate_cwd / "features.out").write_text(candidate, encoding="utf-8")
+
+            records, _details = e_interop.compare_tool_output_files(
+                ["features.out"],
+                reference_cwd,
+                candidate_cwd,
+                [],
+                normalize_legacy_classify_feature_suffix=True,
+            )
+
+        self.assertTrue(records[0]["normalized_equal"])
 
     def test_tool_output_comparison_requires_declared_files(self):
         with tempfile.TemporaryDirectory() as tmp:
