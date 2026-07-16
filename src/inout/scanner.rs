@@ -9,6 +9,7 @@ use crate::inout::streams::{InputStream, InputStreamStack, StreamType};
 use std::borrow::Cow;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
 pub const EMPTY_INCLUDE_SELECTOR_SENTINEL: &str = "** Not a legal name**";
@@ -126,7 +127,7 @@ pub struct Token {
     numval: u64,
     comment: DynamicString,
     skipped: bool,
-    source: Vec<u8>,
+    source: Arc<[u8]>,
     stream_type: StreamType,
     line: usize,
     column: usize,
@@ -140,7 +141,7 @@ impl Default for Token {
             numval: 0,
             comment: DynamicString::new(),
             skipped: false,
-            source: Vec::new(),
+            source: Arc::default(),
             stream_type: StreamType::UserString,
             line: 1,
             column: 1,
@@ -587,13 +588,16 @@ impl Scanner {
 
     fn reset_scanned_token(&mut self, index: usize) {
         let source = self.source();
-        let source_bytes = source.source_bytes().to_vec();
+        // C releases the token's old DStr reference and takes a new reference
+        // to the stream source. Keep that O(1) sharing contract: source labels
+        // are immutable, and copying one for every scanned token is wasteful.
+        let source_handle = source.source_handle();
         let stream_type = source.stream_type();
         let line = source.line();
         let column = source.column();
         let token = &mut self.tok_sequence[index];
         token.literal.reset();
-        token.source = source_bytes;
+        token.source = source_handle;
         token.stream_type = stream_type;
         token.line = line;
         token.column = column;
@@ -1116,6 +1120,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::stringtrees::StrTree;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::current_dir()
@@ -1236,6 +1241,23 @@ mod tests {
         let error = Scanner::from_file(&missing, false).unwrap_err();
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert!(error.message().contains("Cannot open file"));
+    }
+
+    #[test]
+    fn scanner_tokens_share_the_immutable_source_label() {
+        let scanner = Scanner::from_file_content(
+            "shared-source-label.p",
+            b"fof(name, axiom, p(a)).".to_vec(),
+            false,
+        )
+        .unwrap();
+
+        for look in 1..MAX_TOKEN_LOOKAHEAD {
+            assert!(Arc::ptr_eq(
+                &scanner.look_token(0).source,
+                &scanner.look_token(look).source
+            ));
+        }
     }
 
     #[test]

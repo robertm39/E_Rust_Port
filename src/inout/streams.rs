@@ -2,6 +2,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 pub const MAX_LOOKAHEAD: usize = 64;
 
@@ -29,8 +30,8 @@ impl StreamType {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputStream {
-    source: Vec<u8>,
-    data: Vec<u8>,
+    source: Arc<[u8]>,
+    data: Arc<[u8]>,
     stream_type: StreamType,
     string_pos: usize,
     eof_seen: bool,
@@ -72,8 +73,8 @@ impl InputStream {
 
     fn from_data(stream_type: StreamType, source: Vec<u8>, data: Vec<u8>) -> Self {
         let mut stream = Self {
-            source,
-            data,
+            source: source.into(),
+            data: data.into(),
             stream_type,
             string_pos: 0,
             eof_seen: false,
@@ -149,6 +150,11 @@ impl InputStream {
     #[must_use]
     pub fn source_bytes(&self) -> &[u8] {
         &self.source
+    }
+
+    #[must_use]
+    pub(crate) fn source_handle(&self) -> Arc<[u8]> {
+        Arc::clone(&self.source)
     }
 
     #[must_use]
@@ -419,6 +425,21 @@ mod tests {
         stream.next_char();
         assert_eq!((stream.line(), stream.column()), (2, 1));
         assert_eq!(stream.current_char(), Some(b'c'));
+    }
+
+    #[test]
+    fn cloned_streams_share_input_bytes_and_advance_independently() {
+        let mut original = InputStream::from_user_string("abc");
+        let mut cloned = original.clone();
+
+        assert!(std::sync::Arc::ptr_eq(&original.data, &cloned.data));
+        original.next_char();
+        assert_eq!(original.current_char(), Some(b'b'));
+        assert_eq!(cloned.current_char(), Some(b'a'));
+        cloned.next_char();
+        cloned.next_char();
+        assert_eq!(original.current_char(), Some(b'b'));
+        assert_eq!(cloned.current_char(), Some(b'c'));
     }
 
     #[test]
