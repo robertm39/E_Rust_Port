@@ -548,6 +548,63 @@ class ComparisonTests(unittest.TestCase):
                     "epcllemma/stdin-basic",
                     ["--max-lemmas=0", "--min-lemma-quality=0"],
                 ),
+                (
+                    "epcllemma/large-relative-limit",
+                    ["--min-lemma-quality=0"],
+                ),
+                (
+                    "epcllemma/formula-lemma-pcl",
+                    ["--max-lemmas=0", "--min-lemma-quality=0"],
+                ),
+                (
+                    "epcllemma/formula-lemma-tptp",
+                    [
+                        "--max-lemmas=0",
+                        "--min-lemma-quality=0",
+                        "--tptp-out",
+                    ],
+                ),
+                (
+                    "epcllemma/formula-lemma-tstp",
+                    [
+                        "--max-lemmas=0",
+                        "--min-lemma-quality=0",
+                        "--tstp-out",
+                    ],
+                ),
+                (
+                    "epcllemma/formula-lemma-lop",
+                    [
+                        "--max-lemmas=0",
+                        "--min-lemma-quality=0",
+                        "--lop-out",
+                    ],
+                ),
+                (
+                    "epcllemma/minimum-quality-nan",
+                    ["--min-lemma-quality=nan"],
+                ),
+                (
+                    "epcllemma/minimum-quality-positive-infinity",
+                    ["--min-lemma-quality=inf"],
+                ),
+                (
+                    "epcllemma/minimum-quality-negative-infinity",
+                    ["--min-lemma-quality=-inf"],
+                ),
+                (
+                    "epcllemma/minimum-quality-negative-zero",
+                    ["--min-lemma-quality=-0"],
+                ),
+                ("epcllemma/shell-step-rejection", []),
+                (
+                    "epcllemma/missing-input",
+                    ["missing-epcllemma-input.pcl"],
+                ),
+                (
+                    "epcllemma/missing-output-parent",
+                    ["--output-file=missing-parent/lemmas.pcl"],
+                ),
                 ("ex_commandline/help", ["--help"]),
                 (
                     "ex_commandline/options-basic",
@@ -847,6 +904,34 @@ class ComparisonTests(unittest.TestCase):
         )
         epcllemma_case = cases_by_name["epcllemma/stdin-basic"]
         self.assertIn("5 : : [++t(a)] : er(4)", epcllemma_case["stdin"])
+        epcllemma_large_case = cases_by_name["epcllemma/large-relative-limit"]
+        self.assertEqual(epcllemma_large_case["stdin"].count(" : : "), 1_010)
+        self.assertTrue(epcllemma_large_case["stdin"].startswith("1 : : [++p(a)]"))
+        self.assertIn("1010 : : [++p(a)]", epcllemma_large_case["stdin"])
+        for case_name in (
+            "epcllemma/formula-lemma-pcl",
+            "epcllemma/formula-lemma-tptp",
+            "epcllemma/formula-lemma-tstp",
+            "epcllemma/formula-lemma-lop",
+        ):
+            self.assertEqual(
+                cases_by_name[case_name]["stdin"],
+                "1 : : p(a) : initial\n2 : : q(a) : 1\n",
+            )
+        self.assertEqual(
+            cases_by_name["epcllemma/minimum-quality-nan"]["stdin"], ""
+        )
+        epcllemma_missing_case = cases_by_name["epcllemma/missing-input"]
+        self.assertTrue(epcllemma_missing_case["isolated_workdir"])
+        self.assertEqual(
+            epcllemma_missing_case["arguments"],
+            ["missing-epcllemma-input.pcl"],
+        )
+        epcllemma_output_case = cases_by_name[
+            "epcllemma/missing-output-parent"
+        ]
+        self.assertTrue(epcllemma_output_case["isolated_workdir"])
+        self.assertEqual(epcllemma_output_case["stdin"], "")
         epatternize_case = cases_by_name["epatternize/lop-basic"]
         self.assertEqual(epatternize_case["stdin"], "p(a).\n")
         ex_case = cases_by_name["ex_commandline/options-basic"]

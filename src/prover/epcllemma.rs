@@ -708,7 +708,10 @@ fn execute_epcllemma(
     };
     writeln_diag(
         stdout,
-        &format!("% Minimum lemma quality: {min_quality:.6}"),
+        &format!(
+            "% Minimum lemma quality: {}",
+            format_c_fixed_f32(min_quality)
+        ),
     )?;
 
     match config.algorithm {
@@ -814,7 +817,25 @@ fn f64_to_f32(value: f64) -> f32 {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn relative_lemma_limit(step_count: usize, relative: f32) -> i64 {
-    (step_count as f64 * f64::from(relative) + 0.99) as i64
+    (f64::from(step_count as f32 * relative) + 0.99) as i64
+}
+
+fn format_c_fixed_f32(value: f32) -> String {
+    if value.is_nan() {
+        return if value.is_sign_negative() {
+            "-nan".to_owned()
+        } else {
+            "nan".to_owned()
+        };
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
+    }
+    format!("{value:.6}")
 }
 
 #[must_use]
@@ -958,7 +979,9 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_options, print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
+    use super::{
+        parse_options, print_help, relative_lemma_limit, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+    };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::prover::version::VERSION;
@@ -1546,6 +1569,48 @@ mod tests {
     }
 
     #[test]
+    fn large_protocol_uses_c_single_precision_relative_limit() {
+        let _guard = global_state_lock();
+        let input = (1..=1_010)
+            .map(|id| format!("{id} : : [++p(a)] : initial\n"))
+            .collect::<String>();
+        let (status, output, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "--min-lemma-quality=0"], &input);
+
+        assert_eq!(relative_lemma_limit(1_010, 0.001), 1);
+        assert_eq!(status, 0);
+        assert!(
+            output.starts_with("% Selecting at most 1 lemmas\n% Minimum lemma quality: 0.000000\n")
+        );
+        assert_eq!(output.matches(" : lemma : ").count(), 2);
+        assert!(output.contains("      1 : lemma : [++p(a)] : initial : 'lemma'\n"));
+        assert!(output.contains("      2 : lemma : [++p(a)] : initial : 'lemma'\n"));
+        assert!(!output.contains("      3 : lemma :"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn unusual_minimum_quality_values_use_c_printf_spelling() {
+        let _guard = global_state_lock();
+        for (argument, expected) in [
+            ("--min-lemma-quality=nan", "nan"),
+            ("--min-lemma-quality=inf", "inf"),
+            ("--min-lemma-quality=-inf", "-inf"),
+            ("--min-lemma-quality=-0", "-0.000000"),
+        ] {
+            let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME, argument], "");
+
+            assert_eq!(status, 0, "argument {argument}");
+            assert_eq!(
+                output,
+                format!("% Selecting at most 0 lemmas\n% Minimum lemma quality: {expected}\n"),
+                "argument {argument}"
+            );
+            assert!(stderr.is_empty(), "argument {argument}");
+        }
+    }
+
+    #[test]
     fn high_output_level_prints_formula_steps() {
         let _guard = global_state_lock();
         let input = "1 : : p(a) : initial\n";
@@ -1555,6 +1620,32 @@ mod tests {
         assert!(output.contains("% Selecting at most 0 lemmas\n"));
         assert!(output.contains("      1 :  : p(a) : initial\n"));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn formula_lemmas_render_in_every_c_output_format() {
+        let _guard = global_state_lock();
+        let input = "1 : : p(a) : initial\n2 : : q(a) : 1\n";
+        for (format_argument, expected) in [
+            (None, "      1 : lemma : p(a) : initial : 'lemma'\n"),
+            (Some("--tptp-out"), "input_formula(1,lemma,p(a))\n"),
+            (Some("--tstp-out"), "fof(1,lemma,p(a),unknown()).\n"),
+            (Some("--lop-out"), "p(a)\n"),
+        ] {
+            let mut arguments = vec![PROGRAM_NAME, "--max-lemmas=0", "--min-lemma-quality=0"];
+            if let Some(format_argument) = format_argument {
+                arguments.push(format_argument);
+            }
+            let (status, output, stderr) = run_with_stdin(&arguments, input);
+
+            assert_eq!(status, 0, "format {format_argument:?}");
+            assert!(
+                output.ends_with(expected),
+                "format {format_argument:?}: {output}"
+            );
+            assert!(!output.contains("q(a)"), "format {format_argument:?}");
+            assert!(stderr.is_empty(), "format {format_argument:?}");
+        }
     }
 
     #[test]

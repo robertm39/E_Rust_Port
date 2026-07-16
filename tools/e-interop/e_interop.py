@@ -296,6 +296,10 @@ def csscpa_large_stateful_corpus() -> str:
 
 
 CSSCPA_LARGE_STATEFUL_CORPUS = csscpa_large_stateful_corpus()
+EPCLLEMMA_FORMULA_PROTOCOL = "1 : : p(a) : initial\n2 : : q(a) : 1\n"
+EPCLLEMMA_LARGE_PROTOCOL = "".join(
+    f"{step_id} : : [++p(a)] : initial\n" for step_id in range(1, 1_011)
+)
 TOOL_FUNCTIONAL_CASES = {
     "CSSCPA_filter": (
         (
@@ -822,6 +826,48 @@ TOOL_FUNCTIONAL_CASES = {
                 "4 : : [++s(a)] : pm(1,3)\n"
                 "5 : : [++t(a)] : er(4)\n"
             ),
+        ),
+        (
+            "large-relative-limit",
+            ("--min-lemma-quality=0",),
+            EPCLLEMMA_LARGE_PROTOCOL,
+        ),
+        (
+            "formula-lemma-pcl",
+            ("--max-lemmas=0", "--min-lemma-quality=0"),
+            EPCLLEMMA_FORMULA_PROTOCOL,
+        ),
+        (
+            "formula-lemma-tptp",
+            ("--max-lemmas=0", "--min-lemma-quality=0", "--tptp-out"),
+            EPCLLEMMA_FORMULA_PROTOCOL,
+        ),
+        (
+            "formula-lemma-tstp",
+            ("--max-lemmas=0", "--min-lemma-quality=0", "--tstp-out"),
+            EPCLLEMMA_FORMULA_PROTOCOL,
+        ),
+        (
+            "formula-lemma-lop",
+            ("--max-lemmas=0", "--min-lemma-quality=0", "--lop-out"),
+            EPCLLEMMA_FORMULA_PROTOCOL,
+        ),
+        ("minimum-quality-nan", ("--min-lemma-quality=nan",), ""),
+        ("minimum-quality-positive-infinity", ("--min-lemma-quality=inf",), ""),
+        ("minimum-quality-negative-infinity", ("--min-lemma-quality=-inf",), ""),
+        ("minimum-quality-negative-zero", ("--min-lemma-quality=-0",), ""),
+        ("shell-step-rejection", (), "1 : : : initial\n"),
+        (
+            "missing-input",
+            ("missing-epcllemma-input.pcl",),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-output-parent",
+            ("--output-file=missing-parent/lemmas.pcl",),
+            "",
+            {"isolated_workdir": True},
         ),
     ),
     "epatternize": (
