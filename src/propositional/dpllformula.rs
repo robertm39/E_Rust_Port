@@ -180,10 +180,32 @@ impl DpllFormula {
         problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
         let mut trace = String::new();
+        self.parse_lop_with_trace(scanner, bank, problem_type, |line| {
+            trace.push_str(line);
+            Ok(())
+        })?;
+        Ok(trace)
+    }
+
+    /// C `DPLLFormulaParseLOP` with incremental trace delivery.
+    ///
+    /// Unlike [`Self::parse_lop`], this preserves trace lines already emitted
+    /// when parsing a later clause fails, matching C's writes to `GlobalOut`.
+    ///
+    /// # Errors
+    ///
+    /// Returns parser, clause-conversion, or trace-sink diagnostics.
+    pub fn parse_lop_with_trace(
+        &mut self,
+        scanner: &mut Scanner,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        mut trace_sink: impl FnMut(&str) -> Result<(), Diagnostic>,
+    ) -> Result<(), Diagnostic> {
         while clause_starts_maybe(scanner) {
             let clause = clause_parse(scanner, bank, problem_type)?;
             let mut pclause = DpllClause::from_clause(&mut self.sig, bank, &clause)?;
-            trace.push_str("New clause: ");
+            let mut trace = String::from("New clause: ");
             trace.push_str(&pclause.print_lop_string(&self.sig));
             if pclause.normalize() {
                 trace.push_str("...discarded (tautology)\n");
@@ -191,8 +213,9 @@ impl DpllFormula {
                 self.insert_clause(pclause);
                 trace.push_str("...accepted\n");
             }
+            trace_sink(&trace)?;
         }
-        Ok(trace)
+        Ok(())
     }
 
     fn ensure_atom_space(&mut self, atom: usize) {

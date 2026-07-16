@@ -597,6 +597,25 @@ class ComparisonTests(unittest.TestCase):
                 ("edpll/version", ["--version"]),
                 ("edpll/lop-basic", ["--dimacs"]),
                 ("edpll/tptp-input-clause", ["--tptp-in"]),
+                ("edpll/trailing-non-clause", []),
+                ("edpll/output-file", ["-o", "trace.out"]),
+                ("edpll/malformed-term-after-prefix", []),
+                ("edpll/malformed-equation", []),
+                ("edpll/empty-procedural-tail", []),
+                (
+                    "edpll/resource-options-success",
+                    ["--cpu-limit=30", "--soft-cpu-limit=20", "--memory-limit=0"],
+                ),
+                (
+                    "edpll/invalid-hard-after-soft",
+                    ["--soft-cpu-limit=10", "--cpu-limit=10"],
+                ),
+                (
+                    "edpll/invalid-soft-after-hard",
+                    ["--cpu-limit=10", "--soft-cpu-limit=10"],
+                ),
+                ("edpll/missing-input", ["missing-edpll-input.lop"]),
+                ("edpll/missing-output-parent", ["-o", "missing/trace.out"]),
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("eground/lop-basic", ["--lop-in", "--silent"]),
@@ -1059,6 +1078,45 @@ class ComparisonTests(unittest.TestCase):
         edpll_tptp_case = cases_by_name["edpll/tptp-input-clause"]
         self.assertEqual(
             edpll_tptp_case["stdin"], "input_clause(c_0_1,axiom,[++p,--q])."
+        )
+        edpll_trailing_case = cases_by_name["edpll/trailing-non-clause"]
+        self.assertEqual(edpll_trailing_case["stdin"], "p. ,\n")
+        edpll_output_case = cases_by_name["edpll/output-file"]
+        self.assertTrue(edpll_output_case["isolated_workdir"])
+        self.assertEqual(edpll_output_case["output_files"], ["trace.out"])
+        edpll_malformed_term_case = cases_by_name[
+            "edpll/malformed-term-after-prefix"
+        ]
+        self.assertEqual(edpll_malformed_term_case["stdin"], "p.\nq(f(a).\n")
+        edpll_malformed_equation_case = cases_by_name["edpll/malformed-equation"]
+        self.assertEqual(edpll_malformed_equation_case["stdin"], "p(a)=.\n")
+        edpll_empty_tail_case = cases_by_name["edpll/empty-procedural-tail"]
+        self.assertEqual(edpll_empty_tail_case["stdin"], "p :- .\n")
+        edpll_resource_case = cases_by_name["edpll/resource-options-success"]
+        self.assertEqual(
+            edpll_resource_case["arguments"],
+            ["--cpu-limit=30", "--soft-cpu-limit=20", "--memory-limit=0"],
+        )
+        edpll_invalid_hard_case = cases_by_name["edpll/invalid-hard-after-soft"]
+        self.assertEqual(
+            edpll_invalid_hard_case["arguments"],
+            ["--soft-cpu-limit=10", "--cpu-limit=10"],
+        )
+        edpll_invalid_soft_case = cases_by_name["edpll/invalid-soft-after-hard"]
+        self.assertEqual(
+            edpll_invalid_soft_case["arguments"],
+            ["--cpu-limit=10", "--soft-cpu-limit=10"],
+        )
+        edpll_missing_input_case = cases_by_name["edpll/missing-input"]
+        self.assertTrue(edpll_missing_input_case["isolated_workdir"])
+        self.assertEqual(
+            edpll_missing_input_case["arguments"], ["missing-edpll-input.lop"]
+        )
+        edpll_missing_output_case = cases_by_name["edpll/missing-output-parent"]
+        self.assertTrue(edpll_missing_output_case["isolated_workdir"])
+        self.assertEqual(
+            edpll_missing_output_case["output_absent_files"],
+            ["missing/trace.out"],
         )
         eground_case = cases_by_name["eground/lop-basic"]
         self.assertEqual(eground_case["stdin"], "p(a).\n")

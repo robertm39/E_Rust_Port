@@ -98,6 +98,9 @@ Source files reviewed: `PROVER/edpll.c`.
 - `--dimacs` sets C's `dimacs_format` global but no later code reads it; Rust accepts the flag as a parsed no-op and keeps output identical to the default trace.
 - `--version` prints `classify_problem VERSION` in C even though the executable name is `edpll`; Rust keeps that visible typo for drop-in CLI compatibility.
 - The Rust wrapper preserves default stdin through `-`, output-file routing including `-o -` as stdout, two-line `SysError`-style scanner/output open diagnostics, early output-file creation before later input-open failures, C `OutClose` wording on final flush failure, the C loop's loose treatment of non-clause trailing input, and the historical empty procedural-tail diagnostic text from `ClauseParse`.
+- `DPLLFormulaParseLOP()` writes each completed clause trace directly to `GlobalOut`. Rust now exposes an incremental trace sink so an accepted clause remains visible when parsing a later clause fails; batching a whole file's trace would incorrectly erase that prefix.
+- Resource review pins C's two hard/soft ordering messages (including `softtime`/`hardtime`), the verbose `Auto` memory lines that print a byte count with an `MB` label, two `RLIMIT_DATA` calls whose second warning is labeled `RLIMIT_AS`, and the intentional masking of failed `RLIMIT_DATA` warnings. Rust preserves the deterministic text and memory outcomes. Direct POSIX CPU/core setup failures require host fault injection, and the native Windows port does not apply a CPU job limit to this no-search helper because that limit terminates the process with a Windows status before C-shaped diagnostics can run.
+- The permanent comparison matrix has 14 cases. An archived real C/Rust report proves exact help, version, LOP, and old-TPTP behavior; the expanded malformed/resource/filesystem cases and platform decisions are documented in `experiments/2026-07-16-045-edpll-expanded-comparison/FINDINGS.md`.
 
 ### Change Later
 

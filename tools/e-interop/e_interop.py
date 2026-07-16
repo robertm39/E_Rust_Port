@@ -928,6 +928,49 @@ TOOL_FUNCTIONAL_CASES = {
     "edpll": (
         ("lop-basic", ("--dimacs",), "p <- q. r <- r."),
         ("tptp-input-clause", ("--tptp-in",), "input_clause(c_0_1,axiom,[++p,--q])."),
+        ("trailing-non-clause", (), "p. ,\n"),
+        (
+            "output-file",
+            ("-o", "trace.out"),
+            "p.\nq <- r.\n",
+            {
+                "isolated_workdir": True,
+                "output_files": ("trace.out",),
+            },
+        ),
+        ("malformed-term-after-prefix", (), "p.\nq(f(a).\n"),
+        ("malformed-equation", (), "p(a)=.\n"),
+        ("empty-procedural-tail", (), "p :- .\n"),
+        (
+            "resource-options-success",
+            ("--cpu-limit=30", "--soft-cpu-limit=20", "--memory-limit=0"),
+            "p.\n",
+        ),
+        (
+            "invalid-hard-after-soft",
+            ("--soft-cpu-limit=10", "--cpu-limit=10"),
+            "p.\n",
+        ),
+        (
+            "invalid-soft-after-hard",
+            ("--cpu-limit=10", "--soft-cpu-limit=10"),
+            "p.\n",
+        ),
+        (
+            "missing-input",
+            ("missing-edpll-input.lop",),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-output-parent",
+            ("-o", "missing/trace.out"),
+            "p.\n",
+            {
+                "isolated_workdir": True,
+                "output_absent_files": ("missing/trace.out",),
+            },
+        ),
     ),
     "eground": (
         ("lop-basic", ("--lop-in", "--silent"), "p(a).\n"),
