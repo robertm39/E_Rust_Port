@@ -44,6 +44,23 @@ class OutputParsingTests(unittest.TestCase):
             "<TPTP>/Axioms/SET001.ax",
         )
 
+    def test_normalization_canonicalizes_platform_error_and_nan_spellings(self):
+        linux = (
+            "direct_examples: No such file or directory\n"
+            " 0 terms, 0 successes,  -nan percent\n"
+            "direct_examples: Broken pipe\n"
+        )
+        windows = (
+            "direct_examples: The system cannot find the file specified. (os error 2)\n"
+            " 0 terms, 0 successes,   NaN percent\n"
+            "direct_examples: The pipe is being closed. (os error 232)\n"
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(linux),
+            e_interop.normalize_output(windows),
+        )
+
     def test_normalization_sorts_only_saturation_blocks(self):
         saturation_a = (
             "% SZS output start Saturation\n"
@@ -267,6 +284,11 @@ class ComparisonTests(unittest.TestCase):
                 ("direct_examples/help", ["--help"]),
                 ("direct_examples/version", ["--version"]),
                 ("direct_examples/stdin-basic", []),
+                (
+                    "direct_examples/branching-protocol",
+                    ["--negative-example-proportion=1.5", "--negative-example-number=12"],
+                ),
+                ("direct_examples/missing-input", ["missing-learning-input.pcl"]),
                 ("e_axfilter/help", ["--help"]),
                 ("e_axfilter/version", ["--version"]),
                 ("e_axfilter/dump-filter-stdout", ["--dump-filter", "-o", "-"]),
@@ -309,6 +331,10 @@ class ComparisonTests(unittest.TestCase):
                 ("ekb_delete/help", ["--help"]),
                 ("ekb_delete/version", ["--version"]),
                 ("ekb_delete/drop-example", ["--knowledge-base=kb", "drop"]),
+                (
+                    "ekb_delete/drop-middle-example",
+                    ["--knowledge-base=kb", "middle"],
+                ),
                 ("ekb_ginsert/help", ["--help"]),
                 ("ekb_ginsert/version", ["--version"]),
                 ("ekb_ginsert/stdin-protocol", ["--knowledge-base=kb"]),
@@ -351,6 +377,18 @@ class ComparisonTests(unittest.TestCase):
                     "tsm_classify/stdin-basic",
                     ["--index-type=IndexIdentity", "--tsm-type=Flat"],
                 ),
+                (
+                    "tsm_classify/recursive-mixed",
+                    [
+                        "--index-type=IndexSymbol",
+                        "--index-depth=3",
+                        "--tsm-type=Recursive",
+                    ],
+                ),
+                (
+                    "tsm_classify/empty-test-set",
+                    ["--index-type=IndexIdentity", "--tsm-type=Flat"],
+                ),
             ],
         )
         cases_by_name = {case["name"]: case for case in cases}
@@ -368,6 +406,11 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("prob : (1,2,3,4,5,6,7,8,9,10", classify_case["stdin"])
         direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
         self.assertIn("2 : : [++q(a)] : 1", direct_examples_case["stdin"])
+        branching_case = cases_by_name["direct_examples/branching-protocol"]
+        self.assertIn("10 : : [] : 9 : 'final'", branching_case["stdin"])
+        self.assertIn("12 : : [++m(a)] : 11", branching_case["stdin"])
+        missing_input_case = cases_by_name["direct_examples/missing-input"]
+        self.assertTrue(missing_input_case["isolated_workdir"])
         e_axfilter_case = cases_by_name["e_axfilter/dump-filter-stdout"]
         self.assertIsNone(e_axfilter_case["stdin"])
         e_axfilter_generated_case = cases_by_name["e_axfilter/tstp-threshold-file"]
@@ -415,6 +458,12 @@ class ComparisonTests(unittest.TestCase):
             ["kb/FILES/keep", "kb/problems", "kb/clausepatterns"],
         )
         self.assertEqual(ekb_delete_case["output_absent_files"], ["kb/FILES/drop"])
+        middle_case = cases_by_name["ekb_delete/drop-middle-example"]
+        self.assertIn('2: "middle"', middle_case["workdir_files"]["kb/problems"])
+        self.assertEqual(
+            middle_case["output_absent_files"], ["kb/FILES/middle"]
+        )
+        self.assertEqual(len(middle_case["output_files"]), 5)
         ekb_ginsert_case = cases_by_name["ekb_ginsert/stdin-protocol"]
         self.assertIn(
             "1 : : [++p(a)] : initial : 'proof'",
@@ -477,6 +526,11 @@ class ComparisonTests(unittest.TestCase):
         tsm_case = cases_by_name["tsm_classify/stdin-basic"]
         self.assertIn("Training:\n", tsm_case["stdin"])
         self.assertIn("Test:\n", tsm_case["stdin"])
+        recursive_tsm_case = cases_by_name["tsm_classify/recursive-mixed"]
+        self.assertIn("h(f(a),g(a,b))", recursive_tsm_case["stdin"])
+        self.assertIn("f(h(f(b),g(b,a)))", recursive_tsm_case["stdin"])
+        empty_tsm_case = cases_by_name["tsm_classify/empty-test-set"]
+        self.assertTrue(empty_tsm_case["stdin"].endswith("Test:\n.\n"))
 
     def test_tool_fixture_materialization_substitutes_arguments(self):
         [case] = [

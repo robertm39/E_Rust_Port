@@ -39,10 +39,28 @@ VOLATILE_LINE_RE = re.compile(
     r"(?:User time|System time|Total time|Maximum resident|date|timestamp)\s*:",
     re.IGNORECASE,
 )
+PLATFORM_NAN_PERCENT_RE = re.compile(
+    r"\bsuccesses,\s+"
+    r"(?:[-+]?nan(?:\([^)]*\))?|[-+]?1\.\#(?:ind|qnan|snan))"
+    r"\s+percent\b",
+    re.IGNORECASE,
+)
+PLATFORM_ERROR_SUFFIXES = {
+    "<OS ERROR: NOT FOUND>": (
+        "No such file or directory",
+        "The system cannot find the file specified. (os error 2)",
+    ),
+    "<OS ERROR: BROKEN PIPE>": (
+        "Broken pipe",
+        "The pipe has been ended. (os error 109)",
+        "The pipe is being closed. (os error 232)",
+    ),
+}
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
 TOOL_CASE_METADATA_KEYS = frozenset(
     {
         "fixture_files",
+        "isolated_workdir",
         "workdir_files",
         "workdir_directories",
         "output_files",
@@ -147,6 +165,50 @@ VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "term2dag",
     "termprops",
 }
+DIRECT_EXAMPLES_BRANCHING_PROTOCOL = (
+    "1 : : [++p(X)] : initial\n"
+    "2 : : [++q(Y)] : initial\n"
+    "3 : : [++r(X,Y)] : pm(1,2)\n"
+    "4 : : [++s(X)] : 1\n"
+    "5 : : [++t(Y)] : 2\n"
+    "6 : : [++u(X,Y)] : pm(3,4)\n"
+    "7 : : [++v(X)] : 6\n"
+    "8 : : [++w(Y)] : 5\n"
+    "9 : : [++x(X,Y)] : pm(7,8)\n"
+    "10 : : [] : 9 : 'final'\n"
+    "11 : : [++n(a)] : 4\n"
+    "12 : : [++m(a)] : 11\n"
+)
+TSM_RECURSIVE_CORPUS = (
+    "Training:\n"
+    "a : 1:(1,-1).\n"
+    "b : 2:(1,1).\n"
+    "f(a) : 1:(1,-1).\n"
+    "f(b) : 2:(1,1).\n"
+    "g(a,b) : 1:(1,-1).\n"
+    "g(b,a) : 2:(1,1).\n"
+    "h(f(a),g(a,b)) : 1:(1,-1).\n"
+    "h(f(b),g(b,a)) : 2:(1,1).\n"
+    "f(g(a,b)) : 1:(1,-1).\n"
+    "f(g(b,a)) : 2:(1,1).\n"
+    "g(f(a),f(b)) : 1:(1,-1).\n"
+    "g(f(b),f(a)) : 2:(1,1).\n"
+    ".\n"
+    "Test:\n"
+    "a : 1:(1,-1).\n"
+    "b : 2:(1,1).\n"
+    "f(a) : 1:(1,-1).\n"
+    "f(b) : 2:(1,1).\n"
+    "g(a,b) : 1:(1,-1).\n"
+    "g(b,a) : 2:(1,1).\n"
+    "h(f(a),g(a,b)) : 1:(1,-1).\n"
+    "h(f(b),g(b,a)) : 2:(1,1).\n"
+    "f(h(f(a),g(a,b))) : 1:(1,-1).\n"
+    "f(h(f(b),g(b,a))) : 2:(1,1).\n"
+    "g(g(a,b),f(a)) : 1:(1,-1).\n"
+    "g(g(b,a),f(b)) : 2:(1,1).\n"
+    ".\n"
+)
 TOOL_FUNCTIONAL_CASES = {
     "CSSCPA_filter": (
         (
@@ -193,6 +255,17 @@ TOOL_FUNCTIONAL_CASES = {
             "stdin-basic",
             (),
             "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
+        ),
+        (
+            "branching-protocol",
+            ("--negative-example-proportion=1.5", "--negative-example-number=12"),
+            DIRECT_EXAMPLES_BRANCHING_PROTOCOL,
+        ),
+        (
+            "missing-input",
+            ("missing-learning-input.pcl",),
+            None,
+            {"isolated_workdir": True},
         ),
     ),
     "e_axfilter": (
@@ -254,6 +327,51 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/clausepatterns",
                 ),
                 "output_absent_files": ("kb/FILES/drop",),
+            },
+        ),
+        (
+            "drop-middle-example",
+            ("--knowledge-base=kb", "middle"),
+            None,
+            {
+                "workdir_files": {
+                    "kb/problems": (
+                        "% Example names and features. \n"
+                        "1: \"one\"\n"
+                        "PA: () FA: () "
+                        "(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                        "2: \"middle\"\n"
+                        "PA: () FA: () "
+                        "(2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                        "3: \"three\"\n"
+                        "PA: () FA: () "
+                        "(3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                        "4: \"four\"\n"
+                        "PA: () FA: () "
+                        "(4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\n"
+                    ),
+                    "kb/clausepatterns": (
+                        "% Individual annotated patterns. \n"
+                        "p(a) : 1:(1,0,0,0,0,0,0),2:(1,0,0,0,0,0,0),"
+                        "3:(1,0,0,0,0,0,0),4:(1,0,0,0,0,0,0).\n"
+                        "q(a) : 2:(1,0,0,0,0,0,0).\n"
+                        "r(a) : 1:(1,0,0,0,0,0,0),4:(1,0,0,0,0,0,0).\n"
+                        "s(a) : 3:(1,0,0,0,0,0,0).\n"
+                    ),
+                    "kb/FILES/one": "one problem",
+                    "kb/FILES/middle": "middle problem",
+                    "kb/FILES/three": "three problem",
+                    "kb/FILES/four": "four problem",
+                },
+                "workdir_directories": ("kb/FILES",),
+                "output_files": (
+                    "kb/FILES/one",
+                    "kb/FILES/three",
+                    "kb/FILES/four",
+                    "kb/problems",
+                    "kb/clausepatterns",
+                ),
+                "output_absent_files": ("kb/FILES/middle",),
             },
         ),
     ),
@@ -411,6 +529,20 @@ TOOL_FUNCTIONAL_CASES = {
                 "f(a) : 2:(1,1).\n"
                 ".\n"
             ),
+        ),
+        (
+            "recursive-mixed",
+            (
+                "--index-type=IndexSymbol",
+                "--index-depth=3",
+                "--tsm-type=Recursive",
+            ),
+            TSM_RECURSIVE_CORPUS,
+        ),
+        (
+            "empty-test-set",
+            ("--index-type=IndexIdentity", "--tsm-type=Flat"),
+            "Training:\na : 1:(1,-1).\nf(a) : 2:(1,1).\n.\nTest:\n.\n",
         ),
     ),
 }
@@ -745,10 +877,23 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
     for old, new in replacements:
         if old:
             normalized = normalized.replace(old, new)
-    lines = [line.rstrip() for line in normalized.splitlines() if not VOLATILE_LINE_RE.search(line)]
+    lines = [
+        normalize_platform_line(line.rstrip())
+        for line in normalized.splitlines()
+        if not VOLATILE_LINE_RE.search(line)
+    ]
     lines = normalize_app_encode_type_declarations(lines)
     lines = normalize_saturation_blocks(lines)
     return "\n".join(lines).strip()
+
+
+def normalize_platform_line(line: str) -> str:
+    normalized = PLATFORM_NAN_PERCENT_RE.sub("successes, <NAN> percent", line)
+    for replacement, suffixes in PLATFORM_ERROR_SUFFIXES.items():
+        for suffix in suffixes:
+            if normalized.endswith(suffix):
+                return normalized[: -len(suffix)] + replacement
+    return normalized
 
 
 def normalize_app_encode_type_declarations(lines: Iterable[str]) -> list[str]:
@@ -1322,6 +1467,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
     if not fixture_tail:
         return {
             "fixture_files": {},
+            "isolated_workdir": False,
             "workdir_files": {},
             "workdir_directories": [],
             "output_files": [],
@@ -1342,6 +1488,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
                 + ", ".join(unknown_keys)
             )
         fixture_files = tail.get("fixture_files", {})
+        isolated_workdir = tail.get("isolated_workdir", False)
         workdir_files = tail.get("workdir_files", {})
         workdir_directories = tail.get("workdir_directories", ())
         output_files = tail.get("output_files", ())
@@ -1349,6 +1496,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         output_directories = tail.get("output_directories", ())
     else:
         fixture_files = tail
+        isolated_workdir = False
         workdir_files = {}
         workdir_directories = ()
         output_files = ()
@@ -1357,6 +1505,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
 
     return {
         "fixture_files": dict(fixture_files),
+        "isolated_workdir": bool(isolated_workdir),
         "workdir_files": dict(workdir_files),
         "workdir_directories": list(workdir_directories),
         "output_files": list(output_files),
@@ -1580,7 +1729,8 @@ def compare_tools(args: argparse.Namespace) -> None:
         print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
         reference_binary = Path(reference_tools[tool])
         uses_case_workdir = bool(
-            case.get("workdir_files")
+            case.get("isolated_workdir")
+            or case.get("workdir_files")
             or case.get("workdir_directories")
             or case.get("output_files")
             or case.get("output_absent_files")
@@ -1757,6 +1907,7 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "arguments": case["arguments"],
                 "stdin": case["stdin"] is not None,
                 "fixtures": bool(fixture_paths),
+                "isolated_workdir": bool(case.get("isolated_workdir")),
                 "workdir_files": bool(reference_workdir_paths),
                 "workdir_directories": bool(reference_workdir_directories),
                 "output_files": output_file_records,
