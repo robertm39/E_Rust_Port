@@ -56,7 +56,7 @@ use crate::terms::termtypes::{
     TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
 };
 use crate::terms::termvars::VarBank;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
@@ -2735,7 +2735,10 @@ pub struct FormulaDefinitionStatistics {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FormulaSet {
-    formulas: Vec<WrappedFormula>,
+    // C uses an append-only intrusive list and drains CNF/archive work from the
+    // anchor's successor in O(1). A deque preserves that hot-path contract
+    // while stable entry ids replace wrapper-pointer identity.
+    formulas: VecDeque<WrappedFormula>,
     identifier: String,
 }
 
@@ -2774,7 +2777,7 @@ impl FormulaSet {
 
     pub fn insert(&mut self, formula: WrappedFormula) -> u64 {
         let entry_id = formula.entry_id();
-        self.formulas.push(formula);
+        self.formulas.push_back(formula);
         entry_id
     }
 
@@ -2789,11 +2792,7 @@ impl FormulaSet {
     }
 
     pub fn extract_first(&mut self) -> Option<WrappedFormula> {
-        if self.formulas.is_empty() {
-            None
-        } else {
-            Some(self.formulas.remove(0))
-        }
+        self.formulas.pop_front()
     }
 
     pub fn extract_entry(&mut self, entry_id: u64) -> Option<WrappedFormula> {
@@ -2801,7 +2800,7 @@ impl FormulaSet {
             .formulas
             .iter()
             .position(|formula| formula.entry_id() == entry_id)?;
-        Some(self.formulas.remove(position))
+        self.formulas.remove(position)
     }
 
     #[must_use]
@@ -3743,7 +3742,7 @@ impl FormulaSet {
 
         intersimplify_definition_symbols(bank, &mut definitions, &mut result)?;
         rewrite_formulas_with_def_symbols(
-            &mut self.formulas,
+            self.formulas.make_contiguous(),
             bank,
             &definitions,
             &recognized_entry_ids,
@@ -5031,6 +5030,24 @@ mod tests {
             vec![third_id, moved_first_id]
         );
         assert_eq!(formula_set_stack_cardinality(&[&to, &from]), 2);
+    }
+
+    #[test]
+    fn formula_set_front_drain_preserves_append_order_at_scale() {
+        const FORMULA_COUNT: usize = 4_096;
+        let mut set = FormulaSet::new();
+        let expected = (0..FORMULA_COUNT)
+            .map(|_| set.insert(WrappedFormula::default_alloc()))
+            .collect::<Vec<_>>();
+
+        for expected_entry in expected {
+            assert_eq!(
+                set.extract_first().map(|formula| formula.entry_id()),
+                Some(expected_entry)
+            );
+        }
+        assert!(set.is_empty());
+        assert!(set.extract_first().is_none());
     }
 
     #[test]
