@@ -1,7 +1,6 @@
 //! Classic Knuth-Bendix ordering implementation from `cto_kbo`.
 
 use crate::basics::partial_orderings::CompareResult;
-use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -12,16 +11,15 @@ use crate::terms::varhash::VarHash;
 /// Compare two terms with the classic KBO implementation.
 ///
 /// This mirrors C `KBOCompare`, including the delayed variable-condition
-/// checks and pointer-identity equality for variables. Higher-order problems
-/// may use this path only for dereferenced inputs that remain first-order
-/// shaped; DB variables, lambdas, and phony applications require the KBO6/LFHO
-/// ordering path.
+/// checks and pointer-identity equality for variables. The optimized C build
+/// compiles out `KBOCompare`'s first-order-problem assertion, so this path also
+/// traverses higher-order term cells as ordinary symbols and arguments when a
+/// user explicitly selects classic KBO for a higher-order problem.
 ///
 /// # Panics
 ///
-/// Panics if a higher-order problem reaches this path with higher-order
-/// ordering syntax, if term argument slots are uninitialized, or if the OCB
-/// lacks precedence/weight storage required by KBO.
+/// Panics if term argument slots are uninitialized or if the OCB lacks
+/// precedence/weight storage required by KBO.
 #[must_use]
 pub fn kbo_compare(
     ocb: &OrderControlBlock,
@@ -33,7 +31,6 @@ pub fn kbo_compare(
 ) -> CompareResult {
     let s = term_deref(s, &mut deref_s);
     let t = term_deref(t, &mut deref_t);
-    assert_classic_kbo_inputs_ready(&s, &t);
 
     if s.is_free_var() || t.is_free_var() {
         return kbo_compare_vars(&s, &t, deref_s, deref_t);
@@ -159,7 +156,6 @@ fn get_weight(ocb: &OrderControlBlock, symbol: FunCode) -> i64 {
 
 fn get_term_weight(ocb: &OrderControlBlock, term: &Term, mut deref: DerefType) -> i64 {
     let term = term_deref(term, &mut deref);
-    assert_classic_kbo_term_ready(&term);
     let mut weight = get_weight(ocb, term.f_code());
     if !term.is_free_var() {
         for arg in term.argument_clones().into_iter().flatten() {
@@ -210,7 +206,6 @@ fn kbo_greater_new(
 ) -> CompareResult {
     let s = term_deref(s, &mut deref_s);
     let t = term_deref(t, &mut deref_t);
-    assert_classic_kbo_inputs_ready(&s, &t);
 
     if s.is_free_var() {
         return if s == t {
@@ -360,18 +355,6 @@ fn greater_equal_heads_lex(
 fn initialized_arg(term: &Term, index: usize) -> Term {
     term.argument(index)
         .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
-}
-
-fn assert_classic_kbo_inputs_ready(s: &Term, t: &Term) {
-    assert_classic_kbo_term_ready(s);
-    assert_classic_kbo_term_ready(t);
-}
-
-fn assert_classic_kbo_term_ready(term: &Term) {
-    assert!(
-        problem_type() != ProblemType::HigherOrder || !term.has_higher_order_ordering_surface(),
-        "classic KBO higher-order problem path requires first-order-shaped terms"
-    );
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
@@ -2037,15 +2036,15 @@ fn proof_state_move_processed_set_to_tmp_by(
 /// positive-unit demodulator sets, superfluous literal removal, optional
 /// AC-resolved literal cleanup, optional local rewriting, literal orientation,
 /// optional condensation, triviality detection, and positive/negative
-/// simplify-reflect against processed unit sets. Higher-order runs are admitted
-/// for first-order-shaped legacy ordering surfaces and for the bank-backed
-/// KBO6/LPO4 surfaces covered by the ordering layer.
+/// simplify-reflect against processed unit sets. Higher-order runs preserve the
+/// optimized C executable's explicit-ordering surface, including classic KBO,
+/// legacy LPO/copy, LPO4/copy, and KBO6.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic if proof-control ordering is missing, if a lower-level
 /// term operation fails, or if the current higher-order problem requests a
-/// non-empty higher-order term ordering outside the currently ported surface.
+/// non-empty ordering outside C's concrete ordering surface.
 pub fn proof_state_forward_modify_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -2244,36 +2243,22 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 fn forward_modify_check_higher_order_ordering(
     higher_order: bool,
     ocb: &OrderControlBlock,
-    clause: &Clause,
-    demodulators: &[&ClauseSet],
+    _clause: &Clause,
+    _demodulators: &[&ClauseSet],
 ) -> Result<(), Diagnostic> {
     if !higher_order || ocb.ordering_type == TermOrdering::Empty {
         return Ok(());
     }
 
-    if ocb.ordering_type == TermOrdering::Lpo4 {
-        return Ok(());
-    }
-
-    if ocb.ordering_type != TermOrdering::Kbo6 {
-        if clause_can_use_first_order_ordering_surface(clause)
-            && demodulators
-                .iter()
-                .all(|set| clause_set_can_use_first_order_ordering_surface(set))
-        {
-            return Ok(());
-        }
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ForwardModifyClause higher-order term ordering is not ported yet",
-        ));
-    }
-
-    if ocb.ho_order_kind == HoOrderKind::LfhoOrder {
-        return Ok(());
-    }
-
-    if ocb.ho_order_kind == HoOrderKind::LambdaOrder {
+    if matches!(
+        ocb.ordering_type,
+        TermOrdering::Kbo
+            | TermOrdering::Kbo6
+            | TermOrdering::Lpo
+            | TermOrdering::LpoCopy
+            | TermOrdering::Lpo4
+            | TermOrdering::Lpo4Copy
+    ) {
         return Ok(());
     }
 
@@ -2281,16 +2266,6 @@ fn forward_modify_check_higher_order_ordering(
         ErrorCode::OTHER_ERROR,
         "ForwardModifyClause higher-order term ordering is not ported yet",
     ))
-}
-
-fn clause_can_use_first_order_ordering_surface(clause: &Clause) -> bool {
-    !clause
-        .literals()
-        .exists_term(Term::has_higher_order_ordering_surface)
-}
-
-fn clause_set_can_use_first_order_ordering_surface(set: &ClauseSet) -> bool {
-    set.iter().all(clause_can_use_first_order_ordering_surface)
 }
 
 fn forward_modify_normalize_if_higher_order(
@@ -11478,7 +11453,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_lpo_surface_stays_diagnostic() {
+    fn proof_state_forward_modify_clause_higher_order_lpo_surface_matches_release() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -11501,7 +11476,7 @@ mod tests {
             HoOrderKind::LfhoOrder,
         ));
 
-        let error = proof_state_forward_modify_clause_impl::<String>(
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
             &mut control,
             &mut clause,
@@ -11510,10 +11485,10 @@ mod tests {
             ProblemType::HigherOrder,
             None,
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("term ordering"));
+        assert!(!trivial);
+        assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]

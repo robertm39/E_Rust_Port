@@ -579,25 +579,30 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "requires first-order-shaped terms")]
-    fn to_compare_legacy_ordering_rejects_higher_order_surface() {
+    fn to_compare_legacy_orderings_accept_higher_order_surface_like_release() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let signature = signature();
         let head = Term::const_cell_alloc(-2);
         let arg = Term::const_cell_alloc(signature.find_f_code("a"));
         let applied = app(SIG_PHONY_APP_CODE, &[head, arg.clone()]);
-        let mut ocb =
-            OrderControlBlock::alloc(TermOrdering::Lpo, true, &signature, HoOrderKind::LfhoOrder);
 
-        let _ = to_compare(
-            &mut ocb,
-            &signature,
-            &applied,
-            &arg,
-            DerefType::Never,
-            DerefType::Never,
-        );
+        for ordering in [TermOrdering::Kbo, TermOrdering::Lpo, TermOrdering::LpoCopy] {
+            let mut ocb =
+                OrderControlBlock::alloc(ordering, true, &signature, HoOrderKind::LfhoOrder);
+            assert_eq!(
+                to_compare(
+                    &mut ocb,
+                    &signature,
+                    &applied,
+                    &arg,
+                    DerefType::Never,
+                    DerefType::Never,
+                ),
+                CompareResult::Greater,
+                "optimized-C higher-order dispatch failed for {ordering:?}"
+            );
+        }
     }
 
     #[test]

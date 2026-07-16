@@ -1454,10 +1454,17 @@ fn ensure_higher_order_paramodulation_ordering_supported(
     if problem_type() != ProblemType::HigherOrder {
         return Ok(());
     }
-    if !matches!(ocb.ordering_type, TermOrdering::Kbo6 | TermOrdering::Lpo4)
-        && terms
-            .iter()
-            .any(|term| term_has_higher_order_unification_surface(term))
+    if !matches!(
+        ocb.ordering_type,
+        TermOrdering::Kbo
+            | TermOrdering::Kbo6
+            | TermOrdering::Lpo
+            | TermOrdering::LpoCopy
+            | TermOrdering::Lpo4
+            | TermOrdering::Lpo4Copy
+    ) && terms
+        .iter()
+        .any(|term| term_has_higher_order_unification_surface(term))
     {
         return Err(diagnostic());
     }
@@ -2553,6 +2560,7 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::ho_csu::init_unif_limits;
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
+    use crate::terms::match_mgu::subst_mgu_complete_with_bank;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -3226,6 +3234,26 @@ mod tests {
         assert_higher_order_surface_overlap_paramodulates(TermOrdering::Lpo4);
     }
 
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_kbo_matches_release_surface() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::Kbo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_lpo_matches_release_surface() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::Lpo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_lpo_copy_matches_release_surface() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::LpoCopy);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_lpo4_copy_matches_release_surface() {
+        assert_higher_order_surface_overlap_paramodulates(TermOrdering::Lpo4Copy);
+    }
+
     fn assert_higher_order_surface_overlap_paramodulates(ordering: TermOrdering) {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
@@ -3276,6 +3304,200 @@ mod tests {
 
         assert_eq!(count, 1);
         let generated = store.iter().next().expect("one higher-order paramodulant");
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.literals().as_slice()[0].left(), &source_right);
+        assert_eq!(generated.literals().as_slice()[0].right(), &target_right);
+        assert!(function.binding().is_none());
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_kbo6() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::Kbo6);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_lpo4() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::Lpo4);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_kbo() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::Kbo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_lpo() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::Lpo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_lpo_copy() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::LpoCopy);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_flex_flex_reorients_for_lpo4_copy() {
+        assert_higher_order_flex_flex_overlap_paramodulates(TermOrdering::Lpo4Copy);
+    }
+
+    fn assert_higher_order_flex_flex_overlap_paramodulates(ordering: TermOrdering) {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let binary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual,
+            ]));
+        let short_head = bank.vars().var_assert_alloc(-2_405, &unary);
+        let long_head = bank.vars().var_assert_alloc(-2_406, &binary);
+        let prefix = typed_const(&mut bank, "pm_ho_flex_prefix");
+        let suffix = typed_const(&mut bank, "pm_ho_flex_suffix");
+        let source_left =
+            apply_terms(&mut bank, &short_head, std::slice::from_ref(&suffix)).unwrap();
+        let target_left = apply_terms(&mut bank, &long_head, &[prefix, suffix]).unwrap();
+        let source_right = typed_const(&mut bank, "pm_ho_flex_source_right");
+        let target_right = typed_const(&mut bank, "pm_ho_flex_target_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut ocb =
+            OrderControlBlock::alloc(ordering, true, bank.signature(), HoOrderKind::LfhoOrder);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let generated = store
+            .iter()
+            .next()
+            .expect("one flex-flex higher-order paramodulant");
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.literals().as_slice()[0].left(), &source_right);
+        assert_eq!(generated.literals().as_slice()[0].right(), &target_right);
+        assert!(short_head.binding().is_none());
+        assert!(long_head.binding().is_none());
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_kbo6() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::Kbo6);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_lpo4() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::Lpo4);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_kbo() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::Kbo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_lpo() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::Lpo);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_lpo_copy() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::LpoCopy);
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_eta_reduces_db_overlap_for_lpo4_copy() {
+        assert_higher_order_eta_db_overlap_paramodulates(TermOrdering::Lpo4Copy);
+    }
+
+    fn assert_higher_order_eta_db_overlap_paramodulates(ordering: TermOrdering) {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let function = typed_arrow_var(&mut bank, -2_407);
+        let rigid_head = typed_arrow_const(&mut bank, "pm_ho_eta_head");
+        let eta_head = eta_expanded_arrow_const(&mut bank, &rigid_head);
+        let individual = bank.signature().type_bank().default_type();
+        let unary = typed_arrow_type(&mut bank);
+        let wrapper_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![unary, individual.clone()]));
+        let wrapper_code = bank
+            .signature_mut()
+            .insert_id("pm_ho_eta_wrapper", 0, false);
+        bank.signature_mut()
+            .declare_final_type(wrapper_code, wrapper_type)
+            .unwrap();
+        let wrapper = bank.create_const_term(wrapper_code).unwrap();
+        let source_left =
+            apply_terms(&mut bank, &wrapper, std::slice::from_ref(&function)).unwrap();
+        let target_left = Term::top_alloc(wrapper_code, 1);
+        target_left.set_type(Some(individual));
+        target_left.set_argument(0, eta_head);
+        let target_left = bank.term_top_insert(target_left).unwrap();
+        assert!(target_left
+            .argument(0)
+            .is_some_and(|argument| argument.is_lambda()));
+        let mut direct_subst = Substitution::new();
+        assert!(subst_mgu_complete_with_bank(
+            &mut bank,
+            &source_left,
+            &target_left,
+            &mut direct_subst,
+        )
+        .unwrap());
+        direct_subst.backtrack();
+        let source_right = typed_const(&mut bank, "pm_ho_eta_source_right");
+        let target_right = typed_const(&mut bank, "pm_ho_eta_target_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut ocb =
+            OrderControlBlock::alloc(ordering, true, bank.signature(), HoOrderKind::LfhoOrder);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let generated = store
+            .iter()
+            .next()
+            .expect("one eta-reduced higher-order paramodulant");
         assert_eq!(generated.literal_number(), 1);
         assert_eq!(generated.literals().as_slice()[0].left(), &source_right);
         assert_eq!(generated.literals().as_slice()[0].right(), &target_right);

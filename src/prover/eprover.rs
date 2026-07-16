@@ -26376,6 +26376,65 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_higher_order_paramodulation_accepts_c_release_ordering_surface() {
+        let _guard = global_state_lock();
+        let path = temp_path("higher-order-paramodulation-release-orderings");
+        std::fs::write(
+            &path,
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
+             thf(d_type, type, d: $i).\n\
+             thf(h_type, type, h: $i > $i > $i).\n\
+             thf(p_type, type, p: $o).\n\
+             thf(source, axiom, ! [F: $i > $i] : (((F @ b) = d) | p)).\n\
+             thf(target, axiom, ((h @ a @ b) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+
+        for ordering in ["KBO", "LPO", "LPOCopy", "LPO4Copy"] {
+            let ordering_arg = format!("--term-ordering={ordering}");
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let status = run(
+                [
+                    "eprover",
+                    ordering_arg.as_str(),
+                    "--literal-selection-strategy=NoSelection",
+                    "--pm-from-index=NoIndex",
+                    "--pm-into-index=NoIndex",
+                    "--processed-clauses-limit=2",
+                    "--output-level=0",
+                    "--print-statistics",
+                    path_arg.as_str(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            let printed = String::from_utf8(stdout).unwrap();
+            assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status(), "{ordering}");
+            assert!(
+                printed.contains("% Generated clauses                    : 1\n"),
+                "{ordering}: {printed}"
+            );
+            assert!(
+                printed.contains("% Paramodulations                      : 1\n"),
+                "{ordering}: {printed}"
+            );
+            assert!(
+                stderr.is_empty(),
+                "{ordering}: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_resolves_tstp_include_through_tptp_env() {
         let _guard = global_state_lock();
         let tptp_root = temp_path("proof-fof-include-tptp-root");
