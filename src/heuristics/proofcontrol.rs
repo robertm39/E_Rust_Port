@@ -14,7 +14,7 @@ use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
-    clause_remove_ac_resolved_with_docs, clause_remove_superfluous_literals,
+    clause_remove_ac_resolved_with_docs_and_axioms, clause_remove_superfluous_literals,
     clause_resolve_flex_clause, clause_set_delete_orphans_with, clause_set_recognize_choice,
     tformula_fcode_alloc, tformula_is_quantified_nl,
 };
@@ -1561,6 +1561,7 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
     if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
         return Ok(0);
     }
+    let ac_axiom_parents = state.ac_axiom_parent_refs();
 
     let ids = {
         let ocb = control.ocb.as_mut().ok_or_else(|| {
@@ -1658,11 +1659,12 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
         if control.ac_handling_active() {
             match doc_context.as_mut() {
                 Some((output, session)) => {
-                    clause_remove_ac_resolved_with_docs(
+                    clause_remove_ac_resolved_with_docs_and_axioms(
                         output,
                         session,
                         &mut handle,
                         state.terms(),
+                        &ac_axiom_parents,
                     )?;
                 }
                 None => {
@@ -2144,6 +2146,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     let prune_args = control.heuristic_parms().prune_args;
     let higher_order = problem_type == ProblemType::HigherOrder;
     let ac_handling_active = control.ac_handling_active();
+    let ac_axiom_parents = state.ac_axiom_parent_refs();
     let strong_unit_forward_subsumption = control.strong_unit_forward_subsumption();
     let ocb = control.ocb.as_mut().ok_or_else(|| {
         Diagnostic::new(
@@ -2204,7 +2207,12 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             }
 
             if ac_handling_active {
-                forward_modify_remove_ac_resolved(terms, clause, &mut doc_context)?;
+                forward_modify_remove_ac_resolved(
+                    terms,
+                    clause,
+                    &ac_axiom_parents,
+                    &mut doc_context,
+                )?;
             }
 
             if local_rw && clause_local_rw(ocb, terms, clause)? {
@@ -2320,11 +2328,14 @@ fn forward_modify_condense<W: fmt::Write>(
 fn forward_modify_remove_ac_resolved<W: fmt::Write>(
     terms: &TermBank,
     clause: &mut Clause,
+    ac_axioms: &[ClauseDerivationRef],
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(), Diagnostic> {
     match doc_context.as_mut() {
         Some((output, session)) => {
-            clause_remove_ac_resolved_with_docs(output, session, clause, terms)?;
+            clause_remove_ac_resolved_with_docs_and_axioms(
+                output, session, clause, terms, ac_axioms,
+            )?;
         }
         None => {
             clause_remove_ac_resolved(clause, terms);
@@ -7153,7 +7164,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             *output_level,
             state,
             control,
-            packed.clause(),
+            packed.clause_mut(),
         )?
     } else if let Some((output, output_level)) = output_context.as_mut() {
         proof_state_check_ac_status_with_output(
@@ -7161,10 +7172,10 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             *output_level,
             state,
             control,
-            packed.clause(),
+            packed.clause_mut(),
         )?
     } else {
-        proof_state_check_ac_status(state, control, packed.clause())
+        proof_state_check_ac_status(state, control, packed.clause_mut())
     };
     if let Some((output, session, output_level)) = doc_context.as_mut() {
         proof_state_document_processing_with_docs(
@@ -7417,7 +7428,7 @@ fn proof_state_check_ac_status_with_fmt_output(
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
-    clause: &Clause,
+    clause: &mut Clause,
 ) -> Result<bool, Diagnostic> {
     let mut rendered = Vec::new();
     let activated = proof_state_check_ac_status_with_output(
@@ -9269,7 +9280,7 @@ pub fn proof_state_move_eval_store_to_unprocessed_with_docs(
 pub fn proof_state_check_ac_status(
     state: &mut ProofState,
     control: &mut ProofControl,
-    clause: &Clause,
+    clause: &mut Clause,
 ) -> bool {
     if control.heuristic_parms().ac_handling == AcHandling::None {
         return false;
@@ -9294,7 +9305,7 @@ pub fn proof_state_check_ac_status_with_output(
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
-    clause: &Clause,
+    clause: &mut Clause,
 ) -> Result<bool, Diagnostic> {
     let activated = proof_state_check_ac_status(state, control, clause);
     if activated && output_level != 0 {
@@ -9645,18 +9656,18 @@ mod tests {
         proof_control_clause_set_filter_reweigth_with_bank,
         proof_control_clause_set_reweight_with_bank, proof_control_init,
         proof_control_init_heuristics, proof_control_reset_sat_solver,
-        proof_state_backward_simplify_with_global_indices, proof_state_check_ac_status,
-        proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
-        proof_state_check_watchlist_with_global_indices, proof_state_check_watchlist_with_output,
-        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_bank, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
-        proof_state_generate_new_clauses_with_docs,
+        proof_state_archive_simplified_clause, proof_state_backward_simplify_with_global_indices,
+        proof_state_check_ac_status, proof_state_check_ac_status_with_output,
+        proof_state_check_watchlist_with_docs, proof_state_check_watchlist_with_global_indices,
+        proof_state_check_watchlist_with_output, proof_state_cleanup_unprocessed_clauses,
+        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_bank,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs,
         proof_state_immediate_clausification, proof_state_immediate_clausification_with_docs,
@@ -11721,18 +11732,32 @@ mod tests {
     #[test]
     fn proof_state_forward_modify_clause_with_docs_records_ac_resolution() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut first_parent = Clause::empty();
+        first_parent.set_ident(70);
+        first_parent.refresh_derivation_generation();
+        let first_parent_ref = ClauseDerivationRef::from(&first_parent);
+        let mut second_parent = Clause::empty();
+        second_parent.set_ident(71);
+        second_parent.refresh_derivation_generation();
+        let second_parent_ref = ClauseDerivationRef::from(&second_parent);
+        state
+            .terms_mut()
+            .signature_mut()
+            .push_ac_axiom(first_parent_ref);
+        state
+            .terms_mut()
+            .signature_mut()
+            .push_ac_axiom(second_parent_ref);
+        first_parent.set_ident(7);
+        second_parent.set_ident(8);
+        state.axioms_mut().insert(first_parent);
+        state.archive_mut().insert(second_parent);
         let mut clause = {
             let terms = state.terms_mut();
             let f_code = typed_binary_code(terms, "pc_forward_ac_f");
             terms
                 .signature_mut()
                 .set_func_prop(f_code, FP_ASSOCIATIVE | FP_COMMUTATIVE);
-            terms
-                .signature_mut()
-                .push_ac_axiom(ClauseDerivationRef::new(70, 0));
-            terms
-                .signature_mut()
-                .push_ac_axiom(ClauseDerivationRef::new(71, 0));
             let first = typed_const(terms, "pc_forward_ac_a");
             let second = typed_const(terms, "pc_forward_ac_b");
             let left = typed_binary_with_code(terms, f_code, &first, &second);
@@ -11776,7 +11801,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "cnf(c_0_1, plain, ($false),inference(ar,[status(thm)],[c_0_4088,c_0_70,c_0_71])).\n"
+            "cnf(c_0_1, plain, ($false),inference(ar,[status(thm)],[c_0_4088,c_0_7,c_0_8])).\n"
         );
     }
 
@@ -14411,13 +14436,24 @@ mod tests {
             "% pc_process_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n"
         ));
         assert!(output.contains(" : 4162 : 'new_given'\n"));
-        assert!(match class {
+        let processed_ref = match class {
             ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(1),
             ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(1),
             ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(1),
             ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(1),
         }
-        .is_some());
+        .map(ClauseDerivationRef::from)
+        .expect("processed set owns the renumbered AC parent");
+        let signature_ref = state.terms().signature().ac_axioms()[0];
+        assert_ne!(signature_ref.generation(), 0);
+        assert_eq!(signature_ref, processed_ref);
+        assert_eq!(state.ac_axiom_parent_refs(), vec![processed_ref]);
+        assert_eq!(
+            state
+                .proof_clause_by_derivation_ref(signature_ref)
+                .map(ClauseDerivationRef::from),
+            Some(processed_ref)
+        );
     }
 
     #[test]
@@ -17821,11 +17857,11 @@ mod tests {
     #[test]
     fn proof_state_check_ac_status_enables_ac_dynamically() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (clause, f_code) = commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_f", 4_092);
+        let (mut clause, f_code) = commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_f", 4_092);
         let mut control = proof_control_alloc();
 
-        let activated = proof_state_check_ac_status(&mut state, &mut control, &clause);
-        let already_active = proof_state_check_ac_status(&mut state, &mut control, &clause);
+        let activated = proof_state_check_ac_status(&mut state, &mut control, &mut clause);
+        let already_active = proof_state_check_ac_status(&mut state, &mut control, &mut clause);
 
         assert!(activated);
         assert!(!already_active);
@@ -17834,9 +17870,73 @@ mod tests {
     }
 
     #[test]
+    fn signature_ac_parent_survives_renumber_clone_and_archive_requeue() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut clause, _) =
+            commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_owner_f", 4_096);
+        let mut control = proof_control_alloc();
+
+        assert!(proof_state_check_ac_status(
+            &mut state,
+            &mut control,
+            &mut clause
+        ));
+        let signature_ref = state.terms().signature().ac_axioms()[0];
+        assert_ne!(signature_ref.generation(), 0);
+
+        clause.set_ident(1);
+        let current_ref = ClauseDerivationRef::from(&clause);
+        state.processed_pos_eqns_mut().insert(clause);
+
+        assert_eq!(signature_ref, current_ref);
+        assert_eq!(state.ac_axiom_parent_refs(), vec![current_ref]);
+        assert_eq!(
+            state
+                .proof_clause_by_derivation_ref(signature_ref)
+                .map(ClauseDerivationRef::from),
+            Some(current_ref)
+        );
+
+        let original_owner = std::ptr::from_ref(
+            state
+                .proof_clause_by_derivation_ref(signature_ref)
+                .expect("original state owns the AC parent"),
+        );
+        let mut snapshot = state.clone();
+        let snapshot_owner = std::ptr::from_ref(
+            snapshot
+                .proof_clause_by_derivation_ref(signature_ref)
+                .expect("cloned state owns its AC-parent snapshot"),
+        );
+        assert_ne!(original_owner, snapshot_owner);
+
+        let archived = snapshot
+            .processed_pos_eqns_mut()
+            .extract_by_id(1)
+            .expect("snapshot still owns the processed AC parent");
+        let requeued = proof_state_archive_simplified_clause(&mut snapshot, archived)
+            .expect("AC parent can be archived and requeued");
+        let requeued_ref = ClauseDerivationRef::from(&requeued);
+        snapshot.tmp_store_mut().insert(requeued);
+
+        assert_ne!(signature_ref, requeued_ref);
+        assert!(snapshot
+            .archive()
+            .find_by_derivation_ref(signature_ref)
+            .is_some());
+        assert!(snapshot
+            .tmp_store()
+            .find_by_derivation_ref(requeued_ref)
+            .is_some());
+        assert_eq!(snapshot.ac_axiom_parent_refs(), vec![current_ref]);
+        assert!(state.processed_pos_eqns().find_by_id(1).is_some());
+        assert!(state.archive().is_empty());
+    }
+
+    #[test]
     fn proof_state_check_ac_status_with_output_reports_dynamic_activation_once() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (clause, f_code) =
+        let (mut clause, f_code) =
             commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_print_f", 4_094);
         let mut control = proof_control_alloc();
         let mut output = Vec::new();
@@ -17846,7 +17946,7 @@ mod tests {
             1,
             &mut state,
             &mut control,
-            &clause,
+            &mut clause,
         )
         .unwrap();
         let already_active = proof_state_check_ac_status_with_output(
@@ -17854,7 +17954,7 @@ mod tests {
             1,
             &mut state,
             &mut control,
-            &clause,
+            &mut clause,
         )
         .unwrap();
 
@@ -17871,7 +17971,7 @@ mod tests {
     #[test]
     fn proof_state_check_ac_status_with_output_obeys_zero_output_level() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (clause, f_code) =
+        let (mut clause, f_code) =
             commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_quiet_f", 4_095);
         let mut control = proof_control_alloc();
         let mut output = Vec::new();
@@ -17881,7 +17981,7 @@ mod tests {
             0,
             &mut state,
             &mut control,
-            &clause,
+            &mut clause,
         )
         .unwrap();
 
@@ -17894,11 +17994,12 @@ mod tests {
     #[test]
     fn proof_state_check_ac_status_skips_scan_when_disabled() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (clause, f_code) = commutativity_axiom(state.terms_mut(), "pc_dynamic_no_ac_f", 4_093);
+        let (mut clause, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_dynamic_no_ac_f", 4_093);
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().ac_handling = AcHandling::None;
 
-        let activated = proof_state_check_ac_status(&mut state, &mut control, &clause);
+        let activated = proof_state_check_ac_status(&mut state, &mut control, &mut clause);
 
         assert!(!activated);
         assert!(!control.ac_handling_active());

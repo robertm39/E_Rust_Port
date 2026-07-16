@@ -549,11 +549,31 @@ pub fn clause_remove_ac_resolved_with_docs<W: fmt::Write>(
     clause: &mut Clause,
     bank: &TermBank,
 ) -> Result<usize, Diagnostic> {
+    let ac_axioms = bank.signature().ac_axioms().to_vec();
+    clause_remove_ac_resolved_with_docs_and_axioms(output, session, clause, bank, &ac_axioms)
+}
+
+/// Removes AC-trivial negative literals while using caller-resolved AC parent
+/// metadata for proof documentation.
+///
+/// Proof-state callers use this form because C's signature stores live clause
+/// pointers whose visible identifiers follow proof-output renumbering. The
+/// lower-level wrapper above retains the signature snapshots for callers that
+/// do not own a proof state.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-document rendering fails.
+pub fn clause_remove_ac_resolved_with_docs_and_axioms<W: fmt::Write>(
+    output: &mut W,
+    session: &mut ProofDocSession,
+    clause: &mut Clause,
+    bank: &TermBank,
+    ac_axioms: &[ClauseDerivationRef],
+) -> Result<usize, Diagnostic> {
     let removed = clause_remove_ac_resolved_core(clause, bank);
     if removed != 0 {
-        let ac_axiom_ids = bank
-            .signature()
-            .ac_axioms()
+        let ac_axiom_ids = ac_axioms
             .iter()
             .copied()
             .map(ClauseDerivationRef::ident)

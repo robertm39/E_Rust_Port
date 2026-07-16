@@ -28,10 +28,14 @@ not the printable `ident` alone, is the relevant internal identity.
   same `ident` and source.
 
 Newly allocated clauses have unique `ident` values, so generation zero is
-unambiguous. Working clones/copies preserve generation because they represent
-the same logical clause. Every represented archive/requeue path that creates a
-new proof node while retaining the ID calls `refresh_derivation_generation`
-before capturing or storing its derivation reference:
+unambiguous while that visible metadata remains unchanged. Working clones/copies
+preserve generation because they represent the same logical clause. Long-lived
+references whose clauses can be proof-output-renumbered must first receive a
+nonzero generation; the signature AC-parent case and generation-based equality
+are audited in experiment 020. Every represented archive/requeue path that
+creates a new proof node while retaining the ID calls
+`refresh_derivation_generation` before capturing or storing its derivation
+reference:
 
 - `clause_archive`;
 - `clause_archive_copy`;

@@ -1,7 +1,12 @@
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::terms::termtypes::RewriteDemodulator;
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt::Write as _,
+    hash::{Hash, Hasher},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -185,11 +190,13 @@ pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
 /// Stable process-local identity for a clause proof node.
 ///
 /// C stores a `Clause_p` in derivation stacks. Rust keeps the visible clause
-/// identifier and CSSCPA source for rendering, then uses `generation` to
-/// distinguish archive/requeue copies that intentionally retain both values.
+/// identifier and CSSCPA source as rendering metadata. A nonzero `generation`
+/// is the immutable process-local identity: it continues to identify the same
+/// clause when proof documentation renumbers the visible identifier. Legacy
+/// generation-zero references retain their identifier/source identity.
 /// Moving a clause between sets or compacting set storage does not change this
 /// key.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug)]
 pub struct ClauseDerivationRef {
     ident: i64,
     source: u64,
@@ -228,6 +235,48 @@ impl ClauseDerivationRef {
     #[must_use]
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    fn cmp_identity(self, other: Self) -> Ordering {
+        match (self.generation, other.generation) {
+            (0, 0) => (self.ident, self.source).cmp(&(other.ident, other.source)),
+            (0, _) => Ordering::Less,
+            (_, 0) => Ordering::Greater,
+            (left, right) => left.cmp(&right),
+        }
+    }
+}
+
+impl PartialEq for ClauseDerivationRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp_identity(*other) == Ordering::Equal
+    }
+}
+
+impl Eq for ClauseDerivationRef {}
+
+impl PartialOrd for ClauseDerivationRef {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(Ord::cmp(self, other))
+    }
+}
+
+impl Ord for ClauseDerivationRef {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.cmp_identity(*other)
+    }
+}
+
+impl Hash for ClauseDerivationRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if self.generation == 0 {
+            0_u8.hash(state);
+            self.ident.hash(state);
+            self.source.hash(state);
+        } else {
+            1_u8.hash(state);
+            self.generation.hash(state);
+        }
     }
 }
 
@@ -1515,7 +1564,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::termtypes::RewriteDemodulator;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
 
     #[test]
     fn proof_output_discriminants_match_c_enum() {
@@ -1564,6 +1613,29 @@ mod tests {
                 ClauseDerivationRef::new_with_generation(-98, 0, 42),
             ]
         );
+    }
+
+    #[test]
+    fn clause_derivation_generation_is_identity_across_visible_renumbering() {
+        let before = ClauseDerivationRef::new_with_generation(4_162, 7, 42);
+        let after = ClauseDerivationRef::new_with_generation(1, 9, 42);
+
+        assert_eq!(before, after);
+        assert_eq!(before.cmp(&after), std::cmp::Ordering::Equal);
+        assert_ne!(
+            ClauseDerivationRef::new(4_162, 7),
+            ClauseDerivationRef::new(1, 9)
+        );
+
+        let mut ordered = BTreeSet::new();
+        ordered.insert(before);
+        ordered.insert(after);
+        assert_eq!(ordered.len(), 1);
+
+        let mut hashed = HashSet::new();
+        hashed.insert(before);
+        hashed.insert(after);
+        assert_eq!(hashed.len(), 1);
     }
 
     #[test]

@@ -124,27 +124,33 @@ pub fn detect_associativity(clause: &Clause) -> FunCode {
     f
 }
 
-pub fn clause_scan_ac(sig: &mut Signature, clause: &Clause) -> bool {
+pub fn clause_scan_ac(sig: &mut Signature, clause: &mut Clause) -> bool {
     let f = detect_commutativity(clause);
     if f != 0 {
         if !sig.query_prop(f, FP_COMMUTATIVE) {
+            if clause.derivation_generation() == 0 {
+                clause.refresh_derivation_generation();
+            }
             sig.set_func_prop(f, FP_COMMUTATIVE);
-            sig.push_ac_axiom(ClauseDerivationRef::from(clause));
+            sig.push_ac_axiom(ClauseDerivationRef::from(&*clause));
         }
         return true;
     }
 
     let f = detect_associativity(clause);
     if f != 0 && !sig.query_prop(f, FP_ASSOCIATIVE) {
+        if clause.derivation_generation() == 0 {
+            clause.refresh_derivation_generation();
+        }
         sig.set_func_prop(f, FP_ASSOCIATIVE);
-        sig.push_ac_axiom(ClauseDerivationRef::from(clause));
+        sig.push_ac_axiom(ClauseDerivationRef::from(&*clause));
     }
     false
 }
 
-pub fn clause_set_scan_ac(sig: &mut Signature, set: &ClauseSet) -> bool {
+pub fn clause_set_scan_ac(sig: &mut Signature, set: &mut ClauseSet) -> bool {
     let mut result = false;
-    for clause in set.iter() {
+    for clause in set.iter_mut() {
         result |= clause_scan_ac(sig, clause);
     }
     result
@@ -315,13 +321,12 @@ mod tests {
         assoc.set_ident(31);
         assoc.set_csscpa_source(2);
 
-        assert!(!clause_scan_ac(bank.signature_mut(), &assoc));
+        assert!(!clause_scan_ac(bank.signature_mut(), &mut assoc));
         assert!(bank.signature().query_prop(f_code, FP_ASSOCIATIVE));
         assert!(!bank.signature().query_prop(f_code, FP_COMMUTATIVE));
-        assert_eq!(
-            bank.signature().ac_axioms(),
-            &[ClauseDerivationRef::new(31, 2)]
-        );
+        let axiom_ref = ClauseDerivationRef::from(&assoc);
+        assert_ne!(axiom_ref.generation(), 0);
+        assert_eq!(bank.signature().ac_axioms(), &[axiom_ref]);
     }
 
     #[test]
@@ -334,19 +339,15 @@ mod tests {
         let mut clause = unit_clause(literal(&mut bank, &left, &right, true));
         clause.set_ident(41);
         clause.set_csscpa_source(3);
-        let set = ClauseSet::from_clauses([clause.clone()]);
+        let mut set = ClauseSet::from_clauses([clause.clone()]);
 
-        assert!(clause_scan_ac(bank.signature_mut(), &clause));
+        assert!(clause_scan_ac(bank.signature_mut(), &mut clause));
         assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
-        assert_eq!(
-            bank.signature().ac_axioms(),
-            &[ClauseDerivationRef::new(41, 3)]
-        );
-        assert!(clause_set_scan_ac(bank.signature_mut(), &set));
+        let axiom_ref = ClauseDerivationRef::from(&clause);
+        assert_ne!(axiom_ref.generation(), 0);
+        assert_eq!(bank.signature().ac_axioms(), &[axiom_ref]);
+        assert!(clause_set_scan_ac(bank.signature_mut(), &mut set));
         assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
-        assert_eq!(
-            bank.signature().ac_axioms(),
-            &[ClauseDerivationRef::new(41, 3)]
-        );
+        assert_eq!(bank.signature().ac_axioms(), &[axiom_ref]);
     }
 }

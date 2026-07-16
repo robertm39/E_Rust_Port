@@ -1126,6 +1126,27 @@ impl ProofState {
         find_by_derivation_ref_or_sourceless_id(&self.proof_clause_sets(), parent)
     }
 
+    /// Resolves the signature's stable AC-axiom identities back to their
+    /// current proof-state-owned clause metadata.
+    ///
+    /// C stores raw clause pointers in the signature, so a later proof-output
+    /// renumbering is visible through those pointers. Rust keeps immutable
+    /// generation identities and reconstructs the current identifier/source
+    /// pair here. An unresolved legacy reference retains its stored metadata.
+    #[must_use]
+    pub fn ac_axiom_parent_refs(&self) -> Vec<ClauseDerivationRef> {
+        self.terms
+            .signature()
+            .ac_axioms()
+            .iter()
+            .copied()
+            .map(|parent| {
+                self.proof_clause_by_derivation_ref(parent)
+                    .map_or(parent, ClauseDerivationRef::from)
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn proof_formula_by_derivation_ref(
         &self,
