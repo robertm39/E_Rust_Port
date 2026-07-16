@@ -2,7 +2,8 @@
 
 ## Status
 
-Completed for Bead `E_Rust_Port-j76.1.26`. The vendored C source remained
+Completed for Bead `E_Rust_Port-j76.1.26` and supplies the caller-level evidence
+used to close Bead `E_Rust_Port-j76.1.27`. The vendored C source remained
 unchanged. Real satisfiable and unsatisfiable problem files now exercise the
 native Rust executable, and a caller-level process-set regression pins the
 same-poll output tie rule.

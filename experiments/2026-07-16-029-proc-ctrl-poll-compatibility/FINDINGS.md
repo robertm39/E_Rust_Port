@@ -3,9 +3,10 @@
 ## Status
 
 Completed for Bead `E_Rust_Port-j76.1.20` as a source- and platform-backed
-compatibility decision with permanent Rust regressions. No fresh C executable
-was available because this host has neither a C compiler nor an installed WSL
-distribution.
+compatibility decision with permanent Rust regressions, and adopted as the
+adapter-level resolution for the `e_stratpar` boundary tracked by Bead
+`E_Rust_Port-j76.1.27`. No fresh C executable was available because this host
+has neither a C compiler nor an installed WSL distribution.
 
 ## C behavior
 
