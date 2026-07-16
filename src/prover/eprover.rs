@@ -15742,10 +15742,10 @@ mod tests {
         simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
         write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
         write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
-        FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison,
-        ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
+        write_stopped_proof_output, AcHandling, ConfiguredOutput, DocOutputFormat, EProverAction,
+        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
+        FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode,
+        LiteralComparison, ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
         PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
         ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
         SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
@@ -22201,7 +22201,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(
+        let result = run(
             [
                 "eprover",
                 "--lop-in",
@@ -22211,14 +22211,15 @@ input_clause(c2,axiom,[++q(X)]).
             ],
             &mut stdout,
             &mut stderr,
-        )
-        .unwrap();
+        );
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let status = result.unwrap();
 
         assert_eq!(status, ErrorCode::CPU_LIMIT_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with(
-            "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"
-        ));
+        let resource_out =
+            "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n";
+        assert_eq!(printed.matches(resource_out).count(), 1, "{printed}");
         assert!(printed.contains("% Preprocessing class:"));
         assert!(!printed.contains("User resource limit exceeded"));
         assert_eq!(
@@ -22226,7 +22227,6 @@ input_clause(c2,axiom,[++q(X)]).
             "eprover: CPU time limit exceeded, terminating\n"
         );
 
-        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -22364,6 +22364,21 @@ input_clause(c2,axiom,[++q(X)]).
         }
 
         assert_eq!(std::str::from_utf8(&stdout).unwrap(), "% routed\n");
+    }
+
+    #[test]
+    fn configured_output_direct_global_write_precedes_pending_stdio_buffer() {
+        let mut stdout = Vec::new();
+        {
+            let mut output = ConfiguredOutput::Writer {
+                writer: &mut stdout,
+                buffer: Vec::new(),
+            };
+            output.write_all(b"pending").unwrap();
+            output.write_direct_global_out(b"direct").unwrap();
+        }
+
+        assert_eq!(std::str::from_utf8(&stdout).unwrap(), "directpending");
     }
 
     #[test]

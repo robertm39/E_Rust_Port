@@ -91,4 +91,6 @@ Successful option parsing is unchanged, so a benchmark is not warranted.
 
 Two parallel validation attempts hit unrelated global-environment/timing flakes;
 both failed tests passed immediately in isolation. The serialized complete run
-is green, and follow-up Bead `E_Rust_Port-9wi` tracks test stabilization.
+is green. Follow-up Bead `E_Rust_Port-9wi` resolves both assumptions; the
+reproductions and repeated parallel validation are recorded in
+[`experiments/2026-07-16-053-parallel-test-stability/FINDINGS.md`](../2026-07-16-053-parallel-test-stability/FINDINGS.md).

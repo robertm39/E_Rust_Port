@@ -1119,8 +1119,31 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::stringtrees::StrTree;
+    use crate::test_support::global_state_lock;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+
+    struct TptpEnvGuard {
+        previous: Option<OsString>,
+    }
+
+    impl TptpEnvGuard {
+        fn unset() -> Self {
+            let previous = std::env::var_os("TPTP");
+            std::env::remove_var("TPTP");
+            Self { previous }
+        }
+    }
+
+    impl Drop for TptpEnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("TPTP", value),
+                None => std::env::remove_var("TPTP"),
+            }
+        }
+    }
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::current_dir()
@@ -1412,6 +1435,8 @@ mod tests {
 
     #[test]
     fn include_key_splices_included_files_and_resumes_parent_stream() {
+        let _global_guard = global_state_lock();
+        let _tptp_guard = TptpEnvGuard::unset();
         let dir = temp_dir("include-key");
         remove_dir_if_present(&dir);
         std::fs::create_dir_all(&dir).unwrap();
