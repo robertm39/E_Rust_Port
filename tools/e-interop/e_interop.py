@@ -996,6 +996,22 @@ TOOL_FUNCTIONAL_CASES = {
             },
         ),
         (
+            "nested-selected-include",
+            ("--tstp-in", "--silent", "main.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "main.p": "include('child.p',[selected]).\n",
+                    "child.p": (
+                        "include('grand.p').\n"
+                        "fof(unselected,axiom,q(a)).\n"
+                    ),
+                    "grand.p": "fof(selected,axiom,p(a)).\n",
+                },
+            },
+        ),
+        (
             "verbose-conjecture-progress",
             ("--tstp-in", "--verbose=1", "--silent", "--suppress-result"),
             "fof(goal,conjecture,p(a)).\n",

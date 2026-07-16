@@ -10014,12 +10014,13 @@ fn parse_clause_scanner_into_destination_with_options(
     let result_problem_type;
     match detected_format {
         IoFormat::Tstp => {
+            let mut include_selector_stack = Vec::new();
             let parsed = parse_tstp_entry_list(
                 scanner,
                 bank,
                 destination,
                 watchlist,
-                None,
+                &mut include_selector_stack,
                 formula_preprocessing,
                 clause_parse_options,
             )?;
@@ -10029,12 +10030,13 @@ fn parse_clause_scanner_into_destination_with_options(
             result_problem_type = parsed.problem_type;
         }
         IoFormat::Tptp => {
+            let mut include_selector_stack = Vec::new();
             let parsed = parse_tptp_entry_list(
                 scanner,
                 bank,
                 destination,
                 watchlist,
-                None,
+                &mut include_selector_stack,
                 formula_preprocessing,
                 clause_parse_options,
             )?;
@@ -10443,7 +10445,7 @@ fn parse_tptp_entry_list(
     bank: &mut TermBank,
     destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
-    mut selectors: Option<&mut StrTree<i64, i64>>,
+    include_selector_stack: &mut Vec<StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
     clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
@@ -10458,9 +10460,9 @@ fn parse_tptp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected(
+            if tstp_entry_selected_by_include_stack(
                 clause.info().and_then(ClauseInfo::name),
-                selectors.as_deref_mut(),
+                include_selector_stack,
             ) {
                 result.input_owner_seen |= is_input_owner;
                 insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
@@ -10472,7 +10474,10 @@ fn parse_tptp_entry_list(
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+            if tstp_entry_selected_by_include_stack(
+                Some(parsed.name.as_str()),
+                include_selector_stack,
+            ) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -10488,15 +10493,22 @@ fn parse_tptp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                result.add(parse_tptp_entry_list(
+                include_selector_stack.push(include_selectors);
+                let included_result = parse_tptp_entry_list(
                     &mut included,
                     bank,
                     destination,
                     watchlist,
-                    Some(&mut include_selectors),
+                    include_selector_stack,
                     formula_preprocessing,
                     clause_parse_options,
-                )?);
+                );
+                let popped_selectors = include_selector_stack.pop();
+                debug_assert!(
+                    popped_selectors.is_some(),
+                    "recursive TPTP include must own one selector frame"
+                );
+                result.add(included_result?);
             }
         } else {
             return Err(Diagnostic::new(
@@ -10509,7 +10521,7 @@ fn parse_tptp_entry_list(
             ));
         }
     }
-    if let Some(selector_tree) = selectors.as_ref() {
+    if let Some(selector_tree) = include_selector_stack.last() {
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
     Ok(result)
@@ -10520,7 +10532,7 @@ fn parse_tstp_entry_list(
     bank: &mut TermBank,
     destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
-    mut selectors: Option<&mut StrTree<i64, i64>>,
+    include_selector_stack: &mut Vec<StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
     clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
@@ -10535,9 +10547,9 @@ fn parse_tstp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected(
+            if tstp_entry_selected_by_include_stack(
                 clause.info().and_then(ClauseInfo::name),
-                selectors.as_deref_mut(),
+                include_selector_stack,
             ) {
                 result.input_owner_seen |= is_input_owner;
                 insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
@@ -10549,7 +10561,10 @@ fn parse_tstp_entry_list(
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+            if tstp_entry_selected_by_include_stack(
+                Some(parsed.name.as_str()),
+                include_selector_stack,
+            ) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -10568,21 +10583,27 @@ fn parse_tstp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected(
+            if tstp_entry_selected_by_include_stack(
                 clause.info().and_then(ClauseInfo::name),
-                selectors.as_deref_mut(),
+                include_selector_stack,
             ) {
                 result.input_owner_seen |= is_input_owner;
                 insert_input_or_watchlist_clause(destination, watchlist, bank, clause)?;
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
+            let record_problem_type =
+                tstp_formula_kind_problem_type(&scanner.current_token().literal());
             let parsed = parse_simple_tstp_formula_clause(
                 scanner,
                 bank,
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+            result.problem_type = combine_problem_types(result.problem_type, record_problem_type);
+            if tstp_entry_selected_by_include_stack(
+                Some(parsed.name.as_str()),
+                include_selector_stack,
+            ) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -10598,15 +10619,22 @@ fn parse_tstp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                result.add(parse_tstp_entry_list(
+                include_selector_stack.push(include_selectors);
+                let included_result = parse_tstp_entry_list(
                     &mut included,
                     bank,
                     destination,
                     watchlist,
-                    Some(&mut include_selectors),
+                    include_selector_stack,
                     formula_preprocessing,
                     clause_parse_options,
-                )?);
+                );
+                let popped_selectors = include_selector_stack.pop();
+                debug_assert!(
+                    popped_selectors.is_some(),
+                    "recursive TSTP include must own one selector frame"
+                );
+                result.add(included_result?);
             }
         } else {
             return Err(Diagnostic::new(
@@ -10619,7 +10647,7 @@ fn parse_tstp_entry_list(
             ));
         }
     }
-    if let Some(selector_tree) = selectors.as_ref() {
+    if let Some(selector_tree) = include_selector_stack.last() {
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
     Ok(result)
@@ -10722,6 +10750,21 @@ fn tstp_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i
         return false;
     };
     entry.val1 = 1;
+    true
+}
+
+fn tstp_entry_selected_by_include_stack(
+    name: Option<&str>,
+    include_selector_stack: &mut [StrTree<i64, i64>],
+) -> bool {
+    // C filters each completed included set before returning it to its parent.
+    // Testing the innermost frame first is the streaming equivalent: an entry
+    // rejected by a nested selector must not mark an outer selector as found.
+    for selectors in include_selector_stack.iter_mut().rev() {
+        if !tstp_entry_selected(name, Some(selectors)) {
+            return false;
+        }
+    }
     true
 }
 
@@ -16792,6 +16835,123 @@ input_clause(c2,axiom,[++q(X)]).
         let disjoint_lop_vars =
             parse_bridge_first_args(IoFormat::Lop, lop_source, disjoint_options);
         assert_ne!(disjoint_lop_vars[0], disjoint_lop_vars[1]);
+    }
+
+    #[test]
+    fn shared_formula_and_clause_parser_accepts_c_record_dispatch_matrix() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+
+        let mut tptp_bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut tptp_formulas = FormulaSet::new();
+        let mut tptp_watchlist = ClauseSet::new();
+        let mut tptp_scanner = Scanner::from_user_string(
+            "input_clause(old_clause,axiom,[++legacy_p(a)]).\n\
+             input_clause(old_watch,watchlist,[++legacy_watch(a)]).\n\
+             input_formula(old_formula,axiom,legacy_q(a)).\n",
+            false,
+        )
+        .unwrap();
+        let tptp = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut tptp_scanner,
+            IoFormat::Tptp,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut tptp_bank,
+            &mut tptp_formulas,
+            &mut tptp_watchlist,
+        )
+        .unwrap();
+
+        assert!(tptp.input_owner_seen);
+        assert_eq!(tptp.problem_type, ProblemType::FirstOrder);
+        assert_eq!(tptp_formulas.cardinality(), 2);
+        assert_eq!(tptp_watchlist.members(), 1);
+
+        reset_problem_type();
+        let mut tstp_bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut tstp_formulas = FormulaSet::new();
+        let mut tstp_watchlist = ClauseSet::new();
+        let mut tstp_scanner = Scanner::from_user_string(
+            "tff(ind_type,type,ind:$tType,unknown,[status(thm)]).\n\
+             tff(a_type,type,a:ind).\n\
+             tff(pred_type,type,typed_p:ind>$o).\n\
+             cnf(17,axiom,typed_p(a),file('records.p',17),[status(thm)]).\n\
+             cnf(cnf_watch,watchlist,typed_p(a),unknown,[status(thm)]).\n\
+             fof('quoted_fof',axiom,typed_p(a),introduced(definition),[status(thm)]).\n\
+             tff(tff_formula,axiom,typed_p(a),file('records.p',tff_formula)).\n\
+             tcf(tcf_formula,axiom,![X:ind]:typed_p(X)).\n\
+             tcf(tcf_watch,watchlist,![X:ind]:typed_p(X),unknown).\n",
+            false,
+        )
+        .unwrap();
+        let tstp = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut tstp_scanner,
+            IoFormat::Tstp,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut tstp_bank,
+            &mut tstp_formulas,
+            &mut tstp_watchlist,
+        )
+        .unwrap();
+
+        assert!(tstp.input_owner_seen);
+        assert_eq!(tstp.problem_type, ProblemType::FirstOrder);
+        assert_eq!(tstp_formulas.cardinality(), 7);
+        assert_eq!(tstp_watchlist.members(), 2);
+        assert!(tstp_bank.signature().typed_symbols());
+
+        reset_problem_type();
+        let mut thf_bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut thf_formulas = FormulaSet::new();
+        let mut thf_watchlist = ClauseSet::new();
+        let mut thf_scanner = Scanner::from_user_string(
+            "thf(person_type,type,person:$tType,unknown,[status(thm)]).\n\
+             thf(a_type,type,a:person).\n\
+             thf(p_type,type,p:person>$o).\n\
+             thf(thf_formula,axiom,p@a,file('records.p',thf_formula)).\n",
+            false,
+        )
+        .unwrap();
+        let thf = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut thf_scanner,
+            IoFormat::Tstp,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut thf_bank,
+            &mut thf_formulas,
+            &mut thf_watchlist,
+        )
+        .unwrap();
+
+        assert!(thf.input_owner_seen);
+        assert_eq!(thf.problem_type, ProblemType::HigherOrder);
+        assert_eq!(thf_formulas.cardinality(), 4);
+        assert!(thf_watchlist.is_empty());
+        assert!(thf_bank.signature().typed_symbols());
+
+        reset_problem_type();
+        let mut lop_bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut lop_formulas = FormulaSet::new();
+        let mut lop_watchlist = ClauseSet::new();
+        let mut lop_scanner = Scanner::from_user_string("lop_p(a).\n", false).unwrap();
+        let lop = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut lop_scanner,
+            IoFormat::Lop,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut lop_bank,
+            &mut lop_formulas,
+            &mut lop_watchlist,
+        )
+        .unwrap();
+
+        assert!(lop.input_owner_seen);
+        assert_eq!(lop.problem_type, ProblemType::FirstOrder);
+        assert_eq!(lop_formulas.cardinality(), 1);
+        assert!(lop_watchlist.is_empty());
+        reset_problem_type();
     }
 
     fn without_selected_clause_progress(output: &str) -> String {
@@ -31682,6 +31842,180 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         );
         std::fs::remove_file(&include_path).unwrap();
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_applies_outer_selector_to_nested_include_subtree() {
+        let _guard = global_state_lock();
+        let dir = temp_path("print-formulas-nested-outer-filter-dir");
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("grand.ax"),
+            "fof(nested_unselected, axiom, r(a)).\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("child.ax"),
+            "include('grand.ax').\nfof(selected, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path = dir.join("main.p");
+        std::fs::write(
+            &path,
+            "include('child.ax',[selected]).\nfof(main, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_formula_owner_print(
+            stdout,
+            stderr,
+            &["fof(selected, axiom, p(a))", "fof(main, axiom, q(a))"],
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_finds_outer_selector_inside_nested_tptp_and_tstp_includes() {
+        let _guard = global_state_lock();
+        for (case, format_arg, selected, unselected) in [
+            (
+                "tstp",
+                "--tstp-in",
+                "fof(selected, axiom, p(a)).\n",
+                "fof(unselected, axiom, r(a)).\n",
+            ),
+            (
+                "tptp",
+                "--tptp-in",
+                "input_formula(selected, axiom, p(a)).\n",
+                "input_formula(unselected, axiom, r(a)).\n",
+            ),
+        ] {
+            reset_problem_type();
+            let dir = temp_path(&format!("print-formulas-nested-selected-{case}-dir"));
+            _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("grand.ax"), selected).unwrap();
+            std::fs::write(
+                dir.join("child.ax"),
+                format!("include('grand.ax').\n{unselected}"),
+            )
+            .unwrap();
+            let path = dir.join("main.p");
+            std::fs::write(&path, "include('child.ax',[selected]).\n").unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                ["eprover", "--print-formulas", format_arg, path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            let printed = String::from_utf8(stdout).unwrap();
+            assert!(printed.contains("selected"));
+            assert!(!printed.contains("unselected"));
+            assert!(stderr.is_empty());
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        reset_problem_type();
+    }
+
+    #[test]
+    fn nested_include_selector_checks_inner_frame_before_marking_outer_frame() {
+        let _guard = global_state_lock();
+        let dir = temp_path("nested-include-selector-frame-order-dir");
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("grand.ax"),
+            "fof(outer_selected, axiom, p(a)).\n\
+             fof(inner_selected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("child.ax"),
+            "include('grand.ax',[inner_selected]).\n",
+        )
+        .unwrap();
+        let path = dir.join("main.p");
+        std::fs::write(&path, "include('child.ax',[outer_selected]).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains("outer_selected"));
+        assert!(!error.message().contains("inner_selected"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn include_selector_discards_owner_but_preserves_thf_wrapper_dialect() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        let dir = temp_path("include-selector-discarded-thf-dialect-dir");
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("inc.ax"),
+            "thf(bool_type,type,b:$o).\nthf(discarded,axiom,b).\n",
+        )
+        .unwrap();
+        let path = dir.join("main.p");
+        std::fs::write(&path, "include('inc.ax',[]).\n").unwrap();
+
+        let mut scanner = Scanner::from_file(&path, false).unwrap();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut formulas = FormulaSet::new();
+        let mut watchlist = ClauseSet::new();
+        let parsed = super::parse_clause_scanner_into_formula_set_with_options(
+            &mut scanner,
+            IoFormat::Tstp,
+            FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+            ClauseParseOptions::default(),
+            &mut bank,
+            &mut formulas,
+            &mut watchlist,
+        )
+        .unwrap();
+
+        assert!(!parsed.input_owner_seen);
+        assert_eq!(parsed.problem_type, ProblemType::HigherOrder);
+        assert!(formulas.is_empty());
+        assert!(watchlist.is_empty());
+        assert!(bank.signature().typed_symbols());
+        std::fs::remove_dir_all(&dir).unwrap();
+        reset_problem_type();
     }
 
     #[test]

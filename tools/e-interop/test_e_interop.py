@@ -629,6 +629,10 @@ class ComparisonTests(unittest.TestCase):
                     ["--tstp-in", "--silent", "main.p"],
                 ),
                 (
+                    "eground/nested-selected-include",
+                    ["--tstp-in", "--silent", "main.p"],
+                ),
+                (
                     "eground/verbose-conjecture-progress",
                     ["--tstp-in", "--verbose=1", "--silent", "--suppress-result"],
                 ),
@@ -1186,6 +1190,21 @@ class ComparisonTests(unittest.TestCase):
                     "fof(selected,axiom,p(a)).\n"
                     "fof(skipped,axiom,q(a)).\n"
                 ),
+            },
+        )
+        eground_nested_include_case = cases_by_name[
+            "eground/nested-selected-include"
+        ]
+        self.assertTrue(eground_nested_include_case["isolated_workdir"])
+        self.assertEqual(
+            eground_nested_include_case["workdir_files"],
+            {
+                "main.p": "include('child.p',[selected]).\n",
+                "child.p": (
+                    "include('grand.p').\n"
+                    "fof(unselected,axiom,q(a)).\n"
+                ),
+                "grand.p": "fof(selected,axiom,p(a)).\n",
             },
         )
         eground_verbose_case = cases_by_name["eground/verbose-conjecture-progress"]
