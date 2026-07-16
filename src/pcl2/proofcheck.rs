@@ -417,8 +417,8 @@ pub fn run_prover_invocation_with_output(
 
 /// Initial C `PCLStepCheck` port.
 ///
-/// `NoProver` and `Setheo` remain unchecked because the C proof checker has no
-/// implemented external verifier for those variants.
+/// `NoProver` remains an unchecked Rust adapter. C accepts `Setheo` but its
+/// release switch falls through the assertion-only default to `CheckFail`.
 ///
 /// # Errors
 ///
@@ -486,6 +486,9 @@ fn step_check_with_runner(
     let Some(problem) = generate(protocol, step_id)? else {
         return Ok(PclCheckType::ByAssumption);
     };
+    if prover == ProverType::Setheo {
+        return Ok(PclCheckType::Fail);
+    }
     let Some(invocation) = prover_invocation_for_problem(
         prover,
         executable,
@@ -1458,6 +1461,25 @@ mod tests {
     }
 
     #[test]
+    fn run_prover_invocation_reports_temp_name_creation_failure() {
+        let _guard = temp_file_test_lock();
+        let missing =
+            target_dir().join(format!("proofcheck-missing-tmpdir-{}", std::process::id()));
+        _ = fs::remove_file(&missing);
+        _ = fs::remove_dir(&missing);
+        let _tmpdir = set_tmpdir(&missing);
+
+        let error = run_prover_invocation(&shell_marker_invocation())
+            .expect_err("missing TMPDIR is reported before prover execution");
+
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with("Could not create valid temporary file name "));
+        assert!(error.message().contains("(check $TMPDIR):"));
+    }
+
+    #[test]
     fn run_prover_invocation_with_output_traces_and_dumps_failed_problem() {
         let _guard = temp_file_test_lock();
         fs::create_dir_all(target_dir()).unwrap();
@@ -1685,6 +1707,10 @@ mod tests {
             )
             .unwrap(),
             PclCheckType::NotImplemented
+        );
+        assert_eq!(
+            step_check(&mut protocol, &parse_id("2"), ProverType::Setheo, None, 10).unwrap(),
+            PclCheckType::Fail
         );
 
         let summary = protocol_check(&mut protocol, ProverType::NoProver, None, 10).unwrap();

@@ -129,6 +129,24 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(glibc),
         )
 
+    def test_checkproof_temp_normalization_is_trace_line_scoped(self):
+        linux = (
+            "% Running eprover --cpu-limit=10 /tmp/epr_A1b2C3\n"
+            "%> marker /tmp/epr_A1b2C3\n"
+            "unrelated /tmp/epr_A1b2C3\n"
+        )
+        windows = (
+            "% Running eprover --cpu-limit=10 C:\\Temp\\epr_d4E5f6\n"
+            "%> marker C:\\Temp\\epr_d4E5f6\n"
+            "unrelated /tmp/epr_A1b2C3\n"
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(linux),
+            e_interop.normalize_output(windows),
+        )
+        self.assertIn("unrelated /tmp/epr_A1b2C3", e_interop.normalize_output(linux))
+
     def test_normalization_sorts_only_saturation_blocks(self):
         saturation_a = (
             "% SZS output start Saturation\n"
@@ -351,6 +369,54 @@ class ComparisonTests(unittest.TestCase):
                 ("checkproof/help", ["--help"]),
                 ("checkproof/version", ["--version"]),
                 ("checkproof/assumption-only", []),
+                (
+                    "checkproof/setheo-release-failure",
+                    ["--prover-type=scheme-setheo"],
+                ),
+                (
+                    "checkproof/real-e-success",
+                    ['--executable="{companion:eprover}"'],
+                ),
+                (
+                    "checkproof/real-e-failure",
+                    ['--executable="{companion:eprover}"'],
+                ),
+                (
+                    "checkproof/e-shell-success",
+                    ["--output-level=3", "--executable=echo % Proof found!"],
+                ),
+                (
+                    "checkproof/e-shell-failure",
+                    ["--output-level=3", "--executable=echo NO-PROOF"],
+                ),
+                (
+                    "checkproof/otter-shell-failure",
+                    ["--prover-type=Otter", "--executable=echo NO-PROOF"],
+                ),
+                (
+                    "checkproof/otter-shell-success",
+                    [
+                        "--prover-type=Otter",
+                        "--executable=echo -------- PROOF --------",
+                    ],
+                ),
+                (
+                    "checkproof/spass-shell-failure",
+                    ["--prover-type=SPASS", "--executable=echo NO-PROOF"],
+                ),
+                (
+                    "checkproof/spass-shell-success",
+                    ["--prover-type=SPASS", "--executable=echo Proof found."],
+                ),
+                (
+                    "checkproof/fof-warning-setheo",
+                    ["--prover-type=scheme-setheo"],
+                ),
+                ("checkproof/shell-step-rejection", []),
+                (
+                    "checkproof/missing-input",
+                    ["missing-checkproof-input.pcl"],
+                ),
                 ("classify_problem/help", ["--help"]),
                 ("classify_problem/version", ["--version"]),
                 ("classify_problem/parse-features-standard", ["--parse-features"]),
@@ -548,6 +614,49 @@ class ComparisonTests(unittest.TestCase):
         )
         checkproof_case = cases_by_name["checkproof/assumption-only"]
         self.assertEqual(checkproof_case["stdin"], "1 : : [++p(a)] : initial\n")
+        checkproof_setheo_case = cases_by_name[
+            "checkproof/setheo-release-failure"
+        ]
+        self.assertIn("3 : : [++r(a)] : split(2)", checkproof_setheo_case["stdin"])
+        checkproof_success_case = cases_by_name["checkproof/e-shell-success"]
+        self.assertIn("[++p(X),--q(f(X))]", checkproof_success_case["stdin"])
+        self.assertEqual(
+            checkproof_success_case["arguments"],
+            ["--output-level=3", "--executable=echo % Proof found!"],
+        )
+        checkproof_real_e_case = cases_by_name["checkproof/real-e-success"]
+        self.assertEqual(
+            checkproof_real_e_case["arguments"],
+            ['--executable="{companion:eprover}"'],
+        )
+        self.assertIn("2 : : [++p(a)] : 1", checkproof_real_e_case["stdin"])
+        self.assertEqual(
+            cases_by_name["checkproof/otter-shell-failure"]["arguments"],
+            ["--prover-type=Otter", "--executable=echo NO-PROOF"],
+        )
+        self.assertEqual(
+            cases_by_name["checkproof/otter-shell-success"]["arguments"],
+            [
+                "--prover-type=Otter",
+                "--executable=echo -------- PROOF --------",
+            ],
+        )
+        self.assertEqual(
+            cases_by_name["checkproof/spass-shell-failure"]["arguments"],
+            ["--prover-type=SPASS", "--executable=echo NO-PROOF"],
+        )
+        self.assertEqual(
+            cases_by_name["checkproof/spass-shell-success"]["arguments"],
+            ["--prover-type=SPASS", "--executable=echo Proof found."],
+        )
+        checkproof_fof_case = cases_by_name["checkproof/fof-warning-setheo"]
+        self.assertIn("1 : : p(a) : initial", checkproof_fof_case["stdin"])
+        checkproof_missing_case = cases_by_name["checkproof/missing-input"]
+        self.assertTrue(checkproof_missing_case["isolated_workdir"])
+        self.assertEqual(
+            checkproof_missing_case["arguments"],
+            ["missing-checkproof-input.pcl"],
+        )
         classify_case = cases_by_name["classify_problem/parse-features-standard"]
         self.assertIn("prob : (1,2,3,4,5,6,7,8,9,10", classify_case["stdin"])
         direct_examples_case = cases_by_name["direct_examples/stdin-basic"]
@@ -788,6 +897,17 @@ class ComparisonTests(unittest.TestCase):
             )
             self.assertEqual(Path(arguments[1]).read_text(encoding="utf-8"), "f(b)\n")
             self.assertEqual(Path(arguments[2]).read_text(encoding="utf-8"), "f(X)=a.\n")
+
+    def test_tool_companion_substitution_preserves_argument_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            companion = Path(tmp) / "eprover"
+            companion.write_bytes(b"binary")
+            arguments = e_interop.substitute_tool_companion_arguments(
+                ['--executable="{companion:eprover}"'],
+                {"eprover": companion},
+            )
+
+        self.assertEqual(arguments, [f'--executable="{companion}"'])
 
     def test_tool_workdir_materialization_and_output_comparison(self):
         case = {

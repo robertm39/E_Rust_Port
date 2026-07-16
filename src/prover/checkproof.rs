@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn scheme_setheo_reports_unimplemented_steps_as_partial() {
+    fn scheme_setheo_matches_release_failure_and_split_unchecked_paths() {
         let _guard = global_state_lock();
         let (status, output, stderr) =
             run_with_stdin(&[PROGRAM_NAME, "-p", "scheme-setheo"], PARTIAL_PROTOCOL);
@@ -659,10 +659,39 @@ mod tests {
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
         assert!(output.contains("% Checked (by assumption)\n\n"));
+        assert!(output.contains("% FAILED\n\n"));
         assert!(output.contains("% Check not implemented, assuming true!\n\n"));
         assert!(output.ends_with(
-            "% Successfully checked 1 of 3 steps (2 unchecked):  Proof partially verified!\n"
+            "% Successfully checked 1 of 3 steps (1 unchecked):  Failed to verify proof!\n"
         ));
+    }
+
+    #[test]
+    fn full_fof_parent_and_target_warnings_route_to_stderr() {
+        let _guard = global_state_lock();
+        let input = "\
+1 : : p(a) : initial
+2 : : [++q(a)] : 1
+3 : : r(a) : 2
+";
+        let (status, output, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "-p", "scheme-setheo"], input);
+
+        assert_eq!(status, 0);
+        assert!(output.contains("% Checking       1 :  : p(a) : initial\n"));
+        assert!(output.contains("% Checked (by assumption)\n\n"));
+        assert!(output.contains("% Checking       3 :  : r(a) : 2\n"));
+        assert!(output.contains("% FAILED\n\n"));
+        assert!(output.ends_with(
+            "% Successfully checked 2 of 3 steps (0 unchecked):  Failed to verify proof!\n"
+        ));
+        assert_eq!(
+            stderr,
+            concat!(
+                "checkproof: Warning: Cannot currently handle full first-order format!\n",
+                "checkproof: Warning: Cannot currently handle full first-order format!\n",
+            )
+        );
     }
 
     #[test]
@@ -678,7 +707,7 @@ mod tests {
         assert!(!output.contains("% Checking"));
         assert_eq!(
             output,
-            "% Successfully checked 1 of 3 steps (2 unchecked):  Proof partially verified!\n"
+            "% Successfully checked 1 of 3 steps (1 unchecked):  Failed to verify proof!\n"
         );
     }
 
@@ -732,7 +761,7 @@ mod tests {
         assert!(stderr.is_empty());
         assert!(output.contains("% Checking       1 :  : [++p(a)] : initial\n"));
         assert!(output.ends_with(
-            "% Successfully checked 1 of 3 steps (2 unchecked):  Proof partially verified!\n"
+            "% Successfully checked 1 of 3 steps (1 unchecked):  Failed to verify proof!\n"
         ));
     }
 

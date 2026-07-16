@@ -62,6 +62,9 @@ EPCLANALYSE_AVERAGE_PREFIXES = (
     "% ...positive literals only",
     "% ...negative literals only",
 )
+PLATFORM_PROOFCHECK_TEMP_RE = re.compile(
+    r"(?:(?:[A-Za-z]:)?[^ \t\r\n<>\"]*[\\/])?epr_[A-Za-z0-9]{6}"
+)
 LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE = re.compile(r"^Accepted [0-9]+$")
 PLATFORM_ERROR_SUFFIXES = {
     "<OS ERROR: NOT FOUND>": (
@@ -79,6 +82,7 @@ PLATFORM_ERROR_SUFFIXES = {
     ),
 }
 FIXTURE_ARGUMENT_RE = re.compile(r"\{fixture:([^}]+)\}")
+COMPANION_ARGUMENT_RE = re.compile(r"\{companion:([^}]+)\}")
 TOOL_CASE_METADATA_KEYS = frozenset(
     {
         "fixture_files",
@@ -331,6 +335,90 @@ TOOL_FUNCTIONAL_CASES = {
             "assumption-only",
             (),
             "1 : : [++p(a)] : initial\n",
+        ),
+        (
+            "setheo-release-failure",
+            ("--prover-type=scheme-setheo",),
+            (
+                "1 : : [++p(a)] : initial\n"
+                "2 : : [++q(a)] : 1\n"
+                "3 : : [++r(a)] : split(2)\n"
+            ),
+        ),
+        (
+            "real-e-success",
+            ('--executable="{companion:eprover}"',),
+            "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
+        ),
+        (
+            "real-e-failure",
+            ('--executable="{companion:eprover}"',),
+            "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
+        ),
+        (
+            "e-shell-success",
+            ("--output-level=3", "--executable=echo % Proof found!"),
+            (
+                "1 : : [++p(X),--q(f(X))] : initial\n"
+                "2 : : [++r(X),--s(X)] : 1\n"
+            ),
+        ),
+        (
+            "e-shell-failure",
+            ("--output-level=3", "--executable=echo NO-PROOF"),
+            (
+                "1 : : [++p(X),--q(f(X))] : initial\n"
+                "2 : : [++r(X),--s(X)] : 1\n"
+            ),
+        ),
+        (
+            "otter-shell-failure",
+            ("--prover-type=Otter", "--executable=echo NO-PROOF"),
+            (
+                "1 : : [++p(X),--q(f(X))] : initial\n"
+                "2 : : [++r(X),--s(X)] : 1\n"
+            ),
+        ),
+        (
+            "otter-shell-success",
+            (
+                "--prover-type=Otter",
+                "--executable=echo -------- PROOF --------",
+            ),
+            "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
+        ),
+        (
+            "spass-shell-failure",
+            ("--prover-type=SPASS", "--executable=echo NO-PROOF"),
+            (
+                "1 : : [++p(X),--q(f(X))] : initial\n"
+                "2 : : [++r(X),--s(X)] : 1\n"
+            ),
+        ),
+        (
+            "spass-shell-success",
+            ("--prover-type=SPASS", "--executable=echo Proof found."),
+            "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
+        ),
+        (
+            "fof-warning-setheo",
+            ("--prover-type=scheme-setheo",),
+            (
+                "1 : : p(a) : initial\n"
+                "2 : : [++q(a)] : 1\n"
+                "3 : : r(a) : 2\n"
+            ),
+        ),
+        (
+            "shell-step-rejection",
+            (),
+            "1 : : : initial\n",
+        ),
+        (
+            "missing-input",
+            ("missing-checkproof-input.pcl",),
+            None,
+            {"isolated_workdir": True},
         ),
     ),
     "classify_problem": (
@@ -1153,6 +1241,8 @@ def normalize_platform_line(line: str) -> str:
         normalized = PLATFORM_TERMPROPS_NAN_RE.sub(r"\g<label><NAN>", normalized)
     if normalized.startswith(EPCLANALYSE_AVERAGE_PREFIXES):
         normalized = PLATFORM_EPCLANALYSE_NAN_RE.sub(r"\g<label> <NAN>", normalized)
+    if normalized.startswith(("% Running ", "%> ")):
+        normalized = PLATFORM_PROOFCHECK_TEMP_RE.sub("<PROOFCHECK_TMP>", normalized)
     if LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE.fullmatch(normalized):
         return "Accepted <DESCRIPTOR>"
     for replacement, suffixes in PLATFORM_ERROR_SUFFIXES.items():
@@ -1852,6 +1942,24 @@ def substitute_tool_fixture_arguments(
     return [FIXTURE_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
 
 
+def substitute_tool_companion_arguments(
+    arguments: Sequence[str],
+    companion_paths: dict[str, Path],
+    *,
+    windows_paths: bool = False,
+) -> list[str]:
+    def replacement(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in companion_paths:
+            raise InteropError(f"Unknown companion placeholder: {name}")
+        path = companion_paths[name]
+        if not path.is_file():
+            raise InteropError(f"Companion binary is missing: {path}")
+        return wslpath(path, windows=True) if windows_paths else str(path)
+
+    return [COMPANION_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
+
+
 def compare_tool_output_files(
     output_files: Sequence[str],
     reference_cwd: Path,
@@ -1989,6 +2097,12 @@ def compare_tools(args: argparse.Namespace) -> None:
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
+    reference_companions = {
+        "eprover": Path(manifest["builds"]["fol"]["binary"]),
+    }
+    candidate_companions = reference_companions if args.self_test else {
+        "eprover": rust_bin_dir / "eprover.exe",
+    }
     cases = tool_comparison_cases(selected)
     for index, case in enumerate(cases, 1):
         tool = case["tool"]
@@ -2027,6 +2141,9 @@ def compare_tools(args: argparse.Namespace) -> None:
             case, run_dir / "fixtures" / f"{index:04d}"
         )
         reference_arguments = substitute_tool_fixture_arguments(case["arguments"], fixture_paths)
+        reference_arguments = substitute_tool_companion_arguments(
+            reference_arguments, reference_companions
+        )
         environment = os.environ.copy()
         reference = execute(
             reference_binary,
@@ -2046,6 +2163,11 @@ def compare_tools(args: argparse.Namespace) -> None:
                 raise InteropError(f"Windows Rust tool executable not found: {candidate_binary}")
         candidate_arguments = substitute_tool_fixture_arguments(
             case["arguments"], fixture_paths, windows_paths=not args.self_test
+        )
+        candidate_arguments = substitute_tool_companion_arguments(
+            candidate_arguments,
+            candidate_companions,
+            windows_paths=not args.self_test,
         )
 
         candidate = execute(
