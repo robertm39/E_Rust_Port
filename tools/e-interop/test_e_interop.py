@@ -620,6 +620,55 @@ class ComparisonTests(unittest.TestCase):
                 ("eground/help", ["--help"]),
                 ("eground/version", ["--version"]),
                 ("eground/lop-basic", ["--lop-in", "--silent"]),
+                (
+                    "eground/tstp-formula-ground",
+                    ["--tstp-format", "--silent"],
+                ),
+                (
+                    "eground/selected-include",
+                    ["--tstp-in", "--silent", "main.p"],
+                ),
+                (
+                    "eground/verbose-conjecture-progress",
+                    ["--tstp-in", "--verbose=1", "--silent", "--suppress-result"],
+                ),
+                (
+                    "eground/dimacs-output-stream-split",
+                    ["--tstp-in", "--dimacs", "-o", "ground.cnf"],
+                ),
+                ("eground/malformed-term", ["--lop-in"]),
+                ("eground/trailing-token", ["--lop-in"]),
+                ("eground/non-ground-infinite-universe", ["--lop-in"]),
+                (
+                    "eground/give-up-estimate",
+                    ["--lop-in", "--silent", "--give-up=1"],
+                ),
+                (
+                    "eground/resource-options-success",
+                    [
+                        "--lop-in",
+                        "--silent",
+                        "--cpu-limit=30",
+                        "--soft-cpu-limit=20",
+                        "--memory-limit=0",
+                    ],
+                ),
+                (
+                    "eground/invalid-hard-after-soft",
+                    ["--soft-cpu-limit=10", "--cpu-limit=10"],
+                ),
+                (
+                    "eground/invalid-soft-after-hard",
+                    ["--cpu-limit=10", "--soft-cpu-limit=10"],
+                ),
+                (
+                    "eground/missing-input",
+                    ["--lop-in", "missing-eground-input.lop"],
+                ),
+                (
+                    "eground/missing-output-parent",
+                    ["--lop-in", "-o", "missing/ground.out"],
+                ),
                 ("ekb_create/help", ["--help"]),
                 ("ekb_create/version", ["--version"]),
                 (
@@ -1125,6 +1174,56 @@ class ComparisonTests(unittest.TestCase):
         )
         eground_case = cases_by_name["eground/lop-basic"]
         self.assertEqual(eground_case["stdin"], "p(a).\n")
+        eground_tstp_case = cases_by_name["eground/tstp-formula-ground"]
+        self.assertEqual(eground_tstp_case["stdin"], "fof(ax,axiom,p(a)).\n")
+        eground_include_case = cases_by_name["eground/selected-include"]
+        self.assertTrue(eground_include_case["isolated_workdir"])
+        self.assertEqual(
+            eground_include_case["workdir_files"],
+            {
+                "main.p": "include('inc.p',[selected]).\n",
+                "inc.p": (
+                    "fof(selected,axiom,p(a)).\n"
+                    "fof(skipped,axiom,q(a)).\n"
+                ),
+            },
+        )
+        eground_verbose_case = cases_by_name["eground/verbose-conjecture-progress"]
+        self.assertEqual(
+            eground_verbose_case["stdin"], "fof(goal,conjecture,p(a)).\n"
+        )
+        eground_dimacs_case = cases_by_name["eground/dimacs-output-stream-split"]
+        self.assertEqual(eground_dimacs_case["output_files"], ["ground.cnf"])
+        eground_malformed_case = cases_by_name["eground/malformed-term"]
+        self.assertEqual(eground_malformed_case["stdin"], "p(f(a).\n")
+        eground_trailing_case = cases_by_name["eground/trailing-token"]
+        self.assertEqual(eground_trailing_case["stdin"], "p(a). ,\n")
+        eground_semantic_case = cases_by_name[
+            "eground/non-ground-infinite-universe"
+        ]
+        self.assertEqual(eground_semantic_case["stdin"], "p(f(X)).\n")
+        eground_give_up_case = cases_by_name["eground/give-up-estimate"]
+        self.assertEqual(
+            eground_give_up_case["stdin"], "p(a).\np(b).\nq(X).\n"
+        )
+        eground_resource_case = cases_by_name["eground/resource-options-success"]
+        self.assertEqual(
+            eground_resource_case["arguments"],
+            [
+                "--lop-in",
+                "--silent",
+                "--cpu-limit=30",
+                "--soft-cpu-limit=20",
+                "--memory-limit=0",
+            ],
+        )
+        eground_missing_input_case = cases_by_name["eground/missing-input"]
+        self.assertTrue(eground_missing_input_case["isolated_workdir"])
+        eground_missing_output_case = cases_by_name["eground/missing-output-parent"]
+        self.assertEqual(
+            eground_missing_output_case["output_absent_files"],
+            ["missing/ground.out"],
+        )
         enormalizer_case = cases_by_name["enormalizer/term-basic"]
         self.assertIsNone(enormalizer_case["stdin"])
         self.assertEqual(

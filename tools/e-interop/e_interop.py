@@ -975,6 +975,84 @@ TOOL_FUNCTIONAL_CASES = {
     ),
     "eground": (
         ("lop-basic", ("--lop-in", "--silent"), "p(a).\n"),
+        (
+            "tstp-formula-ground",
+            ("--tstp-format", "--silent"),
+            "fof(ax,axiom,p(a)).\n",
+        ),
+        (
+            "selected-include",
+            ("--tstp-in", "--silent", "main.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "main.p": "include('inc.p',[selected]).\n",
+                    "inc.p": (
+                        "fof(selected,axiom,p(a)).\n"
+                        "fof(skipped,axiom,q(a)).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "verbose-conjecture-progress",
+            ("--tstp-in", "--verbose=1", "--silent", "--suppress-result"),
+            "fof(goal,conjecture,p(a)).\n",
+        ),
+        (
+            "dimacs-output-stream-split",
+            ("--tstp-in", "--dimacs", "-o", "ground.cnf"),
+            "fof(ax,axiom,(p(a)|q(a))).\n",
+            {
+                "isolated_workdir": True,
+                "output_files": ("ground.cnf",),
+            },
+        ),
+        ("malformed-term", ("--lop-in",), "p(f(a).\n"),
+        ("trailing-token", ("--lop-in",), "p(a). ,\n"),
+        ("non-ground-infinite-universe", ("--lop-in",), "p(f(X)).\n"),
+        (
+            "give-up-estimate",
+            ("--lop-in", "--silent", "--give-up=1"),
+            "p(a).\np(b).\nq(X).\n",
+        ),
+        (
+            "resource-options-success",
+            (
+                "--lop-in",
+                "--silent",
+                "--cpu-limit=30",
+                "--soft-cpu-limit=20",
+                "--memory-limit=0",
+            ),
+            "p(a).\n",
+        ),
+        (
+            "invalid-hard-after-soft",
+            ("--soft-cpu-limit=10", "--cpu-limit=10"),
+            "p(a).\n",
+        ),
+        (
+            "invalid-soft-after-hard",
+            ("--cpu-limit=10", "--soft-cpu-limit=10"),
+            "p(a).\n",
+        ),
+        (
+            "missing-input",
+            ("--lop-in", "missing-eground-input.lop"),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-output-parent",
+            ("--lop-in", "-o", "missing/ground.out"),
+            "p(a).\n",
+            {
+                "isolated_workdir": True,
+                "output_absent_files": ("missing/ground.out",),
+            },
+        ),
     ),
     "enormalizer": (
         (

@@ -2,9 +2,12 @@ use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
+    RLimResult,
 };
 use crate::basics::simple_stuff::{reset_problem_type, ProblemType};
-use crate::basics::verbose::set_verbose_level;
+use crate::basics::verbose::{
+    set_verbose_level, verbose_level, verbout, verbout_arg, verbout_arg2,
+};
 use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_remove_superfluous_literals;
 use crate::clauses::clausesets::ClauseSet;
@@ -492,14 +495,18 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    match process_options(argv, stdout)? {
+    match process_options(argv, stdout, stderr)? {
         RunCommand::Exit(status) => Ok(status),
         RunCommand::Execute(config) => execute_eground(&config, stdin, stdout, stderr),
     }
 }
 
 #[allow(clippy::too_many_lines)]
-fn process_options<I, S>(argv: I, stdout: &mut impl Write) -> Result<RunCommand, Diagnostic>
+fn process_options<I, S>(
+    argv: I,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<RunCommand, Diagnostic>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -520,6 +527,7 @@ where
             }
             OptionCode::Verbose => {
                 config.verbose_level = get_int_arg(parsed.option(), arg)?;
+                set_verbose_level(i64_to_i32_saturating(config.verbose_level));
             }
             OptionCode::Output => config.output_file = Some(PathBuf::from(arg)),
             OptionCode::Silent => config.output_level = 0,
@@ -562,7 +570,7 @@ where
             OptionCode::DisableUnitResolution => config.unit_resolution = false,
             OptionCode::DisableTautologyDetection => config.tautology_detection = false,
             OptionCode::MemoryLimit => {
-                config.memory_limit = parse_memory_limit(parsed.option(), parsed.arg())?;
+                config.memory_limit = parse_memory_limit(parsed.option(), parsed.arg(), stderr)?;
             }
             OptionCode::CpuLimit => {
                 let limit = get_int_arg(parsed.option(), arg)?;
@@ -602,15 +610,16 @@ fn execute_eground(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<u8, Diagnostic> {
-    apply_resource_config(config);
+    apply_resource_config(config, stderr)?;
     set_verbose_level(i64_to_i32_saturating(config.verbose_level));
     let _ = set_output_level(config.output_level);
 
+    write_output_open_progress(config.output_file.as_deref(), stderr)?;
     let mut output = EgroundOutput::open(config.output_file.as_deref(), stdout)?;
     let mut bank = eground_term_bank()?;
     let mut clauses = ClauseSet::new();
 
-    let parsed_input = parse_input_files(config, stdin, &mut bank, &mut clauses)?;
+    let parsed_input = parse_input_files(config, stdin, stderr, &mut bank, &mut clauses)?;
     let preparation = prepare_clauses_for_grounding(config, stderr, &mut bank, &mut clauses)?;
     let groundset = match create_groundset(
         config,
@@ -652,6 +661,7 @@ fn execute_eground(
     output
         .flush()
         .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
+    write_verbose_progress(stderr, "Closing output\n")?;
     stderr
         .flush()
         .map_err(|error| io_diagnostic(error.to_string()))?;
@@ -679,13 +689,16 @@ struct ParsedEgroundInput {
 fn parse_input_files(
     config: &EgroundConfig,
     stdin: &mut impl Read,
+    stderr: &mut impl Write,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
 ) -> Result<ParsedEgroundInput, Diagnostic> {
     let mut formulas = FormulaSet::new();
-    let parsed_input = parse_input_files_to_formula_set(config, stdin, bank, &mut formulas)?;
-    clausify_input_formulas(
+    let parsed_input =
+        parse_input_files_to_formula_set_with_progress(config, stdin, stderr, bank, &mut formulas)?;
+    clausify_input_formulas_with_progress(
         config,
+        stderr,
         bank,
         &mut formulas,
         clauses,
@@ -694,9 +707,20 @@ fn parse_input_files(
     Ok(parsed_input)
 }
 
+#[cfg(test)]
 fn parse_input_files_to_formula_set(
     config: &EgroundConfig,
     stdin: &mut impl Read,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+) -> Result<ParsedEgroundInput, Diagnostic> {
+    parse_input_files_to_formula_set_with_progress(config, stdin, &mut io::sink(), bank, formulas)
+}
+
+fn parse_input_files_to_formula_set_with_progress(
+    config: &EgroundConfig,
+    stdin: &mut impl Read,
+    stderr: &mut impl Write,
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
 ) -> Result<ParsedEgroundInput, Diagnostic> {
@@ -706,7 +730,11 @@ fn parse_input_files_to_formula_set(
     let clause_parse_options = clause_parse_options(config);
 
     for file in &config.files {
+        write_input_open_progress(file, stderr)?;
         let mut scanner = scanner_for_input(file, stdin)?;
+        if file != "-" {
+            write_verbose_arg_progress(stderr, "Input file is ", file)?;
+        }
         let parsed = parse_clause_scanner_into_formula_set_with_options(
             &mut scanner,
             config.parse_format,
@@ -716,6 +744,7 @@ fn parse_input_files_to_formula_set(
             formulas,
             &mut ignored_watchlist,
         )?;
+        write_verbose_progress(stderr, "Closing input\n")?;
         if config.parse_format == IoFormat::Auto && parsed.detected_format == IoFormat::Tstp {
             output_format = IoFormat::Tstp;
         }
@@ -728,6 +757,7 @@ fn parse_input_files_to_formula_set(
     })
 }
 
+#[cfg(test)]
 fn clausify_input_formulas(
     config: &EgroundConfig,
     bank: &mut TermBank,
@@ -735,12 +765,36 @@ fn clausify_input_formulas(
     clauses: &mut ClauseSet,
     problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
+    clausify_input_formulas_with_progress(
+        config,
+        &mut io::sink(),
+        bank,
+        formulas,
+        clauses,
+        problem_type,
+    )
+}
+
+fn clausify_input_formulas_with_progress(
+    config: &EgroundConfig,
+    stderr: &mut impl Write,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    clauses: &mut ClauseSet,
+    problem_type: ProblemType,
+) -> Result<(), Diagnostic> {
     let mut archive = FormulaSet::new();
-    let _preprocessed = formulas.preproc_conjectures(bank, false, false)?;
+    let preprocessed = formulas.preproc_conjectures(bank, false, false)?;
+    if preprocessed.conjectures_negated != 0 {
+        write_verbose_progress(stderr, "Negated conjectures.\n")?;
+    }
     let fresh_vars = VarBank::new(bank.signature().type_bank());
     let options = FormulaSetCnfOptions::new(EGROUND_CNF_MINISCOPE_LIMIT, true, problem_type)
         .with_def_limit(config.formula_def_limit);
-    let _cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
+    let cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
+    if cnf.clauses_generated != 0 {
+        write_verbose_progress(stderr, "CNFization done\n")?;
+    }
     Ok(())
 }
 
@@ -1026,7 +1080,11 @@ fn proof_doc_output_format(format: IoFormat) -> ProofDocOutputFormat {
     }
 }
 
-fn parse_memory_limit<Code>(option: &OptCell<Code>, arg: Option<&str>) -> Result<u64, Diagnostic> {
+fn parse_memory_limit<Code>(
+    option: &OptCell<Code>,
+    arg: Option<&str>,
+    stderr: &mut impl Write,
+) -> Result<u64, Diagnostic> {
     let arg = arg.unwrap_or("");
     if arg == "Auto" {
         let system_memory = get_system_phys_memory();
@@ -1036,7 +1094,15 @@ fn parse_memory_limit<Code>(option: &OptCell<Code>, arg: Option<&str>) -> Result
                 "Cannot find physical memory automatically. Give explicit value to --memory-limit",
             ));
         }
-        return Ok(memory_limit_bytes_from_mb(auto_memory_mb(system_memory)));
+        let memory_limit = memory_limit_bytes_from_mb(auto_memory_mb(system_memory));
+        if verbose_level() > 0 {
+            writeln_diag(
+                stderr,
+                &format!("Physical memory determined as {system_memory} MB"),
+            )?;
+            writeln_diag(stderr, &format!("Memory limit set to {memory_limit} MB"))?;
+        }
+        return Ok(memory_limit);
     }
     get_int_arg(option, arg).map(memory_limit_bytes_from_mb)
 }
@@ -1046,7 +1112,10 @@ fn auto_memory_mb(system_memory_mb: i64) -> i64 {
     (system_memory_mb as f64 * 0.8) as i64
 }
 
-fn apply_resource_config(config: &EgroundConfig) {
+fn apply_resource_config(
+    config: &EgroundConfig,
+    stderr: &mut impl Write,
+) -> Result<(), Diagnostic> {
     let hard_limit = config
         .hard_cpu_limit
         .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
@@ -1054,7 +1123,67 @@ fn apply_resource_config(config: &EgroundConfig) {
         .soft_cpu_limit
         .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
     configure_time_limits(hard_limit, soft_limit, 0);
-    let _ = set_memory_limit(config.memory_limit);
+    for warning in memory_limit_warnings(set_memory_limit(config.memory_limit)) {
+        write_all(stderr, warning.render_warning(PROGRAM_NAME).as_bytes())?;
+    }
+    Ok(())
+}
+
+fn memory_limit_warnings(result: RLimResult) -> Vec<Diagnostic> {
+    if result != RLimResult::Reduced {
+        return Vec::new();
+    }
+    ["RLIMIT_DATA", "RLIMIT_AS"]
+        .into_iter()
+        .map(|description| {
+            Diagnostic::new(
+                ErrorCode::SYSTEM_ERROR,
+                format!("Had to reduce limit {description}"),
+            )
+        })
+        .collect()
+}
+
+fn write_output_open_progress(
+    output_file: Option<&Path>,
+    stderr: &mut impl Write,
+) -> Result<(), Diagnostic> {
+    match output_file {
+        Some(path) if path != Path::new("-") => {
+            write_verbose_arg_progress(stderr, "Output file is ", &path.display().to_string())
+        }
+        _ => write_verbose_progress(stderr, "Output is going to <stdout>\n"),
+    }
+}
+
+fn write_input_open_progress(file: &str, stderr: &mut impl Write) -> Result<(), Diagnostic> {
+    if file == "-" {
+        write_verbose_progress(stderr, "Input is coming from <stdin>\n")
+    } else {
+        verbout_arg2(stderr, PROGRAM_NAME, "Trying file ", file)
+            .map(|_| ())
+            .map_err(verbose_io_diagnostic)
+    }
+}
+
+fn write_verbose_progress(stderr: &mut impl Write, message: &str) -> Result<(), Diagnostic> {
+    verbout(stderr, PROGRAM_NAME, message)
+        .map(|_| ())
+        .map_err(verbose_io_diagnostic)
+}
+
+fn write_verbose_arg_progress(
+    stderr: &mut impl Write,
+    first: &str,
+    second: &str,
+) -> Result<(), Diagnostic> {
+    verbout_arg(stderr, PROGRAM_NAME, first, second)
+        .map(|_| ())
+        .map_err(verbose_io_diagnostic)
+}
+
+fn verbose_io_diagnostic(error: io::Error) -> Diagnostic {
+    io_diagnostic(format!("Cannot write verbose output: {error}"))
 }
 
 #[allow(clippy::cast_sign_loss)]
@@ -1186,12 +1315,15 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_parse_options, clausify_input_formulas, eground_term_bank,
-        parse_input_files_to_formula_set, process_options, run, EgroundConfig, RunCommand,
-        DEFAULT_COMCHAR_RAW, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        auto_memory_mb, clause_parse_options, clausify_input_formulas, eground_term_bank,
+        memory_limit_bytes_from_mb, memory_limit_warnings, parse_input_files_to_formula_set,
+        process_options, run, EgroundConfig, RunCommand, DEFAULT_COMCHAR_RAW, OUTPUT_CLOSE_ERROR,
+        PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::os_wrapper::{get_system_phys_memory, RLimResult};
     use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::verbose::set_verbose_level;
     use crate::clauses::clause::ClauseParseOptions;
     use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::clausesets::ClauseSet;
@@ -1221,25 +1353,30 @@ mod tests {
     #[test]
     fn help_and_version_are_c_shaped() {
         let mut stdout = Vec::new();
-        let command = process_options([PROGRAM_NAME, "--help"], &mut stdout).unwrap();
+        let mut stderr = Vec::new();
+        let command = process_options([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).unwrap();
 
         assert!(matches!(command, RunCommand::Exit(0)));
         let help = String::from_utf8(stdout).unwrap();
         assert!(help.contains(&format!("{PROGRAM_NAME} {VERSION}")));
         assert!(help.contains("Usage: eground [options] [files]"));
+        assert!(stderr.is_empty());
 
         let mut version = Vec::new();
-        let command = process_options([PROGRAM_NAME, "--version"], &mut version).unwrap();
+        let command =
+            process_options([PROGRAM_NAME, "--version"], &mut version, &mut stderr).unwrap();
         assert!(matches!(command, RunCommand::Exit(0)));
         assert_eq!(
             String::from_utf8(version).unwrap(),
             format!("{PROGRAM_NAME} {VERSION}\n")
         );
+        assert!(stderr.is_empty());
     }
 
     #[test]
     fn option_parsing_preserves_defaults_and_aliases() {
         let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
         let command = process_options(
             [
                 PROGRAM_NAME,
@@ -1260,6 +1397,7 @@ mod tests {
                 "--miniscope-limit",
             ],
             &mut stdout,
+            &mut stderr,
         )
         .unwrap();
 
@@ -1294,6 +1432,8 @@ mod tests {
                 files: vec!["-".to_owned()],
             }
         );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -1315,8 +1455,146 @@ mod tests {
 
     #[test]
     fn split_tries_rejects_negative_values() {
-        let err = process_options([PROGRAM_NAME, "--split-tries=-1"], &mut Vec::new()).unwrap_err();
+        let err = process_options(
+            [PROGRAM_NAME, "--split-tries=-1"],
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn malformed_term_preserves_exact_scanner_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stdin: &[u8] = b"p(f(a).\n";
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, "--lop-in"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("malformed term is rejected");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(
+            error.message(),
+            "-:1:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn verbose_conjecture_run_preserves_c_lifecycle_message_order() {
+        let _guard = global_state_lock();
+        let mut stdin: &[u8] = b"fof(goal,conjecture,p(a)).\n";
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--verbose=1",
+                "--silent",
+                "--suppress-result",
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("verbose conjecture run succeeds");
+
+        assert_eq!(status, 0);
+        assert_eq!(String::from_utf8(stdout).unwrap(), "% Success!\n");
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "eground: Output is going to <stdout>\n\
+             eground: Input is coming from <stdin>\n\
+             eground: Closing input\n\
+             eground: Negated conjectures.\n\
+             eground: CNFization done\n\
+             eground: Closing output\n"
+        );
+    }
+
+    #[test]
+    fn verbose_auto_memory_preserves_c_value_and_unit_text() {
+        let _guard = global_state_lock();
+        let system_memory = get_system_phys_memory();
+        if system_memory == -1 {
+            return;
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let command = process_options(
+            [PROGRAM_NAME, "--verbose=1", "--memory-limit=Auto"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("verbose auto memory parses");
+
+        let RunCommand::Execute(config) = command else {
+            panic!("expected execute command");
+        };
+        let expected_limit = memory_limit_bytes_from_mb(auto_memory_mb(system_memory));
+        assert_eq!(config.memory_limit, expected_limit);
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!(
+                "Physical memory determined as {system_memory} MB\n\
+                 Memory limit set to {expected_limit} MB\n"
+            )
+        );
+        assert!(stdout.is_empty());
+        set_verbose_level(0);
+    }
+
+    #[test]
+    fn resource_validation_and_memory_reduction_preserve_c_messages() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = process_options(
+            [PROGRAM_NAME, "--soft-cpu-limit=10", "--cpu-limit=10"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("hard limit must exceed soft limit");
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Hard time limit has to be larger than softtime limit"
+        );
+
+        let error = process_options(
+            [PROGRAM_NAME, "--cpu-limit=10", "--soft-cpu-limit=10"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("soft limit must be below hard limit");
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Soft time limit has to be smaller than hardtime limit"
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        assert!(memory_limit_warnings(RLimResult::Success).is_empty());
+        assert!(memory_limit_warnings(RLimResult::Failed).is_empty());
+        assert_eq!(
+            memory_limit_warnings(RLimResult::Reduced)
+                .iter()
+                .map(|warning| warning.render_warning(PROGRAM_NAME))
+                .collect::<String>(),
+            "eground: Warning: Had to reduce limit RLIMIT_DATA\n\
+             eground: Warning: Had to reduce limit RLIMIT_AS\n"
+        );
     }
 
     #[test]
@@ -1615,19 +1893,13 @@ mod tests {
         assert!(stderr.is_empty());
 
         let stdout = String::from_utf8(stdout).unwrap();
-        assert!(stdout.starts_with("  "));
-        assert!(!stdout.contains('\n'));
-        assert_eq!(stdout.split_whitespace().count(), 2);
-        assert!(!stdout.split_whitespace().any(|token| token == "0"));
+        assert_eq!(stdout, "  4  6");
 
         let output = fs::read_to_string(&output_path).unwrap();
-        let mut lines = output.lines();
-        assert_eq!(lines.next(), Some(DEFAULT_COMCHAR_RAW));
-        assert!(lines.next().is_some_and(|line| line.starts_with("p cnf ")));
-        assert_eq!(lines.next(), Some(" 0"));
-        let completion = format!("{DEFAULT_COMCHAR_RAW} Full and complete proof state written!");
-        assert_eq!(lines.next(), Some(completion.as_str()));
-        assert_eq!(lines.next(), None);
+        assert_eq!(
+            output,
+            "%\np cnf 6 1\n 0\n% Full and complete proof state written!\n"
+        );
 
         fs::remove_file(output_path).unwrap();
     }
