@@ -2,6 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProverResult;
 use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+use crate::inout::signals::terminate_process;
 use crate::inout::tempfile::temp_file_remove;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -661,7 +662,12 @@ fn current_sec_time() -> i64 {
 }
 
 fn cleanup_child(child: &mut Child) {
-    let _kill_result = child.kill();
+    // The production structured-spawn path owns the prover process directly.
+    // Do not trust the prover-reported PID here: compatibility wrappers and
+    // tests may emit arbitrary PID text, while Child is the process Rust owns.
+    if !terminate_process(child.id()) {
+        let _kill_result = child.kill();
+    }
     let _wait_result = child.wait();
 }
 

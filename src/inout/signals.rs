@@ -35,6 +35,18 @@ static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
 static SIGNAL_GLOBAL_OUT_FD: AtomicI32 = AtomicI32::new(1);
 
+#[cfg(unix)]
+#[must_use]
+pub fn terminate_process(process_id: u32) -> bool {
+    posix_process_signal::terminate(process_id)
+}
+
+#[cfg(not(unix))]
+#[must_use]
+pub const fn terminate_process(_process_id: u32) -> bool {
+    false
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CpuSoftTimeoutRLimitSequence {
     reset_current: u64,
@@ -412,6 +424,28 @@ const fn cpu_soft_timeout_rlimit_sequence(
     }
 }
 
+// Allowed external shared-library boundary: normal subprocess cleanup uses
+// libc's process-directed signal API to match `EPCtrlCleanup`.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod posix_process_signal {
+    use super::SIGTERM_COMPAT;
+
+    unsafe extern "C" {
+        fn kill(process_id: i32, signal_number: i32) -> i32;
+    }
+
+    pub(super) fn terminate(process_id: u32) -> bool {
+        let Ok(process_id) = i32::try_from(process_id) else {
+            return false;
+        };
+        // SAFETY: kill receives a positive process identifier obtained from
+        // std::process::Child and the POSIX SIGTERM value. It does not borrow
+        // Rust memory and mirrors C `EPCtrlCleanup`'s best-effort call.
+        unsafe { kill(process_id, SIGTERM_COMPAT) == 0 }
+    }
+}
+
 // Allowed external shared-library boundary: POSIX signal registration and
 // signal-time descriptor writes use libc's process-global ABI.
 #[cfg(all(target_os = "linux", not(test)))]
@@ -553,6 +587,11 @@ mod tests {
         assert_eq!(sig_term_caught(), 0);
         assert!(!silent_time_out());
         assert_eq!(signal_global_out_fd(), 1);
+    }
+
+    #[test]
+    fn process_termination_rejects_pid_outside_posix_range() {
+        assert!(!super::terminate_process(u32::MAX));
     }
 
     #[test]

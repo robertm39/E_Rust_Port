@@ -2749,6 +2749,7 @@ mod tests {
         let global = String::from_utf8(global).unwrap();
         assert!(global.contains("% SZS status Theorem for socket.p\n"));
         assert!(global.contains("% Solution found by "));
+        assert!(!global.contains("% socket proof"));
         assert_eq!(String::from_utf8(external).unwrap(), "");
         assert_eq!(String::from_utf8(socket).unwrap(), "% socket proof\n");
     }
