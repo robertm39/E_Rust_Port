@@ -22,6 +22,7 @@ use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -335,10 +336,21 @@ fn execute_tsm_classify(
     admin.set_unmapped_eval(unmapped_eval);
     verbout_diag(stderr, "TSM build\n")?;
 
-    let mut classification_trace = String::new();
-    let successes = tsm_classify_set_write(&mut admin, &ftest_set, &mut classification_trace)
-        .map_err(|error| io_diagnostic(error.to_string()))?;
-    write_all(stdout, classification_trace.as_bytes())?;
+    let successes = {
+        let mut buffered = io::BufWriter::new(&mut *stdout);
+        let (result, write_error) = {
+            let mut output = IoFmtWriter::new(&mut buffered);
+            let result = tsm_classify_set_write(&mut admin, &ftest_set, &mut output);
+            (result, output.take_error())
+        };
+        let finish_result = buffered.into_inner();
+        if let Some(error) = write_error {
+            return Err(io_diagnostic(format!("Cannot write output: {error}")));
+        }
+        finish_result
+            .map_err(|error| io_diagnostic(format!("Cannot write output: {}", error.error())))?;
+        result.map_err(|error| io_diagnostic(error.to_string()))?
+    };
     let nodes = flat_anno_set_size(&ftest_set);
     let percent = success_percent(successes, nodes);
     let summary = format!(
@@ -462,6 +474,39 @@ fn writeln_diag(output: &mut impl Write, line: &str) -> Result<(), Diagnostic> {
 
 fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
+}
+
+struct IoFmtWriter<'a, W: Write + ?Sized> {
+    output: &'a mut W,
+    error: Option<io::Error>,
+}
+
+impl<'a, W: Write + ?Sized> IoFmtWriter<'a, W> {
+    const fn new(output: &'a mut W) -> Self {
+        Self {
+            output,
+            error: None,
+        }
+    }
+
+    fn take_error(&mut self) -> Option<io::Error> {
+        self.error.take()
+    }
+}
+
+impl<W: Write + ?Sized> fmt::Write for IoFmtWriter<'_, W> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self.error.is_some() {
+            return Err(fmt::Error);
+        }
+        match self.output.write_all(text.as_bytes()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.error = Some(error);
+                Err(fmt::Error)
+            }
+        }
+    }
 }
 
 fn tsm_classify_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {

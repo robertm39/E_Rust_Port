@@ -1,8 +1,10 @@
 use crate::basics::ddarrays::{DDArray, DDArrayIndex};
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::numtrees::NumTree;
+use crate::basics::numtrees::{NumTreeEntry, NumTreeKey};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use std::collections::btree_map::{Entry, Iter};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 pub const ANNOTATION_DEFAULT_SIZE: usize = 7;
@@ -14,7 +16,226 @@ pub struct Annotation {
     length: i64,
 }
 
-pub type AnnotationTree = NumTree<Annotation, ()>;
+#[derive(Clone, Debug, PartialEq)]
+enum AnnotationTreeRepr {
+    Empty,
+    One {
+        key: NumTreeKey,
+        entry: NumTreeEntry<Annotation, ()>,
+    },
+    Many {
+        entries: BTreeMap<NumTreeKey, NumTreeEntry<Annotation, ()>>,
+        root_key: NumTreeKey,
+    },
+}
+
+/// Numeric annotation tree with inline storage for the common singleton case.
+///
+/// Learning corpora normally attach one proof annotation to each term. Keeping
+/// that entry inline avoids allocating a full standard-library B-tree leaf for
+/// every parsed term while preserving the C tree's key and recent-root
+/// behavior when multiple annotations are present.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnnotationTree {
+    repr: AnnotationTreeRepr,
+}
+
+impl Default for AnnotationTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AnnotationTree {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            repr: AnnotationTreeRepr::Empty,
+        }
+    }
+
+    #[must_use]
+    pub fn nodes(&self) -> usize {
+        match &self.repr {
+            AnnotationTreeRepr::Empty => 0,
+            AnnotationTreeRepr::One { .. } => 1,
+            AnnotationTreeRepr::Many { entries, .. } => entries.len(),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        matches!(self.repr, AnnotationTreeRepr::Empty)
+    }
+
+    #[must_use]
+    pub const fn root_key(&self) -> Option<NumTreeKey> {
+        match &self.repr {
+            AnnotationTreeRepr::Empty => None,
+            AnnotationTreeRepr::One { key, .. } => Some(*key),
+            AnnotationTreeRepr::Many { root_key, .. } => Some(*root_key),
+        }
+    }
+
+    pub fn store(&mut self, key: NumTreeKey, val1: Annotation, val2: ()) -> bool {
+        match &mut self.repr {
+            AnnotationTreeRepr::Empty => {
+                self.repr = AnnotationTreeRepr::One {
+                    key,
+                    entry: NumTreeEntry { val1, val2 },
+                };
+                true
+            }
+            AnnotationTreeRepr::One {
+                key: stored_key, ..
+            } if *stored_key == key => false,
+            AnnotationTreeRepr::One { .. } => {
+                let old = std::mem::replace(&mut self.repr, AnnotationTreeRepr::Empty);
+                let AnnotationTreeRepr::One {
+                    key: old_key,
+                    entry: old_entry,
+                } = old
+                else {
+                    unreachable!("matched singleton annotation tree")
+                };
+                let mut entries = BTreeMap::new();
+                entries.insert(old_key, old_entry);
+                entries.insert(key, NumTreeEntry { val1, val2 });
+                self.repr = AnnotationTreeRepr::Many {
+                    entries,
+                    root_key: key,
+                };
+                true
+            }
+            AnnotationTreeRepr::Many { entries, root_key } => {
+                *root_key = key;
+                match entries.entry(key) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(NumTreeEntry { val1, val2 });
+                        true
+                    }
+                    Entry::Occupied(_) => false,
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn find(&self, key: NumTreeKey) -> Option<&NumTreeEntry<Annotation, ()>> {
+        match &self.repr {
+            AnnotationTreeRepr::Empty => None,
+            AnnotationTreeRepr::One {
+                key: stored_key,
+                entry,
+            } => (*stored_key == key).then_some(entry),
+            AnnotationTreeRepr::Many { entries, .. } => entries.get(&key),
+        }
+    }
+
+    pub fn find_mut(&mut self, key: NumTreeKey) -> Option<&mut NumTreeEntry<Annotation, ()>> {
+        match &mut self.repr {
+            AnnotationTreeRepr::Empty => None,
+            AnnotationTreeRepr::One {
+                key: stored_key,
+                entry,
+            } => (*stored_key == key).then_some(entry),
+            AnnotationTreeRepr::Many { entries, root_key } => {
+                let found = entries.get_mut(&key);
+                if found.is_some() {
+                    *root_key = key;
+                }
+                found
+            }
+        }
+    }
+
+    pub fn extract_root(&mut self) -> Option<(NumTreeKey, NumTreeEntry<Annotation, ()>)> {
+        let key = self.root_key()?;
+        self.extract_entry(key)
+    }
+
+    pub fn delete_entry(&mut self, key: NumTreeKey) -> bool {
+        self.extract_entry(key).is_some()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (NumTreeKey, &NumTreeEntry<Annotation, ()>)> {
+        AnnotationTreeIter::new(&self.repr)
+    }
+
+    fn extract_entry(
+        &mut self,
+        key: NumTreeKey,
+    ) -> Option<(NumTreeKey, NumTreeEntry<Annotation, ()>)> {
+        match &mut self.repr {
+            AnnotationTreeRepr::Empty => None,
+            AnnotationTreeRepr::One {
+                key: stored_key, ..
+            } if *stored_key != key => None,
+            AnnotationTreeRepr::One { .. } => {
+                let old = std::mem::replace(&mut self.repr, AnnotationTreeRepr::Empty);
+                let AnnotationTreeRepr::One { key, entry } = old else {
+                    unreachable!("matched singleton annotation tree")
+                };
+                Some((key, entry))
+            }
+            AnnotationTreeRepr::Many { entries, root_key } => {
+                let result = entries.remove_entry(&key);
+                if result.is_some() {
+                    match entries.len() {
+                        0 => self.repr = AnnotationTreeRepr::Empty,
+                        1 => {
+                            let (key, entry) = entries
+                                .pop_first()
+                                .expect("one annotation tree entry remains");
+                            self.repr = AnnotationTreeRepr::One { key, entry };
+                        }
+                        _ => {
+                            *root_key = *entries
+                                .first_key_value()
+                                .expect("multi-entry annotation tree is non-empty")
+                                .0;
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+}
+
+struct AnnotationTreeIter<'a> {
+    one: Option<(NumTreeKey, &'a NumTreeEntry<Annotation, ()>)>,
+    many: Option<Iter<'a, NumTreeKey, NumTreeEntry<Annotation, ()>>>,
+}
+
+impl<'a> AnnotationTreeIter<'a> {
+    fn new(repr: &'a AnnotationTreeRepr) -> Self {
+        match repr {
+            AnnotationTreeRepr::Empty => Self {
+                one: None,
+                many: None,
+            },
+            AnnotationTreeRepr::One { key, entry } => Self {
+                one: Some((*key, entry)),
+                many: None,
+            },
+            AnnotationTreeRepr::Many { entries, .. } => Self {
+                one: None,
+                many: Some(entries.iter()),
+            },
+        }
+    }
+}
+
+impl<'a> Iterator for AnnotationTreeIter<'a> {
+    type Item = (NumTreeKey, &'a NumTreeEntry<Annotation, ()>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.one
+            .take()
+            .or_else(|| self.many.as_mut()?.next().map(|(key, entry)| (*key, entry)))
+    }
+}
 
 impl Default for Annotation {
     fn default() -> Self {
@@ -296,7 +517,7 @@ fn dd_index_or_panic(index: i64) -> DDArrayIndex {
 mod tests {
     use super::{
         annotation_list_parse, annotation_list_print_string, annotation_merge, annotation_parse,
-        Annotation, AnnotationTree, ANNOTATION_DEFAULT_SIZE,
+        Annotation, AnnotationTree, AnnotationTreeRepr, ANNOTATION_DEFAULT_SIZE,
     };
     use crate::basics::error::ErrorCode;
     use crate::inout::scanner::Scanner;
@@ -371,6 +592,25 @@ mod tests {
         assert!(error
             .message()
             .contains("Only one annotation for each proof example allowed"));
+    }
+
+    #[test]
+    fn annotation_tree_keeps_singletons_inline_and_compacts_after_deletion() {
+        let mut tree = AnnotationTree::new();
+        assert!(tree.store(1, Annotation::with_key(1), ()));
+        assert!(matches!(tree.repr, AnnotationTreeRepr::One { key: 1, .. }));
+        assert!(!tree.store(1, Annotation::with_key(1), ()));
+
+        assert!(tree.store(2, Annotation::with_key(2), ()));
+        assert!(matches!(tree.repr, AnnotationTreeRepr::Many { .. }));
+        assert_eq!(tree.root_key(), Some(2));
+        assert_eq!(tree.extract_root().map(|(key, _entry)| key), Some(2));
+
+        assert!(matches!(tree.repr, AnnotationTreeRepr::One { key: 1, .. }));
+        assert_eq!(
+            tree.iter().map(|(key, _entry)| key).collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]

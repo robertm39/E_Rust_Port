@@ -116,16 +116,16 @@ pub fn term_parse(
 
     let mut id = DynamicString::new();
     let id_type = term_parse_operator(scanner, &mut id)?;
-    let name = id.view().into_owned();
+    let name = id.view();
     if id_type == FuncSymbType::IdentVar {
         if scanner.test_tok(TokenType::COLON) {
             scanner.accept_tok(TokenType::COLON)?;
             let type_ = sig
                 .type_bank_mut()
                 .parse_type_from_current_problem(scanner)?;
-            return Ok(vars.ext_name_assert_alloc_sort(&name, &type_));
+            return Ok(vars.ext_name_assert_alloc_sort(name.as_ref(), &type_));
         }
-        return Ok(vars.ext_name_assert_alloc(&name));
+        return Ok(vars.ext_name_assert_alloc(name.as_ref()));
     }
 
     let handle = if scanner.test_tok(TokenType::OPEN_BRACKET) {
@@ -135,7 +135,7 @@ pub fn term_parse(
         Term::default_cell_alloc()
     };
     let arity = c_arity(handle.arity())?;
-    let f_code = term_sig_insert(sig, &name, arity, false, id_type);
+    let f_code = term_sig_insert(sig, name.as_ref(), arity, false, id_type);
     if f_code == 0 {
         return Err(Diagnostic::new(
             ErrorCode::SYNTAX_ERROR,

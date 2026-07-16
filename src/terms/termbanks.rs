@@ -2010,7 +2010,7 @@ impl TermBank {
 
         let mut id = DynamicString::new();
         let id_type = term_parse_operator(scanner, &mut id)?;
-        let name = id.view().into_owned();
+        let name = id.view();
         if id_type == FuncSymbType::IdentVar {
             if scanner.test_tok(TokenType::COLON) {
                 scanner.accept_tok(TokenType::COLON)?;
@@ -2018,15 +2018,15 @@ impl TermBank {
                     .sig
                     .type_bank_mut()
                     .parse_type_from_current_problem(scanner)?;
-                return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
+                return Ok(self.vars.ext_name_assert_alloc_sort(name.as_ref(), &type_));
             }
-            return Ok(self.vars.ext_name_assert_alloc(&name));
+            return Ok(self.vars.ext_name_assert_alloc(name.as_ref()));
         }
 
         if scanner.test_tok(TokenType::OPEN_BRACKET) && check_symbol_properties {
             reject_term_bank_distinct_argument_list(&self.sig, id_type)?;
         }
-        let existing_code = self.sig.find_f_code(&name);
+        let existing_code = self.sig.find_f_code(name.as_ref());
         let symbol_type = if existing_code == 0 {
             None
         } else {
@@ -2040,7 +2040,7 @@ impl TermBank {
                 "Term arity is too large for C-compatible signatures",
             )
         })?;
-        let f_code = term_sig_insert(&mut self.sig, &name, arity, false, id_type);
+        let f_code = term_sig_insert(&mut self.sig, name.as_ref(), arity, false, id_type);
         if f_code == 0 {
             return Err(Diagnostic::new(
                 ErrorCode::TYPE_ERROR,
@@ -2066,7 +2066,7 @@ impl TermBank {
 
         let mut id = DynamicString::new();
         let id_type = term_parse_operator(scanner, &mut id)?;
-        let name = id.view().into_owned();
+        let name = id.view();
         if id_type == FuncSymbType::IdentVar {
             if scanner.test_tok(TokenType::COLON) {
                 scanner.accept_tok(TokenType::COLON)?;
@@ -2074,9 +2074,9 @@ impl TermBank {
                     .sig
                     .type_bank_mut()
                     .parse_type_from_current_problem(scanner)?;
-                return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
+                return Ok(self.vars.ext_name_assert_alloc_sort(name.as_ref(), &type_));
             }
-            return Ok(self.vars.ext_name_assert_alloc(&name));
+            return Ok(self.vars.ext_name_assert_alloc(name.as_ref()));
         }
 
         if scanner.test_tok(TokenType::OPEN_BRACKET) && check_distinct_argument_lists {
@@ -2089,7 +2089,7 @@ impl TermBank {
                 "Term arity is too large for C-compatible signatures",
             )
         })?;
-        let f_code = term_sig_insert(&mut self.sig, &name, arity, false, id_type);
+        let f_code = term_sig_insert(&mut self.sig, name.as_ref(), arity, false, id_type);
         if f_code == 0 {
             return Err(Diagnostic::new(
                 ErrorCode::TYPE_ERROR,

@@ -122,11 +122,8 @@ pub fn tsm_classify_set_write(
         } else {
             write!(output, "FAIL ")?;
         }
-        writeln!(
-            output,
-            "{}",
-            admin.index_bank().term_string(term.term(), true)
-        )?;
+        admin.index_bank().write_term(output, term.term(), true)?;
+        writeln!(output)?;
     }
     Ok(result)
 }

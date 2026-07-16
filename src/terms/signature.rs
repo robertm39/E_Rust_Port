@@ -455,8 +455,10 @@ impl Signature {
 
     #[must_use]
     pub fn find_f_code(&self, name: &str) -> FunCode {
-        let raw_name = raw_signature_name(name);
-        self.f_index.get(raw_name.as_str()).copied().unwrap_or(0)
+        let raw_name = name
+            .strip_prefix('\'')
+            .map_or(name, |rest| rest.strip_suffix('\'').unwrap_or(rest));
+        self.f_index.get(raw_name).copied().unwrap_or(0)
     }
 
     #[must_use]
@@ -783,8 +785,18 @@ impl Signature {
         special_id: bool,
         problem_type: ProblemType,
     ) -> FunCode {
+        let known_pos = self.find_f_code(name);
+        if known_pos != 0
+            && (self.func(known_pos).arity == arity || problem_type != ProblemType::FirstOrder)
+        {
+            if special_id {
+                self.set_special(known_pos, true);
+            }
+            return known_pos;
+        }
+
         let (mut raw_name, mut print_name) = split_signature_name(name);
-        let mut pos = self.find_f_code(&raw_name);
+        let mut pos = known_pos;
 
         if pos != 0 && self.func(pos).arity != arity && problem_type == ProblemType::FirstOrder {
             let fixed_name = format!("{name}_ARITYFIX{arity} ");
@@ -1685,10 +1697,6 @@ impl Signature {
     fn external_f_codes(&self) -> impl Iterator<Item = FunCode> + '_ {
         (self.internal_symbols + 1)..=self.f_count
     }
-}
-
-fn raw_signature_name(name: &str) -> String {
-    split_signature_name(name).0
 }
 
 fn diagnostic_to_io(diagnostic: &Diagnostic) -> io::Error {
