@@ -2542,22 +2542,7 @@ pub fn parse_tstp_negated_distinct_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Option<Term>, Diagnostic> {
-    if !scanner.test_tok(TokenType::TILDE_SIGN) {
-        return Ok(None);
-    }
-
-    let mut lookahead = scanner.clone();
-    lookahead.accept_tok(TokenType::TILDE_SIGN)?;
-    if lookahead.test_tok(TokenType::APPLICATION) {
-        lookahead.accept_tok(TokenType::APPLICATION)?;
-    }
-    let mut probe = bank.detached_empty()?;
-    let is_distinct = if lookahead.test_id("$distinct") {
-        true
-    } else {
-        parse_tstp_parenthesized_distinct_formula(&mut lookahead, &mut probe)?.is_some()
-    };
-    if !is_distinct {
+    if !tstp_starts_negated_distinct_formula(scanner) {
         return Ok(None);
     }
 
@@ -2599,8 +2584,7 @@ pub fn parse_tstp_parenthesized_negated_distinct_formula(
     if wrappers == 0 {
         return Ok(None);
     }
-    let mut probe = bank.detached_empty()?;
-    if parse_tstp_negated_distinct_formula(&mut lookahead, &mut probe)?.is_none() {
+    if !tstp_starts_negated_distinct_formula(&lookahead) {
         return Ok(None);
     }
 
@@ -2617,6 +2601,32 @@ pub fn parse_tstp_parenthesized_negated_distinct_formula(
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     }
     Ok(Some(distinct))
+}
+
+fn tstp_starts_negated_distinct_formula(scanner: &Scanner) -> bool {
+    if !scanner.test_tok(TokenType::TILDE_SIGN) {
+        return false;
+    }
+    let mut lookahead = scanner.clone();
+    if lookahead.next_token().is_err() {
+        return false;
+    }
+    if lookahead.test_tok(TokenType::APPLICATION) && lookahead.next_token().is_err() {
+        return false;
+    }
+    lookahead.test_id("$distinct") || tstp_starts_parenthesized_distinct_formula(&lookahead)
+}
+
+fn tstp_starts_parenthesized_distinct_formula(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    let mut wrappers = 0usize;
+    while lookahead.test_tok(TokenType::OPEN_BRACKET) {
+        wrappers = wrappers.saturating_add(1);
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+    wrappers != 0 && lookahead.test_id("$distinct")
 }
 
 /// Parses one or more parenthesized wrappers around a top-level `$distinct`

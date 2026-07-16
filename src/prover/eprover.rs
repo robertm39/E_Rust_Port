@@ -143,6 +143,7 @@ use crate::inout::signals::{
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
+use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
 };
@@ -10860,6 +10861,9 @@ fn should_parse_tstp_app_encode_formula_as_represented_owner(
     scanner: &Scanner,
     bank: &TermBank,
 ) -> bool {
+    if matches!(formula_kind, "fof" | "tff") && tstp_body_is_unambiguous_plain_formula(scanner) {
+        return true;
+    }
     if scanner.test_id("$distinct") {
         return true;
     }
@@ -10919,6 +10923,9 @@ fn tstp_app_encode_fof_body_needs_bridge(scanner: &Scanner, bank: &TermBank) -> 
         return false;
     }
     if tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank) {
+        return false;
+    }
+    if tstp_body_is_unambiguous_plain_formula(scanner) {
         return false;
     }
     if tstp_body_is_represented_formula_owner_supported(scanner, bank) {
@@ -11387,6 +11394,10 @@ fn should_parse_tstp_formula_as_represented_owner(
         return false;
     }
 
+    if matches!(formula_kind, "fof" | "tff") && tstp_body_is_unambiguous_plain_formula(scanner) {
+        return true;
+    }
+
     if scanner.test_id("$distinct")
         || tstp_app_encode_body_is_negated_top_level_distinct(scanner, bank)
         || tstp_app_encode_body_is_parenthesized_negated_top_level_distinct(scanner, bank)
@@ -11412,7 +11423,122 @@ fn tstp_plain_body_is_represented_formula_owner_supported(
     scanner: &Scanner,
     bank: &TermBank,
 ) -> bool {
+    if tstp_body_is_unambiguous_plain_formula(scanner) {
+        return true;
+    }
     tstp_body_is_represented_formula_owner_supported(scanner, bank)
+}
+
+fn tstp_body_is_unambiguous_plain_formula(scanner: &Scanner) -> bool {
+    let mut lookahead = scanner.clone();
+    let Some(mut paren_depth) = skip_unambiguous_formula_prefix(&mut lookahead) else {
+        return false;
+    };
+    if !lookahead.test_tok(func_symb_token()) {
+        return false;
+    }
+    if lookahead.test_tok(TokenType::IDENTIFIER) {
+        let literal = lookahead.current_token().literal();
+        if literal
+            .as_bytes()
+            .first()
+            .is_some_and(|first| first.is_ascii_uppercase() || *first == b'_')
+        {
+            return false;
+        }
+    }
+
+    let mut associative_ops = BTreeMap::new();
+    let mut nonassociative_ops = BTreeSet::new();
+    loop {
+        if paren_depth == 0 && lookahead.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA) {
+            return true;
+        }
+        if lookahead.test_tok(TokenType::FOF_BIN_OP) {
+            if lookahead.test_tok(TokenType::FOF_ASSOC_OP) {
+                if nonassociative_ops.contains(&paren_depth) {
+                    return false;
+                }
+                let op = lookahead.current_token().kind().bits();
+                if associative_ops
+                    .insert(paren_depth, op)
+                    .is_some_and(|previous| previous != op)
+                {
+                    return false;
+                }
+            } else if associative_ops.contains_key(&paren_depth)
+                || !nonassociative_ops.insert(paren_depth)
+            {
+                return false;
+            }
+        }
+        if lookahead.test_tok(
+            TokenType::NO_TOKEN
+                | TokenType::FULLSTOP
+                | TokenType::UNIV_QUANTOR
+                | TokenType::EXIST_QUANTOR
+                | TokenType::TILDE_SIGN
+                | TokenType::APPLICATION
+                | TokenType::LAMBDA_QUANTOR
+                | TokenType::ITE_TOKEN
+                | TokenType::LET_TOKEN
+                | TokenType::OPEN_SQUARE
+                | TokenType::CLOSE_SQUARE
+                | TokenType::COLON,
+        ) {
+            return false;
+        }
+        if lookahead.test_tok(TokenType::OPEN_BRACKET) {
+            paren_depth = paren_depth.saturating_add(1);
+        } else if lookahead.test_tok(TokenType::CLOSE_BRACKET) {
+            let Some(next_depth) = paren_depth.checked_sub(1) else {
+                return true;
+            };
+            paren_depth = next_depth;
+        }
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+}
+
+fn skip_unambiguous_formula_prefix(scanner: &mut Scanner) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    loop {
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            paren_depth = paren_depth.saturating_add(1);
+            scanner.next_token().ok()?;
+        } else if scanner.test_tok(TokenType::TILDE_SIGN) {
+            scanner.next_token().ok()?;
+        } else if scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+            scanner.next_token().ok()?;
+            if !scanner.test_tok(TokenType::OPEN_SQUARE) {
+                return None;
+            }
+            let mut square_depth = 0usize;
+            loop {
+                if scanner.test_tok(TokenType::NO_TOKEN | TokenType::FULLSTOP) {
+                    return None;
+                }
+                if scanner.test_tok(TokenType::OPEN_SQUARE) {
+                    square_depth = square_depth.saturating_add(1);
+                } else if scanner.test_tok(TokenType::CLOSE_SQUARE) {
+                    square_depth = square_depth.checked_sub(1)?;
+                    if square_depth == 0 {
+                        scanner.next_token().ok()?;
+                        break;
+                    }
+                }
+                scanner.next_token().ok()?;
+            }
+            if !scanner.test_tok(TokenType::COLON) {
+                return None;
+            }
+            scanner.next_token().ok()?;
+        } else {
+            return Some(paren_depth);
+        }
+    }
 }
 
 fn tstp_body_contains_token(scanner: &Scanner, token: TokenType) -> bool {
@@ -15730,6 +15856,77 @@ mod tests {
         parse_tstp_formula_clause_into_bank("fof(untyped, axiom, p(a)).", &mut bank);
 
         assert!(!bank.signature().typed_symbols());
+    }
+
+    #[test]
+    fn tstp_plain_formula_route_is_classified_without_a_signature_probe() {
+        let _guard = global_state_lock();
+        for body in [
+            "p)",
+            "p(a))",
+            "p(a, f(b)))",
+            "'quoted predicate'(a))",
+            "p(a) => q(b))",
+            "p(a) => (q(b) => r(c)))",
+            "p(a) & q(b) & r(c))",
+            "(p(a)))",
+            "~p(a))",
+            "(~p(a)))",
+            "![X]:p(X))",
+            "![X]:?[Y]:p(X, Y))",
+        ] {
+            let mut scanner = Scanner::from_user_string(body, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                super::tstp_body_is_unambiguous_plain_formula(&scanner),
+                "plain formula should use the non-probing route: {body}"
+            );
+        }
+        for body in [
+            "P(a))",
+            "p(a) => q(a) => r(a))",
+            "p(a) & q(a) | r(a))",
+            "p(a) & q(a) => r(a))",
+            "p(a) | ![X]:q(X))",
+            "p($ite(q, a, b)))",
+            "p([a]))",
+        ] {
+            let mut scanner = Scanner::from_user_string(body, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(
+                !super::tstp_body_is_unambiguous_plain_formula(&scanner),
+                "ambiguous body should keep the parser-probing route: {body}"
+            );
+        }
+
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        for index in 0..4_096 {
+            bank.signature_mut().insert_id_for_problem(
+                &format!("existing_{index}"),
+                0,
+                false,
+                ProblemType::FirstOrder,
+            );
+        }
+        let symbol_count = bank.signature().f_count();
+        for body in [
+            "fresh_pred(fresh_const))",
+            "~fresh_pred(fresh_const))",
+            "![X]:fresh_pred(X))",
+            "(fresh_pred(fresh_const)))",
+        ] {
+            let mut scanner = Scanner::from_user_string(body, false).unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            assert!(super::should_parse_tstp_formula_as_represented_owner(
+                "fof",
+                &scanner,
+                &bank,
+                CP_TYPE_AXIOM,
+                ProblemType::FirstOrder,
+                super::InputFormulaOwnerHandling::FormulaSetPrint,
+            ));
+        }
+        assert_eq!(bank.signature().f_count(), symbol_count);
     }
 
     #[test]
