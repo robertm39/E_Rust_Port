@@ -52,6 +52,16 @@ PLATFORM_TERMPROPS_NAN_RE = re.compile(
     r"(?P<label>\b(?:ASize|ADepth):\s*)" + PLATFORM_NAN_TOKEN + r"(?=\s)",
     re.IGNORECASE,
 )
+PLATFORM_EPCLANALYSE_NAN_RE = re.compile(
+    r"(?P<label>:)\s*" + PLATFORM_NAN_TOKEN + r"$",
+    re.IGNORECASE,
+)
+EPCLANALYSE_AVERAGE_PREFIXES = (
+    "% Average number of ",
+    "% ...in ",
+    "% ...positive literals only",
+    "% ...negative literals only",
+)
 LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE = re.compile(r"^Accepted [0-9]+$")
 PLATFORM_ERROR_SUFFIXES = {
     "<OS ERROR: NOT FOUND>": (
@@ -650,6 +660,17 @@ TOOL_FUNCTIONAL_CASES = {
                 "3 : : [] : 2\n"
             ),
         ),
+        (
+            "zero-denominator-safe-boundary",
+            (),
+            "1 : : p(a) : initial\n2 : : [] : 1\n",
+        ),
+        (
+            "missing-input",
+            ("missing-epclanalyse-input.pcl",),
+            None,
+            {"isolated_workdir": True},
+        ),
     ),
     "epclextract": (
         (
@@ -1130,6 +1151,8 @@ def normalize_platform_line(line: str) -> str:
     normalized = PLATFORM_NAN_PERCENT_RE.sub("successes, <NAN> percent", line)
     if normalized.startswith("% Terms: "):
         normalized = PLATFORM_TERMPROPS_NAN_RE.sub(r"\g<label><NAN>", normalized)
+    if normalized.startswith(EPCLANALYSE_AVERAGE_PREFIXES):
+        normalized = PLATFORM_EPCLANALYSE_NAN_RE.sub(r"\g<label> <NAN>", normalized)
     if LEGACY_SERVER_ACCEPTED_DESCRIPTOR_RE.fullmatch(normalized):
         return "Accepted <DESCRIPTOR>"
     for replacement, suffixes in PLATFORM_ERROR_SUFFIXES.items():

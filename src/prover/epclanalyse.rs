@@ -586,6 +586,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_clause_safely_anchors_zero_denominator_representatives() {
+        let _guard = global_state_lock();
+        let input = "1 : : p(a) : initial\n2 : : [] : 1\n";
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME], input);
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(output.matches("    NaN\n").count(), 10);
+        assert_eq!(output.matches("      2 :  : [] : 1").count(), 4);
+        assert!(!output.contains("      1 :  : p(a)"));
+        assert!(output.contains("% Standardweight:      0\n"));
+    }
+
+    #[test]
     fn output_file_receives_protocol_statistics() {
         let _guard = global_state_lock();
         let input_path = temp_path("input");

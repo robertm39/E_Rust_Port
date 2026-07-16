@@ -103,6 +103,32 @@ class OutputParsingTests(unittest.TestCase):
             "% Terms: 0  ASize: <NAN> MSize: 0, ADepth: <NAN> MDepth: 0",
         )
 
+    def test_epclanalyse_nan_normalization_is_average_field_scoped(self):
+        glibc = (
+            "% Average number of literals         :   -nan\n"
+            "% ...in negative clauses             :   -nan\n"
+            "% unrelated metric                   :   -nan\n"
+        )
+        rust = (
+            "% Average number of literals         :    NaN\n"
+            "% ...in negative clauses             :    NaN\n"
+            "% unrelated metric                   :   -nan\n"
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(glibc),
+            e_interop.normalize_output(rust),
+        )
+        legacy_msvcrt = glibc.replace("-nan", "-1.#IND00", 2)
+        self.assertEqual(
+            e_interop.normalize_output(legacy_msvcrt),
+            e_interop.normalize_output(rust),
+        )
+        self.assertIn(
+            "% unrelated metric                   :   -nan",
+            e_interop.normalize_output(glibc),
+        )
+
     def test_normalization_sorts_only_saturation_blocks(self):
         saturation_a = (
             "% SZS output start Saturation\n"
@@ -429,6 +455,11 @@ class ComparisonTests(unittest.TestCase):
                 ("epclanalyse/help", ["--help"]),
                 ("epclanalyse/version", ["--version"]),
                 ("epclanalyse/stdin-basic", []),
+                ("epclanalyse/zero-denominator-safe-boundary", []),
+                (
+                    "epclanalyse/missing-input",
+                    ["missing-epclanalyse-input.pcl"],
+                ),
                 ("epclextract/help", ["--help"]),
                 ("epclextract/version", ["--version"]),
                 ("epclextract/stdin-basic", []),
@@ -667,6 +698,19 @@ class ComparisonTests(unittest.TestCase):
         )
         epclanalyse_case = cases_by_name["epclanalyse/stdin-basic"]
         self.assertIn("[++q(a),--r(X)]", epclanalyse_case["stdin"])
+        epclanalyse_zero_case = cases_by_name[
+            "epclanalyse/zero-denominator-safe-boundary"
+        ]
+        self.assertEqual(
+            epclanalyse_zero_case["stdin"],
+            "1 : : p(a) : initial\n2 : : [] : 1\n",
+        )
+        epclanalyse_missing_case = cases_by_name["epclanalyse/missing-input"]
+        self.assertTrue(epclanalyse_missing_case["isolated_workdir"])
+        self.assertEqual(
+            epclanalyse_missing_case["arguments"],
+            ["missing-epclanalyse-input.pcl"],
+        )
         epclextract_case = cases_by_name["epclextract/stdin-basic"]
         self.assertIn("3 : : [] : 2 : 'final'", epclextract_case["stdin"])
         epclextract_mixed_case = cases_by_name[
