@@ -2251,7 +2251,7 @@ mod tests {
     use crate::control::proc_ctrl::{EPCtrl, MAX_CORES};
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
-    use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::inout::tempfile::{temp_file_remove, temp_file_test_lock};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -2299,6 +2299,121 @@ mod tests {
         assert_eq!(header.category, "LTB.SAT");
         assert_eq!(header.train_dir.as_deref(), Some("/tmp/train/set-01"));
         assert!(scanner.test_id("output"));
+    }
+
+    #[test]
+    fn official_casc28_jjt_batch_spec_parses_all_problem_pairs() {
+        let mut scanner = Scanner::from_user_string(
+            include_str!("../../tests/fixtures/ltb/official/BatchSampleLTBJJT.txt"),
+            true,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let header = parse_ltb_header(&mut scanner).unwrap();
+        let mut notices = Vec::new();
+        let spec = BatchSpec::parse_with_include_output(
+            &mut scanner,
+            "eprover",
+            &header.category,
+            header.train_dir.as_deref(),
+            IoFormat::Tstp,
+            &mut notices,
+        )
+        .unwrap();
+
+        assert_eq!(header.category, "LTB.JJT");
+        assert_eq!(
+            header.train_dir.as_deref(),
+            Some("TrainingData/TrainingData.JJT.tgz")
+        );
+        assert!(!spec.ordered);
+        assert_eq!(spec.res_proof, BatchOutputType::Required);
+        assert_eq!(spec.per_prob_limit, 0);
+        assert_eq!(spec.total_wtc_limit, 450);
+        assert!(spec.includes.is_empty());
+        assert_eq!(
+            spec.source_files,
+            [
+                "Problems/JJT00011*.p",
+                "Problems/JJT00020*.p",
+                "Problems/JJT00024*.p",
+                "Problems/JJT00032*.p",
+                "Problems/JJT00077*.p",
+                "Problems/JJT00085*.p",
+                "Problems/JJT00092*.p",
+                "Problems/JJT00129*.p",
+                "Problems/JJT00130*.p",
+                "Problems/JJT00131*.p",
+            ]
+        );
+        assert_eq!(
+            spec.dest_files,
+            [
+                "JJT00011", "JJT00020", "JJT00024", "JJT00032", "JJT00077", "JJT00085", "JJT00092",
+                "JJT00129", "JJT00130", "JJT00131",
+            ]
+        );
+        assert!(notices.is_empty());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn official_casc_j11_vbt_batch_spec_parses_all_hundred_problem_pairs() {
+        let mut scanner = Scanner::from_user_string(
+            include_str!("../../tests/fixtures/ltb/official/BatchSpec.VBT.txt"),
+            true,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let header = parse_ltb_header(&mut scanner).unwrap();
+        let mut notices = Vec::new();
+        let spec = BatchSpec::parse_with_include_output(
+            &mut scanner,
+            "eprover",
+            &header.category,
+            header.train_dir.as_deref(),
+            IoFormat::Tstp,
+            &mut notices,
+        )
+        .unwrap();
+
+        assert_eq!(header.category, "LTB.VBT");
+        assert_eq!(
+            header.train_dir.as_deref(),
+            Some("TrainingData/TrainingData.VBT.tgz")
+        );
+        assert!(!spec.ordered);
+        assert_eq!(spec.res_proof, BatchOutputType::Required);
+        assert_eq!(spec.per_prob_limit, 0);
+        assert_eq!(spec.total_wtc_limit, 3_000);
+        assert!(spec.includes.is_empty());
+        assert_eq!(spec.problem_no(), 100);
+        assert_eq!(spec.dest_files.len(), 100);
+        for (index, (source, dest)) in spec.source_files.iter().zip(&spec.dest_files).enumerate() {
+            let problem = index + 1;
+            assert_eq!(source, &format!("Problems/VBT{problem:05}*.p"));
+            assert_eq!(dest, &format!("VBT{problem:05}"));
+        }
+        assert!(notices.is_empty());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn official_older_hol_sample_preserves_current_c_training_directory_rejection() {
+        let mut scanner = Scanner::from_user_string(
+            include_str!("../../tests/fixtures/ltb/official/BatchSampleLTBHLL"),
+            true,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let error = parse_ltb_header(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("division.category.training_data"));
+        assert!(error.message().contains("training_directory"));
     }
 
     #[test]

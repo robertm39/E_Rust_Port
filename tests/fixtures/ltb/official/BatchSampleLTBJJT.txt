@@ -1,0 +1,72 @@
+division.category LTB.JJT
+division.category.training_data TrainingData/TrainingData.JJT.tgz
+% SZS start BatchConfiguration
+execution.order unordered
+output.required Proof
+limit.time.problem.wc 0
+limit.time.overall.wc 450
+% SZS end BatchConfiguration
+% SZS start BatchIncludes
+% SZS end BatchIncludes
+% SZS start BatchProblems
+Problems/JJT00011*.p JJT00011
+Problems/JJT00020*.p JJT00020
+Problems/JJT00024*.p JJT00024
+Problems/JJT00032*.p JJT00032
+Problems/JJT00077*.p JJT00077
+Problems/JJT00085*.p JJT00085
+Problems/JJT00092*.p JJT00092
+Problems/JJT00129*.p JJT00129
+Problems/JJT00130*.p JJT00130
+Problems/JJT00131*.p JJT00131
+% SZS end BatchProblems
+% starexec-dependency Problems/JJT00011+1.p
+% starexec-dependency Problems/JJT00011_1.p
+% starexec-dependency Problems/JJT00011_2.p
+% starexec-dependency Problems/JJT00011^1.p
+% starexec-dependency Problems/JJT00011^2.p
+% starexec-dependency Problems/JJT00020+1.p
+% starexec-dependency Problems/JJT00020_1.p
+% starexec-dependency Problems/JJT00020_2.p
+% starexec-dependency Problems/JJT00020^1.p
+% starexec-dependency Problems/JJT00020^2.p
+% starexec-dependency Problems/JJT00024+1.p
+% starexec-dependency Problems/JJT00024_1.p
+% starexec-dependency Problems/JJT00024_2.p
+% starexec-dependency Problems/JJT00024^1.p
+% starexec-dependency Problems/JJT00024^2.p
+% starexec-dependency Problems/JJT00032+1.p
+% starexec-dependency Problems/JJT00032_1.p
+% starexec-dependency Problems/JJT00032_2.p
+% starexec-dependency Problems/JJT00032^1.p
+% starexec-dependency Problems/JJT00032^2.p
+% starexec-dependency Problems/JJT00077+1.p
+% starexec-dependency Problems/JJT00077_1.p
+% starexec-dependency Problems/JJT00077_2.p
+% starexec-dependency Problems/JJT00077^1.p
+% starexec-dependency Problems/JJT00077^2.p
+% starexec-dependency Problems/JJT00085+1.p
+% starexec-dependency Problems/JJT00085_1.p
+% starexec-dependency Problems/JJT00085_2.p
+% starexec-dependency Problems/JJT00085^1.p
+% starexec-dependency Problems/JJT00085^2.p
+% starexec-dependency Problems/JJT00092+1.p
+% starexec-dependency Problems/JJT00092_1.p
+% starexec-dependency Problems/JJT00092_2.p
+% starexec-dependency Problems/JJT00092^1.p
+% starexec-dependency Problems/JJT00092^2.p
+% starexec-dependency Problems/JJT00129+1.p
+% starexec-dependency Problems/JJT00129_1.p
+% starexec-dependency Problems/JJT00129_2.p
+% starexec-dependency Problems/JJT00129^1.p
+% starexec-dependency Problems/JJT00129^2.p
+% starexec-dependency Problems/JJT00130+1.p
+% starexec-dependency Problems/JJT00130_1.p
+% starexec-dependency Problems/JJT00130_2.p
+% starexec-dependency Problems/JJT00130^1.p
+% starexec-dependency Problems/JJT00130^2.p
+% starexec-dependency Problems/JJT00131+1.p
+% starexec-dependency Problems/JJT00131_1.p
+% starexec-dependency Problems/JJT00131_2.p
+% starexec-dependency Problems/JJT00131^1.p
+% starexec-dependency Problems/JJT00131^2.p

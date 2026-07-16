@@ -1,0 +1,712 @@
+division.category LTB.VBT
+division.category.training_data TrainingData/TrainingData.VBT.tgz
+% SZS start BatchConfiguration
+execution.order unordered
+output.required Proof
+limit.time.problem.wc 0
+limit.time.overall.wc 3000
+% SZS end BatchConfiguration
+% SZS start BatchIncludes
+% SZS end BatchIncludes
+% SZS start BatchProblems
+Problems/VBT00001*.p VBT00001
+Problems/VBT00002*.p VBT00002
+Problems/VBT00003*.p VBT00003
+Problems/VBT00004*.p VBT00004
+Problems/VBT00005*.p VBT00005
+Problems/VBT00006*.p VBT00006
+Problems/VBT00007*.p VBT00007
+Problems/VBT00008*.p VBT00008
+Problems/VBT00009*.p VBT00009
+Problems/VBT00010*.p VBT00010
+Problems/VBT00011*.p VBT00011
+Problems/VBT00012*.p VBT00012
+Problems/VBT00013*.p VBT00013
+Problems/VBT00014*.p VBT00014
+Problems/VBT00015*.p VBT00015
+Problems/VBT00016*.p VBT00016
+Problems/VBT00017*.p VBT00017
+Problems/VBT00018*.p VBT00018
+Problems/VBT00019*.p VBT00019
+Problems/VBT00020*.p VBT00020
+Problems/VBT00021*.p VBT00021
+Problems/VBT00022*.p VBT00022
+Problems/VBT00023*.p VBT00023
+Problems/VBT00024*.p VBT00024
+Problems/VBT00025*.p VBT00025
+Problems/VBT00026*.p VBT00026
+Problems/VBT00027*.p VBT00027
+Problems/VBT00028*.p VBT00028
+Problems/VBT00029*.p VBT00029
+Problems/VBT00030*.p VBT00030
+Problems/VBT00031*.p VBT00031
+Problems/VBT00032*.p VBT00032
+Problems/VBT00033*.p VBT00033
+Problems/VBT00034*.p VBT00034
+Problems/VBT00035*.p VBT00035
+Problems/VBT00036*.p VBT00036
+Problems/VBT00037*.p VBT00037
+Problems/VBT00038*.p VBT00038
+Problems/VBT00039*.p VBT00039
+Problems/VBT00040*.p VBT00040
+Problems/VBT00041*.p VBT00041
+Problems/VBT00042*.p VBT00042
+Problems/VBT00043*.p VBT00043
+Problems/VBT00044*.p VBT00044
+Problems/VBT00045*.p VBT00045
+Problems/VBT00046*.p VBT00046
+Problems/VBT00047*.p VBT00047
+Problems/VBT00048*.p VBT00048
+Problems/VBT00049*.p VBT00049
+Problems/VBT00050*.p VBT00050
+Problems/VBT00051*.p VBT00051
+Problems/VBT00052*.p VBT00052
+Problems/VBT00053*.p VBT00053
+Problems/VBT00054*.p VBT00054
+Problems/VBT00055*.p VBT00055
+Problems/VBT00056*.p VBT00056
+Problems/VBT00057*.p VBT00057
+Problems/VBT00058*.p VBT00058
+Problems/VBT00059*.p VBT00059
+Problems/VBT00060*.p VBT00060
+Problems/VBT00061*.p VBT00061
+Problems/VBT00062*.p VBT00062
+Problems/VBT00063*.p VBT00063
+Problems/VBT00064*.p VBT00064
+Problems/VBT00065*.p VBT00065
+Problems/VBT00066*.p VBT00066
+Problems/VBT00067*.p VBT00067
+Problems/VBT00068*.p VBT00068
+Problems/VBT00069*.p VBT00069
+Problems/VBT00070*.p VBT00070
+Problems/VBT00071*.p VBT00071
+Problems/VBT00072*.p VBT00072
+Problems/VBT00073*.p VBT00073
+Problems/VBT00074*.p VBT00074
+Problems/VBT00075*.p VBT00075
+Problems/VBT00076*.p VBT00076
+Problems/VBT00077*.p VBT00077
+Problems/VBT00078*.p VBT00078
+Problems/VBT00079*.p VBT00079
+Problems/VBT00080*.p VBT00080
+Problems/VBT00081*.p VBT00081
+Problems/VBT00082*.p VBT00082
+Problems/VBT00083*.p VBT00083
+Problems/VBT00084*.p VBT00084
+Problems/VBT00085*.p VBT00085
+Problems/VBT00086*.p VBT00086
+Problems/VBT00087*.p VBT00087
+Problems/VBT00088*.p VBT00088
+Problems/VBT00089*.p VBT00089
+Problems/VBT00090*.p VBT00090
+Problems/VBT00091*.p VBT00091
+Problems/VBT00092*.p VBT00092
+Problems/VBT00093*.p VBT00093
+Problems/VBT00094*.p VBT00094
+Problems/VBT00095*.p VBT00095
+Problems/VBT00096*.p VBT00096
+Problems/VBT00097*.p VBT00097
+Problems/VBT00098*.p VBT00098
+Problems/VBT00099*.p VBT00099
+Problems/VBT00100*.p VBT00100
+% SZS end BatchProblems
+% starexec-dependency Problems/VBT00001^1.p
+% starexec-dependency Problems/VBT00001_1.p
+% starexec-dependency Problems/VBT00001^2.p
+% starexec-dependency Problems/VBT00001_2.p
+% starexec-dependency Problems/VBT00001_3.p
+% starexec-dependency Problems/VBT00001_4.p
+% starexec-dependency Problems/VBT00002^1.p
+% starexec-dependency Problems/VBT00002_1.p
+% starexec-dependency Problems/VBT00002^2.p
+% starexec-dependency Problems/VBT00002_2.p
+% starexec-dependency Problems/VBT00002_3.p
+% starexec-dependency Problems/VBT00002_4.p
+% starexec-dependency Problems/VBT00003^1.p
+% starexec-dependency Problems/VBT00003_1.p
+% starexec-dependency Problems/VBT00003^2.p
+% starexec-dependency Problems/VBT00003_2.p
+% starexec-dependency Problems/VBT00003_3.p
+% starexec-dependency Problems/VBT00003_4.p
+% starexec-dependency Problems/VBT00004^1.p
+% starexec-dependency Problems/VBT00004_1.p
+% starexec-dependency Problems/VBT00004^2.p
+% starexec-dependency Problems/VBT00004_2.p
+% starexec-dependency Problems/VBT00004_3.p
+% starexec-dependency Problems/VBT00004_4.p
+% starexec-dependency Problems/VBT00005^1.p
+% starexec-dependency Problems/VBT00005_1.p
+% starexec-dependency Problems/VBT00005^2.p
+% starexec-dependency Problems/VBT00005_2.p
+% starexec-dependency Problems/VBT00005_3.p
+% starexec-dependency Problems/VBT00005_4.p
+% starexec-dependency Problems/VBT00006^1.p
+% starexec-dependency Problems/VBT00006_1.p
+% starexec-dependency Problems/VBT00006^2.p
+% starexec-dependency Problems/VBT00006_2.p
+% starexec-dependency Problems/VBT00006_3.p
+% starexec-dependency Problems/VBT00006_4.p
+% starexec-dependency Problems/VBT00007^1.p
+% starexec-dependency Problems/VBT00007_1.p
+% starexec-dependency Problems/VBT00007^2.p
+% starexec-dependency Problems/VBT00007_2.p
+% starexec-dependency Problems/VBT00007_3.p
+% starexec-dependency Problems/VBT00007_4.p
+% starexec-dependency Problems/VBT00008^1.p
+% starexec-dependency Problems/VBT00008_1.p
+% starexec-dependency Problems/VBT00008^2.p
+% starexec-dependency Problems/VBT00008_2.p
+% starexec-dependency Problems/VBT00008_3.p
+% starexec-dependency Problems/VBT00008_4.p
+% starexec-dependency Problems/VBT00009^1.p
+% starexec-dependency Problems/VBT00009_1.p
+% starexec-dependency Problems/VBT00009^2.p
+% starexec-dependency Problems/VBT00009_2.p
+% starexec-dependency Problems/VBT00009_3.p
+% starexec-dependency Problems/VBT00009_4.p
+% starexec-dependency Problems/VBT00010^1.p
+% starexec-dependency Problems/VBT00010_1.p
+% starexec-dependency Problems/VBT00010^2.p
+% starexec-dependency Problems/VBT00010_2.p
+% starexec-dependency Problems/VBT00010_3.p
+% starexec-dependency Problems/VBT00010_4.p
+% starexec-dependency Problems/VBT00011^1.p
+% starexec-dependency Problems/VBT00011_1.p
+% starexec-dependency Problems/VBT00011^2.p
+% starexec-dependency Problems/VBT00011_2.p
+% starexec-dependency Problems/VBT00011_3.p
+% starexec-dependency Problems/VBT00011_4.p
+% starexec-dependency Problems/VBT00012^1.p
+% starexec-dependency Problems/VBT00012_1.p
+% starexec-dependency Problems/VBT00012^2.p
+% starexec-dependency Problems/VBT00012_2.p
+% starexec-dependency Problems/VBT00012_3.p
+% starexec-dependency Problems/VBT00012_4.p
+% starexec-dependency Problems/VBT00013^1.p
+% starexec-dependency Problems/VBT00013_1.p
+% starexec-dependency Problems/VBT00013^2.p
+% starexec-dependency Problems/VBT00013_2.p
+% starexec-dependency Problems/VBT00013_3.p
+% starexec-dependency Problems/VBT00013_4.p
+% starexec-dependency Problems/VBT00014^1.p
+% starexec-dependency Problems/VBT00014_1.p
+% starexec-dependency Problems/VBT00014^2.p
+% starexec-dependency Problems/VBT00014_2.p
+% starexec-dependency Problems/VBT00014_3.p
+% starexec-dependency Problems/VBT00014_4.p
+% starexec-dependency Problems/VBT00015^1.p
+% starexec-dependency Problems/VBT00015_1.p
+% starexec-dependency Problems/VBT00015^2.p
+% starexec-dependency Problems/VBT00015_2.p
+% starexec-dependency Problems/VBT00015_3.p
+% starexec-dependency Problems/VBT00015_4.p
+% starexec-dependency Problems/VBT00016^1.p
+% starexec-dependency Problems/VBT00016_1.p
+% starexec-dependency Problems/VBT00016^2.p
+% starexec-dependency Problems/VBT00016_2.p
+% starexec-dependency Problems/VBT00016_3.p
+% starexec-dependency Problems/VBT00016_4.p
+% starexec-dependency Problems/VBT00017^1.p
+% starexec-dependency Problems/VBT00017_1.p
+% starexec-dependency Problems/VBT00017^2.p
+% starexec-dependency Problems/VBT00017_2.p
+% starexec-dependency Problems/VBT00017_3.p
+% starexec-dependency Problems/VBT00017_4.p
+% starexec-dependency Problems/VBT00018^1.p
+% starexec-dependency Problems/VBT00018_1.p
+% starexec-dependency Problems/VBT00018^2.p
+% starexec-dependency Problems/VBT00018_2.p
+% starexec-dependency Problems/VBT00018_3.p
+% starexec-dependency Problems/VBT00018_4.p
+% starexec-dependency Problems/VBT00019^1.p
+% starexec-dependency Problems/VBT00019_1.p
+% starexec-dependency Problems/VBT00019^2.p
+% starexec-dependency Problems/VBT00019_2.p
+% starexec-dependency Problems/VBT00019_3.p
+% starexec-dependency Problems/VBT00019_4.p
+% starexec-dependency Problems/VBT00020^1.p
+% starexec-dependency Problems/VBT00020_1.p
+% starexec-dependency Problems/VBT00020^2.p
+% starexec-dependency Problems/VBT00020_2.p
+% starexec-dependency Problems/VBT00020_3.p
+% starexec-dependency Problems/VBT00020_4.p
+% starexec-dependency Problems/VBT00021^1.p
+% starexec-dependency Problems/VBT00021_1.p
+% starexec-dependency Problems/VBT00021^2.p
+% starexec-dependency Problems/VBT00021_2.p
+% starexec-dependency Problems/VBT00021_3.p
+% starexec-dependency Problems/VBT00021_4.p
+% starexec-dependency Problems/VBT00022^1.p
+% starexec-dependency Problems/VBT00022_1.p
+% starexec-dependency Problems/VBT00022^2.p
+% starexec-dependency Problems/VBT00022_2.p
+% starexec-dependency Problems/VBT00022_3.p
+% starexec-dependency Problems/VBT00022_4.p
+% starexec-dependency Problems/VBT00023^1.p
+% starexec-dependency Problems/VBT00023_1.p
+% starexec-dependency Problems/VBT00023^2.p
+% starexec-dependency Problems/VBT00023_2.p
+% starexec-dependency Problems/VBT00023_3.p
+% starexec-dependency Problems/VBT00023_4.p
+% starexec-dependency Problems/VBT00024^1.p
+% starexec-dependency Problems/VBT00024_1.p
+% starexec-dependency Problems/VBT00024^2.p
+% starexec-dependency Problems/VBT00024_2.p
+% starexec-dependency Problems/VBT00024_3.p
+% starexec-dependency Problems/VBT00024_4.p
+% starexec-dependency Problems/VBT00025^1.p
+% starexec-dependency Problems/VBT00025_1.p
+% starexec-dependency Problems/VBT00025^2.p
+% starexec-dependency Problems/VBT00025_2.p
+% starexec-dependency Problems/VBT00025_3.p
+% starexec-dependency Problems/VBT00025_4.p
+% starexec-dependency Problems/VBT00026^1.p
+% starexec-dependency Problems/VBT00026_1.p
+% starexec-dependency Problems/VBT00026^2.p
+% starexec-dependency Problems/VBT00026_2.p
+% starexec-dependency Problems/VBT00026_3.p
+% starexec-dependency Problems/VBT00026_4.p
+% starexec-dependency Problems/VBT00027^1.p
+% starexec-dependency Problems/VBT00027_1.p
+% starexec-dependency Problems/VBT00027^2.p
+% starexec-dependency Problems/VBT00027_2.p
+% starexec-dependency Problems/VBT00027_3.p
+% starexec-dependency Problems/VBT00027_4.p
+% starexec-dependency Problems/VBT00028^1.p
+% starexec-dependency Problems/VBT00028_1.p
+% starexec-dependency Problems/VBT00028^2.p
+% starexec-dependency Problems/VBT00028_2.p
+% starexec-dependency Problems/VBT00028_3.p
+% starexec-dependency Problems/VBT00028_4.p
+% starexec-dependency Problems/VBT00029^1.p
+% starexec-dependency Problems/VBT00029_1.p
+% starexec-dependency Problems/VBT00029^2.p
+% starexec-dependency Problems/VBT00029_2.p
+% starexec-dependency Problems/VBT00029_3.p
+% starexec-dependency Problems/VBT00029_4.p
+% starexec-dependency Problems/VBT00030^1.p
+% starexec-dependency Problems/VBT00030_1.p
+% starexec-dependency Problems/VBT00030^2.p
+% starexec-dependency Problems/VBT00030_2.p
+% starexec-dependency Problems/VBT00030_3.p
+% starexec-dependency Problems/VBT00030_4.p
+% starexec-dependency Problems/VBT00031^1.p
+% starexec-dependency Problems/VBT00031_1.p
+% starexec-dependency Problems/VBT00031^2.p
+% starexec-dependency Problems/VBT00031_2.p
+% starexec-dependency Problems/VBT00031_3.p
+% starexec-dependency Problems/VBT00031_4.p
+% starexec-dependency Problems/VBT00032^1.p
+% starexec-dependency Problems/VBT00032_1.p
+% starexec-dependency Problems/VBT00032^2.p
+% starexec-dependency Problems/VBT00032_2.p
+% starexec-dependency Problems/VBT00032_3.p
+% starexec-dependency Problems/VBT00032_4.p
+% starexec-dependency Problems/VBT00033^1.p
+% starexec-dependency Problems/VBT00033_1.p
+% starexec-dependency Problems/VBT00033^2.p
+% starexec-dependency Problems/VBT00033_2.p
+% starexec-dependency Problems/VBT00033_3.p
+% starexec-dependency Problems/VBT00033_4.p
+% starexec-dependency Problems/VBT00034^1.p
+% starexec-dependency Problems/VBT00034_1.p
+% starexec-dependency Problems/VBT00034^2.p
+% starexec-dependency Problems/VBT00034_2.p
+% starexec-dependency Problems/VBT00034_3.p
+% starexec-dependency Problems/VBT00034_4.p
+% starexec-dependency Problems/VBT00035^1.p
+% starexec-dependency Problems/VBT00035_1.p
+% starexec-dependency Problems/VBT00035^2.p
+% starexec-dependency Problems/VBT00035_2.p
+% starexec-dependency Problems/VBT00035_3.p
+% starexec-dependency Problems/VBT00035_4.p
+% starexec-dependency Problems/VBT00036^1.p
+% starexec-dependency Problems/VBT00036_1.p
+% starexec-dependency Problems/VBT00036^2.p
+% starexec-dependency Problems/VBT00036_2.p
+% starexec-dependency Problems/VBT00036_3.p
+% starexec-dependency Problems/VBT00036_4.p
+% starexec-dependency Problems/VBT00037^1.p
+% starexec-dependency Problems/VBT00037_1.p
+% starexec-dependency Problems/VBT00037^2.p
+% starexec-dependency Problems/VBT00037_2.p
+% starexec-dependency Problems/VBT00037_3.p
+% starexec-dependency Problems/VBT00037_4.p
+% starexec-dependency Problems/VBT00038^1.p
+% starexec-dependency Problems/VBT00038_1.p
+% starexec-dependency Problems/VBT00038^2.p
+% starexec-dependency Problems/VBT00038_2.p
+% starexec-dependency Problems/VBT00038_3.p
+% starexec-dependency Problems/VBT00038_4.p
+% starexec-dependency Problems/VBT00039^1.p
+% starexec-dependency Problems/VBT00039_1.p
+% starexec-dependency Problems/VBT00039^2.p
+% starexec-dependency Problems/VBT00039_2.p
+% starexec-dependency Problems/VBT00039_3.p
+% starexec-dependency Problems/VBT00039_4.p
+% starexec-dependency Problems/VBT00040^1.p
+% starexec-dependency Problems/VBT00040_1.p
+% starexec-dependency Problems/VBT00040^2.p
+% starexec-dependency Problems/VBT00040_2.p
+% starexec-dependency Problems/VBT00040_3.p
+% starexec-dependency Problems/VBT00040_4.p
+% starexec-dependency Problems/VBT00041^1.p
+% starexec-dependency Problems/VBT00041_1.p
+% starexec-dependency Problems/VBT00041^2.p
+% starexec-dependency Problems/VBT00041_2.p
+% starexec-dependency Problems/VBT00041_3.p
+% starexec-dependency Problems/VBT00041_4.p
+% starexec-dependency Problems/VBT00042^1.p
+% starexec-dependency Problems/VBT00042_1.p
+% starexec-dependency Problems/VBT00042^2.p
+% starexec-dependency Problems/VBT00042_2.p
+% starexec-dependency Problems/VBT00042_3.p
+% starexec-dependency Problems/VBT00042_4.p
+% starexec-dependency Problems/VBT00043^1.p
+% starexec-dependency Problems/VBT00043_1.p
+% starexec-dependency Problems/VBT00043^2.p
+% starexec-dependency Problems/VBT00043_2.p
+% starexec-dependency Problems/VBT00043_3.p
+% starexec-dependency Problems/VBT00043_4.p
+% starexec-dependency Problems/VBT00044^1.p
+% starexec-dependency Problems/VBT00044_1.p
+% starexec-dependency Problems/VBT00044^2.p
+% starexec-dependency Problems/VBT00044_2.p
+% starexec-dependency Problems/VBT00044_3.p
+% starexec-dependency Problems/VBT00044_4.p
+% starexec-dependency Problems/VBT00045^1.p
+% starexec-dependency Problems/VBT00045_1.p
+% starexec-dependency Problems/VBT00045^2.p
+% starexec-dependency Problems/VBT00045_2.p
+% starexec-dependency Problems/VBT00045_3.p
+% starexec-dependency Problems/VBT00045_4.p
+% starexec-dependency Problems/VBT00046^1.p
+% starexec-dependency Problems/VBT00046_1.p
+% starexec-dependency Problems/VBT00046^2.p
+% starexec-dependency Problems/VBT00046_2.p
+% starexec-dependency Problems/VBT00046_3.p
+% starexec-dependency Problems/VBT00046_4.p
+% starexec-dependency Problems/VBT00047^1.p
+% starexec-dependency Problems/VBT00047_1.p
+% starexec-dependency Problems/VBT00047^2.p
+% starexec-dependency Problems/VBT00047_2.p
+% starexec-dependency Problems/VBT00047_3.p
+% starexec-dependency Problems/VBT00047_4.p
+% starexec-dependency Problems/VBT00048^1.p
+% starexec-dependency Problems/VBT00048_1.p
+% starexec-dependency Problems/VBT00048^2.p
+% starexec-dependency Problems/VBT00048_2.p
+% starexec-dependency Problems/VBT00048_3.p
+% starexec-dependency Problems/VBT00048_4.p
+% starexec-dependency Problems/VBT00049^1.p
+% starexec-dependency Problems/VBT00049_1.p
+% starexec-dependency Problems/VBT00049^2.p
+% starexec-dependency Problems/VBT00049_2.p
+% starexec-dependency Problems/VBT00049_3.p
+% starexec-dependency Problems/VBT00049_4.p
+% starexec-dependency Problems/VBT00050^1.p
+% starexec-dependency Problems/VBT00050_1.p
+% starexec-dependency Problems/VBT00050^2.p
+% starexec-dependency Problems/VBT00050_2.p
+% starexec-dependency Problems/VBT00050_3.p
+% starexec-dependency Problems/VBT00050_4.p
+% starexec-dependency Problems/VBT00051^1.p
+% starexec-dependency Problems/VBT00051_1.p
+% starexec-dependency Problems/VBT00051^2.p
+% starexec-dependency Problems/VBT00051_2.p
+% starexec-dependency Problems/VBT00051_3.p
+% starexec-dependency Problems/VBT00051_4.p
+% starexec-dependency Problems/VBT00052^1.p
+% starexec-dependency Problems/VBT00052_1.p
+% starexec-dependency Problems/VBT00052^2.p
+% starexec-dependency Problems/VBT00052_2.p
+% starexec-dependency Problems/VBT00052_3.p
+% starexec-dependency Problems/VBT00052_4.p
+% starexec-dependency Problems/VBT00053^1.p
+% starexec-dependency Problems/VBT00053_1.p
+% starexec-dependency Problems/VBT00053^2.p
+% starexec-dependency Problems/VBT00053_2.p
+% starexec-dependency Problems/VBT00053_3.p
+% starexec-dependency Problems/VBT00053_4.p
+% starexec-dependency Problems/VBT00054^1.p
+% starexec-dependency Problems/VBT00054_1.p
+% starexec-dependency Problems/VBT00054^2.p
+% starexec-dependency Problems/VBT00054_2.p
+% starexec-dependency Problems/VBT00054_3.p
+% starexec-dependency Problems/VBT00054_4.p
+% starexec-dependency Problems/VBT00055^1.p
+% starexec-dependency Problems/VBT00055_1.p
+% starexec-dependency Problems/VBT00055^2.p
+% starexec-dependency Problems/VBT00055_2.p
+% starexec-dependency Problems/VBT00055_3.p
+% starexec-dependency Problems/VBT00055_4.p
+% starexec-dependency Problems/VBT00056^1.p
+% starexec-dependency Problems/VBT00056_1.p
+% starexec-dependency Problems/VBT00056^2.p
+% starexec-dependency Problems/VBT00056_2.p
+% starexec-dependency Problems/VBT00056_3.p
+% starexec-dependency Problems/VBT00056_4.p
+% starexec-dependency Problems/VBT00057^1.p
+% starexec-dependency Problems/VBT00057_1.p
+% starexec-dependency Problems/VBT00057^2.p
+% starexec-dependency Problems/VBT00057_2.p
+% starexec-dependency Problems/VBT00057_3.p
+% starexec-dependency Problems/VBT00057_4.p
+% starexec-dependency Problems/VBT00058^1.p
+% starexec-dependency Problems/VBT00058_1.p
+% starexec-dependency Problems/VBT00058^2.p
+% starexec-dependency Problems/VBT00058_2.p
+% starexec-dependency Problems/VBT00058_3.p
+% starexec-dependency Problems/VBT00058_4.p
+% starexec-dependency Problems/VBT00059^1.p
+% starexec-dependency Problems/VBT00059_1.p
+% starexec-dependency Problems/VBT00059^2.p
+% starexec-dependency Problems/VBT00059_2.p
+% starexec-dependency Problems/VBT00059_3.p
+% starexec-dependency Problems/VBT00059_4.p
+% starexec-dependency Problems/VBT00060^1.p
+% starexec-dependency Problems/VBT00060_1.p
+% starexec-dependency Problems/VBT00060^2.p
+% starexec-dependency Problems/VBT00060_2.p
+% starexec-dependency Problems/VBT00060_3.p
+% starexec-dependency Problems/VBT00060_4.p
+% starexec-dependency Problems/VBT00061^1.p
+% starexec-dependency Problems/VBT00061_1.p
+% starexec-dependency Problems/VBT00061^2.p
+% starexec-dependency Problems/VBT00061_2.p
+% starexec-dependency Problems/VBT00061_3.p
+% starexec-dependency Problems/VBT00061_4.p
+% starexec-dependency Problems/VBT00062^1.p
+% starexec-dependency Problems/VBT00062_1.p
+% starexec-dependency Problems/VBT00062^2.p
+% starexec-dependency Problems/VBT00062_2.p
+% starexec-dependency Problems/VBT00062_3.p
+% starexec-dependency Problems/VBT00062_4.p
+% starexec-dependency Problems/VBT00063^1.p
+% starexec-dependency Problems/VBT00063_1.p
+% starexec-dependency Problems/VBT00063^2.p
+% starexec-dependency Problems/VBT00063_2.p
+% starexec-dependency Problems/VBT00063_3.p
+% starexec-dependency Problems/VBT00063_4.p
+% starexec-dependency Problems/VBT00064^1.p
+% starexec-dependency Problems/VBT00064_1.p
+% starexec-dependency Problems/VBT00064^2.p
+% starexec-dependency Problems/VBT00064_2.p
+% starexec-dependency Problems/VBT00064_3.p
+% starexec-dependency Problems/VBT00064_4.p
+% starexec-dependency Problems/VBT00065^1.p
+% starexec-dependency Problems/VBT00065_1.p
+% starexec-dependency Problems/VBT00065^2.p
+% starexec-dependency Problems/VBT00065_2.p
+% starexec-dependency Problems/VBT00065_3.p
+% starexec-dependency Problems/VBT00065_4.p
+% starexec-dependency Problems/VBT00066^1.p
+% starexec-dependency Problems/VBT00066_1.p
+% starexec-dependency Problems/VBT00066^2.p
+% starexec-dependency Problems/VBT00066_2.p
+% starexec-dependency Problems/VBT00066_3.p
+% starexec-dependency Problems/VBT00066_4.p
+% starexec-dependency Problems/VBT00067^1.p
+% starexec-dependency Problems/VBT00067_1.p
+% starexec-dependency Problems/VBT00067^2.p
+% starexec-dependency Problems/VBT00067_2.p
+% starexec-dependency Problems/VBT00067_3.p
+% starexec-dependency Problems/VBT00067_4.p
+% starexec-dependency Problems/VBT00068^1.p
+% starexec-dependency Problems/VBT00068_1.p
+% starexec-dependency Problems/VBT00068^2.p
+% starexec-dependency Problems/VBT00068_2.p
+% starexec-dependency Problems/VBT00068_3.p
+% starexec-dependency Problems/VBT00068_4.p
+% starexec-dependency Problems/VBT00069^1.p
+% starexec-dependency Problems/VBT00069_1.p
+% starexec-dependency Problems/VBT00069^2.p
+% starexec-dependency Problems/VBT00069_2.p
+% starexec-dependency Problems/VBT00069_3.p
+% starexec-dependency Problems/VBT00069_4.p
+% starexec-dependency Problems/VBT00070^1.p
+% starexec-dependency Problems/VBT00070_1.p
+% starexec-dependency Problems/VBT00070^2.p
+% starexec-dependency Problems/VBT00070_2.p
+% starexec-dependency Problems/VBT00070_3.p
+% starexec-dependency Problems/VBT00070_4.p
+% starexec-dependency Problems/VBT00071^1.p
+% starexec-dependency Problems/VBT00071_1.p
+% starexec-dependency Problems/VBT00071^2.p
+% starexec-dependency Problems/VBT00071_2.p
+% starexec-dependency Problems/VBT00071_3.p
+% starexec-dependency Problems/VBT00071_4.p
+% starexec-dependency Problems/VBT00072^1.p
+% starexec-dependency Problems/VBT00072_1.p
+% starexec-dependency Problems/VBT00072^2.p
+% starexec-dependency Problems/VBT00072_2.p
+% starexec-dependency Problems/VBT00072_3.p
+% starexec-dependency Problems/VBT00072_4.p
+% starexec-dependency Problems/VBT00073^1.p
+% starexec-dependency Problems/VBT00073_1.p
+% starexec-dependency Problems/VBT00073^2.p
+% starexec-dependency Problems/VBT00073_2.p
+% starexec-dependency Problems/VBT00073_3.p
+% starexec-dependency Problems/VBT00073_4.p
+% starexec-dependency Problems/VBT00074^1.p
+% starexec-dependency Problems/VBT00074_1.p
+% starexec-dependency Problems/VBT00074^2.p
+% starexec-dependency Problems/VBT00074_2.p
+% starexec-dependency Problems/VBT00074_3.p
+% starexec-dependency Problems/VBT00074_4.p
+% starexec-dependency Problems/VBT00075^1.p
+% starexec-dependency Problems/VBT00075_1.p
+% starexec-dependency Problems/VBT00075^2.p
+% starexec-dependency Problems/VBT00075_2.p
+% starexec-dependency Problems/VBT00075_3.p
+% starexec-dependency Problems/VBT00075_4.p
+% starexec-dependency Problems/VBT00076^1.p
+% starexec-dependency Problems/VBT00076_1.p
+% starexec-dependency Problems/VBT00076^2.p
+% starexec-dependency Problems/VBT00076_2.p
+% starexec-dependency Problems/VBT00076_3.p
+% starexec-dependency Problems/VBT00076_4.p
+% starexec-dependency Problems/VBT00077^1.p
+% starexec-dependency Problems/VBT00077_1.p
+% starexec-dependency Problems/VBT00077^2.p
+% starexec-dependency Problems/VBT00077_2.p
+% starexec-dependency Problems/VBT00077_3.p
+% starexec-dependency Problems/VBT00077_4.p
+% starexec-dependency Problems/VBT00078^1.p
+% starexec-dependency Problems/VBT00078_1.p
+% starexec-dependency Problems/VBT00078^2.p
+% starexec-dependency Problems/VBT00078_2.p
+% starexec-dependency Problems/VBT00078_3.p
+% starexec-dependency Problems/VBT00078_4.p
+% starexec-dependency Problems/VBT00079^1.p
+% starexec-dependency Problems/VBT00079_1.p
+% starexec-dependency Problems/VBT00079^2.p
+% starexec-dependency Problems/VBT00079_2.p
+% starexec-dependency Problems/VBT00079_3.p
+% starexec-dependency Problems/VBT00079_4.p
+% starexec-dependency Problems/VBT00080^1.p
+% starexec-dependency Problems/VBT00080_1.p
+% starexec-dependency Problems/VBT00080^2.p
+% starexec-dependency Problems/VBT00080_2.p
+% starexec-dependency Problems/VBT00080_3.p
+% starexec-dependency Problems/VBT00080_4.p
+% starexec-dependency Problems/VBT00081^1.p
+% starexec-dependency Problems/VBT00081_1.p
+% starexec-dependency Problems/VBT00081^2.p
+% starexec-dependency Problems/VBT00081_2.p
+% starexec-dependency Problems/VBT00081_3.p
+% starexec-dependency Problems/VBT00081_4.p
+% starexec-dependency Problems/VBT00082^1.p
+% starexec-dependency Problems/VBT00082_1.p
+% starexec-dependency Problems/VBT00082^2.p
+% starexec-dependency Problems/VBT00082_2.p
+% starexec-dependency Problems/VBT00082_3.p
+% starexec-dependency Problems/VBT00082_4.p
+% starexec-dependency Problems/VBT00083^1.p
+% starexec-dependency Problems/VBT00083_1.p
+% starexec-dependency Problems/VBT00083^2.p
+% starexec-dependency Problems/VBT00083_2.p
+% starexec-dependency Problems/VBT00083_3.p
+% starexec-dependency Problems/VBT00083_4.p
+% starexec-dependency Problems/VBT00084^1.p
+% starexec-dependency Problems/VBT00084_1.p
+% starexec-dependency Problems/VBT00084^2.p
+% starexec-dependency Problems/VBT00084_2.p
+% starexec-dependency Problems/VBT00084_3.p
+% starexec-dependency Problems/VBT00084_4.p
+% starexec-dependency Problems/VBT00085^1.p
+% starexec-dependency Problems/VBT00085_1.p
+% starexec-dependency Problems/VBT00085^2.p
+% starexec-dependency Problems/VBT00085_2.p
+% starexec-dependency Problems/VBT00085_3.p
+% starexec-dependency Problems/VBT00085_4.p
+% starexec-dependency Problems/VBT00086^1.p
+% starexec-dependency Problems/VBT00086_1.p
+% starexec-dependency Problems/VBT00086^2.p
+% starexec-dependency Problems/VBT00086_2.p
+% starexec-dependency Problems/VBT00086_3.p
+% starexec-dependency Problems/VBT00086_4.p
+% starexec-dependency Problems/VBT00087^1.p
+% starexec-dependency Problems/VBT00087_1.p
+% starexec-dependency Problems/VBT00087^2.p
+% starexec-dependency Problems/VBT00087_2.p
+% starexec-dependency Problems/VBT00087_3.p
+% starexec-dependency Problems/VBT00087_4.p
+% starexec-dependency Problems/VBT00088^1.p
+% starexec-dependency Problems/VBT00088_1.p
+% starexec-dependency Problems/VBT00088^2.p
+% starexec-dependency Problems/VBT00088_2.p
+% starexec-dependency Problems/VBT00088_3.p
+% starexec-dependency Problems/VBT00088_4.p
+% starexec-dependency Problems/VBT00089^1.p
+% starexec-dependency Problems/VBT00089_1.p
+% starexec-dependency Problems/VBT00089^2.p
+% starexec-dependency Problems/VBT00089_2.p
+% starexec-dependency Problems/VBT00089_3.p
+% starexec-dependency Problems/VBT00089_4.p
+% starexec-dependency Problems/VBT00090^1.p
+% starexec-dependency Problems/VBT00090_1.p
+% starexec-dependency Problems/VBT00090^2.p
+% starexec-dependency Problems/VBT00090_2.p
+% starexec-dependency Problems/VBT00090_3.p
+% starexec-dependency Problems/VBT00090_4.p
+% starexec-dependency Problems/VBT00091^1.p
+% starexec-dependency Problems/VBT00091_1.p
+% starexec-dependency Problems/VBT00091^2.p
+% starexec-dependency Problems/VBT00091_2.p
+% starexec-dependency Problems/VBT00091_3.p
+% starexec-dependency Problems/VBT00091_4.p
+% starexec-dependency Problems/VBT00092^1.p
+% starexec-dependency Problems/VBT00092_1.p
+% starexec-dependency Problems/VBT00092^2.p
+% starexec-dependency Problems/VBT00092_2.p
+% starexec-dependency Problems/VBT00092_3.p
+% starexec-dependency Problems/VBT00092_4.p
+% starexec-dependency Problems/VBT00093^1.p
+% starexec-dependency Problems/VBT00093_1.p
+% starexec-dependency Problems/VBT00093^2.p
+% starexec-dependency Problems/VBT00093_2.p
+% starexec-dependency Problems/VBT00093_3.p
+% starexec-dependency Problems/VBT00093_4.p
+% starexec-dependency Problems/VBT00094^1.p
+% starexec-dependency Problems/VBT00094_1.p
+% starexec-dependency Problems/VBT00094^2.p
+% starexec-dependency Problems/VBT00094_2.p
+% starexec-dependency Problems/VBT00094_3.p
+% starexec-dependency Problems/VBT00094_4.p
+% starexec-dependency Problems/VBT00095^1.p
+% starexec-dependency Problems/VBT00095_1.p
+% starexec-dependency Problems/VBT00095^2.p
+% starexec-dependency Problems/VBT00095_2.p
+% starexec-dependency Problems/VBT00095_3.p
+% starexec-dependency Problems/VBT00095_4.p
+% starexec-dependency Problems/VBT00096^1.p
+% starexec-dependency Problems/VBT00096_1.p
+% starexec-dependency Problems/VBT00096^2.p
+% starexec-dependency Problems/VBT00096_2.p
+% starexec-dependency Problems/VBT00096_3.p
+% starexec-dependency Problems/VBT00096_4.p
+% starexec-dependency Problems/VBT00097^1.p
+% starexec-dependency Problems/VBT00097_1.p
+% starexec-dependency Problems/VBT00097^2.p
+% starexec-dependency Problems/VBT00097_2.p
+% starexec-dependency Problems/VBT00097_3.p
+% starexec-dependency Problems/VBT00097_4.p
+% starexec-dependency Problems/VBT00098^1.p
+% starexec-dependency Problems/VBT00098_1.p
+% starexec-dependency Problems/VBT00098^2.p
+% starexec-dependency Problems/VBT00098_2.p
+% starexec-dependency Problems/VBT00098_3.p
+% starexec-dependency Problems/VBT00098_4.p
+% starexec-dependency Problems/VBT00099^1.p
+% starexec-dependency Problems/VBT00099_1.p
+% starexec-dependency Problems/VBT00099^2.p
+% starexec-dependency Problems/VBT00099_2.p
+% starexec-dependency Problems/VBT00099_3.p
+% starexec-dependency Problems/VBT00099_4.p
+% starexec-dependency Problems/VBT00100^1.p
+% starexec-dependency Problems/VBT00100_1.p
+% starexec-dependency Problems/VBT00100^2.p
+% starexec-dependency Problems/VBT00100_2.p
+% starexec-dependency Problems/VBT00100_3.p
+% starexec-dependency Problems/VBT00100_4.p

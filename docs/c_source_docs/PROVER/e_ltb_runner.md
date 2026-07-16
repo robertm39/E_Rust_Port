@@ -100,7 +100,7 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 
 ### Change Later
 
-- `e_ltb_runner` parses `division.category.training_data`, but the paired batch-spec printer writes `division.category.training_directory`. Rust should preserve that boundary mismatch for now and revisit only after LTB spec round-trip tests exist.
+- `e_ltb_runner` parses `division.category.training_data`, but the paired batch-spec printer writes `division.category.training_directory`. Official JJT/VBT parser fixtures and an older HOL rejection fixture now pin that current-C mismatch. Rust preserves it for drop-in compatibility; any future round-trip normalization is a product extension and must retain an explicit legacy mode.
 - The optional second positional argument is honored here as the prover executable path, unlike `e_stratpar` where the same-looking argument is ignored. Keep those executable-specific differences visible when common runner option handling is introduced.
 - C opens `GlobalOut` after option parsing and before validating the positional argument count, so `-o file` can create or truncate the output file even when the command later reports a usage error, while `-o -` routes to stdout instead of a literal file. Rust now preserves those side effects in the compatibility wrapper; a future cleaned CLI should avoid them only outside the drop-in mode.
 - The help banner calls the first positional argument `[Batchfile] [PATH_TO_EPROVER]`, while the fatal usage diagnostic calls the same surface `<spec> [<path-to-eprover>]`. Rust preserves the mismatch for drop-in behavior; a cleaned CLI should use one spelling once byte-compatible help output is no longer required.
