@@ -6,14 +6,12 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::prover::version::{footer, E_NICKNAME, VERSION};
 use std::io::Write;
-use std::time::Duration;
 
 pub const PROGRAM_NAME: &str = "e_stratpar";
 
 const DEFAULT_PROVER: &str = "eprover";
 const DEFAULT_HARD_TIME_LIMIT: i64 = 3600;
 const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
-const PROCESS_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -167,8 +165,7 @@ fn execute_process_set(
 ) -> Result<u8, Diagnostic> {
     let mut proof_descriptor = None;
     while !controls.is_empty() {
-        proof_descriptor =
-            controls.get_result_from_pipes_timeout(PROCESS_POLL_TIMEOUT, false, stdout)?;
+        proof_descriptor = controls.get_result(false, stdout)?;
         if proof_descriptor.is_some() {
             break;
         }

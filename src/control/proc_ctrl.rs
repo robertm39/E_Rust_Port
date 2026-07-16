@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 pub const EPCTRL_BUFSIZE: usize = 200;
 pub const MAX_CORES: usize = 8;
+pub const EPCTRL_SET_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub const SZS_THEOREM_STR: &str = "% SZS status Theorem";
 pub const SZS_CONTRAAX_STR: &str = "% SZS status ContradictoryAxioms";
@@ -29,7 +30,7 @@ pub const E_OPTIONS: &str = "--satauto-schedule --assume-incompleteness";
 enum ProcessOutputMessage {
     Line(String),
     Eof,
-    Error(String),
+    Error,
 }
 
 #[must_use]
@@ -350,9 +351,10 @@ impl EPCtrl {
                 self.output_eof = true;
                 Ok(self.get_result_from_optional_line(None))
             }
-            ProcessOutputMessage::Error(error) => Err(proc_ctrl_error(format!(
-                "Cannot read eprover subprocess output: {error}"
-            ))),
+            ProcessOutputMessage::Error => {
+                self.output_eof = true;
+                Ok(self.get_result_from_optional_line(None))
+            }
         }
     }
 
@@ -538,7 +540,7 @@ impl EPCtrlSet {
         loop {
             let (proof_descriptor, saw_output) =
                 self.get_result_from_available_pipes(delete_files, output)?;
-            if proof_descriptor.is_some() || saw_output || self.is_empty() {
+            if proof_descriptor.is_some() || saw_output {
                 return Ok(proof_descriptor);
             }
 
@@ -551,6 +553,14 @@ impl EPCtrlSet {
             };
             thread::sleep(remaining.min(Duration::from_millis(10)));
         }
+    }
+
+    pub fn get_result(
+        &mut self,
+        delete_files: bool,
+        output: &mut impl Write,
+    ) -> Result<Option<Descriptor>, Diagnostic> {
+        self.get_result_from_pipes_timeout(EPCTRL_SET_WAIT_TIMEOUT, delete_files, output)
     }
 
     fn handle_eof_result(
@@ -671,8 +681,8 @@ fn spawn_output_reader(
                     break;
                 }
             }
-            Err(error) => {
-                let _send_result = sender.send(ProcessOutputMessage::Error(error.to_string()));
+            Err(_error) => {
+                let _send_result = sender.send(ProcessOutputMessage::Error);
                 break;
             }
         }
@@ -726,13 +736,15 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
 mod tests {
     use super::{
         e_ctrl_command, e_ctrl_default_command, prover_result_table_entry, shell_command, EPCtrl,
-        EPCtrlSet, EPCTRL_BUFSIZE, E_OPTIONS, E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR,
-        SZS_FAILURE_STR, SZS_GAVEUP_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
+        EPCtrlSet, ProcessOutputMessage, EPCTRL_BUFSIZE, EPCTRL_SET_WAIT_TIMEOUT, E_OPTIONS,
+        E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR, SZS_FAILURE_STR, SZS_GAVEUP_STR,
+        SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
     use std::ffi::OsStr;
     use std::process::Command;
+    use std::sync::mpsc;
     use std::time::Duration;
 
     #[test]
@@ -1005,6 +1017,72 @@ mod tests {
         assert_eq!(result, Some(proof_descriptor));
         assert!(set.find_proc(proof_descriptor).is_some());
         assert!(String::from_utf8(output).unwrap().is_empty());
+    }
+
+    #[test]
+    fn c_compatible_poll_uses_500ms_and_reads_one_message_per_process() {
+        assert_eq!(EPCTRL_SET_WAIT_TIMEOUT, Duration::from_millis(500));
+
+        let descriptor = Descriptor::new(4);
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(ProcessOutputMessage::Line(
+                "% SZS status Theorem\n".to_owned(),
+            ))
+            .unwrap();
+        sender.send(ProcessOutputMessage::Eof).unwrap();
+        let mut control = EPCtrl::with_descriptor("proof", descriptor);
+        control.output_rx = Some(receiver);
+        let mut set = EPCtrlSet::new();
+        set.add_proc(control).unwrap();
+        let mut output = Vec::new();
+
+        assert_eq!(set.get_result(false, &mut output).unwrap(), None);
+        let control = set.find_proc(descriptor).unwrap();
+        assert_eq!(control.result(), ProverResult::Theorem);
+        assert!(!control.output_eof);
+
+        assert_eq!(
+            set.get_result(false, &mut output).unwrap(),
+            Some(descriptor)
+        );
+        assert!(set.find_proc(descriptor).unwrap().output_eof);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn c_compatible_poll_treats_pipe_read_error_as_eof() {
+        let descriptor = Descriptor::new(6);
+        let (sender, receiver) = mpsc::channel();
+        sender.send(ProcessOutputMessage::Error).unwrap();
+        let mut control = EPCtrl::with_descriptor("failed", descriptor);
+        control.output_rx = Some(receiver);
+        let mut set = EPCtrlSet::new();
+        set.add_proc(control).unwrap();
+        let mut output = Vec::new();
+
+        assert_eq!(set.get_result(false, &mut output).unwrap(), None);
+        assert!(set.find_proc(descriptor).is_none());
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% No proof found by failed\n"
+        );
+    }
+
+    #[test]
+    fn c_compatible_poll_preserves_empty_set_timeout() {
+        let mut set = EPCtrlSet::new();
+        let mut output = Vec::new();
+        let timeout = Duration::from_millis(20);
+        let start = std::time::Instant::now();
+
+        assert_eq!(
+            set.get_result_from_pipes_timeout(timeout, false, &mut output)
+                .unwrap(),
+            None
+        );
+        assert!(start.elapsed() >= timeout);
+        assert!(output.is_empty());
     }
 
     #[cfg(windows)]

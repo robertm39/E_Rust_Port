@@ -17,7 +17,9 @@ use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::sine::{pstack_clause_write_tstp, pstack_formula_write_tstp};
 use crate::control::esession::{Descriptor, DescriptorInterestSet};
 use crate::control::gproc_ctrl::EGPCtrl;
-use crate::control::proc_ctrl::{prover_result_table_entry, EPCtrl, EPCtrlSet, MAX_CORES};
+use crate::control::proc_ctrl::{
+    prover_result_table_entry, EPCtrl, EPCtrlSet, EPCTRL_SET_WAIT_TIMEOUT, MAX_CORES,
+};
 use crate::control::sine::{StructFofSpec, StructFofSpecSelection};
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
@@ -108,7 +110,7 @@ pub const BATCH_STRATEGIES_DIV: &[&str] = &[
     "-xAutoSched5 -tAutoSched5 --assume-incompleteness",
 ];
 
-pub const BATCH_PROCESS_POLL_TIMEOUT: Duration = Duration::from_millis(500);
+pub const BATCH_PROCESS_POLL_TIMEOUT: Duration = EPCTRL_SET_WAIT_TIMEOUT;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
