@@ -960,6 +960,10 @@ fn drain_formula_set_to_cnf(
     set: &mut FormulaSet,
     drain: &mut FormulaSetCnfDrain<'_>,
 ) -> Result<(), Diagnostic> {
+    drain
+        .archive
+        .formulas
+        .reserve_exact(set.formulas.len().saturating_mul(2));
     while let Some(handle) = set.extract_first() {
         let source = handle.derivation_ref();
         let mut form = handle.flat_copy();
@@ -998,6 +1002,8 @@ fn drain_formula_set_to_cnf(
         }
     }
 
+    drain.archive.formulas.shrink_to_fit();
+
     Ok(())
 }
 
@@ -1005,6 +1011,10 @@ fn drain_formula_set_to_cnf_with_docs<W: fmt::Write>(
     set: &mut FormulaSet,
     drain: &mut FormulaSetCnfDocDrain<'_, W>,
 ) -> Result<(), Diagnostic> {
+    drain
+        .archive
+        .formulas
+        .reserve_exact(set.formulas.len().saturating_mul(2));
     while let Some(handle) = set.extract_first() {
         let source = handle.derivation_ref();
         let mut form = handle.flat_copy();
@@ -1045,6 +1055,8 @@ fn drain_formula_set_to_cnf_with_docs<W: fmt::Write>(
             *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
         }
     }
+
+    drain.archive.formulas.shrink_to_fit();
 
     Ok(())
 }
@@ -2745,6 +2757,21 @@ pub struct FormulaSet {
 }
 
 impl FormulaSet {
+    fn with_exact_capacity(capacity: usize) -> Self {
+        let mut formulas = VecDeque::new();
+        formulas.reserve_exact(capacity);
+        Self {
+            formulas,
+            identifier: String::new(),
+        }
+    }
+
+    fn release_empty_storage(&mut self) {
+        if self.formulas.is_empty() {
+            self.formulas = VecDeque::new();
+        }
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -2786,15 +2813,18 @@ impl FormulaSet {
     pub fn insert_set(&mut self, from: &mut Self) -> i64 {
         let moved = from.cardinality();
         self.formulas.append(&mut from.formulas);
+        from.release_empty_storage();
         moved
     }
 
     pub fn clear(&mut self) {
-        self.formulas.clear();
+        self.formulas = VecDeque::new();
     }
 
     pub fn extract_first(&mut self) -> Option<WrappedFormula> {
-        self.formulas.pop_front()
+        let formula = self.formulas.pop_front();
+        self.release_empty_storage();
+        formula
     }
 
     pub fn extract_entry(&mut self, entry_id: u64) -> Option<WrappedFormula> {
@@ -2802,7 +2832,9 @@ impl FormulaSet {
             .formulas
             .iter()
             .position(|formula| formula.entry_id() == entry_id)?;
-        self.formulas.remove(position)
+        let formula = self.formulas.remove(position);
+        self.release_empty_storage();
+        formula
     }
 
     #[must_use]
@@ -2839,7 +2871,9 @@ impl FormulaSet {
     #[must_use]
     pub fn archive_into(&mut self, archive: &mut Self) -> FormulaSetArchiveResult {
         let mut result = FormulaSetArchiveResult::default();
-        let mut tmpset = Self::new();
+        let members = self.formulas.len();
+        archive.formulas.reserve_exact(members);
+        let mut tmpset = Self::with_exact_capacity(members);
 
         while let Some(handle) = self.extract_first() {
             let source = handle.derivation_ref();
@@ -2853,6 +2887,8 @@ impl FormulaSet {
         }
 
         self.insert_set(&mut tmpset);
+        self.formulas.shrink_to_fit();
+        archive.formulas.shrink_to_fit();
         result
     }
 
@@ -5027,6 +5063,7 @@ mod tests {
 
         assert_eq!(to.insert_set(&mut from), 1);
         assert!(from.is_empty());
+        assert_eq!(from.formulas.capacity(), 0);
         assert_eq!(
             to.iter().map(WrappedFormula::entry_id).collect::<Vec<_>>(),
             vec![third_id, moved_first_id]
@@ -5049,7 +5086,22 @@ mod tests {
             );
         }
         assert!(set.is_empty());
+        assert_eq!(set.formulas.capacity(), 0);
         assert!(set.extract_first().is_none());
+    }
+
+    #[test]
+    fn formula_set_clear_releases_backing_storage_like_c_anchor() {
+        let mut set = FormulaSet::new();
+        for _ in 0..4_096 {
+            set.insert(WrappedFormula::default_alloc());
+        }
+        assert!(set.formulas.capacity() >= 4_096);
+
+        set.clear();
+
+        assert!(set.is_empty());
+        assert_eq!(set.formulas.capacity(), 0);
     }
 
     #[test]
