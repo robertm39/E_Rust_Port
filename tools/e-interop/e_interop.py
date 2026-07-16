@@ -355,6 +355,44 @@ TOOL_FUNCTIONAL_CASES = {
                 "output_files": ("global.out", "problem_tiny.p"),
             },
         ),
+        (
+            "tstp-gsine-formulas",
+            ("--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"),
+            None,
+            {
+                "workdir_files": {
+                    "filters.axf": (
+                        "formulas=GSinE(CountTerms, ,false,10.0,100,100,10000,1.0)\n"
+                    ),
+                    "problem.p": (
+                        "fof(goal, conjecture, p(goal_a)).\n"
+                        "fof(link, axiom, (p(goal_a) => q(link_b))).\n"
+                        "fof(far, axiom, r(far_c)).\n"
+                    ),
+                },
+                "output_files": ("global.out", "problem_formulas.p"),
+            },
+        ),
+        (
+            "tstp-lambda-def-formulas",
+            ("--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"),
+            None,
+            {
+                "workdir_files": {
+                    "filters.axf": "defs=LambdaDef\n",
+                    "problem.p": (
+                        "thf(person_type, type, person: $tType).\n"
+                        "thf(a_type, type, a: person).\n"
+                        "thf(p_type, type, p: person > $o).\n"
+                        "thf(q_type, type, q: person > $o).\n"
+                        "thf(lambda_def, definition, p = (^[X: person]: q @ X)).\n"
+                        "thf(goal, conjecture, p @ a).\n"
+                        "thf(far, axiom, q @ a).\n"
+                    ),
+                },
+                "output_files": ("global.out", "problem_defs.p"),
+            },
+        ),
     ),
     "e_client": (
         ("invalid-port", ("--port=70000",), None),

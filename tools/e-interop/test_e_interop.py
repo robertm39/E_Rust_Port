@@ -309,6 +309,14 @@ class ComparisonTests(unittest.TestCase):
                     "e_axfilter/tstp-threshold-file",
                     ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
                 ),
+                (
+                    "e_axfilter/tstp-gsine-formulas",
+                    ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
+                ),
+                (
+                    "e_axfilter/tstp-lambda-def-formulas",
+                    ["--tstp-in", "-f", "filters.axf", "-o", "global.out", "problem.p"],
+                ),
                 ("e_client/help", ["--help"]),
                 ("e_client/version", ["--version"]),
                 ("e_client/invalid-port", ["--port=70000"]),
@@ -451,6 +459,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             e_axfilter_generated_case["output_files"],
             ["global.out", "problem_tiny.p"],
+        )
+        e_axfilter_gsine_case = cases_by_name["e_axfilter/tstp-gsine-formulas"]
+        self.assertIn("fof(goal, conjecture", e_axfilter_gsine_case["workdir_files"]["problem.p"])
+        self.assertEqual(
+            e_axfilter_gsine_case["output_files"],
+            ["global.out", "problem_formulas.p"],
+        )
+        e_axfilter_lambda_case = cases_by_name["e_axfilter/tstp-lambda-def-formulas"]
+        self.assertIn(
+            "thf(lambda_def, definition",
+            e_axfilter_lambda_case["workdir_files"]["problem.p"],
+        )
+        self.assertEqual(
+            e_axfilter_lambda_case["output_files"],
+            ["global.out", "problem_defs.p"],
         )
         e_client_case = cases_by_name["e_client/invalid-port"]
         self.assertIsNone(e_client_case["stdin"])

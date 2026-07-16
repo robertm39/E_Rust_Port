@@ -1611,6 +1611,104 @@ mod tests {
     }
 
     #[test]
+    fn formula_gsine_filter_selects_related_formula_owners_only() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("formula-gsine-problem");
+        let filter_path = temp_path("formula-gsine-filters");
+        let generated_path = generated_path(&problem_path, "formulas");
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(
+            &problem_path,
+            "fof(goal, conjecture, p(goal_a)).\n\
+             fof(link, axiom, (p(goal_a) => q(link_b))).\n\
+             fof(far, axiom, r(far_c)).\n",
+        )
+        .expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "formulas=GSinE(CountTerms, ,false,10.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("formula GSinE run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
+        assert!(generated.contains("fof(goal, conjecture"));
+        assert!(generated.contains("fof(link, axiom"));
+        assert!(!generated.contains("fof(far,"));
+
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn lambda_def_filter_prints_definition_and_goal_formula_owners_only() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("lambda-def-problem");
+        let filter_path = temp_path("lambda-def-filters");
+        let generated_path = generated_path(&problem_path, "defs");
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(
+            &problem_path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(lambda_def, definition, p = (^[X: person]: q @ X)).\n\
+             thf(goal, conjecture, p @ a).\n\
+             thf(far, axiom, q @ a).\n",
+        )
+        .expect("problem written");
+        std::fs::write(&filter_path, "defs=LambdaDef\n").expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("LambdaDef run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
+        assert!(generated.contains("thf(lambda_def,"));
+        assert!(generated.contains("thf(goal, conjecture"));
+        assert!(!generated.contains("thf(far,"));
+
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
     fn seeded_explicit_symbol_generates_hypothesis_seeded_filter_file() {
         let _guard = global_state_lock();
         let problem_path = temp_path("seeded-problem");
