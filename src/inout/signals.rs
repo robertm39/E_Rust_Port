@@ -231,6 +231,10 @@ pub fn sig_term_caught() -> usize {
     SIG_TERM_CAUGHT.load(Ordering::SeqCst)
 }
 
+pub fn reset_sig_term_caught() -> usize {
+    SIG_TERM_CAUGHT.swap(0, Ordering::SeqCst)
+}
+
 #[must_use]
 pub fn silent_time_out() -> bool {
     SILENT_TIME_OUT.load(Ordering::SeqCst)
@@ -276,6 +280,26 @@ pub fn e_signal_setup(signal: i32) -> SignalOutcome {
     }
 
     SignalOutcome::HandlerInstalled { signal }
+}
+
+#[must_use]
+pub fn e_sched_signal_setup() -> SignalOutcome {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        if !linux_signal::install_scheduler_sigterm_handler() {
+            return SignalOutcome::HandlerInstallFailed {
+                signal: SIGTERM_COMPAT,
+                diagnostic: Diagnostic::new(
+                    ErrorCode::SYSTEM_ERROR,
+                    "Unable to set up scheduler signal handler",
+                ),
+            };
+        }
+    }
+
+    SignalOutcome::HandlerInstalled {
+        signal: SIGTERM_COMPAT,
+    }
 }
 
 #[must_use]
@@ -451,7 +475,9 @@ mod posix_process_signal {
 #[cfg(all(target_os = "linux", not(test)))]
 #[allow(unsafe_code)]
 mod linux_signal {
-    use super::{e_signal_handler, signal_global_out_fd, ErrorCode, SignalOutcome};
+    use super::{
+        e_sig_term_sched_handler, e_signal_handler, signal_global_out_fd, ErrorCode, SignalOutcome,
+    };
     use std::ffi::c_void;
 
     type SignalHandler = extern "C" fn(i32);
@@ -476,6 +502,14 @@ mod linux_signal {
         // extern "C" function with the required integer signal argument and no
         // captured Rust state.
         (unsafe { signal_compat(signal_number, Some(signal_trampoline)) }) != SIG_ERR_COMPAT
+    }
+
+    pub(super) fn install_scheduler_sigterm_handler() -> bool {
+        // SAFETY: signal installs a process-global handler. The scheduler
+        // trampoline has the required C ABI and only updates the lock-free
+        // scheduler termination latch before restoring SIGTERM's default.
+        (unsafe { signal_compat(super::SIGTERM_COMPAT, Some(scheduler_signal_trampoline)) })
+            != SIG_ERR_COMPAT
     }
 
     pub(super) fn restore_default_handler(signal_number: i32) -> bool {
@@ -535,6 +569,10 @@ mod linux_signal {
             | SignalOutcome::SoftTimeLimitReached { .. } => {}
         }
     }
+
+    extern "C" fn scheduler_signal_trampoline(signal_number: i32) {
+        let _outcome = e_sig_term_sched_handler(signal_number);
+    }
 }
 
 #[cfg(test)]
@@ -558,15 +596,15 @@ fn reset_signal_state_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::{
-        configure_time_limits, e_sig_term_sched_handler, e_signal_handler, e_signal_setup,
-        finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
-        reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
-        set_schedule_time_limit, set_signal_global_out_fd, set_silent_time_out,
-        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
-        sig_term_caught, signal_global_out_fd, silent_time_out, soft_time_limit, system_time_limit,
-        time_is_up, time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome,
-        SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
-        SIGXCPU_COMPAT,
+        configure_time_limits, e_sched_signal_setup, e_sig_term_sched_handler, e_signal_handler,
+        e_signal_setup, finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
+        reset_sig_term_caught, reset_signal_state_for_tests, schedule_time_limit,
+        set_hard_time_limit, set_schedule_time_limit, set_signal_global_out_fd,
+        set_silent_time_out, set_soft_time_limit, set_system_time_limit, set_time_is_up,
+        set_time_limit_is_soft, sig_term_caught, signal_global_out_fd, silent_time_out,
+        soft_time_limit, system_time_limit, time_is_up, time_limit_expired_kind,
+        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, TimeLimitKind,
+        RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
@@ -915,6 +953,14 @@ mod tests {
             }
         );
         assert_eq!(sig_term_caught(), 2);
+        assert_eq!(reset_sig_term_caught(), 2);
+        assert_eq!(sig_term_caught(), 0);
+        assert_eq!(
+            e_sched_signal_setup(),
+            SignalOutcome::HandlerInstalled {
+                signal: SIGTERM_COMPAT
+            }
+        );
     }
 
     #[test]

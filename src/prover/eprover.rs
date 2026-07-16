@@ -8,6 +8,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
@@ -16,8 +17,9 @@ use crate::basics::os_wrapper::set_memory_limit;
 #[cfg(target_os = "linux")]
 use crate::basics::os_wrapper::RLIMIT_DATA_COMPAT;
 use crate::basics::os_wrapper::{
-    current_resource_usage, format_resource_usage, get_core_number, get_system_phys_memory,
-    resource_limit_error_message, RLimResult, RLimitOutcome,
+    current_process_cpu_time_seconds, current_resource_usage, format_resource_usage,
+    get_core_number, get_system_phys_memory, resource_limit_error_message, RLimResult,
+    RLimitOutcome,
 };
 #[cfg(all(target_os = "linux", not(test)))]
 use crate::basics::os_wrapper::{
@@ -94,8 +96,9 @@ use crate::clauses::unfold_defs::{
 };
 use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::scheduling::{
-    execute_schedule_multi_core, execute_schedule_multi_core_with_default_retry,
-    ScheduleExecutionConfig, ScheduleExecutionOutcome,
+    execute_schedule_multi_core_with_default_retry_and_parent_request,
+    execute_schedule_multi_core_with_parent_request, ScheduleExecutionConfig,
+    ScheduleExecutionCpuUsage, ScheduleExecutionOutcome,
 };
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
@@ -136,10 +139,11 @@ use crate::inout::scanner::{
     TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL, MAX_TOKEN_LOOKAHEAD,
 };
 use crate::inout::signals::{
-    configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, set_signal_global_out_fd,
-    silent_time_out, time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT,
-    SIGXCPU_COMPAT,
+    configure_time_limits, e_sched_signal_setup, e_signal_setup, finalize_cpu_limit_outcome,
+    reset_sig_term_caught, set_signal_global_out_fd, sig_term_caught, silent_time_out,
+    time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
 };
+use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
@@ -171,6 +175,7 @@ const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
 const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--e-rust-port-schedule-search-worker";
+const NO_SCHEDULE_STDIN_SNAPSHOT: &str = "-";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
@@ -228,6 +233,58 @@ struct IoRunGuard;
 impl Drop for IoRunGuard {
     fn drop(&mut self) {
         exit_io();
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ScheduleStdinSnapshotState {
+    path: Option<PathBuf>,
+    consumed: bool,
+}
+
+static SCHEDULE_STDIN_SNAPSHOT: OnceLock<Mutex<ScheduleStdinSnapshotState>> = OnceLock::new();
+
+fn schedule_stdin_snapshot_state() -> &'static Mutex<ScheduleStdinSnapshotState> {
+    SCHEDULE_STDIN_SNAPSHOT.get_or_init(|| Mutex::new(ScheduleStdinSnapshotState::default()))
+}
+
+fn lock_schedule_stdin_snapshot_state() -> MutexGuard<'static, ScheduleStdinSnapshotState> {
+    schedule_stdin_snapshot_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+struct ScheduleStdinSnapshotGuard {
+    previous: ScheduleStdinSnapshotState,
+}
+
+impl ScheduleStdinSnapshotGuard {
+    fn install(path: Option<&str>) -> Self {
+        let mut state = lock_schedule_stdin_snapshot_state();
+        let previous = std::mem::replace(
+            &mut *state,
+            ScheduleStdinSnapshotState {
+                path: path.map(PathBuf::from),
+                consumed: false,
+            },
+        );
+        Self { previous }
+    }
+}
+
+impl Drop for ScheduleStdinSnapshotGuard {
+    fn drop(&mut self) {
+        *lock_schedule_stdin_snapshot_state() = std::mem::take(&mut self.previous);
+    }
+}
+
+struct OwnedScheduleStdinSnapshot {
+    path: PathBuf,
+}
+
+impl Drop for OwnedScheduleStdinSnapshot {
+    fn drop(&mut self) {
+        let _remove_result = temp_file_remove(&self.path);
     }
 }
 
@@ -1296,6 +1353,7 @@ pub struct EProverConfig {
     pub explicit_options: Vec<EProverOption>,
     pub invocation_args: Vec<String>,
     pub internal_schedule_worker: Option<InternalScheduleWorkerConfig>,
+    pub schedule_stdin_snapshot: Option<String>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub output_level: i64,
@@ -1411,6 +1469,7 @@ impl Default for EProverConfig {
             explicit_options: Vec::new(),
             invocation_args: Vec::new(),
             internal_schedule_worker: None,
+            schedule_stdin_snapshot: None,
             files: Vec::new(),
             output_file: None,
             output_level: 1,
@@ -2568,6 +2627,14 @@ fn setup_signal_handlers() -> Result<(), Diagnostic> {
     }
 }
 
+fn setup_scheduler_signal_handler() -> Result<(), Diagnostic> {
+    if let SignalOutcome::HandlerInstallFailed { diagnostic, .. } = e_sched_signal_setup() {
+        Err(diagnostic)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(any(test, target_os = "linux"))]
 fn cpu_rlimit_to_apply(config: &EProverConfig) -> Option<u64> {
     let hard_limit = config
@@ -2839,6 +2906,7 @@ where
     init_io(PROGRAM_NAME);
     let _io_guard = IoRunGuard;
     let _problem_type_guard = ProblemTypeRunGuard::new();
+    let _previous_sigterm_count = reset_sig_term_caught();
     setup_signal_handlers()?;
     let processed_options = match process_options_for_run(argv) {
         Ok(processed_options) => processed_options,
@@ -2859,8 +2927,12 @@ where
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
         EProverAction::Run(config) => {
+            let mut config = *config;
             write_config_warnings(stderr, &config)?;
             write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
+            let _owned_snapshot = prepare_schedule_stdin_snapshot(&mut config)?;
+            let _snapshot_guard =
+                ScheduleStdinSnapshotGuard::install(config.schedule_stdin_snapshot.as_deref());
             run_config_with_stderr(stdout, Some(stderr as &mut dyn Write), &config)
         }
     }
@@ -2885,6 +2957,7 @@ fn run_schedule_worker_from_args(
     init_io(PROGRAM_NAME);
     let _io_guard = IoRunGuard;
     let _problem_type_guard = ProblemTypeRunGuard::new();
+    let _previous_sigterm_count = reset_sig_term_caught();
     setup_signal_handlers()?;
     let processed_options = match process_options_for_run(child_argv) {
         Ok(processed_options) => processed_options,
@@ -2907,14 +2980,33 @@ fn run_schedule_worker_from_args(
         EProverAction::Run(config) => {
             let mut config = *config;
             config.internal_schedule_worker = Some(worker.internal_config());
+            config.schedule_stdin_snapshot = worker.stdin_snapshot.clone();
             let cpu_limit = i64_from_u64_saturating(worker.worker_cpu_limit());
             config.cpu_limit = Some(cpu_limit);
             config.schedule_time_limit = Some(cpu_limit);
             write_config_warnings(stderr, &config)?;
             write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
+            let _snapshot_guard =
+                ScheduleStdinSnapshotGuard::install(config.schedule_stdin_snapshot.as_deref());
             run_config_with_stderr(stdout, Some(stderr as &mut dyn Write), &config)
         }
     }
+}
+
+fn prepare_schedule_stdin_snapshot(
+    config: &mut EProverConfig,
+) -> Result<Option<OwnedScheduleStdinSnapshot>, Diagnostic> {
+    if !config.strategy_scheduling
+        || config.schedule_stdin_snapshot.is_some()
+        || !config.files.iter().any(|file| file == "-")
+    {
+        return Ok(None);
+    }
+
+    let mut stdin = io::stdin().lock();
+    let path = temp_file_create(&mut stdin)?;
+    config.schedule_stdin_snapshot = Some(path.to_string_lossy().into_owned());
+    Ok(Some(OwnedScheduleStdinSnapshot { path }))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2924,6 +3016,7 @@ struct ScheduleWorkerArgs {
     preprocessing_ordering: to_params::TermOrdering,
     preprocessing_cpu_limit: u64,
     mode: InternalScheduleWorkerMode,
+    stdin_snapshot: Option<String>,
     original_args: Vec<String>,
 }
 
@@ -2957,14 +3050,15 @@ fn parse_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Dia
 fn parse_preprocessing_schedule_worker_args(
     argv: &[String],
 ) -> Result<ScheduleWorkerArgs, Diagnostic> {
-    if argv.len() < 8 || argv.get(6).map(String::as_str) != Some("--") {
+    if argv.len() < 9 || argv.get(7).map(String::as_str) != Some("--") {
         return Err(schedule_worker_usage_error());
     }
     let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
     let preprocessing_strategy = schedule_worker_required_string(argv, 3)?;
     let preprocessing_ordering = schedule_worker_required_ordering(argv, 4)?;
     let preprocessing_cpu_limit = schedule_worker_required_u64(argv, 5)?;
-    let original_args = argv[7..].to_vec();
+    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 6)?;
+    let original_args = argv[8..].to_vec();
     if original_args.is_empty() {
         return Err(schedule_worker_usage_error());
     }
@@ -2974,12 +3068,13 @@ fn parse_preprocessing_schedule_worker_args(
         preprocessing_ordering,
         preprocessing_cpu_limit,
         mode: InternalScheduleWorkerMode::Preprocessing,
+        stdin_snapshot,
         original_args,
     })
 }
 
 fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Diagnostic> {
-    if argv.len() < 12 || argv.get(10).map(String::as_str) != Some("--") {
+    if argv.len() < 13 || argv.get(11).map(String::as_str) != Some("--") {
         return Err(schedule_worker_usage_error());
     }
     let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
@@ -2990,7 +3085,8 @@ fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerAr
     let search_strategy = schedule_worker_required_string(argv, 7)?;
     let search_ordering = schedule_worker_required_ordering(argv, 8)?;
     let search_cpu_limit = schedule_worker_required_u64(argv, 9)?;
-    let original_args = argv[11..].to_vec();
+    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 10)?;
+    let original_args = argv[12..].to_vec();
     if original_args.is_empty() {
         return Err(schedule_worker_usage_error());
     }
@@ -3005,8 +3101,17 @@ fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerAr
             ordering: search_ordering,
             cpu_limit: search_cpu_limit,
         },
+        stdin_snapshot,
         original_args,
     })
+}
+
+fn schedule_worker_stdin_snapshot(
+    argv: &[String],
+    index: usize,
+) -> Result<Option<String>, Diagnostic> {
+    let value = schedule_worker_required_string(argv, index)?;
+    Ok((value != NO_SCHEDULE_STDIN_SNAPSHOT).then_some(value))
 }
 
 fn schedule_worker_required_string(argv: &[String], index: usize) -> Result<String, Diagnostic> {
@@ -3042,7 +3147,7 @@ fn schedule_worker_usage_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::USAGE_ERROR,
         format!(
-            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> -- <original-eprover-argv...>"
+            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>"
         ),
     )
 }
@@ -5849,6 +5954,11 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
                     ErrorCode::RESOURCE_OUT.exit_status(),
                 ))
             }
+            ScheduleExecutionOutcome::ParentRequest => {
+                Ok(AutoModePreprocessingSelection::ScheduledExit(
+                    ErrorCode::PARENT_REQUEST.exit_status(),
+                ))
+            }
         };
     } else {
         0
@@ -5956,6 +6066,7 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
                 schedule_exit_status_to_u8(exit_status)
             }
             ScheduleExecutionOutcome::Exhausted => ErrorCode::RESOURCE_OUT.exit_status(),
+            ScheduleExecutionOutcome::ParentRequest => ErrorCode::PARENT_REQUEST.exit_status(),
         }));
     }
     let search_selection = if config.strategy_scheduling {
@@ -6050,10 +6161,11 @@ fn execute_auto_preprocessing_schedule<W: Write + ?Sized>(
     schedule: &mut Vec<ScheduleCell>,
 ) -> Result<ScheduleExecutionOutcome, EProverError> {
     let max_cores = configured_schedule_cores(config);
-    let report = execute_schedule_multi_core(
+    setup_scheduler_signal_handler()?;
+    let report = execute_schedule_multi_core_with_parent_request(
         schedule,
         ScheduleExecutionConfig {
-            time_used: schedule_time_used_seconds(),
+            time_used: schedule_process_time_used_seconds(),
             wc_time_limit: configured_schedule_time_limit(config),
             preprocessing_schedule: true,
             max_cores,
@@ -6061,6 +6173,7 @@ fn execute_auto_preprocessing_schedule<W: Write + ?Sized>(
         },
         output,
         |index, cell, startup_output| spawn_schedule_worker(config, index, cell, startup_output),
+        || sig_term_caught() != 0,
     )?;
     Ok(report.outcome)
 }
@@ -6099,6 +6212,11 @@ fn schedule_worker_command_args(
         cell.heuristic_name.clone(),
         cell.ordering.c_value().to_string(),
         cell.time_absolute.to_string(),
+        config
+            .schedule_stdin_snapshot
+            .as_deref()
+            .unwrap_or(NO_SCHEDULE_STDIN_SNAPSHOT)
+            .to_owned(),
         "--".to_owned(),
     ];
     args.extend(config.invocation_args.iter().cloned());
@@ -6122,18 +6240,19 @@ fn execute_auto_search_schedule<W: Write + ?Sized>(
     let selected_preprocessing_index = auto_context.selected_preprocessing_index;
     let selected_preprocessing = &auto_context.preprocessing_schedule[selected_preprocessing_index];
     let default_schedule = get_default_schedule()?;
-    let report = execute_schedule_multi_core_with_default_retry(
+    setup_scheduler_signal_handler()?;
+    let report = execute_schedule_multi_core_with_default_retry_and_parent_request(
         search_schedule,
         &default_schedule,
         ScheduleExecutionConfig {
-            time_used: schedule_time_used_seconds(),
+            time_used: schedule_process_time_used_seconds(),
             wc_time_limit: f64_from_u64_for_schedule(selected_preprocessing.time_absolute),
             preprocessing_schedule: false,
             max_cores: selected_preprocessing.cores.max(1),
             serialize: false,
         },
         output,
-        schedule_time_used_seconds,
+        schedule_cpu_usage,
         |index, cell, startup_output| {
             spawn_search_schedule_worker(
                 config,
@@ -6144,6 +6263,7 @@ fn execute_auto_search_schedule<W: Write + ?Sized>(
                 startup_output,
             )
         },
+        || sig_term_caught() != 0,
     )?;
     Ok(report.outcome().clone())
 }
@@ -6196,6 +6316,11 @@ fn search_schedule_worker_command_args(
         cell.heuristic_name.clone(),
         cell.ordering.c_value().to_string(),
         cell.time_absolute.to_string(),
+        config
+            .schedule_stdin_snapshot
+            .as_deref()
+            .unwrap_or(NO_SCHEDULE_STDIN_SNAPSHOT)
+            .to_owned(),
         "--".to_owned(),
     ];
     args.extend(config.invocation_args.iter().cloned());
@@ -6229,7 +6354,7 @@ fn select_scheduled_search_cell<W: Write + ?Sized>(
     let mut cores = selected_preprocessing.cores.max(1);
     let report = schedule_times_init_multi_core(
         search_schedule,
-        schedule_time_used_seconds(),
+        schedule_process_time_used_seconds(),
         f64_from_u64_for_schedule(selected_preprocessing.time_absolute),
         false,
         &mut cores,
@@ -6273,9 +6398,16 @@ fn configured_schedule_time_limit(config: &EProverConfig) -> f64 {
     f64_from_u64_for_schedule(limit)
 }
 
-fn schedule_time_used_seconds() -> f64 {
+fn schedule_process_time_used_seconds() -> f64 {
+    current_process_cpu_time_seconds()
+}
+
+fn schedule_cpu_usage() -> ScheduleExecutionCpuUsage {
     let usage = current_resource_usage();
-    usage.user_time_seconds + usage.system_time_seconds
+    ScheduleExecutionCpuUsage {
+        process_time: current_process_cpu_time_seconds(),
+        total_time: usage.user_time_seconds + usage.system_time_seconds,
+    }
 }
 
 fn i32_from_usize_saturating(value: usize) -> i32 {
@@ -9606,10 +9738,52 @@ fn parse_formula_file(
 }
 
 fn problem_input_scanner(file: &str, ignore_comments: bool) -> Result<Scanner, Diagnostic> {
-    let mut stdin = io::stdin().lock();
-    problem_input_scanner_with_stdin(file, ignore_comments, &mut stdin)
+    if file == "-" {
+        Scanner::from_file_content("<stdin>", read_standard_input_for_run()?, ignore_comments)
+    } else {
+        Scanner::from_file(Path::new(file), ignore_comments)
+    }
 }
 
+fn read_standard_input_for_run() -> Result<Vec<u8>, Diagnostic> {
+    let snapshot = {
+        let mut state = lock_schedule_stdin_snapshot_state();
+        match &state.path {
+            Some(path) if !state.consumed => {
+                let path = path.clone();
+                state.consumed = true;
+                Some(Some(path))
+            }
+            Some(_) => Some(None),
+            None => None,
+        }
+    };
+
+    match snapshot {
+        Some(Some(path)) => std::fs::read(&path).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!(
+                    "Cannot read standard input snapshot {}: {error}",
+                    path.display()
+                ),
+            )
+        }),
+        Some(None) => Ok(Vec::new()),
+        None => {
+            let mut input = Vec::new();
+            io::stdin().read_to_end(&mut input).map_err(|error| {
+                Diagnostic::new(
+                    ErrorCode::FILE_ERROR,
+                    format!("Cannot read standard input: {error}"),
+                )
+            })?;
+            Ok(input)
+        }
+    }
+}
+
+#[cfg(test)]
 fn problem_input_scanner_with_stdin(
     file: &str,
     ignore_comments: bool,
@@ -9911,14 +10085,7 @@ fn parse_app_encode_file(
     include_echoes: &mut String,
 ) -> Result<ParsedAppEncodeFile, Diagnostic> {
     let mut scanner = if file == "-" {
-        let mut input = Vec::new();
-        io::stdin().read_to_end(&mut input).map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot read standard input: {error}"),
-            )
-        })?;
-        Scanner::from_file_content("-", input, false)?
+        Scanner::from_file_content("-", read_standard_input_for_run()?, false)?
     } else {
         Scanner::from_file(Path::new(file), false)?
     };
@@ -17138,6 +17305,7 @@ input_clause(c2,axiom,[++q(X)]).
             invocation_args: ["eprover", "--tstp-in", "problem.p"]
                 .map(str::to_owned)
                 .to_vec(),
+            schedule_stdin_snapshot: Some("stdin.snapshot".to_owned()),
             ..EProverConfig::default()
         };
         let preprocessing = ScheduleCell {
@@ -17165,6 +17333,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "PreprocCell",
                 "3",
                 "300",
+                "stdin.snapshot",
                 "--",
                 "eprover",
                 "--tstp-in",
@@ -17184,6 +17353,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "SearchCell",
                 "7",
                 "17",
+                "stdin.snapshot",
                 "--",
                 "eprover",
                 "--tstp-in",
@@ -17263,6 +17433,7 @@ input_clause(c2,axiom,[++q(X)]).
             "ScheduledCell",
             "7",
             "17",
+            "stdin.snapshot",
             "--",
             "eprover",
             "--auto-schedule=1",
@@ -17280,6 +17451,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert_eq!(parsed.preprocessing_cpu_limit, 17);
         assert_eq!(parsed.mode, InternalScheduleWorkerMode::Preprocessing);
+        assert_eq!(parsed.stdin_snapshot.as_deref(), Some("stdin.snapshot"));
         assert_eq!(
             parsed.original_args,
             ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)
@@ -17299,6 +17471,7 @@ input_clause(c2,axiom,[++q(X)]).
             "SearchCell",
             "7",
             "17",
+            "-",
             "--",
             "eprover",
             "--auto-schedule=1",
@@ -17321,6 +17494,7 @@ input_clause(c2,axiom,[++q(X)]).
                 cpu_limit: 17,
             }
         );
+        assert_eq!(parsed.stdin_snapshot, None);
         assert_eq!(
             parsed.original_args,
             ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)

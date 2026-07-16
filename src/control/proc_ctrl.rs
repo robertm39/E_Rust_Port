@@ -1,5 +1,6 @@
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::os_wrapper::record_waited_child_resource_usage;
 use crate::basics::simple_stuff::ProverResult;
 use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::inout::signals::terminate_process;
@@ -669,6 +670,7 @@ fn cleanup_child(child: &mut Child) {
         let _kill_result = child.kill();
     }
     let _wait_result = child.wait();
+    record_waited_child_resource_usage(child);
 }
 
 fn spawn_output_reader(

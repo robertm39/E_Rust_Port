@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 #[test]
 fn auto_schedule_runs_worker_process_and_replays_winner() {
@@ -54,13 +55,62 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
     assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
     assert!(stdout.contains("% Preprocessing time       : "));
     assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    let proof_position = stdout.find("% Proof found!\n").unwrap();
+    let resource_positions = stdout
+        .match_indices("% User time                : ")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    assert_eq!(resource_positions.len(), 3, "{stdout}");
     assert!(
-        stdout.matches("% User time                : ").count() >= 3,
+        resource_positions
+            .iter()
+            .all(|position| *position > proof_position),
         "{stdout}"
     );
+    let total_times = stdout
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("% Total time               : ")?
+                .strip_suffix(" s")?
+                .parse::<f64>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(total_times.len(), 3, "{stdout}");
+    assert!(total_times[1] >= total_times[0], "{stdout}");
+    assert!(total_times[2] >= total_times[1], "{stdout}");
     assert!(stderr.is_empty(), "{stderr}");
 
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn auto_schedule_replays_snapshotted_standard_input_in_nested_workers() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        .arg("--auto-schedule=1")
+        .arg("--tstp-in")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"cnf(stdin_false, axiom, ($false)).\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+    assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
+    assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    assert!(!stdout.contains("% No proof found!"), "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
 }
 
 #[test]

@@ -1,5 +1,9 @@
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::os_wrapper::{
+    record_waited_child_resource_usage, record_waited_child_resource_usage_with_report,
+    ResourceUsage,
+};
 use crate::basics::simple_stuff::ProverResult;
 use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::control::proc_ctrl::{
@@ -301,11 +305,31 @@ impl EGPCtrl {
         let Some(mut child) = self.child.take() else {
             return self.exit_status;
         };
-        match child.wait() {
+        let reported_usage = last_reported_resource_usage(&self.output.view());
+        let status = child.wait();
+        record_waited_child_resource_usage_with_report(&child, reported_usage);
+        match status {
             Ok(status) => status.code().unwrap_or(-1),
             Err(_) => -1,
         }
     }
+}
+
+fn last_reported_resource_usage(output: &str) -> Option<ResourceUsage> {
+    let mut user_time_seconds = None;
+    let mut system_time_seconds = None;
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("% User time                : ") {
+            user_time_seconds = value.strip_suffix(" s")?.parse::<f64>().ok();
+        } else if let Some(value) = line.strip_prefix("% System time              : ") {
+            system_time_seconds = value.strip_suffix(" s")?.parse::<f64>().ok();
+        }
+    }
+    Some(ResourceUsage {
+        user_time_seconds: user_time_seconds?,
+        system_time_seconds: system_time_seconds?,
+        max_resident_pages: 0,
+    })
 }
 
 impl Drop for EGPCtrl {
@@ -560,6 +584,7 @@ fn cleanup_child(child: &mut Child) {
         let _kill_result = child.kill();
     }
     let _wait_result = child.wait();
+    record_waited_child_resource_usage(child);
 }
 
 fn spawn_output_reader(
@@ -620,7 +645,8 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
 #[cfg(test)]
 mod tests {
     use super::{
-        EGPCtrl, EGPCtrlSet, GenericProcessOutputMessage, EGPCTRL_BUFSIZE, EGPCTRL_SET_WAIT_TIMEOUT,
+        last_reported_resource_usage, EGPCtrl, EGPCtrlSet, GenericProcessOutputMessage,
+        EGPCTRL_BUFSIZE, EGPCTRL_SET_WAIT_TIMEOUT,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
@@ -642,6 +668,19 @@ mod tests {
         assert_eq!(control.result(), ProverResult::NoResult);
         assert!(control.output().is_empty());
         assert!(!control.has_child());
+    }
+
+    #[test]
+    fn reported_resource_usage_uses_last_nested_summary() {
+        let output = "% User time                : 1.250 s\n\
+                      % System time              : 0.500 s\n\
+                      % User time                : 3.750 s\n\
+                      % System time              : 1.125 s\n";
+
+        let usage = last_reported_resource_usage(output).unwrap();
+
+        assert_eq!(usage.user_time_seconds, 3.75);
+        assert_eq!(usage.system_time_seconds, 1.125);
     }
 
     #[test]

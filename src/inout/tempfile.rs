@@ -34,7 +34,17 @@ fn system_error(message: impl Into<String>) -> Diagnostic {
 }
 
 fn tmpdir() -> PathBuf {
-    std::env::var_os("TMPDIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+    std::env::var_os("TMPDIR").map_or_else(default_tmpdir, PathBuf::from)
+}
+
+#[cfg(windows)]
+fn default_tmpdir() -> PathBuf {
+    std::env::temp_dir()
+}
+
+#[cfg(not(windows))]
+fn default_tmpdir() -> PathBuf {
+    PathBuf::from("/tmp")
 }
 
 fn time_bits() -> u64 {

@@ -15,6 +15,7 @@ pub enum ScheduleExecutionOutcome {
         exit_status: i32,
     },
     Exhausted,
+    ParentRequest,
 }
 
 impl ScheduleExecutionOutcome {
@@ -23,6 +24,7 @@ impl ScheduleExecutionOutcome {
         match self {
             Self::Result { exit_status, .. } => *exit_status,
             Self::Exhausted => SCHEDULE_DONE,
+            Self::ParentRequest => ErrorCode::PARENT_REQUEST.exit_status() as i32,
         }
     }
 }
@@ -65,19 +67,56 @@ pub struct ScheduleExecutionConfig {
     pub serialize: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScheduleExecutionCpuUsage {
+    pub process_time: f64,
+    pub total_time: f64,
+}
+
 pub fn execute_schedule_multi_core_with_default_retry<F, T>(
     schedule: &mut Vec<ScheduleCell>,
     default_schedule: &[ScheduleCell],
     config: ScheduleExecutionConfig,
     output: &mut impl Write,
-    mut total_time_used: T,
-    mut spawn: F,
+    cpu_usage: T,
+    spawn: F,
 ) -> Result<ScheduleExecutionWithRetryReport, Diagnostic>
 where
     F: FnMut(usize, &ScheduleCell, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
-    T: FnMut() -> f64,
+    T: FnMut() -> ScheduleExecutionCpuUsage,
 {
-    let primary = execute_schedule_multi_core(schedule, config, output, &mut spawn)?;
+    execute_schedule_multi_core_with_default_retry_and_parent_request(
+        schedule,
+        default_schedule,
+        config,
+        output,
+        cpu_usage,
+        spawn,
+        || false,
+    )
+}
+
+pub fn execute_schedule_multi_core_with_default_retry_and_parent_request<F, T, P>(
+    schedule: &mut Vec<ScheduleCell>,
+    default_schedule: &[ScheduleCell],
+    config: ScheduleExecutionConfig,
+    output: &mut impl Write,
+    mut cpu_usage: T,
+    mut spawn: F,
+    mut parent_request_pending: P,
+) -> Result<ScheduleExecutionWithRetryReport, Diagnostic>
+where
+    F: FnMut(usize, &ScheduleCell, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+    T: FnMut() -> ScheduleExecutionCpuUsage,
+    P: FnMut() -> bool,
+{
+    let primary = execute_schedule_multi_core_with_parent_request(
+        schedule,
+        config,
+        output,
+        &mut spawn,
+        &mut parent_request_pending,
+    )?;
     if config.preprocessing_schedule
         || !matches!(primary.outcome, ScheduleExecutionOutcome::Exhausted)
     {
@@ -87,7 +126,8 @@ where
         });
     }
 
-    let remaining_time = config.wc_time_limit - total_time_used();
+    let usage = cpu_usage();
+    let remaining_time = config.wc_time_limit - usage.total_time;
     if remaining_time <= RETRY_DEFAULT_SCHEDULE_THRESHOLD {
         return Ok(ScheduleExecutionWithRetryReport {
             primary,
@@ -101,10 +141,10 @@ where
         "% executing default schedule for {remaining_time} seconds."
     )
     .map_err(|error| output_error(&error))?;
-    let retry = execute_schedule_multi_core(
+    let retry = execute_schedule_multi_core_with_parent_request(
         &mut retry_schedule,
         ScheduleExecutionConfig {
-            time_used: 0.0,
+            time_used: usage.process_time,
             wc_time_limit: remaining_time,
             preprocessing_schedule: false,
             max_cores: config.max_cores,
@@ -112,6 +152,7 @@ where
         },
         output,
         &mut spawn,
+        &mut parent_request_pending,
     )?;
 
     Ok(ScheduleExecutionWithRetryReport {
@@ -124,10 +165,24 @@ pub fn execute_schedule_multi_core<F>(
     schedule: &mut Vec<ScheduleCell>,
     config: ScheduleExecutionConfig,
     output: &mut impl Write,
-    mut spawn: F,
+    spawn: F,
 ) -> Result<ScheduleExecutionReport, Diagnostic>
 where
     F: FnMut(usize, &ScheduleCell, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+{
+    execute_schedule_multi_core_with_parent_request(schedule, config, output, spawn, || false)
+}
+
+pub fn execute_schedule_multi_core_with_parent_request<F, P>(
+    schedule: &mut Vec<ScheduleCell>,
+    config: ScheduleExecutionConfig,
+    output: &mut impl Write,
+    mut spawn: F,
+    mut parent_request_pending: P,
+) -> Result<ScheduleExecutionReport, Diagnostic>
+where
+    F: FnMut(usize, &ScheduleCell, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+    P: FnMut() -> bool,
 {
     let mut cores = config.max_cores.max(1);
     let init_report = schedule_times_init_multi_core(
@@ -156,6 +211,12 @@ where
         )?;
 
         if controls.is_empty() && next >= schedule.len() {
+            if parent_request_pending() {
+                return Ok(ScheduleExecutionReport {
+                    init_report,
+                    outcome: ScheduleExecutionOutcome::ParentRequest,
+                });
+            }
             writeln!(output, "% Schedule exhausted").map_err(|error| output_error(&error))?;
             return Ok(ScheduleExecutionReport {
                 init_report,
@@ -194,6 +255,13 @@ where
                     name,
                     exit_status,
                 },
+            });
+        }
+        if parent_request_pending() {
+            controls.clear(true)?;
+            return Ok(ScheduleExecutionReport {
+                init_report,
+                outcome: ScheduleExecutionOutcome::ParentRequest,
             });
         }
     }
@@ -268,7 +336,8 @@ fn output_error(error: &std::io::Error) -> Diagnostic {
 mod tests {
     use super::{
         execute_schedule_multi_core, execute_schedule_multi_core_with_default_retry,
-        ScheduleExecutionConfig, ScheduleExecutionOutcome,
+        execute_schedule_multi_core_with_parent_request, ScheduleExecutionConfig,
+        ScheduleExecutionCpuUsage, ScheduleExecutionOutcome,
     };
     use crate::basics::error::ErrorCode;
     use crate::control::gproc_ctrl::EGPCtrl;
@@ -415,7 +484,10 @@ mod tests {
             &default_schedule,
             config(10.0, 2),
             &mut output,
-            || 4.0,
+            || ScheduleExecutionCpuUsage {
+                process_time: 1.0,
+                total_time: 4.0,
+            },
             |_, cell, output| {
                 spawned_names.push(cell.heuristic_name.clone());
                 let status = if cell.heuristic_name == "default-prove" {
@@ -451,6 +523,7 @@ mod tests {
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains("% Schedule exhausted\n"));
         assert!(printed.contains("% executing default schedule for 6 seconds.\n"));
+        assert!(printed.contains("% Scheduled 2 strats onto 2 cores with 5 seconds"));
         assert!(printed.contains("% Result found by default-prove"));
     }
 
@@ -466,7 +539,10 @@ mod tests {
             &default_schedule,
             config(10.0, 1),
             &mut output,
-            || 9.0,
+            || ScheduleExecutionCpuUsage {
+                process_time: 1.0,
+                total_time: 9.0,
+            },
             |_, cell, output| {
                 spawned_names.push(cell.heuristic_name.clone());
                 EGPCtrl::spawn_command_reporting(
@@ -512,6 +588,38 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
         assert!(error.message().contains("Cannot schedule too-wide"));
+    }
+
+    #[test]
+    fn execution_returns_parent_request_after_cleaning_active_children() {
+        let mut schedule = vec![schedule_cell("failure", 1.0, 1)];
+        let mut output = Vec::new();
+
+        let report = execute_schedule_multi_core_with_parent_request(
+            &mut schedule,
+            config(10.0, 1),
+            &mut output,
+            |_, cell, output| {
+                EGPCtrl::spawn_command_reporting(
+                    status_command("no result", 0),
+                    cell.heuristic_name.clone(),
+                    1,
+                    cell.time_absolute,
+                    output,
+                )
+            },
+            || true,
+        )
+        .unwrap();
+
+        assert_eq!(report.outcome, ScheduleExecutionOutcome::ParentRequest);
+        assert_eq!(
+            report.outcome.c_return_value(),
+            i32::from(ErrorCode::PARENT_REQUEST.exit_status())
+        );
+        assert!(!String::from_utf8(output)
+            .unwrap()
+            .contains("% Schedule exhausted\n"));
     }
 
     fn schedule_cell(name: &str, fraction: f64, cores: i32) -> ScheduleCell {

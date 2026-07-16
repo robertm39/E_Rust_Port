@@ -3,10 +3,17 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_PAGE_SIZE: isize = 4096;
+
+#[cfg(windows)]
+static WAITED_CHILD_KERNEL_TIME_100NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static WAITED_CHILD_USER_TIME_100NS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -236,9 +243,13 @@ pub fn current_resource_usage() -> ResourceUsage {
     #[cfg(windows)]
     {
         if let Some((kernel_100ns, user_100ns)) = windows_process_times_100ns() {
+            let child_kernel = WAITED_CHILD_KERNEL_TIME_100NS.load(Ordering::SeqCst);
+            let child_user = WAITED_CHILD_USER_TIME_100NS.load(Ordering::SeqCst);
             return ResourceUsage {
-                user_time_seconds: filetime_100ns_to_seconds(user_100ns),
-                system_time_seconds: filetime_100ns_to_seconds(kernel_100ns),
+                user_time_seconds: filetime_100ns_to_seconds(user_100ns.saturating_add(child_user)),
+                system_time_seconds: filetime_100ns_to_seconds(
+                    kernel_100ns.saturating_add(child_kernel),
+                ),
                 max_resident_pages: windows_peak_working_set_pages().unwrap_or(0),
             };
         }
@@ -258,6 +269,79 @@ pub fn current_resource_usage() -> ResourceUsage {
         user_time_seconds: fallback_user_time_seconds(),
         system_time_seconds: 0.0,
         max_resident_pages: 0,
+    }
+}
+
+/// Returns CPU seconds charged to this process, excluding waited-for children.
+///
+/// This is the Rust counterpart of C `GetTotalCPUTime()`. Resource summaries
+/// continue to use [`current_resource_usage`], which includes child CPU time on
+/// Linux like C `PrintRusage()`.
+#[must_use]
+pub fn current_process_cpu_time_seconds() -> f64 {
+    #[cfg(windows)]
+    {
+        if let Some((kernel_100ns, user_100ns)) = windows_process_times_100ns() {
+            return filetime_100ns_to_seconds(user_100ns) + filetime_100ns_to_seconds(kernel_100ns);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(usage) = linux_resource::getrusage(linux_resource::RUSAGE_SELF) {
+            return timeval_seconds(usage.user_time) + timeval_seconds(usage.system_time);
+        }
+    }
+
+    fallback_user_time_seconds()
+}
+
+#[cfg(windows)]
+pub fn record_waited_child_resource_usage(child: &std::process::Child) {
+    record_waited_child_resource_usage_with_report(child, None);
+}
+
+#[cfg(windows)]
+pub fn record_waited_child_resource_usage_with_report(
+    child: &std::process::Child,
+    reported: Option<ResourceUsage>,
+) {
+    use std::os::windows::io::AsRawHandle;
+
+    let Some((mut kernel_100ns, mut user_100ns)) =
+        windows_kernel32::process_times_100ns_for_handle(child.as_raw_handle().cast())
+    else {
+        return;
+    };
+    if let Some(reported) = reported {
+        kernel_100ns = kernel_100ns.max(seconds_to_100ns_saturating(reported.system_time_seconds));
+        user_100ns = user_100ns.max(seconds_to_100ns_saturating(reported.user_time_seconds));
+    }
+    WAITED_CHILD_KERNEL_TIME_100NS.fetch_add(kernel_100ns, Ordering::SeqCst);
+    WAITED_CHILD_USER_TIME_100NS.fetch_add(user_100ns, Ordering::SeqCst);
+}
+
+#[cfg(not(windows))]
+pub fn record_waited_child_resource_usage(_child: &std::process::Child) {}
+
+#[cfg(not(windows))]
+pub fn record_waited_child_resource_usage_with_report(
+    _child: &std::process::Child,
+    _reported: Option<ResourceUsage>,
+) {
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn seconds_to_100ns_saturating(seconds: f64) -> u64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 0;
+    }
+    let ticks = seconds * 10_000_000.0;
+    if ticks >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        ticks.round() as u64
     }
 }
 
@@ -724,17 +808,23 @@ mod windows_kernel32 {
     }
 
     pub(super) fn process_times_100ns() -> Option<(u64, u64)> {
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle for the
+        // calling process.
+        process_times_100ns_for_handle(unsafe { GetCurrentProcess() })
+    }
+
+    pub(super) fn process_times_100ns_for_handle(process: *mut c_void) -> Option<(u64, u64)> {
         let mut creation_time = MaybeUninit::<FileTime>::uninit();
         let mut exit_time = MaybeUninit::<FileTime>::uninit();
         let mut kernel_time = MaybeUninit::<FileTime>::uninit();
         let mut user_time = MaybeUninit::<FileTime>::uninit();
 
-        // SAFETY: GetCurrentProcess returns a valid pseudo-handle for the
-        // current process, and all FILETIME pointers refer to writable,
-        // properly aligned storage that the OS initializes on success.
+        // SAFETY: process is a live process handle retained by std::process or
+        // the current-process pseudo-handle, and all FILETIME pointers refer
+        // to writable, aligned storage that the OS initializes on success.
         let ok = unsafe {
             GetProcessTimes(
-                GetCurrentProcess(),
+                process,
                 creation_time.as_mut_ptr(),
                 exit_time.as_mut_ptr(),
                 kernel_time.as_mut_ptr(),
