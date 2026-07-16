@@ -6078,14 +6078,7 @@ fn spawn_schedule_worker(
         )
     })?;
     let mut command = Command::new(current_exe);
-    command
-        .arg(INTERNAL_SCHEDULE_WORKER_ARG)
-        .arg(index.to_string())
-        .arg(&cell.heuristic_name)
-        .arg(cell.ordering.c_value().to_string())
-        .arg(cell.time_absolute.to_string())
-        .arg("--")
-        .args(&config.invocation_args);
+    command.args(schedule_worker_command_args(config, index, cell));
     EGPCtrl::spawn_command_reporting(
         command,
         cell.heuristic_name.clone(),
@@ -6093,6 +6086,23 @@ fn spawn_schedule_worker(
         cell.time_absolute,
         startup_output,
     )
+}
+
+fn schedule_worker_command_args(
+    config: &EProverConfig,
+    index: usize,
+    cell: &ScheduleCell,
+) -> Vec<String> {
+    let mut args = vec![
+        INTERNAL_SCHEDULE_WORKER_ARG.to_owned(),
+        index.to_string(),
+        cell.heuristic_name.clone(),
+        cell.ordering.c_value().to_string(),
+        cell.time_absolute.to_string(),
+        "--".to_owned(),
+    ];
+    args.extend(config.invocation_args.iter().cloned());
+    args
 }
 
 fn execute_auto_search_schedule<W: Write + ?Sized>(
@@ -6153,18 +6163,13 @@ fn spawn_search_schedule_worker(
         )
     })?;
     let mut command = Command::new(current_exe);
-    command
-        .arg(INTERNAL_SCHEDULE_SEARCH_WORKER_ARG)
-        .arg(preprocessing_index.to_string())
-        .arg(&preprocessing_cell.heuristic_name)
-        .arg(preprocessing_cell.ordering.c_value().to_string())
-        .arg(preprocessing_cell.time_absolute.to_string())
-        .arg(index.to_string())
-        .arg(&cell.heuristic_name)
-        .arg(cell.ordering.c_value().to_string())
-        .arg(cell.time_absolute.to_string())
-        .arg("--")
-        .args(&config.invocation_args);
+    command.args(search_schedule_worker_command_args(
+        config,
+        preprocessing_index,
+        preprocessing_cell,
+        index,
+        cell,
+    ));
     EGPCtrl::spawn_command_reporting(
         command,
         cell.heuristic_name.clone(),
@@ -6172,6 +6177,29 @@ fn spawn_search_schedule_worker(
         cell.time_absolute,
         startup_output,
     )
+}
+
+fn search_schedule_worker_command_args(
+    config: &EProverConfig,
+    preprocessing_index: usize,
+    preprocessing_cell: &ScheduleCell,
+    index: usize,
+    cell: &ScheduleCell,
+) -> Vec<String> {
+    let mut args = vec![
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG.to_owned(),
+        preprocessing_index.to_string(),
+        preprocessing_cell.heuristic_name.clone(),
+        preprocessing_cell.ordering.c_value().to_string(),
+        preprocessing_cell.time_absolute.to_string(),
+        index.to_string(),
+        cell.heuristic_name.clone(),
+        cell.ordering.c_value().to_string(),
+        cell.time_absolute.to_string(),
+        "--".to_owned(),
+    ];
+    args.extend(config.invocation_args.iter().cloned());
+    args
 }
 
 fn schedule_cell_cores_usize(cell: &ScheduleCell) -> usize {
@@ -15496,7 +15524,8 @@ mod tests {
         proof_state_init_global_indices, proof_success_object_roots, proof_success_status,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
-        schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_run_args,
+        schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_command_args,
+        schedule_worker_run_args, search_schedule_worker_command_args,
         simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
         write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
         write_resource_setup_messages, write_saturation_proof_object_clause,
@@ -17101,6 +17130,67 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(selected.name, "scheduled-strategy");
         assert_eq!(selected.ordering, to_params::TermOrdering::Lpo4Copy);
+    }
+
+    #[test]
+    fn schedule_worker_commands_transfer_both_schedule_layers_and_original_argv() {
+        let config = EProverConfig {
+            invocation_args: ["eprover", "--tstp-in", "problem.p"]
+                .map(str::to_owned)
+                .to_vec(),
+            ..EProverConfig::default()
+        };
+        let preprocessing = ScheduleCell {
+            heuristic_name: "PreprocCell".to_owned(),
+            ordering: to_params::TermOrdering::Kbo6,
+            sine: None,
+            time_fraction: 0.6,
+            time_absolute: 300,
+            cores: 2,
+        };
+        let search = ScheduleCell {
+            heuristic_name: "SearchCell".to_owned(),
+            ordering: to_params::TermOrdering::Lpo4Copy,
+            sine: None,
+            time_fraction: 0.4,
+            time_absolute: 17,
+            cores: 1,
+        };
+
+        assert_eq!(
+            schedule_worker_command_args(&config, 1, &preprocessing),
+            [
+                INTERNAL_SCHEDULE_WORKER_ARG,
+                "1",
+                "PreprocCell",
+                "3",
+                "300",
+                "--",
+                "eprover",
+                "--tstp-in",
+                "problem.p",
+            ]
+            .map(str::to_owned)
+        );
+        assert_eq!(
+            search_schedule_worker_command_args(&config, 1, &preprocessing, 4, &search),
+            [
+                INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+                "1",
+                "PreprocCell",
+                "3",
+                "300",
+                "4",
+                "SearchCell",
+                "7",
+                "17",
+                "--",
+                "eprover",
+                "--tstp-in",
+                "problem.p",
+            ]
+            .map(str::to_owned)
+        );
     }
 
     #[test]
