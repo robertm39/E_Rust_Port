@@ -126,6 +126,12 @@ Source files reviewed: `CONTROL/cco_proc_ctrl.h`, `CONTROL/cco_proc_ctrl.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- The opt-in `ECtrlCreate`/`ECtrlCreateGeneric` compatibility constructors preserve the complete C-concatenated command as one shell command operand. They use `/bin/sh -c` on POSIX targets and `cmd.exe /C` on Windows, matching the respective `popen` command-processor contracts rather than consulting an arbitrary `COMSPEC` override.
+- The compatibility path deliberately adds no quoting or escaping around prover, option, or input-file text. Regression tests pin spaces, quotes, redirections, and command separators byte-for-byte before shell execution, plus successful execution through the native Windows command processor.
+- If the shell starts but the requested prover does not, both C and Rust reach the empty-first-line `Cannot read eprover PID line` diagnostic. Rust now returns C's `OTHER_ERROR` exit code 11 for that case and for a non-PID first line; a failure to start the shell itself remains `SYS_ERROR` code 7 with a host-specific system suffix.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
@@ -135,7 +141,6 @@ Source files reviewed: `CONTROL/cco_proc_ctrl.h`, `CONTROL/cco_proc_ctrl.c`.
 ### Change Later
 
 - `EPCtrlAlloc` initializes most fields but not `fileno`; callers must not add the control cell to an `EPCtrlSet` before `ECtrlCreateGeneric` assigns the pipe descriptor. Rust should model this as an optional descriptor at the safe boundary rather than exposing uninitialized state.
-- `ECtrlCreateGeneric` constructs a shell command by concatenating the prover path, fixed options, caller-provided options, CPU limit, and input file without quoting or escaping. Rust preserves exact command-string construction and exposes opt-in shell-backed constructors for compatibility tests, but uses structured process arguments for the default safe spawning path; keep shell execution out of production scheduler/server calls unless reference traces require C `popen` behavior.
 - `ECtrlCreateGeneric` trusts the first line containing `% Pid: ` but then parses the PID from byte offset 7 rather than from the actual match location. Rust mirrors the effective line-start parser for normal C output and should only widen it if nonstandard prover wrappers are intended to work.
 - `EPCtrlGetResult` publishes `PRResultTable` entries for `PRFailure` and `PRGaveUp`, but the result scanner does not recognize `% Failure:` or `% SZS status GaveUp`; it only assigns `PRFailure` on EOF when no recognized proof/saturation status was seen. Rust should keep this compatibility quirk until scheduler reference tests decide whether failure/gave-up output needs direct recognition.
 - `EPCtrlSetGetResult` ignores `select` errors, scans every integer descriptor from zero through `maxfd`, deletes no-proof subprocesses during that scan, and treats `PRGaveUp` as an impossible default case. A cleaned event-loop API should separate readiness polling, result parsing, process deletion, and diagnostic policy after compatibility is covered.

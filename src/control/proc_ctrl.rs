@@ -170,12 +170,12 @@ impl EPCtrl {
         };
         let mut stdout = BufReader::new(stdout);
         let mut pid_line = String::new();
-        let read = stdout
-            .read_line(&mut pid_line)
-            .map_err(|error| proc_ctrl_error(format!("Cannot read eprover PID line: {error}")))?;
+        let read = stdout.read_line(&mut pid_line).map_err(|error| {
+            proc_ctrl_other_error(format!("Cannot read eprover PID line: {error}"))
+        })?;
         if read == 0 {
             cleanup_child(&mut child);
-            return Err(proc_ctrl_error("Cannot read eprover PID line"));
+            return Err(proc_ctrl_other_error("Cannot read eprover PID line"));
         }
         let pid = match parse_pid_line(&pid_line) {
             Ok(pid) => pid,
@@ -615,21 +615,24 @@ pub fn e_ctrl_default_command(
 
 #[cfg(windows)]
 fn shell_command(command_line: &str) -> Command {
-    let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd".into());
-    let mut command = Command::new(shell);
-    command.args(["/C", command_line]);
+    let mut command = Command::new("cmd.exe");
+    command.arg("/C").arg(command_line);
     command
 }
 
 #[cfg(not(windows))]
 fn shell_command(command_line: &str) -> Command {
     let mut command = Command::new("/bin/sh");
-    command.args(["-c", command_line]);
+    command.arg("-c").arg(command_line);
     command
 }
 
 fn proc_ctrl_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::INTERFACE_ERROR, message)
+}
+
+fn proc_ctrl_other_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, message)
 }
 
 fn output_error(error: &std::io::Error) -> Diagnostic {
@@ -679,7 +682,7 @@ fn spawn_output_reader(
 
 fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
     if !line.contains("% Pid: ") {
-        return Err(proc_ctrl_error("Cannot get eprover PID"));
+        return Err(proc_ctrl_other_error("Cannot get eprover PID"));
     }
     let rest = line.get(7..).unwrap_or_default();
     let digits = rest
@@ -691,7 +694,7 @@ fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
     } else {
         digits
             .parse::<u32>()
-            .map_err(|error| proc_ctrl_error(format!("Cannot parse eprover PID: {error}")))
+            .map_err(|error| proc_ctrl_other_error(format!("Cannot parse eprover PID: {error}")))
     }
 }
 
@@ -722,12 +725,13 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
 #[cfg(test)]
 mod tests {
     use super::{
-        e_ctrl_command, e_ctrl_default_command, prover_result_table_entry, EPCtrl, EPCtrlSet,
-        EPCTRL_BUFSIZE, E_OPTIONS, E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR,
+        e_ctrl_command, e_ctrl_default_command, prover_result_table_entry, shell_command, EPCtrl,
+        EPCtrlSet, EPCTRL_BUFSIZE, E_OPTIONS, E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR,
         SZS_FAILURE_STR, SZS_GAVEUP_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+    use std::ffi::OsStr;
     use std::process::Command;
     use std::time::Duration;
 
@@ -822,6 +826,38 @@ mod tests {
             e_ctrl_default_command("eprover", "", 7, "problem.p"),
             format!("eprover{E_OPTIONS_BASE}{E_OPTIONS}  --cpu-limit=7 problem.p")
         );
+        assert_eq!(
+            e_ctrl_command(
+                r#""C:\Program Files\eprover.exe""#,
+                r#" --auto="x y""#,
+                "2>errors.log & next",
+                -3,
+                "problems/a b.p",
+            ),
+            format!(
+                r#""C:\Program Files\eprover.exe"{E_OPTIONS_BASE} --auto="x y" 2>errors.log & next --cpu-limit=-3 problems/a b.p"#
+            )
+        );
+    }
+
+    #[test]
+    fn shell_command_matches_platform_popen_contract_without_requoting() {
+        let command_line = r#""quoted prover" --flag='x y' 2>errors.log & next"#;
+        let command = shell_command(command_line);
+        let args = command.get_args().collect::<Vec<_>>();
+
+        #[cfg(windows)]
+        assert_eq!(command.get_program(), OsStr::new("cmd.exe"));
+        #[cfg(not(windows))]
+        assert_eq!(command.get_program(), OsStr::new("/bin/sh"));
+
+        #[cfg(windows)]
+        assert_eq!(args[0], OsStr::new("/C"));
+        #[cfg(not(windows))]
+        assert_eq!(args[0], OsStr::new("-c"));
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[1], OsStr::new(command_line));
     }
 
     #[test]
@@ -926,11 +962,24 @@ mod tests {
     #[test]
     fn spawn_command_rejects_missing_pid_line() {
         let error = EPCtrl::spawn_command(no_pid_command(), "bad", None, 3).unwrap_err();
-        assert_eq!(
-            error.code(),
-            crate::basics::error::ErrorCode::INTERFACE_ERROR
-        );
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::OTHER_ERROR);
         assert_eq!(error.message(), "Cannot get eprover PID");
+    }
+
+    #[test]
+    fn shell_command_not_found_reaches_c_pid_read_diagnostic() {
+        let error = EPCtrl::create_generic_shell(
+            "e-rust-port-command-that-does-not-exist",
+            "missing",
+            "",
+            shell_stderr_redirect(),
+            5,
+            "problem.p",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), "Cannot read eprover PID line");
     }
 
     #[test]
@@ -994,5 +1043,15 @@ mod tests {
     #[cfg(unix)]
     fn shell_test_prover() -> &'static str {
         "printf '%s\\n' '% Pid: 123' '% SZS status Theorem'; #"
+    }
+
+    #[cfg(windows)]
+    fn shell_stderr_redirect() -> &'static str {
+        "2>NUL"
+    }
+
+    #[cfg(not(windows))]
+    fn shell_stderr_redirect() -> &'static str {
+        "2>/dev/null"
     }
 }
