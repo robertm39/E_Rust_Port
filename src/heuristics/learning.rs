@@ -8,9 +8,10 @@ use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::learn::annotations::ANNOTATION_DEFAULT_SIZE;
 use crate::learn::clauseenc::{flat_encode_clause_list_rep, rec_encode_clause_list_rep};
 use crate::learn::indexfunctions::{get_index_type, IndexType};
+use crate::learn::numfeatures::{compute_clause_set_num_features, Features};
 use crate::learn::patterns::{pattern_clause_compute, PatternSubst};
 use crate::learn::tsm::{get_tsm_type, tsm_eval_term, TsmAdmin, TsmType};
-use crate::learn::tsmio::tsm_from_kb;
+use crate::learn::tsmio::{tsm_from_kb, tsm_from_kb_with_target_features};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 
@@ -45,9 +46,15 @@ struct TsmEvalState {
 }
 
 #[derive(Clone, Debug)]
+enum TsmTargetSource {
+    Axioms(Box<ClauseSet>),
+    FeatureSnapshot(Box<Features>),
+}
+
+#[derive(Clone, Debug)]
 pub struct TsmEvaluator {
     param: TsmParam,
-    axioms: ClauseSet,
+    target: Option<TsmTargetSource>,
     eval: Option<TsmEvalState>,
 }
 
@@ -184,10 +191,19 @@ impl TsmParam {
 
 impl TsmEvaluator {
     #[must_use]
-    pub const fn new(param: TsmParam, axioms: ClauseSet) -> Self {
+    pub fn new(param: TsmParam, axioms: ClauseSet) -> Self {
         Self {
             param,
-            axioms,
+            target: Some(TsmTargetSource::Axioms(Box::new(axioms))),
+            eval: None,
+        }
+    }
+
+    #[must_use]
+    pub fn new_with_target_features(param: TsmParam, target_features: Features) -> Self {
+        Self {
+            param,
+            target: Some(TsmTargetSource::FeatureSnapshot(Box::new(target_features))),
             eval: None,
         }
     }
@@ -255,23 +271,42 @@ impl TsmEvaluator {
         }
 
         let mut kb_signature = signature.clone();
-        let admin = tsm_from_kb(
-            self.param.flat_clauses,
-            &self.param.e_weights,
-            &self.param.kb,
-            &mut kb_signature,
-            &self.axioms,
-            self.param.sel_no,
-            self.param.set_part,
-            self.param.dist_part,
-            self.param.index_type,
-            self.param.tsm_type,
-            tsm_depth_to_i32(self.param.depth),
-        )
+        let target = self.target.as_ref().unwrap_or_else(|| {
+            panic!("TSM evaluator requires a lazy target before initialization")
+        });
+        let admin = match target {
+            TsmTargetSource::Axioms(axioms) => tsm_from_kb(
+                self.param.flat_clauses,
+                &self.param.e_weights,
+                &self.param.kb,
+                &mut kb_signature,
+                axioms,
+                self.param.sel_no,
+                self.param.set_part,
+                self.param.dist_part,
+                self.param.index_type,
+                self.param.tsm_type,
+                tsm_depth_to_i32(self.param.depth),
+            ),
+            TsmTargetSource::FeatureSnapshot(target_features) => tsm_from_kb_with_target_features(
+                self.param.flat_clauses,
+                &self.param.e_weights,
+                &self.param.kb,
+                &mut kb_signature,
+                target_features,
+                self.param.sel_no,
+                self.param.set_part,
+                self.param.dist_part,
+                self.param.index_type,
+                self.param.tsm_type,
+                tsm_depth_to_i32(self.param.depth),
+            ),
+        }
         .unwrap_or_else(|err| panic!("TSMWeight KB initialization: {err}"));
         let pat_subst = PatternSubst::default_subst(&kb_signature);
         let bank = TermBank::new(kb_signature)
             .unwrap_or_else(|err| panic!("TSMWeight eval bank allocation: {err}"));
+        self.target = None;
         self.eval = Some(TsmEvalState {
             bank,
             admin,
@@ -294,6 +329,26 @@ pub fn tsm_weight_init(
     )
 }
 
+#[must_use]
+pub fn tsm_weight_init_with_signature(
+    prio_fun: ClausePrioFun,
+    param: TsmParam,
+    axioms: &ClauseSet,
+    signature: &Signature,
+) -> Wfcb<TsmEvaluator> {
+    let mut target_features = Features::new();
+    compute_clause_set_num_features(&mut target_features, axioms, signature);
+    wfcb_alloc(
+        tsm_weight_wfcb_compute,
+        prio_fun,
+        tsm_weight_exit,
+        Some(TsmEvaluator::new_with_target_features(
+            param,
+            target_features,
+        )),
+    )
+}
+
 pub fn tsm_weight_parse(
     scanner: &mut Scanner,
     axioms: &ClauseSet,
@@ -302,12 +357,34 @@ pub fn tsm_weight_parse(
     Ok(tsm_weight_init(prio_fun, param, axioms))
 }
 
+pub fn tsm_weight_parse_with_signature(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+    signature: &Signature,
+) -> Result<Wfcb<TsmEvaluator>, Diagnostic> {
+    let (prio_fun, param) = tsm_weight_parse_params(scanner)?;
+    Ok(tsm_weight_init_with_signature(
+        prio_fun, param, axioms, signature,
+    ))
+}
+
 pub fn tsmr_weight_parse(
     scanner: &mut Scanner,
     axioms: &ClauseSet,
 ) -> Result<Wfcb<TsmEvaluator>, Diagnostic> {
     let (prio_fun, param) = tsmr_weight_parse_params(scanner)?;
     Ok(tsm_weight_init(prio_fun, param, axioms))
+}
+
+pub fn tsmr_weight_parse_with_signature(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+    signature: &Signature,
+) -> Result<Wfcb<TsmEvaluator>, Diagnostic> {
+    let (prio_fun, param) = tsmr_weight_parse_params(scanner)?;
+    Ok(tsm_weight_init_with_signature(
+        prio_fun, param, axioms, signature,
+    ))
 }
 
 pub fn tsm_weight_parse_params(
@@ -538,8 +615,9 @@ fn tsm_weight_exit(_data: TsmEvaluator) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        tsm_weight_init, tsm_weight_parse, tsm_weight_parse_params, tsmr_weight_parse,
-        tsmr_weight_parse_params, TsmEvaluator, ANNOTATION_DEFAULT_SIZE,
+        tsm_weight_init, tsm_weight_parse, tsm_weight_parse_params,
+        tsm_weight_parse_with_signature, tsmr_weight_parse, tsmr_weight_parse_params, TsmEvaluator,
+        TsmTargetSource, ANNOTATION_DEFAULT_SIZE,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::clause::Clause;
@@ -634,9 +712,44 @@ mod tests {
             tsm_weight_parse(&mut scanner, &axioms).unwrap_or_else(|err| panic!("{err}"));
 
         assert!(!wfcb.data().expect("TSM evaluator data").is_initialized());
+        assert!(matches!(
+            &wfcb.data().expect("TSM evaluator data").target,
+            Some(TsmTargetSource::Axioms(_))
+        ));
         assert_close(wfcb.compute_eval(&bank, &clause), expected_base);
         assert!(wfcb.data().expect("TSM evaluator data").is_initialized());
+        assert!(wfcb.data().expect("TSM evaluator data").target.is_none());
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        remove_dir_if_present(&kb_dir);
+    }
+
+    #[test]
+    fn tsm_weight_signature_context_retains_compact_features_until_lazy_init() {
+        let kb_dir = temp_kb_dir("tsm-weight-features");
+        write_tiny_kb(&kb_dir);
+        let mut bank = term_bank();
+        let clause = unit_equality(&mut bank, "target");
+        let expected_base = clause.literal_weight(&bank, 1.0, 1.0, 1.0, 3, 2, 1.0, false);
+        let axioms = ClauseSet::from_clauses([clause.clone()]);
+        let mut scanner = Scanner::from_user_string(
+            &format!(
+                "(ConstPrio,2,3,0.5,rec,{},1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
+                kb_arg(&kb_dir)
+            ),
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = tsm_weight_parse_with_signature(&mut scanner, &axioms, bank.signature())
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(
+            &wfcb.data().expect("TSM evaluator data").target,
+            Some(TsmTargetSource::FeatureSnapshot(_))
+        ));
+        assert_close(wfcb.compute_eval(&bank, &clause), expected_base);
+        assert!(wfcb.data().expect("TSM evaluator data").target.is_none());
         assert_eq!(scanner.current_token().literal(), "tail");
 
         remove_dir_if_present(&kb_dir);

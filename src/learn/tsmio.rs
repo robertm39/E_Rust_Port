@@ -91,9 +91,38 @@ pub fn example_set_prepare(
     dist_part: f64,
 ) -> f64 {
     let mut target_features = Features::new();
+    compute_clause_set_num_features(&mut target_features, target, sig);
+    example_set_prepare_with_target_features(
+        flatset,
+        annoset,
+        eval_weights,
+        examples,
+        target_features,
+        sel_no,
+        set_part,
+        dist_part,
+    )
+}
+
+/// Prepare an example set from an already captured target feature vector.
+///
+/// This is the owned Rust equivalent of retaining C's non-owning target
+/// `ClauseSet_p` until a lazy TSM evaluator is first selected. Capturing the
+/// small numerical feature vector avoids retaining a deep clause-set clone.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn example_set_prepare_with_target_features(
+    flatset: &mut FlatAnnoSet,
+    annoset: &mut AnnoSet,
+    eval_weights: &[f64],
+    examples: &mut ExampleSet,
+    mut target_features: Features,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+) -> f64 {
     let mut example_ids = PStack::new();
 
-    compute_clause_set_num_features(&mut target_features, target, sig);
     example_set_select_by_dist(
         &mut example_ids,
         examples,
@@ -111,6 +140,12 @@ pub fn example_set_prepare(
     flat_anno_set_translate(flatset, annoset, eval_weights);
 
     i64_to_f64(c_double_to_long(result))
+}
+
+#[derive(Clone, Copy)]
+enum TsmTargetSource<'a> {
+    Clauses(&'a ClauseSet),
+    FeatureSnapshot(&'a Features),
 }
 
 /// Create a flat annotated example set from a knowledge-base directory.
@@ -195,7 +230,42 @@ pub fn tsm_from_kb(
         eval_weights,
         kb,
         sig,
-        target,
+        TsmTargetSource::Clauses(target),
+        sel_no,
+        set_part,
+        dist_part,
+        index_type,
+        tsm_type,
+        index_depth,
+    )?;
+    verbout_global("TSM created\n").map_err(|error| verbose_write_diagnostic(&error))?;
+    Ok(admin)
+}
+
+/// Create a TSM admin from a compact snapshot of the target problem features.
+///
+/// The snapshot is computed while the proof-state axioms are available and
+/// retained by lazy TSM evaluators in place of an owned `ClauseSet` clone.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tsm_from_kb_with_target_features(
+    flat_patterns: bool,
+    eval_weights: &[f64],
+    kb: &str,
+    sig: &mut Signature,
+    target_features: &Features,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+    index_type: IndexType,
+    tsm_type: TsmType,
+    index_depth: i32,
+) -> Result<TsmAdmin, Diagnostic> {
+    let admin = tsm_from_kb_core(
+        flat_patterns,
+        eval_weights,
+        kb,
+        sig,
+        TsmTargetSource::FeatureSnapshot(target_features),
         sel_no,
         set_part,
         dist_part,
@@ -242,7 +312,7 @@ pub fn tsm_from_kb_with_verbose_output(
         eval_weights,
         kb,
         sig,
-        target,
+        TsmTargetSource::Clauses(target),
         sel_no,
         set_part,
         dist_part,
@@ -261,7 +331,7 @@ fn tsm_from_kb_core(
     eval_weights: &[f64],
     kb: &str,
     sig: &mut Signature,
-    target: &ClauseSet,
+    target: TsmTargetSource<'_>,
     sel_no: i64,
     set_part: f64,
     dist_part: f64,
@@ -291,13 +361,20 @@ fn tsm_from_kb_core(
     if flat_patterns {
         anno_set_rec_to_flat_enc(&mut bank, &mut annoset)?;
     }
-    let eval_default = example_set_prepare(
+    let target_features = match target {
+        TsmTargetSource::Clauses(target) => {
+            let mut target_features = Features::new();
+            compute_clause_set_num_features(&mut target_features, target, sig);
+            target_features
+        }
+        TsmTargetSource::FeatureSnapshot(target_features) => target_features.clone(),
+    };
+    let eval_default = example_set_prepare_with_target_features(
         &mut flatset,
         &mut annoset,
         eval_weights,
         &mut proof_examples,
-        sig,
-        target,
+        target_features,
         sel_no,
         set_part,
         dist_part,

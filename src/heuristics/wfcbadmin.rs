@@ -18,7 +18,10 @@ use crate::heuristics::funweights::{
     relevance_level_weight_parse_with_formulas, sym_offset_weight_parse,
 };
 use crate::heuristics::gdweight::gd_clause_weight_parse;
-use crate::heuristics::learning::{tsm_weight_parse, tsmr_weight_parse};
+use crate::heuristics::learning::{
+    tsm_weight_parse, tsm_weight_parse_with_signature, tsmr_weight_parse,
+    tsmr_weight_parse_with_signature,
+};
 use crate::heuristics::levweight::conjecture_lev_distance_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
@@ -37,6 +40,7 @@ use crate::heuristics::varweights::{
 };
 use crate::heuristics::wfcb::{BoxedWfcb, WfcbOps};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::terms::signature::Signature;
 
 pub const WEIGHT_FUN_PARSE_FUN_NAMES: [&str; 46] = [
     "Clauseweight",
@@ -91,6 +95,7 @@ pub const WEIGHT_FUN_PARSE_FUN_NAMES: [&str; 46] = [
 pub struct WeightParseContext<'a> {
     axioms: Option<&'a ClauseSet>,
     formula_axioms: Option<&'a FormulaSet>,
+    signature: Option<&'a Signature>,
 }
 
 impl<'a> WeightParseContext<'a> {
@@ -99,6 +104,7 @@ impl<'a> WeightParseContext<'a> {
         Self {
             axioms: None,
             formula_axioms: None,
+            signature: None,
         }
     }
 
@@ -107,6 +113,16 @@ impl<'a> WeightParseContext<'a> {
         Self {
             axioms: Some(axioms),
             formula_axioms: None,
+            signature: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_with_signature(axioms: &'a ClauseSet, signature: &'a Signature) -> Self {
+        Self {
+            axioms: Some(axioms),
+            formula_axioms: None,
+            signature: Some(signature),
         }
     }
 
@@ -115,6 +131,20 @@ impl<'a> WeightParseContext<'a> {
         Self {
             axioms: Some(axioms),
             formula_axioms: Some(formula_axioms),
+            signature: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_with_formulas_and_signature(
+        axioms: &'a ClauseSet,
+        formula_axioms: &'a FormulaSet,
+        signature: &'a Signature,
+    ) -> Self {
+        Self {
+            axioms: Some(axioms),
+            formula_axioms: Some(formula_axioms),
+            signature: Some(signature),
         }
     }
 
@@ -126,6 +156,11 @@ impl<'a> WeightParseContext<'a> {
     #[must_use]
     pub const fn formula_axioms(self) -> Option<&'a FormulaSet> {
         self.formula_axioms
+    }
+
+    #[must_use]
+    pub const fn signature(self) -> Option<&'a Signature> {
+        self.signature
     }
 
     fn require_axioms(self, scanner: &Scanner, name: &str) -> Result<&'a ClauseSet, Diagnostic> {
@@ -348,11 +383,23 @@ pub fn weight_fun_parse_with_context(
         "ClauseWeightAge" => Ok(Box::new(clause_weight_age_parse(scanner)?)),
         "TSMWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
-            Ok(Box::new(tsm_weight_parse(scanner, axioms)?))
+            if let Some(signature) = context.signature() {
+                Ok(Box::new(tsm_weight_parse_with_signature(
+                    scanner, axioms, signature,
+                )?))
+            } else {
+                Ok(Box::new(tsm_weight_parse(scanner, axioms)?))
+            }
         }
         "TSMRWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
-            Ok(Box::new(tsmr_weight_parse(scanner, axioms)?))
+            if let Some(signature) = context.signature() {
+                Ok(Box::new(tsmr_weight_parse_with_signature(
+                    scanner, axioms, signature,
+                )?))
+            } else {
+                Ok(Box::new(tsmr_weight_parse(scanner, axioms)?))
+            }
         }
         "StaggeredWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
@@ -815,7 +862,7 @@ mod tests {
         let clause = Clause::empty();
         let bank = term_bank();
         let axioms = ClauseSet::new();
-        let context = WeightParseContext::new(&axioms);
+        let context = WeightParseContext::new_with_signature(&axioms, bank.signature());
         let specs = [
             "TSMWeight(ConstPrio,2,3,0.5,rec,kb,1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
             "TSMRWeight(ConstPrio,2,3,4.0,5.0,6.0,0.5,rec,kb,1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
@@ -830,6 +877,7 @@ mod tests {
             assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
             assert_eq!(scanner.current_token().literal(), "tail");
         }
+        assert!(context.signature().is_some());
     }
 
     #[test]

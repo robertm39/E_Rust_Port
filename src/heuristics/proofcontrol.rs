@@ -642,7 +642,10 @@ pub fn proof_control_init(
 
     let ocb = to_select_ordering(bank, axioms, params, higher_order_problem)?;
     control.ocb = Some(ocb);
-    proof_control_init_heuristics(control, axioms, params, fvi_params, wfcb_defs, hcb_defs)
+    let context = WeightParseContext::new_with_signature(axioms, bank.signature());
+    proof_control_init_heuristics_with_context(
+        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+    )
 }
 
 #[expect(
@@ -665,14 +668,13 @@ pub fn proof_control_init_with_formula_axioms(
 
     let ocb = to_select_ordering(bank, axioms, params, higher_order_problem)?;
     control.ocb = Some(ocb);
-    proof_control_init_heuristics_with_formula_axioms(
-        control,
+    let context = WeightParseContext::new_with_formulas_and_signature(
         axioms,
         formula_axioms,
-        params,
-        fvi_params,
-        wfcb_defs,
-        hcb_defs,
+        bank.signature(),
+    );
+    proof_control_init_heuristics_with_context(
+        control, params, fvi_params, wfcb_defs, hcb_defs, context,
     )
 }
 
@@ -1078,7 +1080,11 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             "ProofStateInit requires initialized proof-control heuristic",
         )
     })?;
-    let context = WeightParseContext::new_with_formulas(state.axioms(), state.f_axioms());
+    let context = WeightParseContext::new_with_formulas_and_signature(
+        state.axioms(),
+        state.f_axioms(),
+        state.terms().signature(),
+    );
     let uniq_hcb_handle =
         get_heuristic_handle_with_context("Uniq", &mut control.hcbs, &mut control.wfcbs, context)?;
 
