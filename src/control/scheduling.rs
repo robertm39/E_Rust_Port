@@ -6,9 +6,6 @@ use crate::heuristics::new_autoschedule::{
 };
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::time::Duration;
-
-const PROCESS_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScheduleExecutionOutcome {
@@ -176,9 +173,7 @@ where
             )));
         }
 
-        if let Some(descriptor) =
-            controls.get_result_from_pipes_timeout(PROCESS_POLL_TIMEOUT, output)?
-        {
+        if let Some(descriptor) = controls.get_result(output)? {
             let index = descriptors.get(&descriptor).copied().ok_or_else(|| {
                 scheduling_error("Winning schedule process is missing its schedule index")
             })?;

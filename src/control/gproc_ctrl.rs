@@ -14,6 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const EGPCTRL_BUFSIZE: usize = 1024;
+pub const EGPCTRL_SET_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 enum GenericProcessOutputMessage {
@@ -275,7 +276,7 @@ impl EGPCtrl {
                 self.output_eof = true;
                 self.get_result_from_optional_chunk(None, completion_output)
             }
-            GenericProcessOutputMessage::Error(error) => Err(gproc_ctrl_error(format!(
+            GenericProcessOutputMessage::Error(error) => Err(gproc_ctrl_system_error(format!(
                 "Cannot read generic subprocess output: {error}"
             ))),
         }
@@ -481,7 +482,7 @@ impl EGPCtrlSet {
         let start = Instant::now();
         loop {
             let (result_descriptor, saw_output) = self.get_result_from_available_pipes(output)?;
-            if result_descriptor.is_some() || saw_output || self.is_empty() {
+            if result_descriptor.is_some() || saw_output {
                 return Ok(result_descriptor);
             }
 
@@ -494,6 +495,13 @@ impl EGPCtrlSet {
             };
             thread::sleep(remaining.min(Duration::from_millis(10)));
         }
+    }
+
+    pub fn get_result(
+        &mut self,
+        output: &mut impl Write,
+    ) -> Result<Option<Descriptor>, Diagnostic> {
+        self.get_result_from_pipes_timeout(EGPCTRL_SET_WAIT_TIMEOUT, output)
     }
 
     fn handle_eof_result(
@@ -611,11 +619,14 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
 
 #[cfg(test)]
 mod tests {
-    use super::{EGPCtrl, EGPCtrlSet, EGPCTRL_BUFSIZE};
+    use super::{
+        EGPCtrl, EGPCtrlSet, GenericProcessOutputMessage, EGPCTRL_BUFSIZE, EGPCTRL_SET_WAIT_TIMEOUT,
+    };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
     use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
     use std::process::Command;
+    use std::sync::mpsc;
     use std::time::Duration;
 
     #[test]
@@ -819,6 +830,77 @@ mod tests {
         assert_eq!(result, Some(success_descriptor));
         assert!(set.find_proc(success_descriptor).is_some());
         assert_eq!(set.cores_reserved(), 2);
+    }
+
+    #[test]
+    fn c_compatible_poll_uses_500ms_and_reads_one_chunk_per_process() {
+        assert_eq!(EGPCTRL_SET_WAIT_TIMEOUT, Duration::from_millis(500));
+
+        let descriptor = Descriptor::new(4);
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(GenericProcessOutputMessage::Chunk(
+                b"% SZS status Theorem\n".to_vec(),
+            ))
+            .unwrap();
+        sender.send(GenericProcessOutputMessage::Eof).unwrap();
+        let mut control = EGPCtrl::with_descriptor("proof", descriptor, 1);
+        control.output_rx = Some(receiver);
+        let mut set = EGPCtrlSet::new();
+        set.add_proc(control).unwrap();
+        let mut output = Vec::new();
+
+        assert_eq!(set.get_result(&mut output).unwrap(), None);
+        let control = set.find_proc(descriptor).unwrap();
+        assert_eq!(control.result(), ProverResult::NoResult);
+        assert!(!control.output_eof);
+
+        assert_eq!(set.get_result(&mut output).unwrap(), Some(descriptor));
+        assert!(set.find_proc(descriptor).unwrap().output_eof);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% proof with pid 0 completed with status 0\n"
+        );
+    }
+
+    #[test]
+    fn c_compatible_poll_surfaces_pipe_read_error_as_system_error() {
+        let descriptor = Descriptor::new(6);
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(GenericProcessOutputMessage::Error("broken pipe".to_owned()))
+            .unwrap();
+        let mut control = EGPCtrl::with_descriptor("failed", descriptor, 1);
+        control.output_rx = Some(receiver);
+        let mut set = EGPCtrlSet::new();
+        set.add_proc(control).unwrap();
+        let mut output = Vec::new();
+
+        let error = set.get_result(&mut output).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYSTEM_ERROR);
+        assert_eq!(
+            error.message(),
+            "Cannot read generic subprocess output: broken pipe"
+        );
+        assert!(set.find_proc(descriptor).is_some());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn c_compatible_poll_preserves_empty_set_timeout() {
+        let mut set = EGPCtrlSet::new();
+        let mut output = Vec::new();
+        let timeout = Duration::from_millis(20);
+        let start = std::time::Instant::now();
+
+        assert_eq!(
+            set.get_result_from_pipes_timeout(timeout, &mut output)
+                .unwrap(),
+            None
+        );
+        assert!(start.elapsed() >= timeout);
+        assert!(output.is_empty());
     }
 
     #[test]
