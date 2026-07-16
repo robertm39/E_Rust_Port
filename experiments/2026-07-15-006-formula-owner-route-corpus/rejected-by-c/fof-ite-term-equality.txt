@@ -1,0 +1,8 @@
+% Rust accepts first-order FOOL term branches here. The C 3.3.5 reference's
+% first-order ParseIte path asks TFormulaTSTPParse to parse each branch and
+% rejects the comma after the individual-valued `a` branch.
+tff(a_type, type, a: $i).
+tff(b_type, type, b: $i).
+tff(c_type, type, c: $i).
+tff(p_type, type, p: $i > $o).
+fof(source, axiom, $ite(p(a),a,b) = c).

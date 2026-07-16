@@ -1,0 +1,3 @@
+% Rust accepts this represented formula-owner extension, while the C 3.3.5
+% reference rejects the parenthesized formula on the right of `=`.
+fof(source, axiom, p(a) = (q(a) | r(a))).
