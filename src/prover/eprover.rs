@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
@@ -8198,82 +8198,7 @@ fn proof_object_first_display_id(graph: &ProofObjectGraph<'_>) -> i64 {
 }
 
 fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphNode> {
-    let node_count = proof_object_list_node_count(graph);
-    let mut parents_by_child = vec![Vec::new(); node_count];
-    let mut ref_counts = vec![0_usize; node_count];
-    let edges = proof_object_list_mixed_edges(graph);
-    for edge in edges {
-        if let (Some(parent), Some(child)) = (
-            proof_object_list_node_ordinal(graph, edge.parent),
-            proof_object_list_node_ordinal(graph, edge.child),
-        ) {
-            parents_by_child[child].push(parent);
-            ref_counts[parent] = ref_counts[parent].saturating_add(1);
-        }
-    }
-
-    let mut work_queue = VecDeque::new();
-    for root_index in &graph.root_indices {
-        if let Some(root) =
-            proof_object_list_node_ordinal(graph, ProofObjectGraphNode::Clause(*root_index))
-        {
-            if ref_counts[root] == 0 {
-                work_queue.push_back(root);
-            }
-        }
-    }
-    for root_index in &graph.formula_root_indices {
-        if let Some(root) =
-            proof_object_list_node_ordinal(graph, ProofObjectGraphNode::Formula(*root_index))
-        {
-            if ref_counts[root] == 0 {
-                work_queue.push_back(root);
-            }
-        }
-    }
-
-    if work_queue.is_empty() {
-        for (ordinal, count) in ref_counts.iter().copied().enumerate() {
-            if count == 0 {
-                work_queue.push_back(ordinal);
-            }
-        }
-    }
-
-    let mut ordered_deriv = Vec::with_capacity(node_count);
-    let mut ax_stack = Vec::new();
-    let mut processed = vec![false; node_count];
-    while let Some(child) = work_queue.pop_front() {
-        if processed[child] {
-            continue;
-        }
-        processed[child] = true;
-        ordered_deriv.push(child);
-
-        proof_object_list_process_c_parent_stacks(
-            graph,
-            &parents_by_child[child],
-            &mut ref_counts,
-            &mut work_queue,
-            &mut ax_stack,
-        );
-    }
-
-    ordered_deriv.extend(ax_stack);
-
-    if ordered_deriv.len() != node_count {
-        let ordered: BTreeSet<usize> = ordered_deriv.iter().copied().collect();
-        ordered_deriv.extend(
-            (0..node_count)
-                .rev()
-                .filter(|index| !ordered.contains(index)),
-        );
-    }
-    ordered_deriv
-        .into_iter()
-        .rev()
-        .map(|ordinal| proof_object_list_node_from_ordinal(graph, ordinal))
-        .collect()
+    graph.c_ordered_nodes()
 }
 
 fn proof_object_list_mixed_edges(graph: &ProofObjectGraph<'_>) -> Vec<ProofObjectGraphMixedEdge> {
@@ -8305,72 +8230,6 @@ fn proof_object_list_node_ordinal(
             Some(graph.clauses.len() + index)
         }
         ProofObjectGraphNode::Clause(_) | ProofObjectGraphNode::Formula(_) => None,
-    }
-}
-
-fn proof_object_list_node_from_ordinal(
-    graph: &ProofObjectGraph<'_>,
-    ordinal: usize,
-) -> ProofObjectGraphNode {
-    if ordinal < graph.clauses.len() {
-        ProofObjectGraphNode::Clause(ordinal)
-    } else {
-        ProofObjectGraphNode::Formula(ordinal - graph.clauses.len())
-    }
-}
-
-fn proof_object_list_process_c_parent_stacks(
-    graph: &ProofObjectGraph<'_>,
-    parents: &[usize],
-    ref_counts: &mut [usize],
-    work_queue: &mut VecDeque<usize>,
-    ax_stack: &mut Vec<usize>,
-) {
-    for parent in parents.iter().copied().filter(|parent| {
-        matches!(
-            proof_object_list_node_from_ordinal(graph, *parent),
-            ProofObjectGraphNode::Clause(_)
-        )
-    }) {
-        proof_object_list_process_released_parent(graph, parent, ref_counts, work_queue, ax_stack);
-    }
-    for parent in parents.iter().copied().filter(|parent| {
-        matches!(
-            proof_object_list_node_from_ordinal(graph, *parent),
-            ProofObjectGraphNode::Formula(_)
-        )
-    }) {
-        proof_object_list_process_released_parent(graph, parent, ref_counts, work_queue, ax_stack);
-    }
-}
-
-fn proof_object_list_process_released_parent(
-    graph: &ProofObjectGraph<'_>,
-    parent: usize,
-    ref_counts: &mut [usize],
-    work_queue: &mut VecDeque<usize>,
-    ax_stack: &mut Vec<usize>,
-) {
-    ref_counts[parent] = ref_counts[parent].saturating_sub(1);
-    if ref_counts[parent] == 0 {
-        if proof_object_list_node_has_derivation(graph, parent) {
-            work_queue.push_back(parent);
-        } else {
-            ax_stack.push(parent);
-        }
-    }
-}
-
-fn proof_object_list_node_has_derivation(graph: &ProofObjectGraph<'_>, ordinal: usize) -> bool {
-    match proof_object_list_node_from_ordinal(graph, ordinal) {
-        ProofObjectGraphNode::Clause(index) => graph
-            .clauses
-            .get(index)
-            .is_some_and(|clause| clause.derivation().is_some()),
-        ProofObjectGraphNode::Formula(index) => graph
-            .formulas
-            .get(index)
-            .is_some_and(|formula| formula.derivation().is_some()),
     }
 }
 

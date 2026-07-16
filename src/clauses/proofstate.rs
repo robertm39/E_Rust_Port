@@ -31,7 +31,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     path::Path,
     sync::atomic::Ordering,
@@ -402,6 +402,159 @@ pub struct ProofObjectGraph<'a> {
     pub mixed_edges: Vec<ProofObjectGraphMixedEdge>,
     pub root_indices: Vec<usize>,
     pub formula_root_indices: Vec<usize>,
+}
+
+impl ProofObjectGraph<'_> {
+    /// Returns the proof nodes in C `DerivationPrint` order.
+    ///
+    /// The graph retains borrowed references to the exact clause and formula
+    /// owners selected during extraction. This method orders their stable node
+    /// indices without cloning or renumbering those owners. It mirrors
+    /// `DerivationTopoSort` followed by the reverse traversal in
+    /// `DerivationPrint`: roots and released derived parents use a FIFO queue,
+    /// while released axioms are deferred through a LIFO stack. Clause parents
+    /// are released before formula parents because C extracts them into
+    /// separate stacks in that order.
+    #[must_use]
+    pub fn c_ordered_nodes(&self) -> Vec<ProofObjectGraphNode> {
+        let node_count = self.node_count();
+        let mut parents_by_child = vec![Vec::new(); node_count];
+        let mut ref_counts = vec![0_usize; node_count];
+        let mut record_edge = |edge: ProofObjectGraphMixedEdge| {
+            if let (Some(parent), Some(child)) = (
+                self.node_ordinal(edge.parent),
+                self.node_ordinal(edge.child),
+            ) {
+                parents_by_child[child].push(parent);
+                ref_counts[parent] = ref_counts[parent].saturating_add(1);
+            }
+        };
+        if self.mixed_edges.is_empty() {
+            for edge in &self.edges {
+                record_edge(ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(edge.parent_index),
+                    child: ProofObjectGraphNode::Clause(edge.child_index),
+                });
+            }
+        } else {
+            for edge in &self.mixed_edges {
+                record_edge(*edge);
+            }
+        }
+
+        let mut work_queue = VecDeque::new();
+        for root_index in &self.root_indices {
+            if let Some(root) = self.node_ordinal(ProofObjectGraphNode::Clause(*root_index)) {
+                if ref_counts[root] == 0 {
+                    work_queue.push_back(root);
+                }
+            }
+        }
+        for root_index in &self.formula_root_indices {
+            if let Some(root) = self.node_ordinal(ProofObjectGraphNode::Formula(*root_index)) {
+                if ref_counts[root] == 0 {
+                    work_queue.push_back(root);
+                }
+            }
+        }
+        if work_queue.is_empty() {
+            for (ordinal, count) in ref_counts.iter().copied().enumerate() {
+                if count == 0 {
+                    work_queue.push_back(ordinal);
+                }
+            }
+        }
+
+        let mut ordered_derivation = Vec::with_capacity(node_count);
+        let mut axiom_stack = Vec::new();
+        let mut processed = vec![false; node_count];
+        while let Some(child) = work_queue.pop_front() {
+            if processed[child] {
+                continue;
+            }
+            processed[child] = true;
+            ordered_derivation.push(child);
+
+            for parent in parents_by_child[child]
+                .iter()
+                .copied()
+                .filter(|parent| *parent < self.clauses.len())
+            {
+                self.release_parent(parent, &mut ref_counts, &mut work_queue, &mut axiom_stack);
+            }
+            for parent in parents_by_child[child]
+                .iter()
+                .copied()
+                .filter(|parent| *parent >= self.clauses.len())
+            {
+                self.release_parent(parent, &mut ref_counts, &mut work_queue, &mut axiom_stack);
+            }
+        }
+
+        ordered_derivation.extend(axiom_stack);
+        if ordered_derivation.len() != node_count {
+            let mut included = vec![false; node_count];
+            for ordinal in &ordered_derivation {
+                included[*ordinal] = true;
+            }
+            ordered_derivation.extend((0..node_count).rev().filter(|index| !included[*index]));
+        }
+        ordered_derivation
+            .into_iter()
+            .rev()
+            .filter_map(|ordinal| self.node_from_ordinal(ordinal))
+            .collect()
+    }
+
+    const fn node_count(&self) -> usize {
+        self.clauses.len() + self.formulas.len()
+    }
+
+    fn node_ordinal(&self, node: ProofObjectGraphNode) -> Option<usize> {
+        match node {
+            ProofObjectGraphNode::Clause(index) if index < self.clauses.len() => Some(index),
+            ProofObjectGraphNode::Formula(index) if index < self.formulas.len() => {
+                Some(self.clauses.len() + index)
+            }
+            ProofObjectGraphNode::Clause(_) | ProofObjectGraphNode::Formula(_) => None,
+        }
+    }
+
+    fn node_from_ordinal(&self, ordinal: usize) -> Option<ProofObjectGraphNode> {
+        if ordinal < self.clauses.len() {
+            Some(ProofObjectGraphNode::Clause(ordinal))
+        } else {
+            let formula = ordinal.checked_sub(self.clauses.len())?;
+            (formula < self.formulas.len()).then_some(ProofObjectGraphNode::Formula(formula))
+        }
+    }
+
+    fn node_has_derivation(&self, ordinal: usize) -> bool {
+        match self.node_from_ordinal(ordinal) {
+            Some(ProofObjectGraphNode::Clause(index)) => self.clauses[index].derivation().is_some(),
+            Some(ProofObjectGraphNode::Formula(index)) => {
+                self.formulas[index].derivation().is_some()
+            }
+            None => false,
+        }
+    }
+
+    fn release_parent(
+        &self,
+        parent: usize,
+        ref_counts: &mut [usize],
+        work_queue: &mut VecDeque<usize>,
+        axiom_stack: &mut Vec<usize>,
+    ) {
+        ref_counts[parent] = ref_counts[parent].saturating_sub(1);
+        if ref_counts[parent] == 0 {
+            if self.node_has_derivation(parent) {
+                work_queue.push_back(parent);
+            } else {
+                axiom_stack.push(parent);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -2662,7 +2815,7 @@ mod tests {
         cached_rewrite_steps, derived_dot_clause_link_colour, derived_dot_formula_link_colour,
         derived_dot_node_colour, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
         generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
-        DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraphEdge,
+        DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraph, ProofObjectGraphEdge,
         ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, ProofStateGcAnalysis,
         ProofStateStatistics, WatchlistSource, GC_DEFINITION_FORMULA_ARCHIVE, GC_F_ARCHIVE,
         GC_F_AXIOMS, GC_F_AX_ARCHIVE, GC_WATCHLIST, PROOF_STATE_CLAUSE_GC_ROOTS,
@@ -2670,6 +2823,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
@@ -2680,8 +2834,8 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
         ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
-        DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT, DC_FOF_QUOTE,
-        DC_FOF_SIMPLIFY,
+        DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_EQ_RES, DC_EXPAND_DISTINCT,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -3712,6 +3866,78 @@ mod tests {
                 parent_index: 2,
                 child_index: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn proof_object_graph_c_order_preserves_mixed_multi_root_sibling_interleaving() {
+        fn derived_stack() -> PStack<DerivationEntry> {
+            let mut stack = PStack::new();
+            stack.push(DerivationEntry::Operation(DC_CONDENSE));
+            stack
+        }
+
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause_axiom = simple_clause(&mut state, "ordered_clause_axiom", 1);
+        let mut shared = simple_clause(&mut state, "ordered_shared", 2);
+        shared.set_derivation(Some(derived_stack()));
+        let mut left_sibling = simple_clause(&mut state, "ordered_left", 3);
+        left_sibling.set_derivation(Some(derived_stack()));
+        let mut clause_root = simple_clause(&mut state, "ordered_clause_root", 4);
+        clause_root.set_derivation(Some(derived_stack()));
+
+        let formula_axiom = wrapped_formula(&mut state, "ordered_formula_axiom");
+        let mut right_sibling = wrapped_formula(&mut state, "ordered_right");
+        right_sibling.set_derivation(Some(derived_stack()));
+        let mut formula_root = wrapped_formula(&mut state, "ordered_formula_root");
+        formula_root.set_derivation(Some(derived_stack()));
+
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause_axiom, &shared, &left_sibling, &clause_root],
+            formulas: vec![&formula_axiom, &right_sibling, &formula_root],
+            clause_aliases: Default::default(),
+            edges: Vec::new(),
+            mixed_edges: vec![
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(0),
+                    child: ProofObjectGraphNode::Clause(1),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Formula(0),
+                    child: ProofObjectGraphNode::Clause(1),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(1),
+                    child: ProofObjectGraphNode::Clause(2),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(1),
+                    child: ProofObjectGraphNode::Formula(1),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(2),
+                    child: ProofObjectGraphNode::Clause(3),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Formula(1),
+                    child: ProofObjectGraphNode::Formula(2),
+                },
+            ],
+            root_indices: vec![3],
+            formula_root_indices: vec![2],
+        };
+
+        assert_eq!(
+            graph.c_ordered_nodes(),
+            vec![
+                ProofObjectGraphNode::Formula(0),
+                ProofObjectGraphNode::Clause(0),
+                ProofObjectGraphNode::Clause(1),
+                ProofObjectGraphNode::Formula(1),
+                ProofObjectGraphNode::Clause(2),
+                ProofObjectGraphNode::Formula(2),
+                ProofObjectGraphNode::Clause(3),
+            ]
         );
     }
 

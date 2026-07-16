@@ -1536,8 +1536,9 @@ mod tests {
         deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
         deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids,
-        derivation_entries, formula_dummy_quote_parent_ref, get_is_ho, op_code, op_is_generating,
-        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
+        derivation_entries, derivation_op_id, derivation_op_status, derivation_op_theory,
+        formula_dummy_quote_parent_ref, get_is_ho, op_code, op_is_generating, set_is_ho,
+        ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
         ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM,
         ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX,
         DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR,
@@ -1764,6 +1765,103 @@ mod tests {
         ];
         for (actual, expected) in derivation_code_values {
             assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn derivation_operation_metadata_matches_every_c_print_table_entry() {
+        let cases = [
+            (DC_NOP, "NOP", None, None),
+            (DC_CNF_QUOTE, "QUOTE", None, None),
+            (DC_FOF_QUOTE, "QUOTE", None, None),
+            (DC_CNF_ADD_ARG, "AddArg", Some("NA"), Some("NA")),
+            (DC_CNF_EVAL_GC, "evalgc", Some("thm"), None),
+            (DC_REWRITE, "rw", Some("thm"), None),
+            (DC_LOCAL_REWRITE, "local_rw", Some("thm"), None),
+            (DC_UNFOLD, "rw", Some("thm"), None),
+            (DC_APPLY_DEF, "apply_def", Some("thm"), None),
+            (DC_CONTEXT_SR, "csr", Some("thm"), None),
+            (DC_DES_EQ_RES, "er", Some("thm"), None),
+            (DC_SR, "sr", Some("thm"), None),
+            (DC_AC_RES, "ar", Some("thm"), None),
+            (DC_CONDENSE, "condense", Some("thm"), None),
+            (DC_NORMALIZE, "cn", Some("thm"), None),
+            (
+                DC_EVAL_ANSWERS,
+                "eval_answer_literal",
+                Some("thm"),
+                Some("answers"),
+            ),
+            (DC_NEGATE_CONJECTURE, "assume_negation", Some("cth"), None),
+            (DC_FOF_SIMPLIFY, "fof_simplification", Some("thm"), None),
+            (DC_FNNF, "fof_nnf", Some("thm"), None),
+            (DC_SHIFT_QUANTORS, "shift_quantors", Some("thm"), None),
+            (DC_VAR_RENAME, "variable_rename", Some("thm"), None),
+            (DC_SKOLEMIZE, "skolemize", Some("esa"), None),
+            (DC_DIST_DISJUNCTIONS, "distribute", Some("thm"), None),
+            (
+                DC_ANNO_QUESTION,
+                "add_answer_literal",
+                Some("thm"),
+                Some("answers"),
+            ),
+            (
+                DC_EXPAND_DISTINCT,
+                "epxand_distinct",
+                Some("thm"),
+                Some("distinct"),
+            ),
+            (DC_PARAMOD, "pm", Some("thm"), None),
+            (DC_SIM_PARAMOD, "spm", Some("thm"), None),
+            (DC_ORDERED_FACTOR, "of", Some("thm"), None),
+            (DC_EQ_FACTOR, "ef", Some("thm"), None),
+            (DC_EQ_RES, "er", Some("thm"), None),
+            (DC_DIS_EQ_DECOMPOSE, "diseq_decomp", Some("thm"), None),
+            (DC_SAT_GEN, "cdclpropres", Some("thm"), None),
+            (DC_PE_RESOLVE, "pred_elim_resolve", Some("thm"), None),
+            (DC_SPLIT_EQUIV, "split_equiv", Some("thm"), None),
+            (DC_INTRO_DEF, "introduced(definition)", None, None),
+            (DC_SPLIT_CONJUNCT, "split_conjunct", Some("thm"), None),
+            (DC_EQ_TO_EQ, "lift_bool_eq", Some("thm"), None),
+            (DC_LIFT_LAMBDAS, "lift_lambdas", Some("thm"), None),
+            (DC_FOOL_UNROLL, "fool_unroll", Some("thm"), None),
+            (DC_LIFT_ITE, "lift_ite", Some("thm"), None),
+            (
+                DC_ELIMINATE_BVAR,
+                "eliminate_boolean_vars",
+                Some("thm"),
+                None,
+            ),
+            (DC_DYNAMIC_CNF, "dynamic_cnf", Some("thm"), None),
+            (DC_FLEX_RESOLVE, "flex_resolve", Some("thm"), None),
+            (DC_ARG_CONG, "arg_cong", Some("thm"), None),
+            (DC_NEG_EXT, "neg_ext", Some("thm"), None),
+            (DC_POS_EXT, "pos_ext", Some("thm"), None),
+            (DC_EXT_SUP, "ext_sup", Some("thm"), None),
+            (DC_EXT_EQ_RES, "ext_eqres", Some("thm"), None),
+            (DC_EXT_EQ_FACT, "ext_eqfact", Some("thm"), None),
+            (DC_INV_REC, "recognize_injectivity", Some("thm"), None),
+            (DC_CHOICE_AX, "introduce_choice_axiom", Some("thm"), None),
+            (DC_LEIBNIZ_ELIM, "eliminate_leibniz_eq", Some("thm"), None),
+            (DC_PRIM_ENUM, "primitive_enumeration", Some("thm"), None),
+            (DC_CHOICE_INST, "choice_inst", Some("thm"), None),
+            (DC_TRIGGER, "trigger", Some("thm"), None),
+            (DC_PRUNE_ARG, "prune_arg", Some("thm"), None),
+        ];
+
+        assert_eq!(cases.len(), 56);
+        for (code, id, status, theory) in cases {
+            assert_eq!(derivation_op_id(code), id, "operation id for {code}");
+            assert_eq!(
+                derivation_op_status(code),
+                status,
+                "operation status for {code}"
+            );
+            assert_eq!(
+                derivation_op_theory(code),
+                theory,
+                "operation theory for {code}"
+            );
         }
     }
 
@@ -2315,6 +2413,52 @@ mod tests {
         assert_eq!(
             deriv_stack_pcl_string(Some(&derivation)).as_deref(),
             Some("er(202, 201)")
+        );
+    }
+
+    #[test]
+    fn deriv_stack_renderers_cover_two_parent_theory_and_introduction_shapes() {
+        let mut two_parents = PStack::new();
+        two_parents.push(DerivationEntry::Operation(DC_PARAMOD));
+        two_parents.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            301, 0,
+        )));
+        two_parents.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            302, 0,
+        )));
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&two_parents)).as_deref(),
+            Some("pm(301, 302)")
+        );
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&two_parents)).as_deref(),
+            Some("inference(pm,[status(thm)],[c_0_301, c_0_302])")
+        );
+
+        let mut theory = PStack::new();
+        theory.push(DerivationEntry::Operation(DC_CNF_QUOTE));
+        theory.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            303, 0,
+        )));
+        theory.push(DerivationEntry::Operation(DC_EVAL_ANSWERS));
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&theory)).as_deref(),
+            Some("eval_answer_literal(303)")
+        );
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&theory)).as_deref(),
+            Some("inference(eval_answer_literal,[status(thm)],[c_0_303, theory(answers)])")
+        );
+
+        let mut introduced = PStack::new();
+        introduced.push(DerivationEntry::Operation(DC_INTRO_DEF));
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&introduced)).as_deref(),
+            Some("introduced")
+        );
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&introduced)).as_deref(),
+            Some("introduced(definition)")
         );
     }
 }
