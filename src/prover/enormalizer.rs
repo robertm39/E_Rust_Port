@@ -2,11 +2,12 @@ use crate::basics::defines::MEGA;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
+    RLimResult,
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
-use crate::basics::verbose::set_verbose_level;
+use crate::basics::verbose::{set_verbose_level, verbose_level};
 use crate::clauses::clause::{
     clause_parse, clause_print_lop_format_string_with_options,
     clause_print_tptp_format_string_with_options, clause_tstp_string, Clause, ClauseParseOptions,
@@ -389,13 +390,17 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    match process_options(argv, stdout)? {
+    match process_options(argv, stdout, stderr)? {
         RunCommand::Exit(status) => Ok(status),
         RunCommand::Execute(config) => execute_config(&config, stdin, stdout, stderr),
     }
 }
 
-fn process_options<I, S>(argv: I, stdout: &mut impl Write) -> Result<RunCommand, Diagnostic>
+fn process_options<I, S>(
+    argv: I,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<RunCommand, Diagnostic>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -415,6 +420,7 @@ where
             }
             OptionCode::Verbose => {
                 config.verbose_level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+                set_verbose_level(i64_to_i32_saturating(config.verbose_level));
             }
             OptionCode::Terms => {
                 config.term_file = parsed.arg().map(ToOwned::to_owned);
@@ -468,7 +474,7 @@ where
                 config.eqn_options = tstp_eqn_options();
             }
             OptionCode::MemoryLimit => {
-                config.memory_limit = parse_memory_limit(parsed.option(), parsed.arg())?;
+                config.memory_limit = parse_memory_limit(parsed.option(), parsed.arg(), stderr)?;
             }
             OptionCode::CpuLimit => {
                 let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
@@ -500,7 +506,7 @@ fn execute_config(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<u8, Diagnostic> {
-    apply_resource_config(config);
+    apply_resource_config(config, stderr)?;
     set_verbose_level(i64_to_i32_saturating(config.verbose_level));
     let _ = set_output_level(config.output_level);
 
@@ -985,7 +991,10 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
     Scanner::from_file(Path::new(name), true).map_err(enormalizer_scanner_open_diagnostic)
 }
 
-fn apply_resource_config(config: &EnormalizerConfig) {
+fn apply_resource_config(
+    config: &EnormalizerConfig,
+    stderr: &mut impl Write,
+) -> Result<(), Diagnostic> {
     let hard_limit = config
         .hard_cpu_limit
         .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
@@ -993,10 +1002,32 @@ fn apply_resource_config(config: &EnormalizerConfig) {
         .soft_cpu_limit
         .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
     configure_time_limits(hard_limit, soft_limit, 0);
-    let _ = set_memory_limit(config.memory_limit);
+    for warning in memory_limit_warnings(set_memory_limit(config.memory_limit)) {
+        write_all(stderr, warning.render_warning(PROGRAM_NAME).as_bytes())?;
+    }
+    Ok(())
 }
 
-fn parse_memory_limit<Code>(option: &OptCell<Code>, arg: Option<&str>) -> Result<u64, Diagnostic> {
+fn memory_limit_warnings(result: RLimResult) -> Vec<Diagnostic> {
+    if result != RLimResult::Reduced {
+        return Vec::new();
+    }
+    ["RLIMIT_DATA", "RLIMIT_AS"]
+        .into_iter()
+        .map(|description| {
+            Diagnostic::new(
+                ErrorCode::SYSTEM_ERROR,
+                format!("Had to reduce limit {description}"),
+            )
+        })
+        .collect()
+}
+
+fn parse_memory_limit<Code>(
+    option: &OptCell<Code>,
+    arg: Option<&str>,
+    stderr: &mut impl Write,
+) -> Result<u64, Diagnostic> {
     let arg = arg.unwrap_or("");
     if arg == "Auto" {
         let system_memory = get_system_phys_memory();
@@ -1006,7 +1037,15 @@ fn parse_memory_limit<Code>(option: &OptCell<Code>, arg: Option<&str>) -> Result
                 "Cannot find physical memory automatically. Give explicit value to --memory-limit",
             ));
         }
-        return Ok(memory_limit_bytes_from_mb(auto_memory_mb(system_memory)));
+        let memory_limit = memory_limit_bytes_from_mb(auto_memory_mb(system_memory));
+        if verbose_level() > 0 {
+            writeln_diag(
+                stderr,
+                &format!("Physical memory determined as {system_memory} MB"),
+            )?;
+            writeln_diag(stderr, &format!("Memory limit set to {memory_limit} MB"))?;
+        }
+        return Ok(memory_limit);
     }
     get_int_arg(option, arg).map(memory_limit_bytes_from_mb)
 }
@@ -1240,12 +1279,15 @@ impl<W: Write> Write for EnormalizerOutput<'_, W> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clausify_rule_formulas, memory_limit_bytes_from_mb, new_term_bank, parse_rule_file,
-        parse_wrapped_formula, print_help, process_options, run, EnormalizerConfig, RunCommand,
-        OUTPUT_CLOSE_ERROR, PROGRAM_NAME, TSTP_FORMULA_FREE_VARIABLES_MESSAGE, VERSION,
+        auto_memory_mb, clausify_rule_formulas, memory_limit_bytes_from_mb, memory_limit_warnings,
+        new_term_bank, parse_rule_file, parse_wrapped_formula, print_help, process_options, run,
+        EnormalizerConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE, VERSION,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::os_wrapper::{get_system_phys_memory, RLimResult};
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+    use crate::basics::verbose::set_verbose_level;
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
@@ -1448,6 +1490,7 @@ mod tests {
     fn process_options_records_targets_formats_and_limits() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
         let command = process_options(
             [
                 PROGRAM_NAME,
@@ -1462,6 +1505,7 @@ mod tests {
                 "rules.p",
             ],
             &mut stdout,
+            &mut stderr,
         )
         .expect("options parse");
         let RunCommand::Execute(config) = command else {
@@ -1476,18 +1520,22 @@ mod tests {
         assert_eq!(config.hard_cpu_limit, Some(20));
         assert_eq!(config.soft_cpu_limit, Some(10));
         assert_eq!(config.rule_files, vec!["rules.p"]);
+        assert!(stderr.is_empty());
     }
 
     #[test]
     fn process_options_defaults_rules_to_stdin() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
         let RunCommand::Execute(config) =
-            process_options([PROGRAM_NAME, "--terms=terms.p"], &mut stdout).expect("options parse")
+            process_options([PROGRAM_NAME, "--terms=terms.p"], &mut stdout, &mut stderr)
+                .expect("options parse")
         else {
             panic!("expected execute");
         };
         assert_eq!(config.rule_files, vec!["-"]);
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -1622,21 +1670,81 @@ mod tests {
     fn help_and_version_preserve_c_text() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
-        assert!(process_options([PROGRAM_NAME, "-V"], &mut stdout).is_err());
+        let mut stderr = Vec::new();
+        assert!(process_options([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).is_err());
 
-        let command = process_options([PROGRAM_NAME, "--help"], &mut stdout).expect("help option");
+        let command = process_options([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr)
+            .expect("help option");
         assert!(matches!(command, RunCommand::Exit(0)));
         assert_eq!(
             String::from_utf8(std::mem::take(&mut stdout)).expect("utf8"),
             expected_help()
         );
 
-        let command =
-            process_options([PROGRAM_NAME, "--version"], &mut stdout).expect("version option");
+        let command = process_options([PROGRAM_NAME, "--version"], &mut stdout, &mut stderr)
+            .expect("version option");
         assert!(matches!(command, RunCommand::Exit(0)));
         assert_eq!(
             String::from_utf8(stdout).expect("utf8"),
             format!("{PROGRAM_NAME} {VERSION}\n")
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn auto_memory_verbose_output_observes_option_order_like_c() {
+        let _guard = global_state_lock();
+        let system_memory = get_system_phys_memory();
+        if system_memory == -1 {
+            return;
+        }
+        let expected_limit = memory_limit_bytes_from_mb(auto_memory_mb(system_memory));
+
+        set_verbose_level(0);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let command = process_options(
+            [PROGRAM_NAME, "--verbose=1", "--memory-limit=Auto"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("auto memory options");
+        assert!(matches!(command, RunCommand::Execute(_)));
+        assert_eq!(
+            String::from_utf8(stderr).expect("utf8"),
+            format!(
+                "Physical memory determined as {system_memory} MB\n\
+                 Memory limit set to {expected_limit} MB\n"
+            )
+        );
+
+        set_verbose_level(0);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let command = process_options(
+            [PROGRAM_NAME, "--memory-limit=Auto", "--verbose=1"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("reverse auto memory options");
+        assert!(matches!(command, RunCommand::Execute(_)));
+        assert!(stderr.is_empty());
+        set_verbose_level(0);
+    }
+
+    #[test]
+    fn memory_limit_warning_text_matches_c_shapes() {
+        assert!(memory_limit_warnings(RLimResult::Success).is_empty());
+        assert!(memory_limit_warnings(RLimResult::Failed).is_empty());
+        assert_eq!(
+            memory_limit_warnings(RLimResult::Reduced)
+                .into_iter()
+                .map(|warning| warning.render_warning(PROGRAM_NAME))
+                .collect::<Vec<_>>(),
+            vec![
+                "enormalizer: Warning: Had to reduce limit RLIMIT_DATA\n",
+                "enormalizer: Warning: Had to reduce limit RLIMIT_AS\n",
+            ]
         );
     }
 

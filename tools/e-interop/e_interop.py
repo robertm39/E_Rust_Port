@@ -75,6 +75,7 @@ PLATFORM_ERROR_SUFFIXES = {
     "<OS ERROR: NOT FOUND>": (
         "No such file or directory",
         "The system cannot find the file specified. (os error 2)",
+        "The system cannot find the path specified. (os error 3)",
     ),
     "<OS ERROR: BROKEN PIPE>": (
         "Broken pipe",
@@ -1078,6 +1079,206 @@ TOOL_FUNCTIONAL_CASES = {
             {
                 "rules.lop": "f(X)=a.\n",
                 "terms.lop": "f(b)\n",
+            },
+        ),
+        (
+            "clause-basic",
+            ("--lop-in", "-c", "clauses.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "clauses.lop": "p(f(b)).\n",
+                },
+            },
+        ),
+        (
+            "tstp-formula-target",
+            ("--tstp-in", "--tstp-out", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "cnf(rule,axiom,f(X)=a).\n",
+                    "formulas.p": (
+                        "fof(with_info,axiom,p(f(b)),"
+                        "file('formulas.p',with_info),[status(thm)]).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "old-tptp-formula-roles",
+            ("--tptp-in", "--tptp-out", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "input_clause(rule,axiom,[++equal(f(X),a)]).\n",
+                    "formulas.p": (
+                        "input_formula(lemma_form,lemma,p(f(b))).\n"
+                        "input_formula(12,unknown,q(f(c))).\n"
+                        "input_formula(question_form,question,r(f(d))).\n"
+                        "input_formula(neg_form,negated_conjecture,s(f(e))).\n"
+                    ),
+                },
+            },
+        ),
+        (
+            "stdin-include-rules",
+            ("--tstp-in", "-t", "terms.p"),
+            "include('inc.p').\n",
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "inc.p": "cnf(rule,axiom,f(X)=a).\n",
+                    "terms.p": "f(b)\n",
+                },
+            },
+        ),
+        (
+            "shared-stdin-consumed-by-rules",
+            ("--lop-in", "-t", "-"),
+            "f(X)=a.\n",
+        ),
+        (
+            "print-statistics-noop",
+            ("--lop-in", "--print-statistics", "-t", "terms.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "terms.lop": "f(b)\n",
+                },
+            },
+        ),
+        (
+            "output-file",
+            ("--lop-in", "-t", "terms.lop", "-o", "normalized.out", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "terms.lop": "f(b)\n",
+                },
+                "output_files": ("normalized.out",),
+            },
+        ),
+        (
+            "malformed-rule",
+            ("--lop-in",),
+            "f(a\n",
+        ),
+        (
+            "malformed-term-target",
+            ("--lop-in", "-t", "terms.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "terms.lop": "f(b\n",
+                },
+            },
+        ),
+        (
+            "malformed-clause-target",
+            ("--lop-in", "-c", "clauses.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "clauses.lop": "p(f(b).\n",
+                },
+            },
+        ),
+        (
+            "malformed-formula-target",
+            ("--tstp-in", "-f", "formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.p": "cnf(rule,axiom,f(X)=a).\n",
+                    "formulas.p": "fof(bad,axiom,p(f(b)).\n",
+                },
+            },
+        ),
+        (
+            "resource-options-success",
+            (
+                "--lop-in",
+                "--cpu-limit=30",
+                "--soft-cpu-limit=20",
+                "--memory-limit=0",
+                "-t",
+                "terms.lop",
+                "rules.lop",
+            ),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {
+                    "rules.lop": "f(X)=a.\n",
+                    "terms.lop": "f(b)\n",
+                },
+            },
+        ),
+        (
+            "invalid-hard-after-soft",
+            ("--soft-cpu-limit=10", "--cpu-limit=10"),
+            None,
+        ),
+        (
+            "invalid-soft-after-hard",
+            ("--cpu-limit=10", "--soft-cpu-limit=10"),
+            None,
+        ),
+        (
+            "missing-rule",
+            ("missing-enormalizer-rules.lop",),
+            None,
+            {"isolated_workdir": True},
+        ),
+        (
+            "missing-term-target",
+            ("--lop-in", "-t", "missing-terms.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"rules.lop": "f(X)=a.\n"},
+            },
+        ),
+        (
+            "missing-clause-target",
+            ("--lop-in", "-c", "missing-clauses.lop", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"rules.lop": "f(X)=a.\n"},
+            },
+        ),
+        (
+            "missing-formula-target",
+            ("--tstp-in", "-f", "missing-formulas.p", "rules.p"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"rules.p": "cnf(rule,axiom,f(X)=a).\n"},
+            },
+        ),
+        (
+            "missing-output-parent",
+            ("--lop-in", "-o", "missing/normalized.out", "rules.lop"),
+            None,
+            {
+                "isolated_workdir": True,
+                "workdir_files": {"rules.lop": "f(X)=a.\n"},
+                "output_absent_files": ("missing/normalized.out",),
             },
         ),
     ),

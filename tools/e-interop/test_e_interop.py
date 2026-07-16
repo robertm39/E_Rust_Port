@@ -62,6 +62,15 @@ class OutputParsingTests(unittest.TestCase):
             e_interop.normalize_output(linux),
             e_interop.normalize_output(windows),
         )
+        self.assertEqual(
+            e_interop.normalize_output(
+                "enormalizer: No such file or directory\n"
+            ),
+            e_interop.normalize_output(
+                "enormalizer: The system cannot find the path specified. "
+                "(os error 3)\n"
+            ),
+        )
 
         self.assertEqual(
             e_interop.normalize_output(
@@ -701,6 +710,117 @@ class ComparisonTests(unittest.TestCase):
                 (
                     "enormalizer/term-basic",
                     ["-t", "{fixture:terms.lop}", "{fixture:rules.lop}"],
+                ),
+                (
+                    "enormalizer/clause-basic",
+                    ["--lop-in", "-c", "clauses.lop", "rules.lop"],
+                ),
+                (
+                    "enormalizer/tstp-formula-target",
+                    [
+                        "--tstp-in",
+                        "--tstp-out",
+                        "-f",
+                        "formulas.p",
+                        "rules.p",
+                    ],
+                ),
+                (
+                    "enormalizer/old-tptp-formula-roles",
+                    [
+                        "--tptp-in",
+                        "--tptp-out",
+                        "-f",
+                        "formulas.p",
+                        "rules.p",
+                    ],
+                ),
+                (
+                    "enormalizer/stdin-include-rules",
+                    ["--tstp-in", "-t", "terms.p"],
+                ),
+                (
+                    "enormalizer/shared-stdin-consumed-by-rules",
+                    ["--lop-in", "-t", "-"],
+                ),
+                (
+                    "enormalizer/print-statistics-noop",
+                    [
+                        "--lop-in",
+                        "--print-statistics",
+                        "-t",
+                        "terms.lop",
+                        "rules.lop",
+                    ],
+                ),
+                (
+                    "enormalizer/output-file",
+                    [
+                        "--lop-in",
+                        "-t",
+                        "terms.lop",
+                        "-o",
+                        "normalized.out",
+                        "rules.lop",
+                    ],
+                ),
+                ("enormalizer/malformed-rule", ["--lop-in"]),
+                (
+                    "enormalizer/malformed-term-target",
+                    ["--lop-in", "-t", "terms.lop", "rules.lop"],
+                ),
+                (
+                    "enormalizer/malformed-clause-target",
+                    ["--lop-in", "-c", "clauses.lop", "rules.lop"],
+                ),
+                (
+                    "enormalizer/malformed-formula-target",
+                    ["--tstp-in", "-f", "formulas.p", "rules.p"],
+                ),
+                (
+                    "enormalizer/resource-options-success",
+                    [
+                        "--lop-in",
+                        "--cpu-limit=30",
+                        "--soft-cpu-limit=20",
+                        "--memory-limit=0",
+                        "-t",
+                        "terms.lop",
+                        "rules.lop",
+                    ],
+                ),
+                (
+                    "enormalizer/invalid-hard-after-soft",
+                    ["--soft-cpu-limit=10", "--cpu-limit=10"],
+                ),
+                (
+                    "enormalizer/invalid-soft-after-hard",
+                    ["--cpu-limit=10", "--soft-cpu-limit=10"],
+                ),
+                (
+                    "enormalizer/missing-rule",
+                    ["missing-enormalizer-rules.lop"],
+                ),
+                (
+                    "enormalizer/missing-term-target",
+                    ["--lop-in", "-t", "missing-terms.lop", "rules.lop"],
+                ),
+                (
+                    "enormalizer/missing-clause-target",
+                    ["--lop-in", "-c", "missing-clauses.lop", "rules.lop"],
+                ),
+                (
+                    "enormalizer/missing-formula-target",
+                    ["--tstp-in", "-f", "missing-formulas.p", "rules.p"],
+                ),
+                (
+                    "enormalizer/missing-output-parent",
+                    [
+                        "--lop-in",
+                        "-o",
+                        "missing/normalized.out",
+                        "rules.lop",
+                    ],
                 ),
                 ("epatternize/help", ["--help"]),
                 ("epatternize/version", ["--version"]),
@@ -1369,6 +1489,29 @@ class ComparisonTests(unittest.TestCase):
             )
             self.assertEqual(Path(arguments[1]).read_text(encoding="utf-8"), "f(b)\n")
             self.assertEqual(Path(arguments[2]).read_text(encoding="utf-8"), "f(X)=a.\n")
+
+        cases_by_name = {
+            candidate["name"]: candidate
+            for candidate in e_interop.tool_comparison_cases(["enormalizer"])
+        }
+        self.assertEqual(
+            cases_by_name["enormalizer/stdin-include-rules"]["stdin"],
+            "include('inc.p').\n",
+        )
+        self.assertEqual(
+            cases_by_name["enormalizer/shared-stdin-consumed-by-rules"]["stdin"],
+            "f(X)=a.\n",
+        )
+        self.assertEqual(
+            cases_by_name["enormalizer/output-file"]["output_files"],
+            ["normalized.out"],
+        )
+        self.assertEqual(
+            cases_by_name["enormalizer/missing-output-parent"][
+                "output_absent_files"
+            ],
+            ["missing/normalized.out"],
+        )
 
     def test_tool_companion_substitution_preserves_argument_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
