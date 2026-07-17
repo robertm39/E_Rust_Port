@@ -480,8 +480,10 @@ mod tests {
         protocol_seq_find_lemmas, protocol_update_refs, step_compute_lemma_weight, step_proof_size,
         InferenceWeights, LemmaParams,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::pcl2::expressions::PclOpCode;
     use crate::pcl2::idents::PclId;
     use crate::pcl2::protocol::PclProtocol;
     use crate::pcl2::steps::{PclStepParseOptions, PCL_IS_LEMMA, PCL_NO_WEIGHT};
@@ -578,7 +580,54 @@ mod tests {
         let error =
             expr_proof_size(&mut protocol, &just, InferenceWeights::default(), false).unwrap_err();
 
-        assert!(error.message().contains("Reference to non-existing step"));
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(error.message(), "Reference to non-existing step");
+    }
+
+    #[test]
+    fn inference_weight_defaults_zero_every_c_uninitialized_opcode_slot() {
+        let weights = InferenceWeights::default();
+
+        for op in [
+            PclOpCode::IntroDef,
+            PclOpCode::SatCheck,
+            PclOpCode::Condense,
+            PclOpCode::SplitEquiv,
+            PclOpCode::ApplyDef,
+            PclOpCode::FofSplitConjunct,
+            PclOpCode::FofSimplify,
+            PclOpCode::FofDeMorgan,
+            PclOpCode::FofDistributeQuantors,
+            PclOpCode::FofDistributeDisjunction,
+            PclOpCode::AnnotateQuestion,
+            PclOpCode::EvalAnswers,
+            PclOpCode::FofVarRename,
+            PclOpCode::FofSkolemize,
+            PclOpCode::FofAssumeNegation,
+        ] {
+            assert_eq!(weights.get(op), 0, "opcode {op:?}");
+        }
+        assert_eq!(weights.get(PclOpCode::Initial), 1);
+        assert_eq!(weights.get(PclOpCode::ACResolution), 2);
+    }
+
+    #[test]
+    fn dangling_reference_counter_parents_remain_non_fatal() {
+        let mut protocol = parse_protocol(
+            "1 : : [++p(a)] : initial\n\
+             2 : : [++q(a)] : pm(99,1)\n\
+             3 : : [++r(a)] : 98",
+        );
+
+        protocol_update_refs(&mut protocol);
+
+        let live_parent = protocol
+            .find_step(&parse_id("1"))
+            .expect("live sibling parent remains present")
+            .tree_data();
+        assert_eq!(live_parent.active_pm_refs, 1);
+        assert_eq!(live_parent.other_generating_refs, 0);
+        assert_eq!(live_parent.pure_quote_refs, 0);
     }
 
     #[test]
@@ -613,6 +662,32 @@ mod tests {
                 .to_bits(),
             0.0_f32.to_bits()
         );
+    }
+
+    #[test]
+    fn executable_lemma_formula_ignores_proof_tree_and_dag_parameters() {
+        let mut protocol = parse_protocol(
+            "1 : : [++p(a)] : initial\n\
+             2 : : [++q(a)] : er(1)",
+        );
+        protocol_update_refs(&mut protocol);
+        let id = parse_id("1");
+        let _ = step_proof_size(&mut protocol, &id, InferenceWeights::default(), false).unwrap();
+
+        let defaults = LemmaParams::default();
+        let default_quality = step_compute_lemma_weight(&mut protocol, &id, defaults);
+        let changed_quality = step_compute_lemma_weight(
+            &mut protocol,
+            &id,
+            LemmaParams {
+                proof_tree_w: 123_456.0,
+                proof_dag_w: -654_321.0,
+                ..defaults
+            },
+        );
+
+        assert_eq!(default_quality.to_bits(), changed_quality.to_bits());
+        assert!(default_quality > 0.0);
     }
 
     #[test]
