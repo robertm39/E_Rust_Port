@@ -134,6 +134,7 @@ Source files reviewed: `HEURISTICS/che_to_precgen.h`, `HEURISTICS/che_to_precgen
 - `POrientAxioms` reports `Not yet implemented`; Rust should keep this as an explicit diagnostic until the C path exists.
 - `generate_invfreq_conjmin_precedence` has comments describing conjecture symbols as larger, but the implemented key puts conjecture symbols in the lower sorted class than non-conjecture symbols. Preserve the implementation before changing names or comments.
 - The LFHO type-frequency methods allocate the type-count array from the current type-bank size before collecting type distribution, so callers rely on type traversal not introducing out-of-range type ids.
+- `ENABLE_LFHO` inserts `typefreq`, `invtypefreq`, `combfreq`, and `invcombfreq` into the middle of `TOPrecGenNames`; a non-LFHO executable rejects those names and omits them from diagnostics. Rust intentionally exposes the union in one executable, and the complete method/diagnostic surface is reference-tested against matching FOL and higher-order C builds.
 
 ### Porting Focus
 

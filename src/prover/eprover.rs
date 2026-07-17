@@ -5547,7 +5547,7 @@ fn run_prune_only<W: Write + ?Sized>(
 )]
 fn run_proof_search<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    hard_timeout_stderr: Option<&mut dyn Write>,
+    mut hard_timeout_stderr: Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
@@ -5633,6 +5633,15 @@ fn run_proof_search<W: Write + ?Sized>(
         AutoModeSearchSelection::ScheduledExit(status) => return Ok(status),
     }
     let strategy_io_definitions = apply_strategy_io_to_params(config, &mut heuristic_params)?;
+    if matches!(
+        heuristic_params.order_params.ordertype,
+        to_params::TermOrdering::Kbo | to_params::TermOrdering::Kbo6
+    ) && heuristic_params.order_params.to_pre_weights.is_some()
+    {
+        if let Some(stderr) = hard_timeout_stderr.as_deref_mut() {
+            stderr.write_all(b"setting user weights\n")?;
+        }
+    }
     let mut control = proof_control_from_heuristic_parms(config, heuristic_params)?;
     let mut params = control.heuristic_parms().clone();
     let fvi_params = control.fvi_parms().clone();
@@ -32404,6 +32413,46 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         );
 
         set_lpo_recursion_depth_limit(old_limit);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_reports_user_weight_installation_only_for_kbo_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-order-user-weights");
+        std::fs::write(&path, "f(a)=b.\nf(a)!=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+
+        for (ordering, expected_stderr) in [("KBO6", "setting user weights\n"), ("LPO", "")] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let ordering_arg = format!("--term-ordering={ordering}");
+
+            let status = run(
+                [
+                    "eprover",
+                    "--output-level=0",
+                    "--lop-in",
+                    ordering_arg.as_str(),
+                    "--order-weights=f:2",
+                    path_arg.as_str(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                format!(
+                    "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                    default_preprocessing_debug_line()
+                )
+            );
+            assert_eq!(String::from_utf8(stderr).unwrap(), expected_stderr);
+        }
+
         std::fs::remove_file(&path).unwrap();
     }
 
