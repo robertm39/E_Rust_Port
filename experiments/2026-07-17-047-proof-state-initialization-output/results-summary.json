@@ -1,0 +1,98 @@
+{
+  "all_exact_match": true,
+  "all_ordering_checks_pass": true,
+  "results": [
+    {
+      "mode": "proof_search",
+      "source": "file",
+      "exact_match": true,
+      "ordering_checks": {
+        "has_initialization_line": true,
+        "initialization_precedes_ac_scan": true,
+        "ac_scan_precedes_proof_result": true,
+        "auto_detected_tstp_selected_clause_progress": true,
+        "does_not_force_lop_selected_clause_progress": true
+      },
+      "all_ordering_checks_pass": true,
+      "c": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_1, plain, (human(socrates))).\n%\n%cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n%\n%cnf(i_0_4, plain, (mortal(socrates))).\n%\n% Proof found!\n% SZS status Theorem\n",
+        "stderr": ""
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_1, plain, (human(socrates))).\n%\n%cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n%\n%cnf(i_0_4, plain, (mortal(socrates))).\n%\n% Proof found!\n% SZS status Theorem\n",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "proof_search",
+      "source": "stdin",
+      "exact_match": true,
+      "ordering_checks": {
+        "has_initialization_line": true,
+        "initialization_precedes_ac_scan": true,
+        "ac_scan_precedes_proof_result": true,
+        "auto_detected_tstp_selected_clause_progress": true,
+        "does_not_force_lop_selected_clause_progress": true
+      },
+      "all_ordering_checks_pass": true,
+      "c": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_1, plain, (human(socrates))).\n%\n%cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n%\n%cnf(i_0_4, plain, (mortal(socrates))).\n%\n% Proof found!\n% SZS status Theorem\n",
+        "stderr": ""
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_1, plain, (human(socrates))).\n%\n%cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n%\n%cnf(i_0_4, plain, (mortal(socrates))).\n%\n% Proof found!\n% SZS status Theorem\n",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "cnf_only",
+      "source": "file",
+      "exact_match": true,
+      "ordering_checks": {
+        "has_initialization_line": true,
+        "initialization_precedes_ac_scan": true,
+        "ac_scan_precedes_cnf_success": true,
+        "auto_detected_tstp_sections": true,
+        "does_not_force_lop_sections": true
+      },
+      "all_ordering_checks_pass": true,
+      "c": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\ncnf(i_0_1, plain, (human(socrates))).\n\n% Unprocessed negative unit clauses:\ncnf(i_0_3, negated_conjecture, (~mortal(socrates))).\n\n% Unprocessed non-unit clauses:\ncnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\n\n",
+        "stderr": ""
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\ncnf(i_0_1, plain, (human(socrates))).\n\n% Unprocessed negative unit clauses:\ncnf(i_0_3, negated_conjecture, (~mortal(socrates))).\n\n% Unprocessed non-unit clauses:\ncnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\n\n",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "cnf_only",
+      "source": "stdin",
+      "exact_match": true,
+      "ordering_checks": {
+        "has_initialization_line": true,
+        "initialization_precedes_ac_scan": true,
+        "ac_scan_precedes_cnf_success": true,
+        "auto_detected_tstp_sections": true,
+        "does_not_force_lop_sections": true
+      },
+      "all_ordering_checks_pass": true,
+      "c": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\ncnf(i_0_1, plain, (human(socrates))).\n\n% Unprocessed negative unit clauses:\ncnf(i_0_3, negated_conjecture, (~mortal(socrates))).\n\n% Unprocessed non-unit clauses:\ncnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\n\n",
+        "stderr": ""
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\ncnf(i_0_1, plain, (human(socrates))).\n\n% Unprocessed negative unit clauses:\ncnf(i_0_3, negated_conjecture, (~mortal(socrates))).\n\n% Unprocessed non-unit clauses:\ncnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\n\n",
+        "stderr": ""
+      }
+    }
+  ]
+}

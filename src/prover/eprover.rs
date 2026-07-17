@@ -5863,6 +5863,7 @@ fn run_main_saturation_with_indices<W: Write + ?Sized>(
         proof_state_saturate_with_global_and_watchlist_indices_and_output(
             output,
             config.output_level,
+            config.output_format,
             state,
             control,
             config.step_limit,
@@ -6699,6 +6700,7 @@ fn run_presaturation_interreduction_with_indices<W: Write + ?Sized>(
         proof_state_saturate_with_global_and_watchlist_indices_and_output(
             output,
             config.output_level,
+            config.output_format,
             state,
             control,
             i64::MAX,
@@ -17145,7 +17147,11 @@ input_clause(c2,axiom,[++q(X)]).
         for line in normalized_szs.lines() {
             if line == "%"
                 || line == "%%"
-                || (line.starts_with('%') && (line.contains(" <- ") || line.starts_with("%?-")))
+                || (line.starts_with('%')
+                    && (line.contains(" <- ")
+                        || line.starts_with("%?-")
+                        || line.starts_with("%cnf(")
+                        || line.starts_with("%input_clause(")))
             {
                 removed_selected_progress = true;
                 continue;
@@ -17168,6 +17174,55 @@ input_clause(c2,axiom,[++q(X)]).
         }
 
         lines.join("\n") + if output.ends_with('\n') { "\n" } else { "" }
+    }
+
+    fn rebase_tstp_clause_ids(output: &str) -> String {
+        const PREFIX: &str = "i_0_";
+
+        let bytes = output.as_bytes();
+        let mut cursor = 0;
+        let mut minimum = None;
+        while let Some(relative) = output[cursor..].find(PREFIX) {
+            let digit_start = cursor + relative + PREFIX.len();
+            let mut digit_end = digit_start;
+            while bytes.get(digit_end).is_some_and(u8::is_ascii_digit) {
+                digit_end += 1;
+            }
+            if digit_end > digit_start {
+                let value = output[digit_start..digit_end]
+                    .parse::<i128>()
+                    .expect("TSTP clause identifiers are decimal integers");
+                minimum = Some(minimum.map_or(value, |current: i128| current.min(value)));
+            }
+            cursor = digit_end.max(digit_start);
+        }
+
+        let Some(minimum) = minimum else {
+            return output.to_owned();
+        };
+        let offset = minimum.saturating_sub(1);
+        let mut normalized = String::with_capacity(output.len());
+        cursor = 0;
+        while let Some(relative) = output[cursor..].find(PREFIX) {
+            let prefix_start = cursor + relative;
+            let digit_start = prefix_start + PREFIX.len();
+            let mut digit_end = digit_start;
+            while bytes.get(digit_end).is_some_and(u8::is_ascii_digit) {
+                digit_end += 1;
+            }
+            normalized.push_str(&output[cursor..digit_start]);
+            if digit_end == digit_start {
+                cursor = digit_start;
+                continue;
+            }
+            let value = output[digit_start..digit_end]
+                .parse::<i128>()
+                .expect("TSTP clause identifiers are decimal integers");
+            normalized.push_str(&value.saturating_sub(offset).to_string());
+            cursor = digit_end;
+        }
+        normalized.push_str(&output[cursor..]);
+        normalized
     }
 
     fn run_config_from<I, S>(argv: I) -> Box<EProverConfig>
@@ -28817,6 +28872,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let status = run(
             [
                 "eprover",
+                "--tstp-in",
                 "--pred-elim=true",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -28882,6 +28938,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let status = run(
             [
                 "eprover",
+                "--tstp-in",
                 "--goal-defs=All",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -29088,6 +29145,93 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains("% SZS status Unknown\n"));
         assert!(printed.contains("% Unprocessed non-unit clauses:\n"));
         assert!(!printed.contains("% Processed clauses                    :"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_auto_detects_tstp_sections_after_initialization() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-auto-tstp-initialization");
+        std::fs::write(
+            &path,
+            "fof(socrates_is_human, axiom, human(socrates)).\n\
+             fof(all_humans_are_mortal, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(socrates_is_mortal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            rebase_tstp_clause_ids(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\
+                 % Initializing proof state\n\
+                 % Scanning for AC axioms\n\n\
+                 % CNFization successful!\n\
+                 % SZS status Unknown\n\
+                 % Processed positive unit clauses:\n\n\
+                 % Processed negative unit clauses:\n\n\
+                 % Processed non-unit clauses:\n\n\
+                 % Unprocessed positive unit clauses:\n\
+                 cnf(i_0_1, plain, (human(socrates))).\n\n\
+                 % Unprocessed negative unit clauses:\n\
+                 cnf(i_0_3, negated_conjecture, (~mortal(socrates))).\n\n\
+                 % Unprocessed non-unit clauses:\n\
+                 cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\n\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_auto_detects_tstp_selected_clause_progress() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-search-auto-tstp-initialization");
+        std::fs::write(
+            &path,
+            "fof(socrates_is_human, axiom, human(socrates)).\n\
+             fof(all_humans_are_mortal, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(socrates_is_mortal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            rebase_tstp_clause_ids(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\
+                 % Initializing proof state\n\
+                 % Scanning for AC axioms\n\
+                 %\n\
+                 %cnf(i_0_1, plain, (human(socrates))).\n\
+                 %\n\
+                 %cnf(i_0_2, plain, (mortal(X1)|~human(X1))).\n\
+                 %\n\
+                 %cnf(i_0_4, plain, (mortal(socrates))).\n\
+                 %\n\
+                 % Proof found!\n\
+                 % SZS status Theorem\n",
+                default_preprocessing_debug_line()
+            )
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

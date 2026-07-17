@@ -3,7 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::clauses::clause::{clause_print_format_string, clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM,
     CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
@@ -110,7 +110,7 @@ use crate::heuristics::litselection::{
 use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::to_params::TermOrdering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
-use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
@@ -1342,6 +1342,28 @@ pub fn proof_state_check_watchlist_with_output(
         None,
         &mut doc_context,
         output_context.as_mut(),
+    )
+}
+
+fn proof_state_check_watchlist_with_optional_indices_and_output(
+    output: &mut dyn std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+    watchlist_indices: Option<&mut GlobalIndices>,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
+    let mut doc_context = None;
+    let mut output_context = (output, output_level);
+    proof_state_check_watchlist_impl::<String>(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        watchlist_indices,
+        &mut doc_context,
+        Some(&mut output_context),
     )
 }
 
@@ -6925,7 +6947,7 @@ pub fn proof_state_process_clause_with_output(
         None,
         None,
         None,
-        Some((output, output_level)),
+        Some((output, output_level, IoFormat::Lop)),
     )
 }
 
@@ -7006,7 +7028,7 @@ pub fn proof_state_process_clause_with_global_indices_and_output(
         Some(indices),
         None,
         None,
-        Some((output, output_level)),
+        Some((output, output_level, IoFormat::Lop)),
     )
 }
 
@@ -7034,7 +7056,7 @@ pub fn proof_state_process_clause_with_global_and_watchlist_indices_and_output(
         Some(indices),
         Some(watchlist_indices),
         None,
-        Some((output, output_level)),
+        Some((output, output_level, IoFormat::Lop)),
     )
 }
 
@@ -7077,7 +7099,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     mut indices: Option<&mut GlobalIndices>,
     mut watchlist_indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
-    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64, IoFormat)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
@@ -7087,7 +7109,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             fmt::Write::write_str(&mut **output, DEFAULT_COMCHAR_RAW)
                 .map_err(proof_control_write_error)?;
         }
-    } else if let Some((output, output_level)) = output_context.as_mut() {
+    } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
         if *output_level == 1 {
             std::io::Write::write_all(&mut **output, DEFAULT_COMCHAR_RAW.as_bytes())
                 .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
@@ -7151,7 +7173,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             control,
             packed.clause_mut(),
         )?
-    } else if let Some((output, output_level)) = output_context.as_mut() {
+    } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
         proof_state_check_ac_status_with_output(
             &mut **output,
             *output_level,
@@ -7170,10 +7192,11 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             state,
             packed.clause_mut(),
         )?;
-    } else if let Some((output, output_level)) = output_context.as_mut() {
+    } else if let Some((output, output_level, output_format)) = output_context.as_mut() {
         proof_state_document_processing_with_output(
             &mut **output,
             *output_level,
+            *output_format,
             state,
             packed.clause(),
         )?;
@@ -7218,16 +7241,15 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
                 lambda_demod,
             )?,
         }
-    } else if output_context.is_some() {
-        let mut no_doc_context = None;
-        proof_state_check_watchlist_impl::<String>(
+    } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
+        proof_state_check_watchlist_with_optional_indices_and_output(
+            &mut **output,
+            *output_level,
             state,
             &mut clause,
             static_watchlist,
             lambda_demod,
             watchlist_indices.as_deref_mut(),
-            &mut no_doc_context,
-            output_context.as_mut(),
         )?
     } else {
         match watchlist_indices.as_deref_mut() {
@@ -7383,7 +7405,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     }
     let generated_empty = if let Some((output, session, _output_level)) = doc_context.as_mut() {
         proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
-    } else if let Some((output, output_level)) = output_context.as_mut() {
+    } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
         proof_state_insert_new_clauses_impl::<String>(
             state,
             control,
@@ -7458,6 +7480,7 @@ fn proof_state_document_processing_with_docs(
 fn proof_state_document_processing_with_output(
     output: &mut (impl std::io::Write + ?Sized),
     output_level: i64,
+    output_format: IoFormat,
     state: &ProofState,
     clause: &Clause,
 ) -> Result<(), Diagnostic> {
@@ -7468,11 +7491,10 @@ fn proof_state_document_processing_with_output(
         .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
     std::io::Write::write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())
         .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
-    std::io::Write::write_all(
-        output,
-        clause_print_lop_format_string(state.terms(), clause, true).as_bytes(),
-    )
-    .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    let rendered =
+        clause_print_format_string(state.terms(), clause, true, output_format, problem_type())?;
+    std::io::Write::write_all(output, rendered.as_bytes())
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
     std::io::Write::write_all(output, b"\n")
         .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))
 }
@@ -7602,7 +7624,7 @@ pub fn proof_state_saturate_with_output(
         tb_insert_limit,
         answer_limit,
         None,
-        Some((output, output_level)),
+        Some((output, output_level, IoFormat::Lop)),
         None,
         None,
     )
@@ -7690,7 +7712,7 @@ pub fn proof_state_saturate_with_global_indices_and_output(
         tb_insert_limit,
         answer_limit,
         Some(indices),
-        Some((output, output_level)),
+        Some((output, output_level, IoFormat::Lop)),
         None,
         None,
     )
@@ -7711,6 +7733,7 @@ pub fn proof_state_saturate_with_global_indices_and_output(
 pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
     output: &mut impl std::io::Write,
     output_level: i64,
+    output_format: IoFormat,
     state: &mut ProofState,
     control: &mut ProofControl,
     step_limit: i64,
@@ -7735,7 +7758,7 @@ pub fn proof_state_saturate_with_global_and_watchlist_indices_and_output(
         tb_insert_limit,
         answer_limit,
         Some(indices),
-        Some((output, output_level)),
+        Some((output, output_level, output_format)),
         Some(watchlist_indices),
         None,
     )
@@ -7848,7 +7871,7 @@ fn proof_state_saturate_impl<W: fmt::Write>(
     tb_insert_limit: i64,
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices>,
-    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64, IoFormat)>,
     mut watchlist_indices: Option<&mut GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<SaturateOutcome, Diagnostic> {
@@ -7933,7 +7956,7 @@ fn proof_state_saturate_impl<W: fmt::Write>(
         let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
         if let Some((output, _session, output_level)) = doc_context.as_mut() {
             write_cleanup_unprocessed_fmt_output(&mut **output, *output_level, &cleanup)?;
-        } else if let Some((output, output_level)) = output_context.as_mut() {
+        } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
             write_cleanup_unprocessed_output(&mut **output, *output_level, &cleanup)?;
         }
         if let Some(clause) = cleanup.unsatisfiable {
@@ -8026,10 +8049,10 @@ fn proof_state_process_clause_for_saturate(
     answer_limit: i64,
     indices: Option<&mut GlobalIndices>,
     watchlist_indices: Option<&mut GlobalIndices>,
-    output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
+    output_context: Option<&mut (&mut dyn std::io::Write, i64, IoFormat)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     match (indices, watchlist_indices, output_context) {
-        (Some(indices), Some(watchlist_indices), Some((output, output_level))) => {
+        (Some(indices), Some(watchlist_indices), Some((output, output_level, output_format))) => {
             proof_state_process_clause_impl::<String>(
                 state,
                 control,
@@ -8037,7 +8060,7 @@ fn proof_state_process_clause_for_saturate(
                 Some(indices),
                 Some(watchlist_indices),
                 None,
-                Some((&mut **output, *output_level)),
+                Some((&mut **output, *output_level, *output_format)),
             )
         }
         (Some(indices), Some(watchlist_indices), None) => {
@@ -8049,7 +8072,7 @@ fn proof_state_process_clause_for_saturate(
                 watchlist_indices,
             )
         }
-        (Some(indices), None, Some((output, output_level))) => {
+        (Some(indices), None, Some((output, output_level, output_format))) => {
             proof_state_process_clause_impl::<String>(
                 state,
                 control,
@@ -8057,13 +8080,13 @@ fn proof_state_process_clause_for_saturate(
                 Some(indices),
                 None,
                 None,
-                Some((&mut **output, *output_level)),
+                Some((&mut **output, *output_level, *output_format)),
             )
         }
         (Some(indices), None, None) => {
             proof_state_process_clause_with_global_indices(state, control, answer_limit, indices)
         }
-        (None, Some(watchlist_indices), Some((output, output_level))) => {
+        (None, Some(watchlist_indices), Some((output, output_level, output_format))) => {
             proof_state_process_clause_impl::<String>(
                 state,
                 control,
@@ -8071,7 +8094,7 @@ fn proof_state_process_clause_for_saturate(
                 None,
                 Some(watchlist_indices),
                 None,
-                Some((&mut **output, *output_level)),
+                Some((&mut **output, *output_level, *output_format)),
             )
         }
         (None, Some(watchlist_indices), None) => proof_state_process_clause_impl::<String>(
@@ -8083,15 +8106,17 @@ fn proof_state_process_clause_for_saturate(
             None,
             None,
         ),
-        (None, None, Some((output, output_level))) => proof_state_process_clause_impl::<String>(
-            state,
-            control,
-            answer_limit,
-            None,
-            None,
-            None,
-            Some((&mut **output, *output_level)),
-        ),
+        (None, None, Some((output, output_level, output_format))) => {
+            proof_state_process_clause_impl::<String>(
+                state,
+                control,
+                answer_limit,
+                None,
+                None,
+                None,
+                Some((&mut **output, *output_level, *output_format)),
+            )
+        }
         (None, None, None) => proof_state_process_clause(state, control, answer_limit),
     }
 }
