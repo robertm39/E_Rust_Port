@@ -63,6 +63,10 @@ impl MiniLiteral {
     }
 }
 
+/// Compact owned snapshot of a clause's literal signs and shared term handles.
+///
+/// Clause-level metadata is intentionally absent, matching C's commented-out
+/// properties field and fresh `ClauseAlloc` reconstruction.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MiniClause {
     literals: Vec<MiniLiteral>,
@@ -259,7 +263,7 @@ mod tests {
     use crate::clauses::clause::{
         clause_pcl_string, clause_print_lop_format_string, clause_print_tstp_core_string, Clause,
     };
-    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clause_props::{CP_IGNORE_PROPS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_UNKNOWN};
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::IoFormat;
@@ -350,6 +354,8 @@ mod tests {
 
         let rebuilt = mini.to_clause(&mut bank).unwrap();
 
+        assert_eq!(rebuilt.properties(), CP_IGNORE_PROPS);
+        assert_eq!(rebuilt.query_tptp_type(), CP_TYPE_UNKNOWN);
         assert_eq!(rebuilt.literal_number(), clause.literal_number());
         assert_eq!(
             rebuilt.positive_literal_count(),
@@ -450,6 +456,42 @@ mod tests {
             mini.print_lop_string(&mut bank, true)
                 .unwrap_or_else(|err| panic!("{err}"))
         );
+    }
+
+    #[test]
+    fn output_format_is_local_to_each_print_call() {
+        let mut bank = test_bank();
+        let clause = sample_clause(&mut bank);
+        let mini = MiniClause::from_clause(&clause);
+
+        let lop_before = mini
+            .print_format_string(&mut bank, true, IoFormat::Lop, ProblemType::FirstOrder)
+            .unwrap();
+        let tptp = mini
+            .print_format_string(&mut bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap();
+        let lop_after = mini
+            .print_format_string(&mut bank, true, IoFormat::Lop, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(lop_after, lop_before);
+        assert!(tptp.starts_with("input_clause("));
+        assert_ne!(tptp, lop_before);
+    }
+
+    #[test]
+    fn literal_count_does_not_truncate_at_c_short_boundary() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "wide_left");
+        let right = typed_const(&mut bank, "wide_right");
+        let literal = MiniLiteral::new(true, left, right);
+        let expected = i16::MAX as usize + 1;
+        let mini = MiniClause {
+            literals: vec![literal; expected],
+        };
+
+        assert_eq!(mini.literal_number(), expected);
+        assert!(!mini.is_empty());
     }
 
     #[test]
