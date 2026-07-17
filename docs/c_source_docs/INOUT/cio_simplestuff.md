@@ -82,7 +82,7 @@ Source files reviewed: `INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`.
 
 - `src/inout/simplestuff.rs` ports `ReadTextBlock` with C-shaped `fgets(buf, 256, ...)` chunking, append-without-clearing semantics, C-string terminator comparison and NUL-truncated append behavior, and false-on-EOF behavior.
 - `TCPReadTextBlock` is represented both as an iterator-backed helper for already received message strings and as a network-backed helper over the ported `TcpMessage` receive loop, preserving the same C-string terminator/append behavior at the text-block boundary.
-- Tests cover append preservation, EOF after partial append, 255-byte chunk boundaries, embedded-NUL C-string truncation, iterator-backed TCP text blocks, network-message text blocks, and receive-failure diagnostics.
+- Tests cover append preservation, EOF after partial append, 255-byte chunk boundaries, embedded-NUL C-string truncation, iterator-backed TCP text blocks, network-message text blocks, receive-failure diagnostics, and a real-loopback deduction-server `RUN` exchange that consumes command, formula and exact terminator frames before sending the captured C response frames.
 
 ### Change Later
 

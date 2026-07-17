@@ -348,19 +348,15 @@ fn spawn_tcp_client(
 }
 
 fn serve_tcp_client(
-    mut stream: TcpStream,
+    stream: TcpStream,
     server_lib: String,
     spec: &BatchSpec,
 ) -> Result<InteractiveServerReport, Diagnostic> {
-    let mut bank = new_term_bank()?;
-    let mut ctrl = StructFofSpec::new(bank.signature());
     let mut backend = BatchProcCtrlRunnerSet::new();
-    start_deduction_server_tcp_with(
-        &mut stream,
+    serve_tcp_client_with(
+        stream,
         server_lib,
         spec,
-        &mut bank,
-        &mut ctrl,
         |spec, bank, ctrl, job_name, input_axioms| {
             run_command_with_runner_backend(
                 job_name,
@@ -376,6 +372,33 @@ fn serve_tcp_client(
                 emit_run_report_global_output(report, &mut stdout.lock())
             })
         },
+    )
+}
+
+fn serve_tcp_client_with<R>(
+    mut stream: TcpStream,
+    server_lib: String,
+    spec: &BatchSpec,
+    run_command: R,
+) -> Result<InteractiveServerReport, Diagnostic>
+where
+    R: FnMut(
+        &BatchSpec,
+        &mut TermBank,
+        &mut StructFofSpec,
+        &str,
+        &str,
+    ) -> Result<InteractiveCommandOutput, Diagnostic>,
+{
+    let mut bank = new_term_bank()?;
+    let mut ctrl = StructFofSpec::new(bank.signature());
+    start_deduction_server_tcp_with(
+        &mut stream,
+        server_lib,
+        spec,
+        &mut bank,
+        &mut ctrl,
+        run_command,
     )
 }
 
@@ -482,15 +505,17 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{self, Cursor, Write},
+        io::{self, Cursor, Read, Write},
         net::{TcpListener, TcpStream},
+        thread,
+        time::Duration,
     };
 
     use super::{
         deduction_batch_spec, emit_run_report_global_output, parse_port, print_help,
-        process_options, run, run_text_server_with, spawn_tcp_client, DeductionServerConfig,
-        RunCommand, DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
-        STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
+        process_options, run, run_text_server_with, serve_tcp_client_with, spawn_tcp_client,
+        DeductionServerConfig, RunCommand, DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME, STDOUT_SERVER_UNIMPLEMENTED_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -543,6 +568,25 @@ mod tests {
             crate::control::einteractive_mode::OK_DOWNLOADED_MESSAGE
         );
         raw
+    }
+
+    fn receive_wire_frame(stream: &mut TcpStream) -> Vec<u8> {
+        let mut header = [0_u8; 4];
+        stream.read_exact(&mut header).unwrap();
+        let total_length = usize::try_from(u32::from_be_bytes(header)).unwrap();
+        assert!(total_length >= header.len());
+        let mut wire = Vec::with_capacity(total_length);
+        wire.extend_from_slice(&header);
+        wire.resize(total_length, 0);
+        stream.read_exact(&mut wire[header.len()..]).unwrap();
+        wire
+    }
+
+    fn reference_wire_frame(header: [u8; 4], payload: &str) -> Vec<u8> {
+        let mut wire = Vec::with_capacity(header.len() + payload.len());
+        wire.extend_from_slice(&header);
+        wire.extend_from_slice(payload.as_bytes());
+        wire
     }
 
     #[allow(clippy::too_many_lines)]
@@ -789,6 +833,59 @@ mod tests {
             assert_eq!(report.commands, 3);
             assert!(report.done);
         }
+    }
+
+    #[test]
+    fn tcp_run_matches_live_c_reference_frame_bytes() {
+        const START: &str = "\n% Processing started for reference_job\n";
+        const PROOF: &str = "%% Pid: 403\n% SZS status Theorem\n% deterministic reference output\n";
+        const FINISH: &str = "\n% Processing finished for reference_job\n\n";
+        const INPUT: &str = "fof(reference_axiom, axiom, p(a)).\n";
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let spec = deduction_batch_spec(DEFAULT_PROVER, DEFAULT_TOTAL_WTC_LIMIT);
+        let worker = thread::spawn(move || {
+            serve_tcp_client_with(
+                server,
+                String::new(),
+                &spec,
+                |_, _, _, job_name, input_axioms| {
+                    assert_eq!(job_name, "reference_job");
+                    assert_eq!(input_axioms, INPUT);
+                    let output = format!("{START}{PROOF}{FINISH}");
+                    Ok(InteractiveCommandOutput {
+                        frame_offsets: vec![START.len(), START.len() + PROOF.len(), output.len()],
+                        output,
+                        status: OK_SUCCESS_MESSAGE,
+                    })
+                },
+            )
+        });
+
+        tcp_string_send_to_or_error(&mut client, "RUN reference_job").unwrap();
+        tcp_string_send_to_or_error(&mut client, INPUT).unwrap();
+        tcp_string_send_to_or_error(&mut client, END_OF_BLOCK_TOKEN).unwrap();
+
+        let expected = [
+            reference_wire_frame([0, 0, 0, 44], START),
+            reference_wire_frame([0, 0, 0, 70], PROOF),
+            reference_wire_frame([0, 0, 0, 46], FINISH),
+            reference_wire_frame([0, 0, 0, 21], OK_SUCCESS_MESSAGE),
+        ];
+        for expected_frame in expected {
+            assert_eq!(receive_wire_frame(&mut client), expected_frame);
+        }
+
+        tcp_string_send_to_or_error(&mut client, "QUIT").unwrap();
+        let report = worker.join().unwrap().unwrap();
+        assert_eq!(report.commands, 2);
+        assert!(report.done);
     }
 
     #[test]

@@ -89,6 +89,16 @@ decoder tests the resulting framed bytes. The vendored upstream source remains
 unchanged. A future live reference run can validate the same permanent tests
 without changing the expected protocol.
 
+### Live-reference follow-up
+
+WSL later became visible from the normal user context. A temporary C build and
+live socket trace supersede the no-live-reference limitation above; see
+[`../2026-07-17-044-deduction-server-run-framing/FINDINGS.md`](../2026-07-17-044-deduction-server-run-framing/FINDINGS.md).
+The intended four-frame call order is confirmed byte-for-byte. The same run
+also exposed the default C build's printf-escaped `COMCHAR` PID-search bug,
+which makes the stock child abort after the start frame while its parent still
+sends success. Rust intentionally preserves the usable intended path.
+
 ## Performance decision
 
 The listener now returns to `accept` immediately after a successful thread
