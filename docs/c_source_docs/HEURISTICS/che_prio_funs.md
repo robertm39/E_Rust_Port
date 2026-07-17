@@ -174,7 +174,7 @@ Source files reviewed: `HEURISTICS/che_prio_funs.h`, `HEURISTICS/che_prio_funs.c
 
 ### Rust Port Status Notes
 
-- `src/heuristics/prio_funs.rs` ports the C priority constants, name table, parser lookup surface, and the currently represented clause priority functions over an explicit `&TermBank`.
+- `src/heuristics/prio_funs.rs` ports the C priority constants, name table, parser lookup surface, and the currently represented clause priority functions over an explicit `&TermBank`. The explicit shared borrow is the completed Rust replacement for recovering the bank through C's `eq->bank` back-pointer: it identifies the actual proof-state owner without storing a pointer that can become stale when Rust owners move, and it adds no allocation or term traversal. Production HCB evaluation supplies the same owner bank through the banked callback path; the ownership audit is recorded in [`experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md`](../../../experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md).
 - `PrioFunPreferEasyHO` now preserves the C normal-result behavior for non-ArgCong clauses and returns `PrioBest` for represented `DCArgCong` derivations when the process problem type is higher-order. Production ArgCong generation writes `DCArgCong` plus the exact clause-parent reference, and focused tests pin both generation metadata and the unset/first-order/higher-order priority split.
 
 ### Change Later
