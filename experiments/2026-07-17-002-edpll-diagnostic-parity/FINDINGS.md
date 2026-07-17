@@ -66,6 +66,24 @@ The contradictory positive/negative unit case remains exact and prints no
 satisfiability result, confirming that the diagnostic fixes did not turn the
 reference parser/state shell into a solver.
 
+## Adjacent Ownership Decisions
+
+The same integrated result closes four migrated representation-only gaps. Rust
+uses stable `AtomSet` cell handles instead of a raw sentinel/cell pointer,
+owned propositional names instead of shared `char*` plus lookup-time splaying,
+an explicit `TermBank` instead of hidden equation/signature back-pointers, and
+stable clause indices instead of raw clause addresses. All C-visible insertion,
+extraction, encoding, normalization, occurrence, registration, printing, and
+assertion contracts remain covered by direct tests and the exact executable
+matrix. Reintroducing raw pointer identity would weaken ownership without
+adding a reference-visible feature.
+
+C's `p_atom_compare` typo is treated separately as an evidence-backed safety
+decision: it gives `qsort` a non-strict comparator and therefore has no portable
+ordering to reproduce. Rust retains the documented absolute-atom ordering with
+positive-before-negative ties; direct normalization tests and integrated output
+are deterministic.
+
 ## Validation
 
 - All 23 focused `prover::edpll` tests pass with exact `<stdin>`, token-context,

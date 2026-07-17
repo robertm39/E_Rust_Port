@@ -74,7 +74,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled against the complete propositional ownership path and exact edpll matrix on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_varset.h`, `PROPOSITIONAL/cpr_varset.c`.
 
@@ -97,7 +97,7 @@ Source files reviewed: `PROPOSITIONAL/cpr_varset.h`, `PROPOSITIONAL/cpr_varset.c
 ### Rust Port Status Notes
 
 - `src/propositional/varset.rs` ports `AtomSetAlloc`, `AtomSetEmpty`, `AtomSetInsert`, `AtomSetExtract`, and the drain behavior used by `AtomSetFree`.
-- The Rust port represents cells with stable index handles owned by `AtomSet` instead of exposing the sentinel/list nodes as raw pointers. It preserves insertion after the sentinel, LIFO extraction from `set->succ`, arbitrary live-cell extraction, duplicate atoms, and the C assertion that `PLiteralNoLit` must not be extracted.
+- The Rust port represents cells with stable index handles owned by `AtomSet` instead of exposing the sentinel/list nodes as raw pointers. This is the completed safe ownership decision, not a missing raw-pointer API: insertion after the sentinel, LIFO extraction from `set->succ`, arbitrary live-cell extraction, duplicate atoms, and the C assertion that `PLiteralNoLit` must not be extracted are all preserved and covered through the integrated DPLL state path.
 - The shared propositional literal vocabulary starts in `src/propositional/mod.rs` with `PLiteralCode`, `PLiteralNoLit`, and `PAtomP` equivalents so later `cpr_propsig`, `cpr_propclauses`, `cpr_dpllformula`, and `cpr_dpll` ports can use the same encoding.
 
 ### Change Later

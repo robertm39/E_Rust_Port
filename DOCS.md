@@ -32,6 +32,8 @@ The 2026-07-17 proofcheck-marker follow-up records an intentional correctness di
 
 The 2026-07-17 DPLL reconciliation applied this rule to the reference's unfinished solver surface: `edpll` only allocates and frees state, its clause-update helpers are empty, and its declared retraction has no definition. The paired `cpr_dpll` review records that Rust's state shell is drop-in complete and that a real SAT solver would be an explicit post-compatibility extension.
 
+The same 2026-07-17 propositional ownership audit reconciled `cpr_varset`, `cpr_propsig`, `cpr_propclauses`, and `cpr_dpllformula` against the exact 15-case `edpll` matrix. Their safe handles, owned strings, explicit bank, stable clause indices, and deterministic normalization are completed compatibility decisions rather than missing raw-pointer surfaces; the paired source reviews retain the C hazards and post-compatibility considerations.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

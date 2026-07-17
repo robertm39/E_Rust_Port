@@ -83,7 +83,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled against the complete propositional ownership path and exact edpll matrix on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_propsig.h`, `PROPOSITIONAL/cpr_propsig.c`.
 
@@ -108,7 +108,7 @@ Source files reviewed: `PROPOSITIONAL/cpr_propsig.h`, `PROPOSITIONAL/cpr_propsig
 
 - `src/propositional/propsig.rs` ports `PropSigAlloc`, `PropSigAtomNumber`, `PropSigGetAtomEnc`, `PropSigInsertAtom`, `PropSigGetAtomName`, and `PropSigPrint`.
 - The Rust port preserves the reserved encoding `0` slot by storing `None` at vector index `0`; a fresh signature therefore reports atom number `1`, the first inserted atom receives encoding `1`, and unknown-name lookups return `PLiteralNoLit`.
-- Duplicate insertion returns the existing encoding without changing insertion/printing order. `PropSigPrint` rendering uses encoding order rather than name order, matching the C loop over `enc_to_name`.
+- Duplicate insertion returns the existing encoding without changing insertion/printing order. `PropSigPrint` rendering uses encoding order rather than name order, matching the C loop over `enc_to_name`. Owned strings plus deterministic lookup are the completed safe representation: C's shared `char*` identity and lookup-time splay-tree reorganization have no semantic consumer in the propositional or `edpll` path.
 
 ### Change Later
 
