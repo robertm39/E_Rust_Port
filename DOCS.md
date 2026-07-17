@@ -54,6 +54,8 @@ The 2026-07-17 subsumption integration follow-up routes proof control, contextua
 
 The 2026-07-17 full PCL-step ownership audit confirms that Rust's discriminated logical-content enum, boxed clause arm, protocol-owned term-bank parameter, and explicit shell parse option preserve C's effective ownership and tool behavior without raw union or borrowed-bank hazards. Clause addresses remain stable when protocol vectors relocate steps, and the sole C shell-mode opt-in remains `epclextract` in Rust as well.
 
+The 2026-07-17 full PCL-protocol audit confirms that a sorted owning step vector replaces C's raw-pointer tree and cached pointer stack without changing C-comparator lookup or serialized output. Duplicate errors keep membership counts truthful, comment forwarding uses `epclextract`'s explicit output owner, dangling parents are diagnostics, parent traversal is deterministic and deduplicated, and FOF stripping retains C's justification-only reset.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

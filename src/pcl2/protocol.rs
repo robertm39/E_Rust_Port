@@ -520,7 +520,7 @@ mod tests {
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::pcl2::idents::PclId;
     use crate::pcl2::steps::{
-        PclStepParseOptions, PCL_IS_EXAMPLE, PCL_IS_MARKED, PCL_IS_PROOF_STEP,
+        PclStepParseOptions, PCL_IS_EXAMPLE, PCL_IS_INITIAL, PCL_IS_MARKED, PCL_IS_PROOF_STEP,
     };
 
     fn parse_id(source: &str) -> PclId {
@@ -624,6 +624,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.message().contains("duplicate PCL identifier"));
+        assert_eq!(protocol.step_count(), 1);
     }
 
     #[test]
@@ -668,6 +669,33 @@ mod tests {
     }
 
     #[test]
+    fn preconditions_are_unique_and_sorted_by_pcl_identifier() {
+        let (protocol, _) = parse_protocol(
+            "1 : : [++p] : initial\n\
+             2 : : [++q] : initial\n\
+             3 : : [++r] : rw(2,1)\n\
+             4 : : [++s] : rw(2,2)",
+        );
+
+        let ordered = protocol
+            .collect_preconditions(protocol.find_step(&parse_id("3")).unwrap().just())
+            .unwrap();
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|id| id.elements().to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![1], vec![2]]
+        );
+
+        let deduplicated = protocol
+            .collect_preconditions(protocol.find_step(&parse_id("4")).unwrap().just())
+            .unwrap();
+        assert_eq!(deduplicated.len(), 1);
+        assert_eq!(deduplicated[0].elements(), [2]);
+    }
+
+    #[test]
     fn quoted_arg_step_returns_only_direct_quote_arguments() {
         let (protocol, _) = parse_protocol("1 : : [++p] : initial\n2 : : [++q] : rw(1,1)");
         let step = protocol.find_step(&parse_id("2")).unwrap();
@@ -699,6 +727,11 @@ mod tests {
                 .print_string(false),
             "initial"
         );
+        assert!(!protocol
+            .find_step(&parse_id("2"))
+            .unwrap()
+            .properties()
+            .query(PCL_IS_INITIAL));
         assert_eq!(
             protocol
                 .find_step(&parse_id("3"))
