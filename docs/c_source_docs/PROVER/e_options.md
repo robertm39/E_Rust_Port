@@ -85,8 +85,8 @@ Source files reviewed: `PROVER/e_options.h`.
 
 ### Change Later
 
-- The C `OptionCodes` enum and the `E_OPTIONS` table are maintained separately, so enum/table drift is possible and typoed identifiers such as `OPT_PRESAT_SIMPLIY` and `OPT_FW_SUMBSUMPTION_AGGRESSIVE` become compatibility names. Rust keeps typed option variants and C-shaped parsing, but any future generator should derive enum ids, option metadata, and help text from one source.
-- Several C help strings contain visible historical typos and stale wording, including "peoblem", "deriviation", and old resource-limit platform notes. Preserve those where byte-compatible help output matters; a cleaned CLI should separate legacy help text from modern user-facing descriptions.
+- The C `OptionCodes` enum and the `E_OPTIONS` table are maintained separately, so enum/table drift is possible and typoed identifiers such as `OPT_PRESAT_SIMPLIY` and `OPT_FW_SUMBSUMPTION_AGGRESSIVE` become compatibility names. Rust deliberately keeps semantic enum variants and dispatch Rust-owned, while the checked help generator maps entries by long option and direct tests compare C declaration order, aliases, argument/default metadata, and prose. This catches C/Rust table drift without importing typoed C enum identifiers into the typed API.
+- Several C help strings contain visible historical typos and stale wording, including "peoblem", "deriviation", and old resource-limit platform notes. Rust now preserves the complete C prose and declaration order in the compatibility `--help` surface; the checked generator and source-derived tests make that decision explicit and reproducible.
 - Some options are compatibility aliases or no-ops in current executable paths because later `eprover.c` switch handling, feature gates, or parser surfaces decide whether they have effects. Keep the table exhaustive for parsing compatibility, but future non-drop-in configuration should expose only implemented behavior or report unsupported combinations structurally.
 
 ### Porting Focus
