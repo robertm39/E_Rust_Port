@@ -514,6 +514,52 @@ mod tests {
     }
 
     #[test]
+    fn relevance_data_preserves_c_observed_split_and_same_bucket_order() {
+        let mut bank = test_bank();
+        let seed1 = typed_const(&mut bank, "seed1", false);
+        let seed2 = typed_const(&mut bank, "seed2", false);
+        let a1 = typed_const(&mut bank, "a1", false);
+        let a2 = typed_const(&mut bank, "a2", false);
+        let a3 = typed_const(&mut bank, "a3", false);
+        let a4 = typed_const(&mut bank, "a4", false);
+        let f_seed1 = typed_unary(&mut bank, "f", &seed1);
+        let f_seed2 = typed_unary(&mut bank, "f", &seed2);
+        let f_a1 = typed_unary(&mut bank, "f", &a1);
+        let f_a2 = typed_unary(&mut bank, "f", &a2);
+        let f_a3 = typed_unary(&mut bank, "f", &a3);
+        let f_a4 = typed_unary(&mut bank, "f", &a4);
+
+        let goal1 = unit_clause(&mut bank, &f_seed1, &seed1, CP_TYPE_NEG_CONJECTURE);
+        let goal2 = unit_clause(&mut bank, &f_seed2, &seed2, CP_TYPE_NEG_CONJECTURE);
+        let ax1 = unit_clause(&mut bank, &f_a1, &a1, CP_TYPE_AXIOM);
+        let ax2 = unit_clause(&mut bank, &f_a2, &a2, CP_TYPE_AXIOM);
+        let ax3 = unit_clause(&mut bank, &f_a3, &a3, CP_TYPE_AXIOM);
+        let ax4 = unit_clause(&mut bank, &f_a4, &a4, CP_TYPE_AXIOM);
+        let goal1_id = goal1.ident();
+        let goal2_id = goal2.ident();
+        let ax1_id = ax1.ident();
+        let ax2_id = ax2.ident();
+        let ax3_id = ax3.ident();
+        let ax4_id = ax4.ident();
+
+        let data = RelevanceData::compute(
+            bank.signature(),
+            &ClauseSet::from_clauses([goal1, goal2, ax1, ax2, ax3, ax4]),
+        );
+
+        assert_eq!(data.clause_levels().len(), 2);
+        assert_eq!(
+            clause_ids(&data.clause_levels()[0]),
+            vec![goal2_id, goal1_id]
+        );
+        assert_eq!(
+            clause_ids(&data.clause_levels()[1]),
+            vec![ax4_id, ax3_id, ax2_id, ax1_id]
+        );
+        assert!(data.clauses_rest().is_empty());
+    }
+
+    #[test]
     fn relevance_data_expands_across_formula_and_clause_symbols() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a", false);

@@ -1,0 +1,375 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "case_count": 3,
+  "c_runs_per_case": 5,
+  "matching_cases": 3,
+  "results": [
+    {
+      "case": "clauses_same_bucket",
+      "expected_labels": [
+        "goal2",
+        "goal1",
+        "ax6",
+        "ax5",
+        "ax4",
+        "ax3",
+        "ax2",
+        "ax1"
+      ],
+      "order_match": true,
+      "status_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "labels": [
+          "goal2",
+          "goal1",
+          "ax6",
+          "ax5",
+          "ax4",
+          "ax3",
+          "ax2",
+          "ax1"
+        ],
+        "stdout_bytes": 1261,
+        "stdout_sha256": "e7157e6a20fc1e4ab9eba97b2755480cad270b55b1622a9e318510d31e082bb2",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c_runs": [
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1277,
+          "stdout_sha256": "3b1fca6d38d54b67141d168a8c6a168001d0d5d7bfa2d461c33ae225702f642a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1277,
+          "stdout_sha256": "3b1fca6d38d54b67141d168a8c6a168001d0d5d7bfa2d461c33ae225702f642a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1277,
+          "stdout_sha256": "3b1fca6d38d54b67141d168a8c6a168001d0d5d7bfa2d461c33ae225702f642a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1277,
+          "stdout_sha256": "3b1fca6d38d54b67141d168a8c6a168001d0d5d7bfa2d461c33ae225702f642a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1277,
+          "stdout_sha256": "3b1fca6d38d54b67141d168a8c6a168001d0d5d7bfa2d461c33ae225702f642a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "case": "formulas_same_bucket",
+      "expected_labels": [
+        "goal2",
+        "goal1",
+        "ax6",
+        "ax5",
+        "ax4",
+        "ax3",
+        "ax2",
+        "ax1"
+      ],
+      "order_match": true,
+      "status_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "labels": [
+          "goal2",
+          "goal1",
+          "ax6",
+          "ax5",
+          "ax4",
+          "ax3",
+          "ax2",
+          "ax1"
+        ],
+        "stdout_bytes": 1237,
+        "stdout_sha256": "aab2c4323ce21c22693106cde9ed1d9b0ea19b5d5f43fa087b3407dbd11b0112",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c_runs": [
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1269,
+          "stdout_sha256": "49b2748e8a3c68c6a59c27457e18c63dbe354a9eb52aa36577d0d411a833ea39",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1269,
+          "stdout_sha256": "49b2748e8a3c68c6a59c27457e18c63dbe354a9eb52aa36577d0d411a833ea39",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1269,
+          "stdout_sha256": "49b2748e8a3c68c6a59c27457e18c63dbe354a9eb52aa36577d0d411a833ea39",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1269,
+          "stdout_sha256": "49b2748e8a3c68c6a59c27457e18c63dbe354a9eb52aa36577d0d411a833ea39",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal2",
+            "goal1",
+            "ax6",
+            "ax5",
+            "ax4",
+            "ax3",
+            "ax2",
+            "ax1"
+          ],
+          "stdout_bytes": 1269,
+          "stdout_sha256": "49b2748e8a3c68c6a59c27457e18c63dbe354a9eb52aa36577d0d411a833ea39",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "case": "overlapping_three_levels",
+      "expected_labels": [
+        "goal",
+        "bridge3",
+        "bridge2",
+        "bridge1",
+        "g3",
+        "g2",
+        "g1",
+        "h2",
+        "h1"
+      ],
+      "order_match": true,
+      "status_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "labels": [
+          "goal",
+          "bridge3",
+          "bridge2",
+          "bridge1",
+          "g3",
+          "g2",
+          "g1",
+          "h2",
+          "h1"
+        ],
+        "stdout_bytes": 1384,
+        "stdout_sha256": "a21ac67258503eba3c9739cc57880850dcde9986bf16b090377c380c66340baf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c_runs": [
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal",
+            "bridge3",
+            "bridge2",
+            "bridge1",
+            "g3",
+            "g2",
+            "g1",
+            "h2",
+            "h1"
+          ],
+          "stdout_bytes": 1402,
+          "stdout_sha256": "d4fb4d8a36ef9ee32316df9b0c17bc5376f4eab15d87fc6e805bed5ab617040a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal",
+            "bridge3",
+            "bridge2",
+            "bridge1",
+            "g3",
+            "g2",
+            "g1",
+            "h2",
+            "h1"
+          ],
+          "stdout_bytes": 1402,
+          "stdout_sha256": "d4fb4d8a36ef9ee32316df9b0c17bc5376f4eab15d87fc6e805bed5ab617040a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal",
+            "bridge3",
+            "bridge2",
+            "bridge1",
+            "g3",
+            "g2",
+            "g1",
+            "h2",
+            "h1"
+          ],
+          "stdout_bytes": 1402,
+          "stdout_sha256": "d4fb4d8a36ef9ee32316df9b0c17bc5376f4eab15d87fc6e805bed5ab617040a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal",
+            "bridge3",
+            "bridge2",
+            "bridge1",
+            "g3",
+            "g2",
+            "g1",
+            "h2",
+            "h1"
+          ],
+          "stdout_bytes": 1402,
+          "stdout_sha256": "d4fb4d8a36ef9ee32316df9b0c17bc5376f4eab15d87fc6e805bed5ab617040a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "exit_code": 0,
+          "labels": [
+            "goal",
+            "bridge3",
+            "bridge2",
+            "bridge1",
+            "g3",
+            "g2",
+            "g1",
+            "h2",
+            "h1"
+          ],
+          "stdout_bytes": 1402,
+          "stdout_sha256": "d4fb4d8a36ef9ee32316df9b0c17bc5376f4eab15d87fc6e805bed5ab617040a",
+          "stderr_bytes": 0,
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    }
+  ]
+}
