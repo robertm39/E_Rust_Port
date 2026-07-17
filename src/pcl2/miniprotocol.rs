@@ -455,17 +455,89 @@ mod tests {
     }
 
     #[test]
+    fn protocol_parser_accepts_zero_but_stops_before_negative_id() {
+        let mut zero_protocol = PclMiniProtocol::new().unwrap();
+        let mut zero_scanner = Scanner::from_user_string("0 : : [++p] : initial", false).unwrap();
+        zero_scanner.set_format(IoFormat::Tptp);
+        assert_eq!(
+            zero_protocol
+                .parse(&mut zero_scanner, PclMiniStepParseOptions::default())
+                .unwrap(),
+            1
+        );
+        assert_eq!(zero_protocol.find_step(0).unwrap().id(), 0);
+        assert_eq!(zero_protocol.max_ident(), 0);
+
+        let mut negative_protocol = PclMiniProtocol::new().unwrap();
+        let initial_capacity = negative_protocol.steps.capacity();
+        let mut negative_scanner =
+            Scanner::from_user_string("-1 : : [++p] : initial", false).unwrap();
+        negative_scanner.set_format(IoFormat::Tptp);
+        assert_eq!(
+            negative_protocol
+                .parse(&mut negative_scanner, PclMiniStepParseOptions::default())
+                .unwrap(),
+            0
+        );
+        assert_eq!(negative_protocol.max_ident(), 0);
+        assert_eq!(negative_protocol.steps.len(), 1);
+        assert_eq!(negative_protocol.steps.capacity(), initial_capacity);
+        assert!(negative_protocol.find_step(0).is_none());
+    }
+
+    #[test]
+    fn missing_lookup_does_not_enlarge_owned_storage() {
+        let protocol = PclMiniProtocol::new().unwrap();
+        let initial_len = protocol.steps.len();
+        let initial_capacity = protocol.steps.capacity();
+
+        assert!(protocol.find_step(500_000).is_none());
+        assert_eq!(protocol.steps.len(), initial_len);
+        assert_eq!(protocol.steps.capacity(), initial_capacity);
+    }
+
+    #[test]
     fn extract_and_delete_remove_indexed_steps() {
         let (mut protocol, _) = parse_protocol("1 : : [++p] : initial");
 
         assert!(!protocol.delete_step(7));
-        let duplicate = protocol.find_step(1).unwrap().clone();
+        let mut duplicate = protocol.find_step(1).unwrap().clone();
+        duplicate.set_property(PCL_IS_EXAMPLE);
         assert!(!protocol.insert_step(duplicate).unwrap());
+        assert!(!protocol
+            .find_step(1)
+            .unwrap()
+            .properties()
+            .query(PCL_IS_EXAMPLE));
 
         let extracted = protocol.extract_step(1).unwrap();
         assert_eq!(extracted.id(), 1);
         assert!(protocol.find_step(1).is_none());
+        assert_eq!(protocol.max_ident(), 1);
         assert!(protocol.insert_step(extracted).unwrap());
+        assert!(protocol.delete_step(1));
+        assert_eq!(protocol.max_ident(), 1);
+        assert!(!protocol.delete_step(1));
+    }
+
+    #[test]
+    fn preconditions_are_deduplicated_and_sorted_by_id() {
+        let (protocol, _) = parse_protocol(
+            "1 : : [++p] : initial\n3 : : [++q] : initial\n5 : : [++r] : pm(3,1)\n6 : : [++s] : pm(3,3)",
+        );
+
+        assert_eq!(
+            protocol
+                .collect_preconditions(protocol.find_step(5).unwrap().just())
+                .unwrap(),
+            [1, 3]
+        );
+        assert_eq!(
+            protocol
+                .collect_preconditions(protocol.find_step(6).unwrap().just())
+                .unwrap(),
+            [3]
+        );
     }
 
     #[test]

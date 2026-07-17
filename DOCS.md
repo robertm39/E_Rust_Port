@@ -60,6 +60,8 @@ The 2026-07-17 PCL-position storage audit confirms that Rust's term-path vector 
 
 The 2026-07-17 PCL-mini-step audit confirms that an owning logic enum and caller-supplied protocol bank replace C's untagged union and raw `TB_p` back-pointer without changing production parsing or printing. Executable shell modes are reproduced with call-scoped options, while numeric ids, narrow extras, zero-id parsing, and shell TSTP punctuation retain their tracked legacy behavior.
 
+The 2026-07-17 PCL-mini-protocol audit confirms that owned optional step slots replace C's raw-pointer `PDArray` with constant-time lookup, amortized growth, non-allocating misses, and single-owner destruction. Duplicate collisions preserve the stored step, the maximum-id watermark and legacy printing/fast-marking rules remain exact, and explicit fast-mode comment forwarding plus deterministic id-based preconditions remove non-semantic global-output and pointer-order dependencies.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

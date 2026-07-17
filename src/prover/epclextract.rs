@@ -833,6 +833,23 @@ mod tests {
     }
 
     #[test]
+    fn fast_extract_forwards_comments_through_mini_protocol_output() {
+        let _guard = global_state_lock();
+        let input = "% lead\n1 : : [++p] : initial : 'final'\n% tail\n";
+        let (status, output, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--fast-extract", "--forward-comments"],
+            input,
+        );
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            output,
+            "% lead\n% tail\n     1 :  : [++p] : initial : 'final'\n"
+        );
+    }
+
+    #[test]
     fn forward_comments_preserve_multi_file_input_order() {
         let _guard = global_state_lock();
         let first_path = temp_path("comments-first");
