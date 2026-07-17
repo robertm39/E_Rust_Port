@@ -647,6 +647,22 @@ class ComparisonTests(unittest.TestCase):
                 ("eground/version", ["--version"]),
                 ("eground/lop-basic", ["--lop-in", "--silent"]),
                 (
+                    "eground/lop-non-unit-output",
+                    ["--lop-in", "--silent"],
+                ),
+                (
+                    "eground/tptp-non-unit-output",
+                    ["--lop-in", "--tptp-out", "--silent"],
+                ),
+                (
+                    "eground/tstp-non-unit-output",
+                    ["--lop-in", "--tstp-out", "--silent"],
+                ),
+                (
+                    "eground/auto-tstp-non-unit-output",
+                    ["--silent"],
+                ),
+                (
                     "eground/tstp-formula-ground",
                     ["--tstp-format", "--silent"],
                 ),
@@ -1398,6 +1414,22 @@ class ComparisonTests(unittest.TestCase):
         )
         eground_case = cases_by_name["eground/lop-basic"]
         self.assertEqual(eground_case["stdin"], "p(a).\n")
+        self.assertEqual(
+            cases_by_name["eground/lop-non-unit-output"]["stdin"],
+            "p(a);q(a)<-r(a).\n",
+        )
+        self.assertEqual(
+            cases_by_name["eground/tptp-non-unit-output"]["stdin"],
+            "p(a);q(a)<-r(a).\n",
+        )
+        self.assertEqual(
+            cases_by_name["eground/tstp-non-unit-output"]["stdin"],
+            "p(a);q(a)<-r(a).\n",
+        )
+        self.assertEqual(
+            cases_by_name["eground/auto-tstp-non-unit-output"]["stdin"],
+            "cnf(ax,axiom,(p(a)|q(a))).\n",
+        )
         eground_tstp_case = cases_by_name["eground/tstp-formula-ground"]
         self.assertEqual(eground_tstp_case["stdin"], "fof(ax,axiom,p(a)).\n")
         eground_include_case = cases_by_name["eground/selected-include"]

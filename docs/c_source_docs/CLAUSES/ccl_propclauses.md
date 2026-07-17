@@ -95,7 +95,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; executable output routing reconciled against the archived C `eground` on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_propclauses.h`, `CLAUSES/ccl_propclauses.c`.
 
@@ -114,7 +114,7 @@ Source files reviewed: `CLAUSES/ccl_propclauses.h`, `CLAUSES/ccl_propclauses.c`.
 ### Change Later
 
 - `PropClausePrint` temporarily rebuilds an ordinary `Clause` and then calls global `ClausePrint`; the temporary clause has an unpredictable identifier. Rust now exposes explicit `ClausePrint`-style LOP/TPTP/TSTP rendering for the rebuilt clause and should keep identifier-sensitive global formats at the outer output boundary.
-- `PropClausePrint` is documented with no global variables, but `ClausePrint` observes the process-global `OutputFormat`. Rust passes the output format explicitly; retain that boundary unless executable reference tests require a hidden global renderer.
+- `PropClausePrint` is documented with no global variables, but `ClausePrint` observes the process-global `OutputFormat`. Rust passes the output format explicitly. The permanent `eground` matrix now proves exact compact non-unit output for LOP fallback, explicit TPTP, explicit TSTP, and auto-detected TSTP, so this is the completed safe routing boundary rather than a missing hidden global.
 - `PropClauseSetPrint` adds the newline after each `PropClausePrint` call, not inside the single-clause printer. Rust preserves this split in the LOP string helpers.
 
 ### Porting Focus

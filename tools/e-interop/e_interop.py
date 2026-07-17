@@ -998,6 +998,26 @@ TOOL_FUNCTIONAL_CASES = {
     "eground": (
         ("lop-basic", ("--lop-in", "--silent"), "p(a).\n"),
         (
+            "lop-non-unit-output",
+            ("--lop-in", "--silent"),
+            "p(a);q(a)<-r(a).\n",
+        ),
+        (
+            "tptp-non-unit-output",
+            ("--lop-in", "--tptp-out", "--silent"),
+            "p(a);q(a)<-r(a).\n",
+        ),
+        (
+            "tstp-non-unit-output",
+            ("--lop-in", "--tstp-out", "--silent"),
+            "p(a);q(a)<-r(a).\n",
+        ),
+        (
+            "auto-tstp-non-unit-output",
+            ("--silent",),
+            "cnf(ax,axiom,(p(a)|q(a))).\n",
+        ),
+        (
             "tstp-formula-ground",
             ("--tstp-format", "--silent"),
             "fof(ax,axiom,p(a)).\n",
