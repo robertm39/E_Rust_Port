@@ -69,7 +69,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching on 2026-07-10.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching on 2026-07-10 and proof-control reconciliation on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_condensation.h`, `CLAUSES/ccl_condensation.c`.
 
@@ -93,6 +93,7 @@ Source files reviewed: `CLAUSES/ccl_condensation.h`, `CLAUSES/ccl_condensation.c
 - `src/clauses/condensation.rs` ports `CondenseOnce`, `Condense`, the process-wide attempt/success counters now read by executable statistics, and the candidate-replacement flow through bank-aware one-way literal unification, duplicate/resolved cleanup, subsumption-order sorting, and mutable-bank candidate subsumption checking for higher-order parity.
 - The Rust port preserves the C gate that only attempts full condensation when there are at least two positive literals or at least two negative literals, while still counting every `Condense` call as an attempt.
 - The `DCCondense` derivation-stack side effect is ported when at least one condensation step changes the clause. An opt-in documenting helper emits the represented `DocClauseModificationDefault(..., inf_condense, NULL)` step before pushing `DCCondense`, matching C side-effect order for proof-control callers with a `ProofDocSession`.
+- Production `ForwardModifyClause` integration selects that documenting helper whenever a proof-documentation session is present, otherwise uses the plain helper, and reorients the live clause after successful condensation in the same position as C. Regression coverage pins the resulting clause-id replacement, `condense(old_id)` record, input-property deletion, one-literal result, and parentless `DCCondense` stack shape.
 
 ### Change Later
 
