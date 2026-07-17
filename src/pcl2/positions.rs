@@ -128,6 +128,7 @@ mod tests {
         assert_eq!(position.side(), EqnSide::NoSide);
         assert_eq!(position.termpos_len(), 0);
         assert!(position.termpos().is_empty());
+        assert_eq!(position.termpos.capacity(), 0);
     }
 
     #[test]
@@ -145,6 +146,7 @@ mod tests {
         assert_eq!(left.literal(), 7);
         assert_eq!(left.side(), EqnSide::LeftSide);
         assert!(left.termpos().is_empty());
+        assert_eq!(left.termpos.capacity(), 0);
         assert_eq!(left.print_string(), "7.L");
 
         let right = parse("8.R");
@@ -156,12 +158,13 @@ mod tests {
 
     #[test]
     fn parses_term_path_and_preserves_c_print_separator_bug() {
-        let position = parse("3.L.4.5");
+        let position = parse("3.L.12.5");
         assert_eq!(position.literal(), 3);
         assert_eq!(position.side(), EqnSide::LeftSide);
-        assert_eq!(position.termpos(), [4, 5]);
+        assert_eq!(position.termpos(), [12, 5]);
         assert_eq!(position.termpos_len(), 2);
-        assert_eq!(position.print_string(), "3.L45");
+        assert!(position.termpos.capacity() >= position.termpos_len());
+        assert_eq!(position.print_string(), "3.L125");
     }
 
     #[test]

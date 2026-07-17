@@ -75,7 +75,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for term-path storage equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_positions.h`, `PCL2/pcl_positions.c`.
 
@@ -99,12 +99,13 @@ Source files reviewed: `PCL2/pcl_positions.h`, `PCL2/pcl_positions.c`.
 ### Rust Port Status Notes
 
 - `src/pcl2/positions.rs` ports `PCL2PosAlloc`, `PCL2PosParse`, and `PCL2PosPrint` with the existing Rust scanner and the ported `EqnSide` discriminants from `ccl_eqn`.
-- The Rust representation stores the optional term path in a `Vec<i64>` instead of a nullable `PDArray`; this preserves the observable empty/non-empty position state without exposing the C allocation sentinel.
-- The Rust printer intentionally preserves the C separator behavior: parsed input such as `3.L.4.5` renders as `3.L45`, because `PCL2PosPrint` prints term-position components without a preceding full stop.
+- The Rust representation stores the optional term path in a `Vec<i64>` instead of a nullable `PDArray`. C's separate `termposlen` is authoritative and the array is null exactly when no component exists; Rust makes the same invariant structural through `Vec::len()`, keeps zero capacity/no heap allocation for empty and side-only positions, and allocates only when the first component is pushed.
+- The Rust printer intentionally preserves the C separator behavior: parsed input such as `3.L.12.5` renders as `3.L125`, because `PCL2PosPrint` prints term-position components without a preceding full stop.
+- `Pcl2Position` is available to the ported PCL expression layer. C's expression-level opening-bracket mismatch and the non-round-tripping printer remain separately tracked compatibility behaviors rather than missing storage integration.
 
 ### Change Later
 
 - `PCL2PosPrint` omits separators before term-position components even though `PCL2PosParse` requires dotted components. That makes multi-component printed positions fail to round-trip through the parser. Keep this for compatibility until reference PCL traces say whether external tools depend on it.
 - The header comment says the literal and side are optional, but `PCL2PosParse` always starts by accepting a positive integer literal. Revisit the syntax contract when the rest of PCL2 proof-object parsing is ported.
-- C allocates `PDArrayAlloc(5,10)` only when at least one term-position component follows the side. Rust uses `Vec<i64>` for now; if PCL position parsing becomes hot in proof checking, benchmark whether the C small-array growth shape matters.
+- C allocates `PDArrayAlloc(5,10)` only when at least one term-position component follows the side. Rust's empty vector likewise performs no allocation and grows only on the first component; if PCL position parsing becomes hot in proof checking, benchmark whether C's exact 5-then-10-slot capacity shape matters before replacing the compact standard container.
 <!-- END MANUAL REVIEW: c_source_docs -->
