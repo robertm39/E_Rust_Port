@@ -306,16 +306,12 @@ mod tests {
         weighted_object_compare, ProblemType, RandState, WeightedObject, MAX_INDENT_SPACES,
     };
     use crate::basics::error::ErrorCode;
+    use crate::test_support::global_state_lock;
     use std::cmp::Ordering;
     use std::{
-        sync::{Arc, Barrier, Mutex, OnceLock},
+        sync::{Arc, Barrier},
         thread,
     };
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     #[test]
     fn string_distance_counts_byte_differences_and_length_delta() {
@@ -392,7 +388,7 @@ mod tests {
 
     #[test]
     fn global_jkiss_wrapper_preserves_c_static_state_quirk() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_jkiss_for_tests();
 
         let mut local = RandState::new(1, 2, 3, 4);
@@ -410,7 +406,7 @@ mod tests {
 
     #[test]
     fn null_jkiss_seed_does_not_change_exported_random_sequence() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_jkiss_for_tests();
 
         jkiss_seed(None, 10, 20, 30);
@@ -462,7 +458,7 @@ mod tests {
 
     #[test]
     fn problem_type_setter_rejects_mixed_first_and_higher_order_syntax() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_problem_type_for_tests();
         assert_eq!(problem_type(), ProblemType::NotInitialized);
         assert!(super::set_problem_type(ProblemType::FirstOrder).is_ok());

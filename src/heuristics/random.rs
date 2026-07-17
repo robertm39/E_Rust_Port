@@ -199,6 +199,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -264,6 +265,8 @@ mod tests {
 
     #[test]
     fn rand_weight_compute_uses_old_fifo_counter_then_increments() {
+        let _guard = global_state_lock();
+        crate::basics::simple_stuff::reset_jkiss_for_tests();
         let clause = unit_clause();
         let mut evaluator = rand_weight_init(0, 10.0, 2.0, 0, 0, 0);
 
@@ -275,6 +278,8 @@ mod tests {
 
     #[test]
     fn rand_weight_wfcb_init_wraps_stateful_random_evaluator() {
+        let _guard = global_state_lock();
+        crate::basics::simple_stuff::reset_jkiss_for_tests();
         let clause = unit_clause();
         let bank = test_bank();
         let mut wfcb = rand_weight_wfcb_init(normal_priority, 0, 10.0, 2.0, 0, 0, 0);
@@ -294,6 +299,8 @@ mod tests {
 
     #[test]
     fn rand_weight_parse_accepts_optional_seeds_and_wraps_seed_values_like_c() {
+        let _guard = global_state_lock();
+        crate::basics::simple_stuff::reset_jkiss_for_tests();
         let clause = unit_clause();
         let bank = test_bank();
         assert_eq!(c_long_to_uint(-1), u32::MAX);

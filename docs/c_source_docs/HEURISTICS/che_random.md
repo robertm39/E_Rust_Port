@@ -90,6 +90,15 @@ Source files reviewed: `HEURISTICS/che_random.h`, `HEURISTICS/che_random.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `RandWeightInit` stores three nonzero seed overrides in each evaluator, but `RandWeightCompute` passes that evaluator state to `JKISSRandDouble`, whose C implementation ignores the pointer and advances separate file-static generator words. Rust preserves that process-global sequence. A proof-control regression installs a named `RandomWeight` through the production WFCB/HCB definition stack, evaluates generated-clause queue entries, verifies the first two C weights exactly after conversion to the stored `float`, and verifies that live clause selection chooses the lower weight even when all three evaluator-local seeds are nonzero.
+- The score keeps C's operation order: consume the old FIFO counter, advance the global random sequence, then add random-range, standard-clause-weight, and FIFO contributions. Rust retains C's conversion of the parsed range and optional seeds to `unsigned int` before initialization.
+
+### Change Later
+
+- The stored evaluator-local random state is misleading because the exported JKISS wrapper does not consume it. Preserve that behavior through compatibility; `E_Rust_Port-j76.3.470` owns the later decision between an explicit global RNG and a per-evaluator compatibility switch, while `E_Rust_Port-j76.3.142` owns the parsed negative-seed wrapping review.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

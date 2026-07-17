@@ -9672,7 +9672,8 @@ mod tests {
         proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_and_watchlist_indices_and_docs,
         proof_state_saturate_with_global_indices, proof_state_saturate_with_output,
-        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
+        proof_state_select_unprocessed_clause, proof_state_simplify_watchlist,
+        proof_state_simplify_watchlist_with_docs,
         proof_state_simplify_watchlist_with_global_indices, proof_state_storage_estimate,
         select_inherited_literal, selection_parent_is_dead, write_cleanup_unprocessed_output,
         BackwardSimplificationOutcome, CleanupUnprocessedOutcome, ForwardContractCounts,
@@ -9684,7 +9685,9 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+    use crate::basics::simple_stuff::{
+        reset_jkiss_for_tests, reset_problem_type, set_problem_type, ProblemType,
+    };
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
@@ -13076,6 +13079,73 @@ mod tests {
             Some(4_060)
         );
         assert_eq!(state.eval_store().eval_order_cloned(0).len(), 2);
+    }
+
+    #[test]
+    fn proof_control_random_weight_drives_live_eval_and_selection_with_c_sequence() {
+        let _guard = global_state_lock();
+        reset_jkiss_for_tests();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first, second) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_random_eval_first", 4_063),
+                unit_clause_with_id(terms, "pc_random_eval_second", 4_064),
+            )
+        };
+        state.eval_store_mut().insert(first);
+        state.eval_store_mut().insert(second);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "RandomEvalStoreTest".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec!["random_eval=RandomWeight(ConstPrio,1000,0,0,11,13,17)".to_owned()];
+        let mut hcb_defs = vec!["RandomEvalStoreTest=(1*random_eval)".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            proof_state_eval_clause_set(&mut state, &mut control)
+                .unwrap_or_else(|err| panic!("{err}")),
+            2
+        );
+        let first_weight = state
+            .eval_store()
+            .find_by_id(4_063)
+            .and_then(Clause::evaluations)
+            .expect("first random-weight evaluation")
+            .eval(0)
+            .heuristic();
+        let second_weight = state
+            .eval_store()
+            .find_by_id(4_064)
+            .and_then(Clause::evaluations)
+            .expect("second random-weight evaluation")
+            .eval(0)
+            .heuristic();
+
+        assert_eq!(first_weight.to_bits(), 1_124_233_471);
+        assert_eq!(second_weight.to_bits(), 1_142_390_271);
+        assert_eq!(
+            state.eval_store().find_best(0).map(Clause::ident),
+            Some(4_063)
+        );
+
+        assert_eq!(proof_state_move_eval_store_to_unprocessed(&mut state), 2);
+        let selected = proof_state_select_unprocessed_clause(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .expect("random-weight HCB should select a clause");
+        assert_eq!(selected.ident(), 4_063);
     }
 
     #[test]
