@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
+use std::hash::Hash;
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -87,8 +88,8 @@ use crate::clauses::proofstate::{
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
-    pstack_clauses_move, pstack_formulas_move, select_axioms_clause_formula_sets,
-    select_threshold_clause_formula_sets, ClauseSineParams, SineSetStacks,
+    select_axioms_clause_formula_sets, select_threshold_clause_formula_sets, ClauseSineParams,
+    SineSetStacks,
 };
 use crate::clauses::unfold_defs::{
     clause_set_preprocess, clause_set_unfold_eq_def_normalize,
@@ -7103,19 +7104,10 @@ fn replace_axiom_owners_with_selected_ids(
     selected_clause_ids: Vec<i64>,
     selected_formula_ids: Vec<u64>,
 ) -> i64 {
-    let mut selected_clauses = ClauseSet::new();
-    let mut clause_stack = PStack::new();
-    for ident in selected_clause_ids {
-        clause_stack.push(ident);
-    }
-    let _ = pstack_clauses_move(&clause_stack, state.axioms_mut(), &mut selected_clauses);
-
-    let mut selected_formulas = FormulaSet::new();
-    let mut formula_stack = PStack::new();
-    for entry_id in selected_formula_ids {
-        formula_stack.push(entry_id);
-    }
-    let _ = pstack_formulas_move(&formula_stack, state.f_axioms_mut(), &mut selected_formulas);
+    let selected_clauses =
+        take_selected_clause_ids(state.axioms_mut(), selected_clause_ids.as_slice());
+    let selected_formulas =
+        take_selected_formula_entry_ids(state.f_axioms_mut(), selected_formula_ids.as_slice());
 
     let selected_count = selected_clauses
         .members()
@@ -7123,6 +7115,67 @@ fn replace_axiom_owners_with_selected_ids(
     *state.axioms_mut() = selected_clauses;
     *state.f_axioms_mut() = selected_formulas;
     original_axioms - selected_count
+}
+
+fn selected_ids_in_last_occurrence_order<T>(selected_ids: &[T]) -> (Vec<T>, HashSet<T>)
+where
+    T: Copy + Eq + Hash,
+{
+    let mut selected = HashSet::with_capacity(selected_ids.len());
+    let mut reverse_order = Vec::with_capacity(selected_ids.len());
+    for selected_id in selected_ids.iter().rev().copied() {
+        if selected.insert(selected_id) {
+            reverse_order.push(selected_id);
+        }
+    }
+    reverse_order.reverse();
+    (reverse_order, selected)
+}
+
+fn take_selected_clause_ids(source: &mut ClauseSet, selected_ids: &[i64]) -> ClauseSet {
+    let (selected_order, selected) = selected_ids_in_last_occurrence_order(selected_ids);
+    let mut owned = HashMap::with_capacity(selected.len());
+    while let Some(clause) = source.extract_first() {
+        let ident = clause.ident();
+        if selected.contains(&ident) {
+            assert!(
+                owned.insert(ident, clause).is_none(),
+                "proof-state SInE requires unique clause identifiers"
+            );
+        }
+    }
+
+    let mut result = ClauseSet::new();
+    for ident in selected_order {
+        let clause = owned
+            .remove(&ident)
+            .unwrap_or_else(|| panic!("selected clause identifier is not set-owned: {ident}"));
+        result.insert(clause);
+    }
+    result
+}
+
+fn take_selected_formula_entry_ids(source: &mut FormulaSet, selected_ids: &[u64]) -> FormulaSet {
+    let (selected_order, selected) = selected_ids_in_last_occurrence_order(selected_ids);
+    let mut owned = HashMap::with_capacity(selected.len());
+    while let Some(formula) = source.extract_first() {
+        let entry_id = formula.entry_id();
+        if selected.contains(&entry_id) {
+            assert!(
+                owned.insert(entry_id, formula).is_none(),
+                "proof-state SInE requires unique formula entry ids"
+            );
+        }
+    }
+
+    let mut result = FormulaSet::new();
+    for entry_id in selected_order {
+        let formula = owned
+            .remove(&entry_id)
+            .unwrap_or_else(|| panic!("selected formula entry id is not set-owned: {entry_id}"));
+        result.insert(formula);
+    }
+    result
 }
 
 fn auto_sine_filter_name(state: &crate::clauses::proofstate::ProofState) -> Option<&'static str> {
@@ -15752,19 +15805,19 @@ mod tests {
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_command_args,
         schedule_worker_run_args, search_schedule_worker_command_args,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank, write_proof_object_dot,
-        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, ConfiguredOutput, DocOutputFormat, EProverAction,
-        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
-        FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode,
-        LiteralComparison, ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
-        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        simple_fof_bool_term_to_formulas, take_selected_formula_entry_ids,
+        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
+        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        ConfiguredOutput, DocOutputFormat, EProverAction, EProverConfig, EProverFlag,
+        EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType,
+        GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison, ParamodulationType,
+        ParsedAppEncodeFormula, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
+        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
+        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
+        PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -23339,6 +23392,36 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn bulk_sine_formula_owner_move_preserves_last_selection_order() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let formula_term = bool_const(state.terms_mut(), "bulk_sine_formula_owner");
+        let mut source = FormulaSet::new();
+        let entry_ids = (0..2_048)
+            .map(|_| source.insert(WrappedFormula::wt_formula_alloc(formula_term.clone())))
+            .collect::<Vec<_>>();
+        let mut selected_ids = entry_ids.iter().rev().copied().collect::<Vec<_>>();
+        selected_ids.push(entry_ids[2_047]);
+
+        let selected = take_selected_formula_entry_ids(&mut source, &selected_ids);
+
+        assert!(source.is_empty());
+        let expected = entry_ids
+            .iter()
+            .rev()
+            .skip(1)
+            .copied()
+            .chain(std::iter::once(entry_ids[2_047]))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected
+                .iter()
+                .map(WrappedFormula::entry_id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
     fn proof_state_relevance_pruning_filters_represented_formula_axioms() {
         let _guard = global_state_lock();
         let mut config = EProverConfig::default();
@@ -24161,6 +24244,51 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains(&format!("file('{path_arg}', far)")));
         assert!(!printed.contains(&format!("file('{path_arg}', irr)")));
         assert!(!printed.contains("r(u)"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_gsine_selects_across_mixed_cnf_fof_formula_owners() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-mixed-owner-gsine");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (p(goal_a))).\n\
+             fof(link, axiom, (p(goal_a) => q(link_b))).\n\
+             cnf(far_clause, axiom, (r(far_c))).\n\
+             fof(far_formula, axiom, s(far_d)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--sine=GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)\n"));
+        assert!(printed.contains(&format!("file('{path_arg}', goal)")));
+        assert!(printed.contains(&format!("file('{path_arg}', link)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', far_clause)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', far_formula)")));
+        assert!(printed.contains("cnf(goal, negated_conjecture"));
+        assert!(printed.contains("fof(link, axiom"));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

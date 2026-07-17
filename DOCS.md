@@ -72,6 +72,8 @@ The 2026-07-17 frequency-vector ownership audit closes the old raw-clause-alias 
 
 The 2026-07-17 FV-index fidelity audit closes the deferred storage and output-routing gap. Rust reproduces C's signed `IntMap` representation-transition deltas, insertion-only `FVIndexStorage` counter, combined same-stream tree output, and exact distinct `out`/`stderr` fragments for LOP/TPTP/TSTP rendering without introducing global output state.
 
+The 2026-07-17 SInE ownership-integration audit closes the parser/formula-owner gap. Executable CNF and formula records retain stable `WrappedFormula` ownership through SInE, selected mixed proof-state owners move by stable ids without cloning, duplicate selections retain C's relinking behavior, and CNF drains only the selected wrappers afterward.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.
