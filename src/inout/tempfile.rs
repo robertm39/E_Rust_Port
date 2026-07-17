@@ -222,10 +222,15 @@ mod tests {
         let name = temp_file_name().unwrap();
         assert!(name.exists());
         assert_eq!(name.parent(), Some(target_dir().as_path()));
-        assert!(name
+        let suffix = name
             .file_name()
             .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with(TEMP_PREFIX)));
+            .and_then(|file_name| file_name.strip_prefix(TEMP_PREFIX))
+            .unwrap();
+        assert_eq!(suffix.len(), 6);
+        assert!(suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase()));
         assert_eq!(registered_temp_file_count(), 1);
 
         assert!(temp_file_remove(&name).unwrap());

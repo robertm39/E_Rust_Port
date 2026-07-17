@@ -92,13 +92,20 @@ Source files reviewed: `INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/tempfile.rs` ports the process-global temporary-file registry, `TMPDIR`/`/tmp` directory selection, `epr_` prefix, safe atomic `create_new` retry creation, source-copy creation, explicit removal/unregistration including a C-shaped registered-file assertion wrapper, and cleanup warning collection.
+- `src/inout/tempfile.rs` ports the process-global temporary-file registry, authoritative `TMPDIR` selection with `/tmp` as the Unix-like fallback and the native temporary directory as the Windows fallback, `epr_` prefix, safe atomic `create_new` retry creation, source-copy creation, explicit removal/unregistration including a C-shaped registered-file assertion wrapper, and cleanup warning collection.
 - Rust uses a `Mutex<BTreeSet<PathBuf>>` instead of C's file-static `StrTree`, keeping safe registration and cleanup behavior for current callers.
-- Tests cover TMPDIR placement, prefixing, registration count, source-copy contents, duplicate registration, cleanup of existing and missing files, registered and unregistered removal behavior, and removal diagnostics.
+- Tests cover TMPDIR placement, the six-character base-36 suffix shape, registration count, source-copy contents, duplicate registration, cleanup of existing and missing files, registered and unregistered removal behavior, removal diagnostics, and signal-triggered cleanup.
+
+### Compatibility Notes
+
+- C's registry retains caller-owned path pointers and orders them by string content; Rust stores owned `PathBuf` copies in a content-keyed set. Production callers observe registration only through removal or process-wide cleanup, so pointer identity and tree shape are not part of executable behavior.
+- C `mkstemp` and Rust `OpenOptions::create_new` both atomically create and close an empty file before registration. Rust explicitly requests Unix mode `0o600`, matching `mkstemp`'s owner-only contract while avoiding a non-DLL unsafe boundary.
+- Explicit removal unlinks first and unregisters only after success in both ports. Registry-wide cleanup removes every registration even after an unlink warning, and the signal layer invokes it once for the first SIGTERM/SIGINT termination outcome.
+- `TempFileCreate` preserves the registered file on copy/open failure so the termination cleanup owner can still attempt removal, matching the C lifetime boundary.
 
 ### Change Later
 
-- C `TempFileName` delegates suffix selection and file mode to `mkstemp`. Rust now uses a safe `create_new` retry loop with a generated six-character base-36 suffix on every target, setting owner-only `0o600` permissions on Unix; this preserves uniqueness, prefix, empty-file creation, and Unix file mode, but not exact libc suffix distribution or NUL-byte path diagnostics.
+- C `TempFileName` delegates suffix selection and file mode to `mkstemp`. Rust uses a safe `create_new` retry loop with a generated six-character base-36 suffix on every target and owner-only `0o600` permissions on Unix. Exact libc suffix distribution, NUL-byte path diagnostics, and the intentional native-Windows fallback instead of C's literal `/tmp` remain platform-policy questions.
 - C's global registry is cleared during cleanup even when unlinking a file fails. Rust mirrors that shape by clearing registrations and returning warnings; scoped run-state ownership would be cleaner after signal/atexit compatibility is designed.
 - `TempFileRemove` asserts that the removed path was registered. Rust keeps the bool-returning helper for safer callers and now exposes an asserting compatibility wrapper for direct C-shaped paths.
 
