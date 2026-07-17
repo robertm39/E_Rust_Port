@@ -669,10 +669,10 @@ mod tests {
         let person_code = types.define_simple_sort("late_person").unwrap();
         let person =
             types.insert_type_shared(crate::terms::simpletypes::alloc_simple_sort(person_code));
-        let typed = bank.ext_name_assert_alloc_sort("P", &person);
+        let person_var = bank.ext_name_assert_alloc_sort("P", &person);
         let untyped = bank.ext_name_assert_alloc("X");
 
-        assert_eq!(typed.type_(), Some(person.clone()));
+        assert_eq!(person_var.type_(), Some(person.clone()));
         assert_eq!(bank.normal_stack_len(&person), 1);
         assert_eq!(untyped.type_(), Some(default_type.clone()));
         assert_eq!(bank.default_type(), default_type);

@@ -7052,8 +7052,8 @@ fn apply_gsine_clause_filter(
     replace_axiom_owners_with_selected_ids(
         state,
         original_axioms,
-        selected_clause_ids,
-        selected_formula_ids,
+        &selected_clause_ids,
+        &selected_formula_ids,
     )
 }
 
@@ -7093,21 +7093,20 @@ fn apply_lambda_defines_filter(state: &mut crate::clauses::proofstate::ProofStat
     replace_axiom_owners_with_selected_ids(
         state,
         original_axioms,
-        selected_clause_ids,
-        selected_formula_ids,
+        &selected_clause_ids,
+        &selected_formula_ids,
     )
 }
 
 fn replace_axiom_owners_with_selected_ids(
     state: &mut crate::clauses::proofstate::ProofState,
     original_axioms: i64,
-    selected_clause_ids: Vec<i64>,
-    selected_formula_ids: Vec<u64>,
+    selected_clause_ids: &[i64],
+    selected_formula_ids: &[u64],
 ) -> i64 {
-    let selected_clauses =
-        take_selected_clause_ids(state.axioms_mut(), selected_clause_ids.as_slice());
+    let selected_clauses = take_selected_clause_ids(state.axioms_mut(), selected_clause_ids);
     let selected_formulas =
-        take_selected_formula_entry_ids(state.f_axioms_mut(), selected_formula_ids.as_slice());
+        take_selected_formula_entry_ids(state.f_axioms_mut(), selected_formula_ids);
 
     let selected_count = selected_clauses
         .members()

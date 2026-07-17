@@ -719,6 +719,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn every_c_parser_operator_round_trips_and_has_exact_tstp_output() {
         let cases = [
             (
