@@ -79,7 +79,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for structural termination and comparison equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_idents.h`, `PCL2/pcl_idents.c`.
 
@@ -104,12 +104,15 @@ Source files reviewed: `PCL2/pcl_idents.h`, `PCL2/pcl_idents.c`.
 ### Rust Port Status Notes
 
 - `src/pcl2/idents.rs` ports `PCLIdAlloc`, `PCLIdParse`, `PCLIdPrintFormatted`, `PCLIdPrintTSTP`, and `PCLIdCompare` with the existing Rust scanner.
-- The Rust representation stores identifier components in a `Vec<i64>` and treats the C `NO_PCL_ID_ELEMENT` sentinel as an implicit end marker for comparison.
-- `compare_c_value` preserves the C-shaped return surface by subtracting the first differing elements and returning an `i32`, rather than exposing only a Rust `Ordering`.
+- The Rust representation stores only live identifier components in a `Vec<i64>`. Parsed components are decimal-digit tokens, including zero, so C's negative `NO_PCL_ID_ELEMENT` cannot be valid data; `Vec::len()` supplies the same boundary without a terminator slot or the possibility of a missing/stale sentinel.
+- Empty `PclId::new()` has zero length/capacity and is an explicitly uninitialized value whose printers reject use. C's raw two-slot integer array starts zero-filled and is likewise not a valid identifier until parsing writes a sentinel, but accidental printing would read/enlarge past its storage rather than fail locally.
+- Valid identifiers of arbitrary length grow geometrically and iterate directly over live components. Focused coverage parses and round-trips 64 components; ordinary PCL identifiers remain short, so exact two-slot `PDArray` growth has no measured or semantic advantage.
+- `compare_c_value` supplies the implicit sentinel at either exhausted vector and otherwise preserves C's subtraction/truncation surface. This includes the LP64-shaped case where `4294967296` and `0` produce return value zero after the `i32` cast even though the identifiers differ; current full-protocol storage therefore retains C comparator identity exactly.
+- Plain and formatted printing retain C's seven-column minimum width for the first component, and compound TSTP identifiers retain `pclid<first>_<rest>` while singletons remain decimal.
 
 ### Change Later
 
-- The source comment says identifiers are separated by spaces, but the parser actually accepts fullstop-separated positive integers such as `1.2.3`. Rust follows the parser; update comments only after compatibility is settled.
-- `PCLIdCompare` subtracts `long` elements and then casts the result to `int`; huge identifier components can overflow or truncate on C platforms. Rust uses wrapping subtraction plus `i32` truncation for the compatibility-shaped helper, but a cleaned API should use explicit lexicographic ordering.
-- C represents identifiers as `PDArray` values terminated by `NO_PCL_ID_ELEMENT`. Rust stores only live components; revisit allocation shape only if proof-object identifier parsing shows measurable hot-path sensitivity.
+- The source comment says identifiers are separated by spaces and calls them positive, but the parser accepts fullstop-separated decimal components including zero. Rust follows scanner behavior exactly; wording cleanup remains tracked by `E_Rust_Port-j76.4.935` and `E_Rust_Port-j76.3.44`.
+- `PCLIdCompare` subtracts `long` elements and then casts the result to `int`; huge components can overflow/truncate and collapse distinct identifiers. Rust preserves that protocol-facing behavior; a strict lexicographic API remains tracked by `E_Rust_Port-j76.4.936` and `E_Rust_Port-j76.3.44`.
+- C represents identifiers as `PDArray` values terminated by `NO_PCL_ID_ELEMENT`. Rust's structural length is the safe equivalent; exact allocation/sentinel emulation remains tracked by `E_Rust_Port-j76.4.937`.
 <!-- END MANUAL REVIEW: c_source_docs -->
