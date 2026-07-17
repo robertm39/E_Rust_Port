@@ -76,7 +76,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled with the complete reference executable call path on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_dpll.h`, `PROPOSITIONAL/cpr_dpll.c`.
 
@@ -98,13 +98,13 @@ Source files reviewed: `PROPOSITIONAL/cpr_dpll.h`, `PROPOSITIONAL/cpr_dpll.c`.
 
 ### Rust Port Status Notes
 
-- `src/propositional/dpll.rs` ports the implemented `DPLLStateAlloc` and `DPLLAssignVar` state-shell behavior over the Rust `DpllFormula`, `DpllClause`, and `AtomSet` ports.
+- `src/propositional/dpll.rs` ports the complete implemented `cpr_dpll.c` behavior over the Rust `DpllFormula`, `DpllClause`, and `AtomSet` ports: `DPLLStateAlloc`, state release through Rust ownership, and the current `DPLLAssignVar` stub result. The reference `edpll` executable allocates and immediately frees this state without calling assignment or a solve loop, so a standalone SAT/UNSAT result is not missing drop-in behavior.
 - Rust stores assignments as signed literal codes, deactivation subset markers as `None` entries in a typed vector, unprocessed unit clauses as formula clause indices, and open atoms in the ported `AtomSet`. Open-atom insertion follows C's increasing atom scan plus front insertion, so iteration observes the same reversed order.
 - `DPLLAssignVar` pushes the assignment and a deactivation marker, then calls Rust equivalents of the currently stubbed C helpers. Since C `shorten_clauses` returns zero, the ported assignment currently returns `false` for allocated atoms, matching the observable implemented C body rather than a complete solver.
 
 ### Change Later
 
-- `deactivate_clauses` and `shorten_clauses` are empty C stubs, so `DPLLAssignVar` cannot yet perform real propagation and reports failure after every allocated assignment. Replace these stubs only when the intended DPLL algorithm is ported and covered by reference tests.
-- `DPLLRetractLastAss` is declared in `cpr_dpll.h` but has no definition in `cpr_dpll.c`. Rust does not expose a working retraction method for this slice; future work should either find the intended implementation in upstream history or design one alongside the missing deactivate/shorten behavior.
+- `deactivate_clauses` and `shorten_clauses` are empty C stubs, so `DPLLAssignVar` cannot perform real propagation and reports failure after every allocated assignment. Rust preserves this for drop-in compatibility. A real DPLL algorithm would be a post-compatibility extension and should use a new mode or executable with its own behavioral tests.
+- `DPLLRetractLastAss` is declared in `cpr_dpll.h` but has no definition in `cpr_dpll.c`. Rust deliberately does not invent a callable retraction body. Any future solver extension must define retraction together with propagation, conflict handling, branching, and result rendering rather than presenting it as a missing port of existing C behavior.
 - The negative-assignment branch in `DPLLAssignVar` still deactivates positive clauses and shortens negative clauses after negating the assignment, the same branches used for positive assignments. With the helper stubs this has no effect today, but real propagation should verify whether negative assignments should swap those sets.
 <!-- END MANUAL REVIEW: c_source_docs -->

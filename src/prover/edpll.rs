@@ -6,9 +6,10 @@ use crate::basics::verbose::{set_verbose_level, verbose_level};
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
+use crate::inout::fileops::input_open;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::{IoFormat, Scanner};
+use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::propositional::dpll::DpllState;
 use crate::propositional::dpllformula::DpllFormula;
@@ -292,12 +293,15 @@ fn execute_edpll(
 
     for file in &config.files {
         let mut scanner = scanner_for_input(file, stdin, config.parse_format)?;
-        formula.parse_lop_with_trace(
+        let parse_result = formula.parse_lop_with_trace(
             &mut scanner,
             &mut bank,
             ProblemType::FirstOrder,
             |trace| write_all(&mut output, trace.as_bytes()),
-        )?;
+        );
+        if let Err(error) = parse_result {
+            return Err(edpll_parse_diagnostic(&scanner, error));
+        }
     }
 
     let _dpll_state = DpllState::new(formula);
@@ -317,9 +321,17 @@ fn scanner_for_input(
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        Scanner::from_file_content("-", data, true)?
+        Scanner::from_file_content("<stdin>", data, true)?
     } else {
-        Scanner::from_file(Path::new(name), true).map_err(edpll_scanner_open_diagnostic)?
+        let path = Path::new(name);
+        let mut source = input_open(Some(path), true)
+            .map_err(edpll_scanner_open_diagnostic)?
+            .ok_or_else(|| io_diagnostic(format!("Cannot open file {name} for reading")))?;
+        let mut data = Vec::new();
+        source.read_to_end(&mut data).map_err(|error| {
+            edpll_sys_error_diagnostic(format!("Cannot read file {name}"), &error)
+        })?;
+        Scanner::from_file_content(name, data, true)?
     };
     scanner.set_format(format);
     Ok(scanner)
@@ -529,7 +541,10 @@ fn edpll_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> D
 }
 
 fn edpll_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -538,6 +553,22 @@ fn edpll_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
     Diagnostic::new(
         error.code(),
         format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
+}
+
+fn edpll_parse_diagnostic(scanner: &Scanner, error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::SYNTAX_ERROR || error.message().contains("(just read '") {
+        return error;
+    }
+    let token = scanner.current_token();
+    Diagnostic::new(
+        error.code(),
+        format!(
+            "{}(just read '{}'): {}",
+            token_pos_rep(token),
+            token.literal(),
+            error.message()
+        ),
     )
 }
 
@@ -798,7 +829,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "Procedural rule or query needs at least one tail literal (Hey! I did not make this  syntax! -StS)"
+            "<stdin>:1:(Column 6):(just read '.'): Procedural rule or query needs at least one tail literal (Hey! I did not make this  syntax! -StS)"
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -817,7 +848,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "-:2:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
+            "<stdin>:2:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
         );
         assert_eq!(
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -839,7 +870,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "-:1:(Column 6):(just read '.'): Identifier not terminating in a number or Identifier terminating in a number or Interpreted function/predicate name ('$name') or String enclosed in double quotes (\"\") or String enclosed in single quote ('') or Integer (sequence of decimal digits) convertible to an 'unsigned long' or Hyphen ('-') or Plus sign ('+') expected, but Fullstop ('.') read "
+            "<stdin>:1:(Column 6):(just read '.'): Identifier not terminating in a number or Identifier terminating in a number or Interpreted function/predicate name ('$name') or String enclosed in double quotes (\"\") or String enclosed in single quote ('') or Integer (sequence of decimal digits) convertible to an 'unsigned long' or Hyphen ('-') or Plus sign ('+') expected, but Fullstop ('.') read "
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -915,10 +946,9 @@ mod tests {
         .expect_err("missing input file is reported after output creation");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(
             std::fs::read_to_string(&output_path).expect("output file is readable"),
@@ -948,10 +978,9 @@ mod tests {
         .expect_err("missing input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());

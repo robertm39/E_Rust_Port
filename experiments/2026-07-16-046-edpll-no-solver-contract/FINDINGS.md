@@ -1,5 +1,11 @@
 # edpll no-solver compatibility contract
 
+> 2026-07-17 follow-up: a restored archived-C environment confirmed the
+> no-solver contract and exposed four independent executable diagnostics.
+> After aligning stdin labels, custom token context, and missing-file preflight,
+> all 15 permanent cases are exact. See
+> [`experiment 2026-07-17-002`](../2026-07-17-002-edpll-diagnostic-parity/FINDINGS.md).
+
 ## Status
 
 Completed for Bead `E_Rust_Port-j76.1.38`. The drop-in port intentionally
