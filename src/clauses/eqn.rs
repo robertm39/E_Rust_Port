@@ -2729,12 +2729,96 @@ pub fn eqn_fof_parse(
     eqn_parse_real(scanner, bank, true, problem_type)
 }
 
+/// Parses the C `EqnHOFParse` THF literal fragment and reports whether the
+/// enclosing formula parser must continue after the returned literal.
+///
+/// C's THF parser can call this helper after consuming an opening parenthesis.
+/// A closing parenthesis immediately before an equality belongs to that
+/// opening parenthesis and is consumed here; the returned continuation flag is
+/// then `false`. Boolean equality left operands are encoded as predicate
+/// literals before the right operand is parsed as a complete TSTP formula,
+/// matching the C handoff to `TFormulaTSTPParse`.
+pub fn eqn_hof_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<(Eqn, bool), Diagnostic> {
+    let mut positive = true;
+    let mut left = bank.parse_term_with_distinct_checks(scanner)?;
+
+    if left == *bank.false_term() {
+        left = bank.true_term().clone();
+        positive = !positive;
+    }
+
+    let mut continue_parsing = true;
+    if scanner.test_tok(TokenType::CLOSE_BRACKET)
+        && scanner
+            .look_token(1)
+            .kind()
+            .intersects(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)
+    {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        continue_parsing = false;
+    }
+
+    let mut pure_eq = false;
+    if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+            positive = !positive;
+        }
+        scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+        pure_eq = true;
+    } else if scanner.test_tok(TokenType::CLOSE_BRACKET) {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        continue_parsing = false;
+    }
+
+    let right = if pure_eq {
+        if left.type_().as_ref().is_some_and(Type::is_bool) {
+            let true_term = bank.true_term().clone();
+            let right = bank.parse_tformula_tstp(scanner)?;
+            left =
+                Eqn::terms_tb_term_encode(bank, &left, &true_term, true, PatEqnDirection::Normal)?;
+            right
+        } else {
+            bank.parse_term_with_distinct_checks(scanner)?
+        }
+    } else {
+        if !left.is_any_var() && !left.is_phony_app() && bank.signature().is_function(left.f_code())
+        {
+            let symbol = bank
+                .signature()
+                .find_name(left.f_code())
+                .unwrap_or("<unknown>");
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "Symbol {symbol} interpreted both as function and predicate (check parentheses)."
+                ),
+            ));
+        }
+        bank.true_term().clone()
+    };
+
+    Ok((Eqn::alloc(left, right, bank, positive)?, continue_parsing))
+}
+
 fn eqn_parse_real(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     fof: bool,
     problem_type: ProblemType,
 ) -> Result<Eqn, Diagnostic> {
+    let (positive, left, right) = eqn_parse_real_terms(scanner, bank, fof, problem_type)?;
+    Eqn::alloc(left, right, bank, positive)
+}
+
+fn eqn_parse_real_terms(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    fof: bool,
+    problem_type: ProblemType,
+) -> Result<(bool, Term, Term), Diagnostic> {
     let mut negate = false;
     let (mut positive, left, right) = match scanner.format() {
         IoFormat::Lop => {
@@ -2775,7 +2859,18 @@ fn eqn_parse_real(
     if negate {
         positive = !positive;
     }
-    Eqn::alloc(left, right, bank, positive)
+    Ok((positive, left, right))
+}
+
+/// Parses the C `EqnTBTermParse` shape directly into a shared `$eq`/`$neq`
+/// term in normal argument order.
+pub fn eqn_tb_term_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let (positive, left, right) = eqn_parse_real_terms(scanner, bank, false, problem_type)?;
+    Eqn::terms_tb_term_encode(bank, &left, &right, positive, PatEqnDirection::Normal)
 }
 
 fn eqn_parse_mixfix_terms(
@@ -3241,8 +3336,8 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 mod tests {
     use super::{
         eqn_app_encode_string, eqn_app_encode_string_with_type_suffixes, eqn_debug_string,
-        eqn_deref_string, eqn_fof_parse, eqn_fof_string, eqn_parse, eqn_string, eqn_tstp_string,
-        Eqn, EqnFofPrintOptions, EqnPrintOptions,
+        eqn_deref_string, eqn_fof_parse, eqn_fof_string, eqn_hof_parse, eqn_parse, eqn_string,
+        eqn_tb_term_parse, eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
@@ -3416,6 +3511,21 @@ mod tests {
     }
 
     #[test]
+    fn eqn_tb_term_parse_encodes_polarity_in_normal_argument_order() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("--equal(tb_left,tb_right)", false).unwrap();
+        scanner.set_format(IoFormat::Tptp);
+
+        let encoded = eqn_tb_term_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(encoded.f_code(), bank.signature().neqn_code());
+        let left = encoded.argument(0).unwrap();
+        let right = encoded.argument(1).unwrap();
+        assert_eq!(bank.signature().find_name(left.f_code()), Some("tb_left"));
+        assert_eq!(bank.signature().find_name(right.f_code()), Some("tb_right"));
+    }
+
+    #[test]
     fn eqn_fof_parse_uses_tptp_tilde_negation() {
         let mut bank = test_bank();
         let mut scanner = Scanner::from_user_string("~equal(fof_a,fof_b)", false).unwrap();
@@ -3473,6 +3583,100 @@ mod tests {
             .is_some_and(crate::terms::simpletypes::Type::is_bool));
         assert_eq!(literal.right(), bank.true_term());
         assert!(literal.is_positive());
+    }
+
+    #[test]
+    fn eqn_hof_parse_hands_boolean_right_side_to_formula_parser() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let left = typed_pred_const(&mut bank, "hof_bool_left");
+        let right_left = typed_pred_const(&mut bank, "hof_bool_right_left");
+        let right_right = typed_pred_const(&mut bank, "hof_bool_right_right");
+        let mut scanner = Scanner::from_user_string(
+            "hof_bool_left=(hof_bool_right_left|hof_bool_right_right)",
+            false,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let (literal, continue_parsing) = eqn_hof_parse(&mut scanner, &mut bank).unwrap();
+
+        assert!(continue_parsing);
+        assert!(literal.is_positive());
+        assert!(literal.is_equ_lit(&bank));
+        assert_eq!(literal.left().f_code(), bank.signature().eqn_code());
+        assert_eq!(literal.left().argument(0), Some(left));
+        assert_eq!(literal.left().argument(1), Some(bank.true_term().clone()));
+        assert_eq!(literal.right().f_code(), bank.signature().or_code());
+        let encoded_right_left = literal.right().argument(0).unwrap();
+        assert_eq!(encoded_right_left.f_code(), bank.signature().eqn_code());
+        assert_eq!(encoded_right_left.argument(0), Some(right_left));
+        assert_eq!(
+            encoded_right_left.argument(1),
+            Some(bank.true_term().clone())
+        );
+        let encoded_right_right = literal.right().argument(1).unwrap();
+        assert_eq!(encoded_right_right.f_code(), bank.signature().eqn_code());
+        assert_eq!(encoded_right_right.argument(0), Some(right_right));
+        assert_eq!(
+            encoded_right_right.argument(1),
+            Some(bank.true_term().clone())
+        );
+    }
+
+    #[test]
+    fn eqn_hof_parse_preserves_closing_parenthesis_protocol() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "hof_term_left");
+        let right = typed_const(&mut bank, "hof_term_right");
+        let mut scanner =
+            Scanner::from_user_string("hof_term_left)!=hof_term_right", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let (literal, continue_parsing) = eqn_hof_parse(&mut scanner, &mut bank).unwrap();
+
+        assert!(!continue_parsing);
+        assert!(!literal.is_positive());
+        assert!(literal.is_equ_lit(&bank));
+        assert_eq!(literal.left(), &left);
+        assert_eq!(literal.right(), &right);
+    }
+
+    #[test]
+    fn eqn_hof_parse_consumes_predicate_closer_without_equality() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let atom = typed_pred_const(&mut bank, "hof_predicate");
+        let mut scanner = Scanner::from_user_string("hof_predicate)", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let (literal, continue_parsing) = eqn_hof_parse(&mut scanner, &mut bank).unwrap();
+
+        assert!(!continue_parsing);
+        assert!(literal.is_positive());
+        assert!(!literal.is_equ_lit(&bank));
+        assert_eq!(literal.left(), &atom);
+        assert_eq!(literal.right(), bank.true_term());
+    }
+
+    #[test]
+    fn eqn_hof_parse_rejects_function_in_predicate_position() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        typed_const(&mut bank, "hof_function");
+        let mut scanner = Scanner::from_user_string("hof_function", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let error = eqn_hof_parse(&mut scanner, &mut bank).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("interpreted both as function and predicate"));
     }
 
     #[test]
