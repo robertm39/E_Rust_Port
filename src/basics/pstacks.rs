@@ -47,6 +47,16 @@ impl<T> PStack<T> {
         Self::with_size_and_capacity(PSTACK_DEFAULT_SIZE, PSTACK_AVG_ENTRIES)
     }
 
+    /// Allocate an empty stack with exactly `capacity` logical and physical
+    /// entries before the first C-shaped doubling step.
+    ///
+    /// This is used for call sites that use `PStackVarAlloc` with a specific
+    /// initial size rather than the default 128-entry stack allocation.
+    #[must_use]
+    pub(crate) fn with_exact_capacity(capacity: usize) -> Self {
+        Self::with_size_and_capacity(capacity, capacity)
+    }
+
     fn with_size_and_capacity(size: usize, capacity: usize) -> Self {
         assert!(size > 0, "PStack initial size must be non-zero");
         assert!(

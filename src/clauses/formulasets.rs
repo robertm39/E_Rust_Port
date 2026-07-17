@@ -1718,7 +1718,7 @@ impl WrappedFormula {
 
     pub fn ensure_derivation(&mut self) -> &mut PStack<DerivationEntry> {
         self.derivation
-            .get_or_insert_with(PStack::with_average_capacity)
+            .get_or_insert_with(|| PStack::with_exact_capacity(3))
     }
 
     pub fn set_derivation(&mut self, derivation: Option<PStack<DerivationEntry>>) {
@@ -5232,6 +5232,75 @@ mod tests {
 
         assert!(set.is_empty());
         assert_eq!(set.formulas.capacity(), 0);
+    }
+
+    #[test]
+    fn formula_set_extract_and_delete_preserve_c_wrapper_lifecycle_boundary() {
+        let mut bank = test_bank();
+        let extracted_term = typed_const(&mut bank, "set_extract_lifecycle");
+        let mut extracted = WrappedFormula::wt_formula_alloc(extracted_term.clone());
+        extracted.set_info(Some(ClauseInfo::new(
+            Some("extract_name"),
+            Some("extract_source"),
+            3,
+            5,
+        )));
+        extracted.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
+        let extracted_id = extracted.entry_id();
+        let mut set = FormulaSet::new();
+        set.insert(extracted);
+
+        let extracted = set
+            .extract_entry(extracted_id)
+            .expect("inserted formula must be extractable");
+        assert!(set.is_empty());
+        assert_eq!(set.formulas.capacity(), 0);
+        assert_eq!(
+            extracted.info().and_then(ClauseInfo::source),
+            Some("extract_source")
+        );
+        assert_eq!(
+            extracted.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        extracted.gc_mark_cells(&bank);
+        assert_eq!(bank.gc_sweep(), 0);
+        assert!(bank.find(&extracted_term).is_some());
+        drop(extracted);
+        assert_eq!(bank.gc_sweep(), 1);
+        assert!(bank.find(&extracted_term).is_none());
+
+        let deleted_term = typed_const(&mut bank, "set_delete_lifecycle");
+        let deleted = WrappedFormula::wt_formula_alloc(deleted_term.clone());
+        let deleted_id = deleted.entry_id();
+        set.insert(deleted);
+        assert!(set.delete_entry(deleted_id));
+        assert!(!set.delete_entry(deleted_id));
+        assert!(set.is_empty());
+        assert_eq!(set.formulas.capacity(), 0);
+        assert_eq!(bank.gc_sweep(), 1);
+        assert!(bank.find(&deleted_term).is_none());
+    }
+
+    #[test]
+    fn wrapped_formula_derivation_uses_c_three_entry_initial_size() {
+        let mut formula = WrappedFormula::default_alloc();
+
+        for _ in 0..3 {
+            formula.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
+        }
+        let derivation = formula
+            .derivation()
+            .expect("derivation pushes allocate the formula stack");
+        assert_eq!(derivation.len(), 3);
+        assert_eq!(derivation.allocated_size(), 3);
+
+        formula.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
+        let derivation = formula
+            .derivation()
+            .expect("grown derivation stack remains allocated");
+        assert_eq!(derivation.len(), 4);
+        assert_eq!(derivation.allocated_size(), 6);
     }
 
     #[test]
