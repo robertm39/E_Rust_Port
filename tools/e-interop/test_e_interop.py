@@ -410,7 +410,7 @@ class ComparisonTests(unittest.TestCase):
                     ["--prover-type=scheme-setheo"],
                 ),
                 (
-                    "checkproof/real-e-success",
+                    "checkproof/real-e-single-percent-marker-failure",
                     ['--executable="{companion:eprover}"'],
                 ),
                 (
@@ -418,8 +418,12 @@ class ComparisonTests(unittest.TestCase):
                     ['--executable="{companion:eprover}"'],
                 ),
                 (
-                    "checkproof/e-shell-success",
+                    "checkproof/e-single-percent-marker-failure",
                     ["--output-level=3", "--executable=echo % Proof found!"],
+                ),
+                (
+                    "checkproof/e-double-percent-marker-success",
+                    ["--output-level=3", "--executable=echo %% Proof found!"],
                 ),
                 (
                     "checkproof/e-shell-failure",
@@ -1049,13 +1053,21 @@ class ComparisonTests(unittest.TestCase):
             "checkproof/setheo-release-failure"
         ]
         self.assertIn("3 : : [++r(a)] : split(2)", checkproof_setheo_case["stdin"])
-        checkproof_success_case = cases_by_name["checkproof/e-shell-success"]
-        self.assertIn("[++p(X),--q(f(X))]", checkproof_success_case["stdin"])
+        checkproof_marker_bug_case = cases_by_name[
+            "checkproof/e-single-percent-marker-failure"
+        ]
+        self.assertIn("[++p(X),--q(f(X))]", checkproof_marker_bug_case["stdin"])
         self.assertEqual(
-            checkproof_success_case["arguments"],
+            checkproof_marker_bug_case["arguments"],
             ["--output-level=3", "--executable=echo % Proof found!"],
         )
-        checkproof_real_e_case = cases_by_name["checkproof/real-e-success"]
+        self.assertEqual(
+            cases_by_name["checkproof/e-double-percent-marker-success"]["arguments"],
+            ["--output-level=3", "--executable=echo %% Proof found!"],
+        )
+        checkproof_real_e_case = cases_by_name[
+            "checkproof/real-e-single-percent-marker-failure"
+        ]
         self.assertEqual(
             checkproof_real_e_case["arguments"],
             ['--executable="{companion:eprover}"'],

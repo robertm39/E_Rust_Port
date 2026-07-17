@@ -357,7 +357,7 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
         (
-            "real-e-success",
+            "real-e-single-percent-marker-failure",
             ('--executable="{companion:eprover}"',),
             "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
         ),
@@ -367,12 +367,17 @@ TOOL_FUNCTIONAL_CASES = {
             "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
         ),
         (
-            "e-shell-success",
+            "e-single-percent-marker-failure",
             ("--output-level=3", "--executable=echo % Proof found!"),
             (
                 "1 : : [++p(X),--q(f(X))] : initial\n"
                 "2 : : [++r(X),--s(X)] : 1\n"
             ),
+        ),
+        (
+            "e-double-percent-marker-success",
+            ("--output-level=3", "--executable=echo %% Proof found!"),
+            "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
         ),
         (
             "e-shell-failure",

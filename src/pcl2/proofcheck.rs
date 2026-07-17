@@ -29,6 +29,7 @@ pub const E_EXEC_DEFAULT: &str = "eprover";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
 pub const SPASS_EXEC_DEFAULT: &str = "SPASS-0.55";
 pub const FOF_PROOFCHECK_WARNING: &str = "Cannot currently handle full first-order format!";
+const E_PROOFCHECK_SUCCESS_MARKER: &str = "%% Proof found!";
 const C_PROOFCHECK_FGETS_TEXT_LIMIT: usize = 179;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,7 +355,7 @@ pub fn prover_invocation_for_problem(
             problem: eprover_problem_string(problem, bank),
             problem_file_use: ProverProblemFileUse::Argument,
             suppress_stderr: false,
-            success_marker: format!("{DEFAULT_COMCHAR_RAW} Proof found!"),
+            success_marker: E_PROOFCHECK_SUCCESS_MARKER.to_owned(),
         }),
         ProverType::Otter => Some(ProverInvocation {
             executable: executable.unwrap_or(OTTER_EXEC_DEFAULT).to_owned(),
@@ -1044,7 +1045,6 @@ mod tests {
         step_check_with_runner, write_prover_output_trace, PclCheckType, ProofcheckWarningOutput,
         ProverInvocation, ProverProblemFileUse, ProverType, FOF_PROOFCHECK_WARNING,
     };
-    use crate::basics::defines::DEFAULT_COMCHAR_RAW;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -1383,10 +1383,7 @@ mod tests {
         );
         assert_eq!(eprover.problem_file_use, ProverProblemFileUse::Argument);
         assert!(!eprover.suppress_stderr);
-        assert_eq!(
-            eprover.success_marker,
-            format!("{DEFAULT_COMCHAR_RAW} Proof found!")
-        );
+        assert_eq!(eprover.success_marker, "%% Proof found!");
         assert!(eprover.problem.contains("input_clause("));
 
         let otter = prover_invocation_for_problem(
