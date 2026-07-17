@@ -24729,6 +24729,45 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_proof_search_omits_sat_check_comment_for_preprocessing_refutation() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-sat-check-preprocessing-comment");
+        std::fs::write(&path, "a=b.\na!=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--satcheck=ConjMinMinFreq",
+                "--satcheck-proc-interval=1",
+                "--satcheck-gen-interval=1",
+                "--satcheck-ttinsert-interval=1",
+                "--satcheck-decision-limit=-1",
+                "--satcheck-normalize-const",
+                "--satcheck-normalize-unproc",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_proof_search_prefix()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_theorem_for_fof_conjecture_refutation() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjecture");

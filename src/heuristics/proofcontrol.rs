@@ -389,6 +389,7 @@ pub enum SaturateReturnReason {
     GeneratedClause,
     Cleanup,
     Filter,
+    SatCheckPreprocessing,
     SatCheck,
 }
 
@@ -7856,6 +7857,26 @@ enum SatCheckTrigger {
     TermBankInsertions,
 }
 
+struct SatCheckRefutation {
+    clause: Clause,
+    solver_reported: bool,
+}
+
+impl SatCheckRefutation {
+    fn into_saturate_outcome(
+        self,
+        state: &mut ProofState,
+        processed_steps: i64,
+    ) -> SaturateOutcome {
+        let reason = if self.solver_reported {
+            SaturateReturnReason::SatCheck
+        } else {
+            SaturateReturnReason::SatCheckPreprocessing
+        };
+        proof_state_saturate_return_with_extract_root(state, self.clause, reason, processed_steps)
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
@@ -7968,15 +7989,10 @@ fn proof_state_saturate_impl<W: fmt::Write>(
             ));
         }
 
-        if let Some(clause) =
+        if let Some(refutation) =
             proof_state_saturate_sat_check_gate(state, control, &mut sat_check_thresholds)?
         {
-            return Ok(proof_state_saturate_return_with_extract_root(
-                state,
-                clause,
-                SaturateReturnReason::SatCheck,
-                processed_steps,
-            ));
+            return Ok(refutation.into_saturate_outcome(state, processed_steps));
         }
     }
 }
@@ -8203,7 +8219,7 @@ fn proof_state_saturate_sat_check_gate(
     state: &mut ProofState,
     control: &mut ProofControl,
     thresholds: &mut SatCheckThresholds,
-) -> Result<Option<Clause>, Diagnostic> {
+) -> Result<Option<SatCheckRefutation>, Diagnostic> {
     let params = control.heuristic_parms();
     if params.sat_check_grounding == GroundingStrategy::NoGrounding {
         return Ok(None);
@@ -8235,7 +8251,7 @@ fn proof_state_saturate_sat_check_gate(
 fn proof_state_sat_check(
     state: &mut ProofState,
     control: &mut ProofControl,
-) -> Result<Option<Clause>, Diagnostic> {
+) -> Result<Option<SatCheckRefutation>, Diagnostic> {
     let sat_check_normalize = control.heuristic_parms().sat_check_normalize;
     let sat_check_grounding = control.heuristic_parms().sat_check_grounding;
     let sat_check_normconst = control.heuristic_parms().sat_check_normconst;
@@ -8265,8 +8281,11 @@ fn proof_state_sat_check(
             .proc_trivial_count
             .saturating_add(eliminated);
         preproc_time = preproc_start.elapsed().as_secs_f64();
-        if empty.is_some() {
-            return Ok(empty);
+        if let Some(clause) = empty {
+            return Ok(Some(SatCheckRefutation {
+                clause,
+                solver_reported: false,
+            }));
         }
     }
 
@@ -8289,7 +8308,10 @@ fn proof_state_sat_check(
         .reset_sat_solver()
         .map_err(|error| picosat_error_to_diagnostic(&error))?;
     apply_sat_check_report(state, preproc_time, &report);
-    Ok(report.empty)
+    Ok(report.empty.map(|clause| SatCheckRefutation {
+        clause,
+        solver_reported: true,
+    }))
 }
 
 fn apply_sat_check_report(state: &mut ProofState, preproc_time: f64, report: &SatCheckReport) {
@@ -17047,6 +17069,62 @@ mod tests {
         assert_eq!(state.statistics().satcheck_actual_size, 2);
         assert_eq!(state.statistics().satcheck_core_size, 2);
         assert_eq!(control.solver().generation(), 2);
+    }
+
+    #[test]
+    fn proof_state_saturate_distinguishes_sat_check_preprocessing_refutation() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let positive = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_preprocessing",
+            4_145,
+            true,
+        );
+        let negative = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_preprocessing",
+            4_146,
+            false,
+        );
+        queue_unprocessed_for_process(&mut state, &mut control, positive);
+        queue_unprocessed_for_process(&mut state, &mut control, negative);
+        control.heuristic_parms_mut().sat_check_grounding = GroundingStrategy::GlobalMin;
+        control.heuristic_parms_mut().sat_check_step_limit = 1;
+        control.heuristic_parms_mut().sat_check_normalize = true;
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let SaturateOutcome::Returned {
+            clause,
+            reason,
+            processed_steps,
+        } = outcome
+        else {
+            panic!("SATCheck preprocessing should return an empty proof clause");
+        };
+        assert!(clause.is_empty());
+        assert_eq!(state.extract_roots(), std::slice::from_ref(clause.as_ref()));
+        assert_eq!(reason, SaturateReturnReason::SatCheckPreprocessing);
+        assert_eq!(processed_steps, 1);
+        assert_eq!(state.statistics().satcheck_count, 0);
+        assert_eq!(state.statistics().satcheck_success, 0);
+        assert_eq!(control.solver().generation(), 1);
     }
 
     #[test]

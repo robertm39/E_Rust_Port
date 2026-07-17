@@ -125,6 +125,7 @@ Source files reviewed: `PROVER/eprover.c`.
 
 - `src/prover/eprover.rs` and `src/bin/eprover.rs` preserve the C successful-run `OutClose(GlobalOut)` final flush/error wording for configured output while keeping help/version on the direct `process_options()` exit path that never reaches the final close.
 - `parse_spec` evaluates `--error-on-empty` once after every input file and after `$distinct` processing, using `ProofStateAxNo` rather than the parser's record count or the eventual lowered-clause count. Rust now preserves that aggregate selected-owner domain: ordinary clause and formula owners, including type declarations and `$true`, satisfy the check; watchlist owners do not. Rejection emits the reference `GlobalOut` error comment plus `InputError` status, reports `Input file contains no clauses or formulas` on stderr, and exits with `OTHER_ERROR` (11).
+- The executable prints `% SatCheck found unsatisfiable ground set` only when the SAT solver reports UNSAT. An empty clause found by the optional SATCheck preprocessing pass still produces the proof-success result but bypasses `SatClauseSetCheckUnsat`; Rust preserves that distinction with separate internal saturation return reasons so the preprocessing path does not print a solver-result comment.
 
 ### Change Later
 
