@@ -243,7 +243,10 @@ fn analysis_error(message: &str) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::{protocol_proof_distance, protocol_select_examples, protocol_update_grefs};
+    use super::{
+        c_example_weight, protocol_proof_distance, protocol_select_examples, protocol_update_grefs,
+    };
+    use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::pcl2::idents::PclId;
@@ -382,5 +385,70 @@ mod tests {
 
         assert_eq!(protocol_select_examples(&mut protocol, 0), 0);
         assert_eq!(protocol.count_property(PCL_IS_EXAMPLE), 0);
+    }
+
+    #[test]
+    fn dangling_proof_distance_parent_is_a_diagnostic_not_c_null_dereference() {
+        let mut protocol = parse_protocol("1 : : [++p] : 99");
+
+        let error = protocol_proof_distance(&mut protocol)
+            .expect_err("a missing proof-distance parent must be rejected safely");
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(error.message(), "Dangling reference in PCL protocol!");
+    }
+
+    #[test]
+    fn dangling_generation_parent_remains_a_silent_c_shaped_no_op() {
+        let mut protocol = parse_protocol("1 : : [++p] : initial\n2 : : [++q] : pm(99,1)");
+
+        protocol_update_grefs(&mut protocol);
+
+        assert_eq!(
+            protocol
+                .find_step(&parse_id("1"))
+                .expect("live parent remains present")
+                .tree_data()
+                .useless_gen_refs,
+            1
+        );
+        assert_eq!(
+            protocol
+                .find_step(&parse_id("2"))
+                .expect("derived step remains present")
+                .tree_data()
+                .useless_gen_refs,
+            0
+        );
+    }
+
+    #[test]
+    fn equal_example_scores_use_deterministic_pcl_id_order() {
+        let mut protocol = parse_protocol(
+            "2 : : [++p2] : initial\n1 : : [++p1] : initial\n100 : : [++goal] : initial : 'final'",
+        );
+        assert!(!protocol.mark_proof_clauses().unwrap());
+
+        assert_eq!(protocol_select_examples(&mut protocol, 1), 2);
+
+        assert!(protocol
+            .find_step(&parse_id("1"))
+            .expect("first tied id remains present")
+            .properties()
+            .query(PCL_IS_EXAMPLE));
+        assert!(!protocol
+            .find_step(&parse_id("2"))
+            .expect("second tied id remains present")
+            .properties()
+            .query(PCL_IS_EXAMPLE));
+    }
+
+    #[test]
+    fn example_score_rounding_matches_c_float_division() {
+        let exactly_representable = c_example_weight(16_777_216, 0);
+        let rounded = c_example_weight(16_777_217, 0);
+
+        assert_eq!(exactly_representable.to_bits(), rounded.to_bits());
+        assert_eq!(rounded.to_bits(), 16_777_216.0_f32.to_bits());
     }
 }
