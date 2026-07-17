@@ -221,7 +221,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for zero-suffix rewrite normalization on 2026-07-09, shared-argument ownership on 2026-07-11, and compact pointer-field ownership on 2026-07-16.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for zero-suffix rewrite normalization on 2026-07-09, shared-argument ownership on 2026-07-11, compact pointer-field ownership on 2026-07-16, and free-boundary ownership on 2026-07-17.
 
 Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 
@@ -242,6 +242,7 @@ Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 - `TermDeref` expands a bound applied free variable without decrementing `DEREF_ONCE`; callers use `DEREF_LIMIT`/`CONVERT_DEREF` to avoid following bindings in the prefix copied from the applied-variable head. Rust mirrors the expansion shape and the unconsumed one-step deref rule in the global term helper, while term-bank insertion paths keep their explicit prefix conversion.
 - `MakeRewrittenTerm` calls `LambdaNormalizeDB` even when `remaining_orig` is zero. Simultaneous paramodulation relies on this to beta-normalize the dereferenced replacement before `TBInsertNoProps`; Rust exposes the equivalent helper within the crate rather than replacing the call with direct term-bank insertion.
 - C keeps the nullable binding, rewrite-replacement, type, and left/right store links inline in each `TermCell`. Rust preserves that compact ownership shape with one safe `RefCell<TermLinks>` boundary rather than one borrow flag per pointer. The 64-bit Rust node is 32 bytes smaller, and exact baseline/candidate heap and proof-search measurements are recorded in [`experiments/2026-07-16-056-compact-term-links/FINDINGS.md`](../../../experiments/2026-07-16-056-compact-term-links/FINDINGS.md).
+- `TermFree` recursively releases an unshared non-variable tree but deliberately leaves variable cells owned by the `VarBank`; `TermTopFree` releases only the top cell because its argument pointers are borrowed or transferred. Rust encodes both boundaries through reference-counted term handles: dropping the last root handle recursively releases unretained non-variable descendants, VarBank-held variables survive, and dropping a temporary top handle only releases its child references. An explicit manual-free API would weaken this ownership contract and is intentionally not exposed.
 
 ### Change Later
 

@@ -1006,6 +1006,9 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::simpletypes::{alloc_simple_sort, ST_INTEGER};
+    use crate::terms::termvars::VarBank;
+    use crate::terms::typebanks::TypeBank;
+    use std::rc::Rc;
 
     #[test]
     fn constants_match_c_header_values() {
@@ -1050,6 +1053,46 @@ mod tests {
         assert_eq!(copy.argument(1), Some(right));
         assert!(copy.left_son().is_none());
         assert!(copy.right_son().is_none());
+    }
+
+    #[test]
+    fn dropping_top_handle_releases_wrapper_but_retains_borrowed_child() {
+        let child = Term::const_cell_alloc(1);
+        let child_weak = Rc::downgrade(&child.0);
+        let root = Term::top_alloc(2, 1);
+        let root_weak = Rc::downgrade(&root.0);
+        root.set_argument(0, child.clone());
+
+        drop(root);
+
+        assert!(root_weak.upgrade().is_none());
+        assert!(child_weak.upgrade().is_some());
+        drop(child);
+        assert!(child_weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn dropping_unshared_tree_retains_varbank_owned_variables() {
+        let types = TypeBank::new();
+        let vars = VarBank::new(&types);
+        let variable = vars.var_assert_alloc(-2, &types.default_type());
+        let variable_weak = Rc::downgrade(&variable.0);
+        let nested = Term::top_alloc(2, 1);
+        let nested_weak = Rc::downgrade(&nested.0);
+        nested.set_argument(0, variable.clone());
+        let root = Term::top_alloc(1, 1);
+        let root_weak = Rc::downgrade(&root.0);
+        root.set_argument(0, nested.clone());
+        drop(nested);
+        drop(variable);
+
+        drop(root);
+
+        assert!(root_weak.upgrade().is_none());
+        assert!(nested_weak.upgrade().is_none());
+        assert!(variable_weak.upgrade().is_some());
+        drop(vars);
+        assert!(variable_weak.upgrade().is_none());
     }
 
     #[test]

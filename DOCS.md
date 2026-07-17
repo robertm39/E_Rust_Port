@@ -44,6 +44,8 @@ The 2026-07-17 `cte_termvars` ownership audit closes the stale live-`TypeBank` c
 
 The 2026-07-17 `cte_termpos` audit closes both `TermPosDebugPrint` branches. Rust has exact coverage for comment-prefixed hexadecimal identity output and for term-bank-backed `DEREF_NEVER...DEREF_ALWAYS` output, including C's higher-order behavior where `$let` remains an ordinary `@` application while FOOL and lambda surfaces use their conventional printers.
 
+The 2026-07-17 `TermFree`/`TermTopFree` ownership audit confirms that Rust's reference-counted `Term` drop boundaries are the completed safe equivalent: unretained unshared descendants are released with their final root, VarBank variables remain bank-owned, and children retained elsewhere survive disposal of a temporary top wrapper. No manual-free API is needed.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.
