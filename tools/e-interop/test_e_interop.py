@@ -690,6 +690,15 @@ class ComparisonTests(unittest.TestCase):
                     ["--lop-in", "--silent", "--give-up=1"],
                 ),
                 (
+                    "eground/constrained-give-up-estimate",
+                    [
+                        "--lop-in",
+                        "--silent",
+                        "--constraints",
+                        "--give-up=1",
+                    ],
+                ),
+                (
                     "eground/resource-options-success",
                     [
                         "--lop-in",
@@ -1476,6 +1485,13 @@ class ComparisonTests(unittest.TestCase):
         eground_give_up_case = cases_by_name["eground/give-up-estimate"]
         self.assertEqual(
             eground_give_up_case["stdin"], "p(a).\np(b).\nq(X).\n"
+        )
+        eground_constrained_give_up_case = cases_by_name[
+            "eground/constrained-give-up-estimate"
+        ]
+        self.assertEqual(
+            eground_constrained_give_up_case["stdin"],
+            "p(a).\np(b).\nq(X).\n",
         )
         eground_resource_case = cases_by_name["eground/resource-options-success"]
         self.assertEqual(

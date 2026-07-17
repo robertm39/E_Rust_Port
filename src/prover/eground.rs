@@ -1977,7 +1977,7 @@ mod tests {
     }
 
     #[test]
-    fn give_up_estimate_limit_exits_with_c_failure_status() {
+    fn unconstrained_give_up_preserves_c_boolean_estimate_bug() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1995,9 +1995,7 @@ mod tests {
         assert!(stderr.is_empty());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            format!(
-                "\n{DEFAULT_COMCHAR_RAW} Failure: User resource limit exceeded (estimated number of instances)!\n"
-            )
+            "p(a) <- .\np(b) <- .\nq(b) <- .\nq(a) <- .\n% Full and complete proof state written!\n"
         );
     }
 

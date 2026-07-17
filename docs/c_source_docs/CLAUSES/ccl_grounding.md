@@ -134,7 +134,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; estimate-limit and executable routing behavior reconciled against archived C on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 
@@ -154,7 +154,7 @@ Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 - `ClausePrintDimacs` takes a `FILE* out`, but the non-empty literal loop writes literal integers to `stdout` and only writes the trailing `0` line ending to `out`; Rust now preserves this through explicit split-writer helpers while retaining pure string renderers for intentionally single-buffer DIMACS output.
 - `ClauseSetPrintDimacs` has no separate header or sorting step; it delegates to `ClausePrintDimacs` for each clause in set iteration order, including the empty-clause two-clause workaround.
 - `ClauseCreateGroundInstances` prints progress comments from the low-level instance generator and then loops only while `!TimeIsUp && !MemIsLow`. The set-level grounding functions also poll those process-global flags between clauses and mark `groundset->complete` as timeout, low-memory, or complete. Rust public grounding helpers now mirror the stop/completion behavior, expose single-clause and clause-set progress output through explicit output-aware wrappers with output-format dispatch, and keep tests/reusable internals on an injected stop callback to avoid process-global races.
-- `ClauseSetCreateGroundInstances` and `ClauseSetCreateConstrGroundInstances` print a `GlobalOut` failure line and call `exit(NO_ERROR)` when `give_up` estimates exceed the user limit. Rust keeps that condition as an explicit reusable-helper outcome, while the `eground` executable maps it back to the C-shaped success-status failure exit before normal result, statistics, or resource-footer output.
+- `ClauseSetCreateGroundInstances` and `ClauseSetCreateConstrGroundInstances` print a `GlobalOut` failure line and call `exit(NO_ERROR)` when `give_up` estimates exceed the user limit. Rust keeps that condition as an explicit reusable-helper outcome, while the `eground` executable maps it back to the C-shaped success-status failure exit before normal result, statistics, or resource-footer output. Archived-C cases cover both the unconstrained and constrained branches.
 
 ### Porting Focus
 
@@ -165,5 +165,6 @@ Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 ### Change Later
 
 - C couples grounding enumeration, final/progress output, `OutputFormat`, and resource-stop globals in the same low-level functions. Keep Rust's reusable helpers and explicit output-owner boundary unless byte-for-byte executable tests require recreating the C global coupling.
+- In `ClauseSetCreateGroundInstances`, local `tmp` is declared as `bool` but receives `PStackGetSP(default_terms)`. The unconstrained estimate therefore uses `1^vars` for every nonempty constant set and never stops for a positive limit of at least one. Rust preserves this executable-visible truncation; a corrected non-drop-in mode should use the actual constant count. The constrained helper already stores its estimate in `double` and is unaffected.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

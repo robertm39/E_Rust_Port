@@ -1076,6 +1076,11 @@ TOOL_FUNCTIONAL_CASES = {
             "p(a).\np(b).\nq(X).\n",
         ),
         (
+            "constrained-give-up-estimate",
+            ("--lop-in", "--silent", "--constraints", "--give-up=1"),
+            "p(a).\np(b).\nq(X).\n",
+        ),
+        (
             "resource-options-success",
             (
                 "--lop-in",

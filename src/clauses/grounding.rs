@@ -1543,7 +1543,11 @@ fn clause_slice_max_variable_count(clauses: &[Clause]) -> i64 {
 #[allow(clippy::cast_precision_loss)]
 fn estimated_instances_exceed_limit(vars: i64, alternatives: usize, give_up: i64) -> bool {
     let mut estimate = 1.0;
-    let alternatives = alternatives as f64;
+    // C stores `PStackGetSP(default_terms)` in the local `bool tmp` before
+    // multiplying. A nonempty default-term stack therefore contributes one,
+    // irrespective of its actual size. Preserve that truncation here because
+    // it makes the executable's unconstrained `--give-up` behavior observable.
+    let alternatives = if alternatives == 0 { 0.0 } else { 1.0 };
     for _ in 0..vars {
         estimate *= alternatives;
         if estimate > give_up as f64 {
@@ -1588,8 +1592,9 @@ mod tests {
         clause_set_print_dimacs_string, clause_set_print_dimacs_to_writers,
         clause_slice_create_constrained_ground_instances_with_stop,
         clause_slice_create_ground_instances_with_stop, eqn_eqlit_recode,
-        print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome, GroundInstancePrintOptions,
-        GroundSet, GroundSetState, VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        estimated_instances_exceed_limit, print_dimacs_header_string, GcuEncoding,
+        GroundInstanceOutcome, GroundInstancePrintOptions, GroundSet, GroundSetState, VarSetInst,
+        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -2497,7 +2502,7 @@ mod tests {
     }
 
     #[test]
-    fn clause_slice_create_ground_instances_reports_c_style_estimate_limit() {
+    fn unconstrained_estimate_preserves_c_boolean_alternative_count() {
         let mut bank = test_bank();
         let _first = typed_const(&mut bank, "a");
         let _second = typed_const(&mut bank, "b");
@@ -2519,10 +2524,12 @@ mod tests {
                 never_stop,
             )
             .unwrap(),
-            GroundInstanceOutcome::EstimateLimitExceeded
+            GroundInstanceOutcome::Complete
         );
-        assert_eq!(groundset.complete(), GroundSetState::Unknown);
-        assert_eq!(groundset.members(), 0);
+        assert_eq!(groundset.complete(), GroundSetState::Complete);
+        assert_eq!(groundset.members(), 4);
+        assert!(!estimated_instances_exceed_limit(2, 2, 3));
+        assert!(estimated_instances_exceed_limit(2, 2, -1));
     }
 
     #[test]

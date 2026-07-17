@@ -156,3 +156,13 @@ Validation:
 - C-source documentation coverage: 492 sources / 266 unit docs;
 - Change Later and local-link checks: 269 Markdown files each; and
 - regeneration preservation: 268 Markdown files.
+
+## 2026-07-17 correction
+
+Fresh archived-C execution superseded this experiment's native-only claim that
+unconstrained `--give-up=1` stops. In C, `ClauseSetCreateGroundInstances`
+assigns `PStackGetSP(default_terms)` to a local `bool tmp`; the estimate is
+therefore `1^vars` for every nonempty term set and does not exceed a positive
+limit of one. Rust now preserves that bug, while the constrained helper's real
+`double` estimate still stops. The paired exact cases and debugger evidence are
+recorded in `experiments/2026-07-17-004-eground-give-up-parity/FINDINGS.md`.
