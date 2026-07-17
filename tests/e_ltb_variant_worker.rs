@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_DIR_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 struct TempDirGuard {
     path: PathBuf,
@@ -13,10 +16,11 @@ impl TempDirGuard {
             .duration_since(UNIX_EPOCH)
             .expect("system clock should follow the Unix epoch")
             .as_nanos();
+        let serial = TEMP_DIR_SERIAL.fetch_add(1, Ordering::Relaxed);
         let path = std::env::current_dir()
             .expect("test should have a current directory")
             .join("target")
-            .join(format!("{name}-{}-{nonce}", std::process::id()));
+            .join(format!("{name}-{}-{nonce}-{serial}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("temporary test directory should be creatable");
         Self { path }
@@ -33,9 +37,8 @@ impl Drop for TempDirGuard {
     }
 }
 
-#[test]
-fn public_variant_mode_runs_real_hidden_child_and_replays_its_result() {
-    let dir = TempDirGuard::new("e-ltb-variant-worker");
+fn run_real_hidden_variant_child(worker: usize) {
+    let dir = TempDirGuard::new(&format!("e-ltb-variant-worker-{worker}"));
     fs::create_dir_all(dir.path().join("Problems")).unwrap();
     fs::create_dir_all(dir.path().join("Results")).unwrap();
     fs::copy(
@@ -48,8 +51,8 @@ fn public_variant_mode_runs_real_hidden_child_and_replays_its_result() {
         dir.path().join("batch.spec"),
         "division.category LTB.SAT\n\
          output.required Proof\n\
-         limit.time.problem.wc 12\n\
-         limit.time.overall.wc 40\n\
+         limit.time.problem.wc 60\n\
+         limit.time.overall.wc 180\n\
          Problems/prob_*ignored.p Results/prob.out\n",
     )
     .unwrap();
@@ -65,14 +68,18 @@ fn public_variant_mode_runs_real_hidden_child_and_replays_its_result() {
         .output()
         .unwrap();
 
-    assert!(result.status.success(), "status: {}", result.status);
     let stderr = String::from_utf8(result.stderr).unwrap();
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    assert!(
+        result.status.success(),
+        "worker {worker}, status: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        result.status
+    );
     assert!(
         stderr.lines().all(|line| line
             == "eprover: Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)"),
-        "{stderr}"
+        "worker {worker}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    let stdout = String::from_utf8(result.stdout).unwrap();
     assert!(stdout.contains("% Initial: 1 abstract problems, 2 variants, 2 concrete problems\n"));
     assert!(stdout.contains("% Round 0, working on variant +1,"));
     assert!(stdout.contains("% Starting E-LTB wrapper with 1000000s (1) cores\n"));
@@ -100,4 +107,13 @@ fn public_variant_mode_runs_real_hidden_child_and_replays_its_result() {
     let destination = fs::read_to_string(dir.path().join("Results").join("prob.out")).unwrap();
     assert!(destination.starts_with("% SZS status Unsatisfiable for Problems/prob_+1.p\n"));
     assert!(destination.contains("% SZS status Unsatisfiable\n"));
+}
+
+#[test]
+fn public_variant_mode_runs_real_hidden_child_and_replays_its_result() {
+    std::thread::scope(|scope| {
+        for worker in 0..4 {
+            scope.spawn(move || run_real_hidden_variant_child(worker));
+        }
+    });
 }

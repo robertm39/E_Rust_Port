@@ -1,0 +1,99 @@
+﻿{
+    "command":  "cargo test --locked --all-targets --all-features --quiet",
+    "default_parallel":  true,
+    "iterations":  10,
+    "passed":  10,
+    "failed":  0,
+    "results":  [
+                    {
+                        "iteration":  1,
+                        "exit_code":  0,
+                        "elapsed_seconds":  26.32,
+                        "stdout_sha256":  "e343b37662cc6c7512604b98e50086290367676a2aeb8c3c7ad292b0b04f2d1c",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  2,
+                        "exit_code":  0,
+                        "elapsed_seconds":  19.404,
+                        "stdout_sha256":  "889828885fceb0038ada4c2e588a942905c9041dea116c81f899cf8b30c91cb3",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  3,
+                        "exit_code":  0,
+                        "elapsed_seconds":  19.781,
+                        "stdout_sha256":  "b750af41ec2b9e2734d292ae7b5c3b9c64e17f6946a66fd3cdbdc90697f81ed6",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  4,
+                        "exit_code":  0,
+                        "elapsed_seconds":  18.545,
+                        "stdout_sha256":  "cca14952fe23be1e47416fa508df1280e3ff708fb6f8fda7ab9e9b6b0eda9478",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  5,
+                        "exit_code":  0,
+                        "elapsed_seconds":  17.917,
+                        "stdout_sha256":  "1801b6ccca479d5feb770b4c80da33fd66115f13ffa722da2fe645a9fcf15cc6",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  6,
+                        "exit_code":  0,
+                        "elapsed_seconds":  18.511,
+                        "stdout_sha256":  "95e5363e269dc2a3f5123cc6a533540606df3ba51a34dd1c300191ca8d35768a",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  7,
+                        "exit_code":  0,
+                        "elapsed_seconds":  18.772,
+                        "stdout_sha256":  "1f76acae98e428ae34ffe0a6b79e6e3ed5f60696b5335cd697ceb01586d98bc7",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  8,
+                        "exit_code":  0,
+                        "elapsed_seconds":  18.814,
+                        "stdout_sha256":  "a7629bd3ba43cff6bf565f857a477df0d43f66b4a95290b1e36b65704d400b82",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  9,
+                        "exit_code":  0,
+                        "elapsed_seconds":  19.733,
+                        "stdout_sha256":  "498f87cc6d5dfaa1436e770e2d15985633bbaaa576dd567187a5e11812e78afe",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    },
+                    {
+                        "iteration":  10,
+                        "exit_code":  0,
+                        "elapsed_seconds":  19.685,
+                        "stdout_sha256":  "685f12acc21bd7f2686a9f6482626e3f794c99a41d601ca72fc7177c9b962e6f",
+                        "stderr_sha256":  "b71d4bf11411a45c53e334ab6bbfa557c98107e5bc31fa33561b4d27b6aea4e6",
+                        "failure_stdout_log":  null,
+                        "failure_stderr_log":  null
+                    }
+                ]
+}

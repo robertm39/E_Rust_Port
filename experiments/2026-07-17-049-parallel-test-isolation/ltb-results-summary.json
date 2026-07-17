@@ -1,0 +1,79 @@
+﻿{
+    "command":  "cargo test --locked --all-features --test e_ltb_variant_worker --quiet",
+    "concurrent_hidden_workers_per_iteration":  4,
+    "iterations":  10,
+    "passed":  10,
+    "failed":  0,
+    "results":  [
+                    {
+                        "iteration":  1,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.914,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  2,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.137,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  3,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.665,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  4,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.523,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  5,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.665,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  6,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.127,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  7,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.194,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  8,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.433,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  9,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.562,
+                        "stdout":  null,
+                        "stderr":  null
+                    },
+                    {
+                        "iteration":  10,
+                        "exit_code":  0,
+                        "elapsed_seconds":  5.529,
+                        "stdout":  null,
+                        "stderr":  null
+                    }
+                ]
+}

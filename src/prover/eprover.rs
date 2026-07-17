@@ -16431,6 +16431,52 @@ mod tests {
     }
 
     #[test]
+    fn tstp_fof_let_owner_parse_isolated_from_concurrent_higher_order_problem_type() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_order_barrier = std::sync::Arc::clone(&barrier);
+        let higher_order_barrier = std::sync::Arc::clone(&barrier);
+
+        let first_order = std::thread::spawn(move || {
+            reset_problem_type();
+            first_order_barrier.wait();
+            first_order_barrier.wait();
+
+            let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+            let mut scanner = Scanner::from_user_string(
+                "fof(bool_let, axiom, $let(f: $o, f := $true, f)).",
+                false,
+            )
+            .unwrap();
+            scanner.set_format(IoFormat::Tstp);
+            let parsed = super::parse_simple_tstp_formula_clause(
+                &mut scanner,
+                &mut bank,
+                FormulaPreprocessing::parse_only(FoolUnroll::Disabled),
+                super::InputFormulaOwnerHandling::FormulaSetPrint,
+            );
+
+            first_order_barrier.wait();
+            let parsed = parsed.unwrap();
+            assert!(parsed.owner_formula.is_some());
+            assert_eq!(parsed.problem_type, ProblemType::FirstOrder);
+            reset_problem_type();
+        });
+        let higher_order = std::thread::spawn(move || {
+            higher_order_barrier.wait();
+            reset_problem_type();
+            set_problem_type(ProblemType::HigherOrder).unwrap();
+            higher_order_barrier.wait();
+            higher_order_barrier.wait();
+
+            assert_eq!(problem_type(), ProblemType::HigherOrder);
+            reset_problem_type();
+        });
+
+        first_order.join().unwrap();
+        higher_order.join().unwrap();
+    }
+
+    #[test]
     fn tstp_fof_tff_non_boolean_fool_equalities_parse_as_represented_formula_owners() {
         let _guard = global_state_lock();
         for formula_kind in ["fof", "tff"] {
