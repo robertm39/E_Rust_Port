@@ -661,6 +661,25 @@ mod tests {
     }
 
     #[test]
+    fn bank_created_before_user_sort_accepts_late_shared_type() {
+        let mut types = TypeBank::new();
+        let default_type = types.default_type();
+        let bank = VarBank::new(&types);
+
+        let person_code = types.define_simple_sort("late_person").unwrap();
+        let person =
+            types.insert_type_shared(crate::terms::simpletypes::alloc_simple_sort(person_code));
+        let typed = bank.ext_name_assert_alloc_sort("P", &person);
+        let untyped = bank.ext_name_assert_alloc("X");
+
+        assert_eq!(typed.type_(), Some(person.clone()));
+        assert_eq!(bank.normal_stack_len(&person), 1);
+        assert_eq!(untyped.type_(), Some(default_type.clone()));
+        assert_eq!(bank.default_type(), default_type);
+        assert_eq!(bank.default_type(), types.default_type());
+    }
+
+    #[test]
     fn sorted_external_name_scopes_restore_previous_binding() {
         let types = TypeBank::new();
         let mut user_types = TypeBank::new();

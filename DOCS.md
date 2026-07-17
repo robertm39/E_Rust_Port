@@ -40,6 +40,8 @@ The paired 2026-07-17 `ccl_grounding` audit records C's unconstrained `--give-up
 
 The 2026-07-17 eground diagnostic audit closes the permanent 22-case executable matrix at zero mismatches. Rust now uses C's `<stdin>` scanner source, `stat`-before-open file diagnostics, `Opened`/`Closing` scanner lifecycle, and ordered recovery counts from the real formula-CNF term-bank sweeps; no diagnostic-only garbage collections are introduced.
 
+The 2026-07-17 `cte_termvars` ownership audit closes the stale live-`TypeBank` concern. C uses the retained bank pointer only to fetch its immutable shared default type during untyped name allocation; typed sorts are explicit. Rust's retained shared default handle and dynamic type-UID maps preserve that behavior even when user sorts are inserted after VarBank construction.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

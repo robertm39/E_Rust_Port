@@ -129,7 +129,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for inference canonicalization and rewrite-cache coupling on 2026-07-09.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for inference canonicalization and rewrite-cache coupling on 2026-07-09, and TypeBank/default-sort ownership on 2026-07-17.
 
 Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 
@@ -148,6 +148,7 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 
 - `VarBankCollectVars` prints `VarBankCollectVars()...` and `...VarBankCollectVars()` directly to stdout around its collection loop, and that loop scans `i < max_var`, so a variable stored exactly at `max_var` is skipped. Rust preserves the loop-bound quirk in `VarBank::collect_vars` and exposes `collect_vars_with_output` for the C progress text while keeping the ordinary helper output-free.
 - Paired proof-state variable banks contain distinct variable cells with synchronized f-codes and types. Inference constructors reset the shadow bank's per-sort counters, bind source variables to its low canonical codes, and only then insert instantiated terms into the live term bank. This makes variable-counter state observable through shared term identity and rewrite-link caching.
+- C retains the whole `TypeBank_p`, but ordinary allocation reads it only for the bank's immutable shared `default_type`; typed allocation receives its `Type_p` explicitly. Rust retains that same shared default `Type` handle and keys variable stacks/counters dynamically by type UID. A regression constructs the Rust bank first, inserts a user sort later, then proves typed allocation uses the late shared sort while default-name allocation retains the identical `$i` handle. Parser construction therefore does not need to wait for all user sorts.
 
 ### Porting Focus
 
