@@ -47,13 +47,13 @@ impl RelatedTermSet {
 
 pub type TermFrequencyTree = NumTree<i64, i64>;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TermWeightEvalState {
     bank: TermBank,
     freqs: TermFrequencyTree,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TermWeightParam {
     axioms: ClauseSet,
     var_norm: VarNormStyle,

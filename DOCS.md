@@ -48,6 +48,8 @@ The 2026-07-17 `TermFree`/`TermTopFree` ownership audit confirms that Rust's ref
 
 The 2026-07-17 base `TermCell` reconciliation closes the raw flexible-array representation item as a measured Rust design decision. `Term` and `Option<Term>` stay one pointer wide, compact link storage has exact heap and proof-search evidence, and the separate LFHO owner-bank/binding-cache work remains explicitly tracked under its existing post-compatibility Beads.
 
+The 2026-07-17 term-bank ownership follow-up makes `TermBank` and its intrusive `TermCellStore` non-cloneable. Detached parser probes keep independent stores, while proof-object formula rendering borrows canonical handles through immutable print-only literal and clause views; a regression verifies rendering cannot change bank counters, term properties, or canonical lookup identity.
+
 The 2026-07-17 simple-type ownership audit confirms that `Type`/`Option<Type>` remain one pointer wide and that Rust `TypesCmp` uses actual `Rc` allocation addresses just as C uses `PCmp`. C explicitly documents allocator-dependent clause-sort differences, so exact address order and reuse are process-local in both implementations; shared identity remains stable for the TypeBank lifetime.
 
 The 2026-07-17 subsumption integration follow-up routes proof control, contextual simplify-reflect, watchlists, and split-definition variant lookup through each `ClauseSet`'s owned FV anchor. Indexed insertion and extraction now define the production lookup lifecycle; explicit-anchor APIs remain only as lower-level test and interop surfaces. Simplify-reflect documentation remains explicit-session output with compact `DCSR` parents until separate stable-handle proof reconstruction work needs stronger identity.

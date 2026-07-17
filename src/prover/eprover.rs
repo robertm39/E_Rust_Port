@@ -65,8 +65,8 @@ use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::formulasets::{
-    FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, FormulaTstpClauseMode,
-    FormulaTstpCompleteness, FormulaTstpPrintOptions, WrappedFormula, WrappedFormulaCnfDocContext,
+    FormulaProofDocRenderOptions, FormulaSet, FormulaSetCnfOptions, WrappedFormula,
+    WrappedFormulaCnfDocContext,
 };
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
@@ -8174,7 +8174,6 @@ fn write_proof_object_list_graph(
     graph: &ProofObjectGraph<'_>,
     proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
-    let mut formula_bank = bank.clone();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
     let items = proof_object_list_display_items(graph);
@@ -8209,7 +8208,7 @@ fn write_proof_object_list_graph(
                 write_saturation_proof_object_formula_with_formula_ids(
                     output,
                     config,
-                    &mut formula_bank,
+                    bank,
                     &formula,
                     proof_problem_type,
                     &formula_ids,
@@ -8871,7 +8870,7 @@ fn write_saturation_proof_object_clause_with_formula_ids(
 fn write_saturation_proof_object_formula_with_formula_ids(
     output: &mut impl Write,
     config: &EProverConfig,
-    bank: &mut TermBank,
+    bank: &TermBank,
     formula: &WrappedFormula,
     proof_problem_type: ProblemType,
     formula_ids: &BTreeMap<i64, String>,
@@ -8894,16 +8893,7 @@ fn write_saturation_proof_object_formula_with_formula_ids(
             rendered.push('\n');
         }
         DocOutputFormat::Tstp => {
-            rendered.push_str(&formula.tstp_string_flex(
-                bank,
-                proof_problem_type,
-                FormulaTstpPrintOptions {
-                    full_terms: true,
-                    completeness: FormulaTstpCompleteness::Open,
-                    clause_mode: FormulaTstpClauseMode::AsClauseCore,
-                    keep_input_names: true,
-                },
-            )?);
+            rendered.push_str(&formula.proof_object_tstp_string(bank, proof_problem_type)?);
             if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
                 formula.derivation(),
                 ac_axioms,
@@ -8946,7 +8936,6 @@ fn write_proof_object_dot(
         b"digraph proof{\n  rankdir=TB\n  graph [splines=true overlap=false];\n  subgraph ax{\n  rank=\"same\";\n",
     )?;
     let mut axiom_open = true;
-    let mut formula_bank = bank.clone();
     let display_order = proof_object_list_display_order(graph);
     let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
     let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
@@ -8971,7 +8960,7 @@ fn write_proof_object_dot(
                 write_proof_object_dot_formula(
                     output,
                     config,
-                    &mut formula_bank,
+                    bank,
                     &formula,
                     formula.ident(),
                     proof_problem_type,
@@ -9053,23 +9042,14 @@ const fn proof_output_problem_type(proof_problem_type: ProblemType) -> ProblemTy
 fn write_proof_object_dot_formula(
     output: &mut impl Write,
     config: &EProverConfig,
-    bank: &mut TermBank,
+    bank: &TermBank,
     formula: &WrappedFormula,
     node_id: i64,
     proof_problem_type: ProblemType,
 ) -> Result<(), EProverError> {
     let label = if config.proof_output > 2 {
         let proof_problem_type = proof_output_problem_type(proof_problem_type);
-        let mut rendered = formula.tstp_string_flex(
-            bank,
-            proof_problem_type,
-            FormulaTstpPrintOptions {
-                full_terms: true,
-                completeness: FormulaTstpCompleteness::Open,
-                clause_mode: FormulaTstpClauseMode::AsClauseCore,
-                keep_input_names: true,
-            },
-        )?;
+        let mut rendered = formula.proof_object_tstp_string(bank, proof_problem_type)?;
         if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(formula.derivation(), &[])
         {
             rendered.push_str(",\n");
@@ -31100,6 +31080,85 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             "{printed}"
         );
         assert!(!printed.contains("[++equal("), "{printed}");
+    }
+
+    #[test]
+    fn proof_object_formula_rendering_borrows_canonical_term_bank_read_only() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let clause = parse_lop_test_clause(&mut bank, "proof_render_left=proof_render_right.", 17);
+        let mut clause_formula =
+            WrappedFormula::form_clause_alloc(&mut bank, clause, ProblemType::FirstOrder).unwrap();
+        clause_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let mut plain_formula = WrappedFormula::wt_formula_alloc(clause_formula.formula().clone());
+        plain_formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let graph = ProofObjectGraph {
+            clauses: Vec::new(),
+            formulas: vec![&plain_formula, &clause_formula],
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: Vec::new(),
+            root_indices: Vec::new(),
+            formula_root_indices: vec![0, 1],
+        };
+        let config = EProverConfig {
+            proof_output: 3,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let stored = bank.stored_terms();
+        let stored_properties = stored.iter().map(Term::properties).collect::<Vec<_>>();
+        let counters = (
+            bank.in_count(),
+            bank.insertions(),
+            bank.recovered(),
+            bank.non_var_term_nodes(),
+            bank.term_arg_count(),
+            bank.storage_estimate(),
+        );
+
+        let mut list_output = Vec::new();
+        write_proof_object_list_graph(
+            &mut list_output,
+            &config,
+            &bank,
+            &graph,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+        let mut dot_output = Vec::new();
+        write_proof_object_dot(
+            &mut dot_output,
+            &config,
+            &bank,
+            &graph,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+
+        assert!(String::from_utf8(list_output)
+            .unwrap()
+            .contains("proof_render_left=proof_render_right"));
+        assert!(String::from_utf8(dot_output)
+            .unwrap()
+            .contains("proof_render_left=proof_render_right"));
+        assert_eq!(
+            (
+                bank.in_count(),
+                bank.insertions(),
+                bank.recovered(),
+                bank.non_var_term_nodes(),
+                bank.term_arg_count(),
+                bank.storage_estimate(),
+            ),
+            counters
+        );
+        assert_eq!(
+            stored.iter().map(Term::properties).collect::<Vec<_>>(),
+            stored_properties
+        );
+        for term in stored {
+            assert_eq!(bank.find(&term), Some(term));
+        }
     }
 
     #[test]

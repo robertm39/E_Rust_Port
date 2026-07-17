@@ -598,7 +598,7 @@ struct ProofObjectParentEdge {
     resolution: ProofObjectParentResolution,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ProofState {
     terms: TermBank,
     tmp_terms: TermBank,

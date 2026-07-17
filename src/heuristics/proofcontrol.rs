@@ -17854,7 +17854,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_ac_parent_survives_renumber_clone_and_archive_requeue() {
+    fn signature_ac_parent_survives_renumber_and_archive_requeue() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (mut clause, _) =
             commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_owner_f", 4_096);
@@ -17881,40 +17881,25 @@ mod tests {
             Some(current_ref)
         );
 
-        let original_owner = std::ptr::from_ref(
-            state
-                .proof_clause_by_derivation_ref(signature_ref)
-                .expect("original state owns the AC parent"),
-        );
-        let mut snapshot = state.clone();
-        let snapshot_owner = std::ptr::from_ref(
-            snapshot
-                .proof_clause_by_derivation_ref(signature_ref)
-                .expect("cloned state owns its AC-parent snapshot"),
-        );
-        assert_ne!(original_owner, snapshot_owner);
-
-        let archived = snapshot
+        let archived = state
             .processed_pos_eqns_mut()
             .extract_by_id(1)
-            .expect("snapshot still owns the processed AC parent");
-        let requeued = proof_state_archive_simplified_clause(&mut snapshot, archived)
+            .expect("state still owns the processed AC parent");
+        let requeued = proof_state_archive_simplified_clause(&mut state, archived)
             .expect("AC parent can be archived and requeued");
         let requeued_ref = ClauseDerivationRef::from(&requeued);
-        snapshot.tmp_store_mut().insert(requeued);
+        state.tmp_store_mut().insert(requeued);
 
         assert_ne!(signature_ref, requeued_ref);
-        assert!(snapshot
+        assert!(state
             .archive()
             .find_by_derivation_ref(signature_ref)
             .is_some());
-        assert!(snapshot
+        assert!(state
             .tmp_store()
             .find_by_derivation_ref(requeued_ref)
             .is_some());
-        assert_eq!(snapshot.ac_axiom_parent_refs(), vec![current_ref]);
-        assert!(state.processed_pos_eqns().find_by_id(1).is_some());
-        assert!(state.archive().is_empty());
+        assert_eq!(state.ac_axiom_parent_refs(), vec![current_ref]);
     }
 
     #[test]

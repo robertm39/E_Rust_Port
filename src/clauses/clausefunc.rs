@@ -3065,8 +3065,8 @@ pub fn tformula_is_untyped(form: &Term) -> bool {
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if temporary equation allocation, term/type rendering,
-/// or output formatting fails.
+/// Returns a diagnostic if the temporary literal view, term/type rendering, or
+/// output formatting fails.
 ///
 /// # Panics
 ///
@@ -3074,13 +3074,13 @@ pub fn tformula_is_untyped(form: &Term) -> bool {
 /// arguments, or if a binary connective has an unexpected operator.
 pub fn tformula_write_tptp(
     output: &mut impl fmt::Write,
-    bank: &mut TermBank,
+    bank: &TermBank,
     form: &Term,
     full_terms: bool,
     options: TFormulaTptpPrintOptions,
 ) -> Result<(), Diagnostic> {
     if tformula_is_literal(bank, form) {
-        let literal = Eqn::alloc(
+        let literal = Eqn::alloc_for_print(
             formula_argument(form, 0),
             formula_argument(form, 1),
             bank,
@@ -3186,7 +3186,7 @@ pub fn tformula_write_tptp(
 ///
 /// Returns a diagnostic under the same conditions as [`tformula_write_tptp`].
 pub fn tformula_tptp_string(
-    bank: &mut TermBank,
+    bank: &TermBank,
     form: &Term,
     full_terms: bool,
     options: TFormulaTptpPrintOptions,
@@ -3198,7 +3198,7 @@ pub fn tformula_tptp_string(
 
 fn tformula_write_tptp_quantifier(
     output: &mut impl fmt::Write,
-    bank: &mut TermBank,
+    bank: &TermBank,
     form: &Term,
     full_terms: bool,
     options: TFormulaTptpPrintOptions,
@@ -3260,7 +3260,7 @@ fn tformula_write_quantified_variable(
 
 fn tformula_write_tptp_or_chain(
     output: &mut impl fmt::Write,
-    bank: &mut TermBank,
+    bank: &TermBank,
     form: &Term,
     full_terms: bool,
     options: TFormulaTptpPrintOptions,
@@ -5695,6 +5695,49 @@ pub fn tformula_collect_clause(
         literals = copied?;
     }
     let mut clause = Clause::alloc(literals);
+    clause.set_weight(clause.standard_weight());
+    Ok(clause)
+}
+
+/// Collects a clause-shaped formula into a temporary read-only proof view.
+///
+/// This is the no-variable-copying path of [`tformula_collect_clause`]. It
+/// preserves C's literal order and truth-constant handling while leaving the
+/// canonical term bank and its intrusive term properties untouched.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a temporary literal view cannot be constructed.
+///
+/// # Panics
+///
+/// Panics if an encoded literal has malformed arguments.
+pub(crate) fn tformula_collect_clause_for_print(
+    bank: &TermBank,
+    form: &Term,
+) -> Result<Clause, Diagnostic> {
+    let or_code = bank.signature().or_code();
+    let mut tasks = vec![form.clone()];
+    let mut literal_stack = Vec::new();
+
+    while let Some(current) = tasks.pop() {
+        if current.f_code() == or_code && current.arity() == 2 {
+            tasks.push(formula_argument(&current, 0));
+            tasks.push(formula_argument(&current, 1));
+            continue;
+        }
+        if tformula_is_literal(bank, &current) {
+            literal_stack.push(Eqn::tb_term_decode_for_print(bank, &current)?);
+            continue;
+        }
+        if current == *bank.true_term() {
+            literal_stack.push(Eqn::create_true_lit_for_print(bank)?);
+        }
+        // C drops $false and silently ignores any unexpected non-literal leaf.
+    }
+
+    let literals = literal_stack.into_iter().rev().collect();
+    let mut clause = Clause::alloc(EqnList::from_vec(literals));
     clause.set_weight(clause.standard_weight());
     Ok(clause)
 }
@@ -9907,7 +9950,7 @@ mod tests {
         let formula = bool_binary_with_code(&mut bank, or_code, &left, &third);
 
         let rendered = tformula_tptp_string(
-            &mut bank,
+            &bank,
             &formula,
             true,
             TFormulaTptpPrintOptions::tstp(ProblemType::FirstOrder),
@@ -9934,14 +9977,14 @@ mod tests {
         let outer = tformula_quantor_alloc(&mut bank, qall_code, &x, &inner).unwrap();
 
         let first_order = tformula_tptp_string(
-            &mut bank,
+            &bank,
             &outer,
             true,
             TFormulaTptpPrintOptions::tstp(ProblemType::FirstOrder),
         )
         .unwrap();
         let higher_order = tformula_tptp_string(
-            &mut bank,
+            &bank,
             &outer,
             true,
             TFormulaTptpPrintOptions::tstp(ProblemType::HigherOrder),

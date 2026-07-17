@@ -132,7 +132,7 @@ impl CsscpaLoopResult {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CsscpaState {
     terms: TermBank,
     pos_units: ClauseSet,

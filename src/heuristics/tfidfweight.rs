@@ -19,7 +19,7 @@ use crate::terms::termtypes::Term;
 use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
 use std::cell::RefCell;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TfIdfEvalState {
     eval_bank: TermBank,
     eval_freqs: TermFrequencyTree,
@@ -41,7 +41,7 @@ impl TfIdfEvalState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TfIdfWeightParam {
     axioms: ClauseSet,
     var_norm: VarNormStyle,

@@ -5,7 +5,7 @@ use std::io::{self, Write};
 pub const TERM_STORE_HASH_SIZE: usize = 8192 * 4;
 pub const TERM_STORE_HASH_MASK: usize = TERM_STORE_HASH_SIZE - 1;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TermCellStore {
     entries: i64,
     arg_count: i64,

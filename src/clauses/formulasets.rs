@@ -13,8 +13,9 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_add_quantor,
     tformula_app_encode_string_with_type_suffixes, tformula_clause_closed_encode,
-    tformula_clause_encode, tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
-    tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
+    tformula_clause_encode, tformula_closure, tformula_collect_clause,
+    tformula_collect_clause_for_print, tformula_collect_free_vars, tformula_conjunctive_nf3,
+    tformula_copy_def, tformula_create_def, tformula_decode_polarity,
     tformula_encode_predicate_as_eqn, tformula_fcode_alloc, tformula_find_defs,
     tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
     tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
@@ -2217,6 +2218,20 @@ impl WrappedFormula {
         Ok(clause)
     }
 
+    /// Converts a clause-backed formula into a temporary read-only proof view.
+    ///
+    /// Unlike [`Self::form_clause_to_clause`], this does not mutate term or
+    /// signature classification state in the canonical bank.
+    pub(crate) fn form_clause_to_clause_for_print(
+        &self,
+        bank: &TermBank,
+    ) -> Result<Clause, Diagnostic> {
+        let mut clause = tformula_collect_clause_for_print(bank, self.formula())?;
+        clause.set_properties(self.properties);
+        clause.set_info(self.info.as_deref().cloned());
+        Ok(clause)
+    }
+
     /// Encodes a parsed clause as a clause-backed wrapped formula, matching C
     /// `WFormClauseParse`.
     ///
@@ -2279,7 +2294,7 @@ impl WrappedFormula {
     /// Returns a diagnostic if formula rendering fails.
     pub fn derived_pcl_formula_body_string(
         &self,
-        bank: &mut TermBank,
+        bank: &TermBank,
         problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
         tformula_tptp_string(
@@ -2636,6 +2651,46 @@ impl WrappedFormula {
             output.push_str(").");
         }
         Ok(output)
+    }
+
+    /// Renders the open TSTP record used inside proof-object list and DOT output.
+    ///
+    /// This is the read-only specialization of [`Self::tstp_string_flex`] for
+    /// full terms, preserved input names, and clause-core rendering.
+    pub(crate) fn proof_object_tstp_string(
+        &self,
+        bank: &TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let formula_kind = if problem_type == ProblemType::HigherOrder {
+            "thf"
+        } else if self.is_clause {
+            if self.is_untyped() {
+                "cnf"
+            } else {
+                "tcf"
+            }
+        } else if self.is_untyped() {
+            "fof"
+        } else {
+            "tff"
+        };
+        let rendered = if self.is_clause {
+            let clause = self.form_clause_to_clause_for_print(bank)?;
+            clause_print_tstp_core_string(bank, &clause, true, false)
+        } else {
+            tformula_tptp_string(
+                bank,
+                self.formula(),
+                true,
+                TFormulaTptpPrintOptions::tstp(problem_type),
+            )?
+        };
+        Ok(format!(
+            "{formula_kind}({}, {}, {rendered}",
+            self.get_id(true),
+            self.tstp_role_name()
+        ))
     }
 
     /// Renders C's `WFormulaTSTPPrint` macro shape with `as_formula=true`.

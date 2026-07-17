@@ -55,7 +55,7 @@ pub struct Tsm {
     tsas: Option<PDPointerArray<Tsa>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TsmAdmin {
     tsm_type: TsmType,
     index_bank: TermBank,

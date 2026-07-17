@@ -38,7 +38,7 @@ pub struct TsmParam {
     eval_scale: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TsmEvalState {
     bank: TermBank,
     admin: TsmAdmin,
@@ -51,7 +51,7 @@ enum TsmTargetSource {
     FeatureSnapshot(Box<Features>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TsmEvaluator {
     param: TsmParam,
     target: Option<TsmTargetSource>,

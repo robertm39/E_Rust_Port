@@ -363,6 +363,80 @@ impl Eqn {
         })
     }
 
+    /// Builds a temporary equation/literal view without mutating its term bank.
+    ///
+    /// This is the read-only counterpart of [`Self::alloc`] for proof and
+    /// formula rendering. Parsed terms have already been classified, so this
+    /// preserves C's literal normalization and validation without redeclaring
+    /// predicate symbols or changing intrusive term properties.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same malformed-term conditions as [`Self::alloc`].
+    pub(crate) fn alloc_for_print(
+        mut lterm: Term,
+        mut rterm: Term,
+        bank: &TermBank,
+        mut positive: bool,
+    ) -> Result<Self, Diagnostic> {
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+
+        if lterm == false_term {
+            lterm = true_term.clone();
+            positive = !positive;
+        }
+        if rterm == false_term {
+            rterm = true_term.clone();
+            positive = !positive;
+        }
+        if lterm == true_term {
+            std::mem::swap(&mut lterm, &mut rterm);
+        }
+
+        let mut properties = EP_NO_PROPS;
+        if positive {
+            properties.set(EP_IS_POSITIVE);
+        }
+        if rterm == true_term {
+            assert!(
+                rterm.query_prop(TP_PRED_POS),
+                "$true term must carry predicate-position property"
+            );
+            if lterm.f_code() > bank.signature().internal_symbols() {
+                assert!(
+                    !lterm.is_db_var(),
+                    "DB variables are not declared as predicate symbols"
+                );
+            }
+            if !lterm.is_any_var() && bank.signature().query_prop(lterm.f_code(), FP_PSEUDO_PRED) {
+                properties.set(EP_PSEUDO_LIT);
+            }
+        } else {
+            assert_ne!(
+                rterm.f_code(),
+                crate::terms::signature::SIG_TRUE_CODE,
+                "equality right side must not be a distinct $true cell"
+            );
+            properties.set(EP_IS_EQU_LITERAL);
+        }
+
+        let ltype = lterm.type_();
+        let rtype = rterm.type_();
+        let predicate_true_literal =
+            ltype.as_ref().is_some_and(type_is_predicate) && rterm == true_term;
+        if ltype != rtype && !predicate_true_literal {
+            return Err(Diagnostic::new(ErrorCode::SYNTAX_ERROR, "Type error"));
+        }
+
+        Ok(Self {
+            properties,
+            pos: 0,
+            lterm,
+            rterm,
+        })
+    }
+
     /// Allocates a predicate literal, lifting `$eq`/`$neq` applications to
     /// equation-literal shape.
     ///
@@ -401,6 +475,15 @@ impl Eqn {
 
     pub fn create_true_lit(bank: &mut TermBank) -> Result<Self, Diagnostic> {
         Self::alloc(
+            bank.true_term().clone(),
+            bank.true_term().clone(),
+            bank,
+            true,
+        )
+    }
+
+    pub(crate) fn create_true_lit_for_print(bank: &TermBank) -> Result<Self, Diagnostic> {
+        Self::alloc_for_print(
             bank.true_term().clone(),
             bank.true_term().clone(),
             bank,
@@ -479,6 +562,26 @@ impl Eqn {
             .argument(1)
             .unwrap_or_else(|| panic!("encoded equation right argument is uninitialized"));
         Self::alloc(left, right, bank, positive)
+    }
+
+    /// Decodes a shared `$eq`/`$neq` term for read-only proof rendering.
+    pub(crate) fn tb_term_decode_for_print(
+        bank: &TermBank,
+        eqn: &Term,
+    ) -> Result<Self, Diagnostic> {
+        assert!(
+            eqn.f_code() == bank.signature().eqn_code()
+                || eqn.f_code() == bank.signature().neqn_code(),
+            "encoded equation term must use equality or inequality code"
+        );
+        let positive = eqn.f_code() == bank.signature().eqn_code();
+        let left = eqn
+            .argument(0)
+            .unwrap_or_else(|| panic!("encoded equation left argument is uninitialized"));
+        let right = eqn
+            .argument(1)
+            .unwrap_or_else(|| panic!("encoded equation right argument is uninitialized"));
+        Self::alloc_for_print(left, right, bank, positive)
     }
 
     #[must_use]

@@ -46,7 +46,7 @@ const TERMARG_MEM: i64 = 4;
 const TERMP_MEM: i64 = 4;
 const TERMCELL_DYN_MEM: i64 = TERMCELL_MEM + 4 * TERMARG_MEM;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TermBank {
     in_count: u64,
     insertions: u64,
