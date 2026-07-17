@@ -175,7 +175,7 @@ Source files reviewed: `HEURISTICS/che_prio_funs.h`, `HEURISTICS/che_prio_funs.c
 ### Rust Port Status Notes
 
 - `src/heuristics/prio_funs.rs` ports the C priority constants, name table, parser lookup surface, and the currently represented clause priority functions over an explicit `&TermBank`.
-- `PrioFunPreferEasyHO` now preserves the C normal-result behavior for non-ArgCong clauses and returns `PrioBest` for represented `DCArgCong` derivations when the process problem type is higher-order.
+- `PrioFunPreferEasyHO` now preserves the C normal-result behavior for non-ArgCong clauses and returns `PrioBest` for represented `DCArgCong` derivations when the process problem type is higher-order. Production ArgCong generation writes `DCArgCong` plus the exact clause-parent reference, and focused tests pin both generation metadata and the unset/first-order/higher-order priority split.
 
 ### Change Later
 
