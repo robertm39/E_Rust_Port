@@ -112,7 +112,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for recursive ownership and complete operator rendering equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_expressions.h`, `PCL2/pcl_expressions.c`.
 
@@ -137,13 +137,16 @@ Source files reviewed: `PCL2/pcl_expressions.h`, `PCL2/pcl_expressions.c`.
 ### Rust Port Status Notes
 
 - `src/pcl2/expressions.rs` ports the core `PCLExprAlloc`, `PCLExprParse`, `PCLExprPrint`, `PCLExprPrintTSTP`, and `PCLStepExtract` behavior for quote, initial, and operator expression trees.
-- The Rust representation stores expression arguments as typed child expressions plus optional `PCL2` positions instead of the C two-slot `PDArray` layout, while preserving the opcode discriminants, mini/full quote distinction, fixed-arity checks, variable-arity one-or-more operators, and PCL/TSTP rendering spellings.
+- The Rust representation stores expression arguments as typed boxed child expressions plus optional owned `PCL2` positions instead of the C two-slot `PDArray` layout. The enum distinguishes full identifiers, inline mini identifiers, initial source information, and compound children, so destruction follows the active variant rather than selecting between `PCLExprFree` and `PCLMiniExprFree` for an untagged pointer-or-integer slot.
+- Every child remains separately allocated, as in C, while the argument vector is contiguous and grows geometrically. C allocates a two-slot `PDArray` for every expression, including leaves, and its fixed growth of two slots reallocates and copies the entire array for each additional argument. Rust leaves zero-argument storage unallocated and a 2,048-parent regression pins amortized large-proof growth without changing child order or identity.
+- All 31 opcode discriminants, the complete 26-name parser table, fixed arities, one-or-more variable arities, and exact PCL/TSTP output are covered exhaustively. This includes split metadata, skolemization/negated-conjecture statuses, answer theory parents, source-info rendering, mini/full quote separation, and the prefix-based `PCLStepExtract` behavior.
 - Initial source-info expressions reuse the ported `ClauseInfo` renderer; source strings are stored without the surrounding double quotes while the name field preserves the scanner literal, matching the C `DStrCopyCore`/`DStrCopy` split.
+- Stored positions remain owned and are appended without separators in PCL rendering, including the position unit's dotless term path. TSTP rendering deliberately omits the same stored positions. Focused construction tests cover both quote and compound-argument positions even though the legacy parser mismatch prevents reading them through `PCLExprParse`.
 
 ### Change Later
 
-- `PCLExprParse` tests for `OpenBracket` before calling `PCL2PosParse`, but `PCL2PosParse` itself expects a positive integer as the current token and does not consume the opening bracket. Rust preserves this parser mismatch, so expression-level positions are still not accepted through this path. Revisit only after reference PCL traces clarify whether this is dead code, a C bug, or a syntax expectation hidden elsewhere.
-- `PCLExprPrintTSTP` ignores stored argument/quote positions even though PCL rendering prints them. Rust mirrors that split; cleaned proof-object APIs should decide whether position metadata belongs in TSTP annotations or only in PCL syntax.
-- `PCLOpURewrite` exists in the opcode enum and has a weight constant, but this unit neither parses nor prints it. Rust keeps the discriminant for compatibility and leaves behavior absent until a caller or source trace requires it.
-- Variable-arity operators such as `cdclpropres` and `ar` still require at least one child because the C parser enters the argument parser whenever `arg_no` is `PCL_VAR_ARG` (`-1`). If empty argument lists should be legal, change that only after proof-output compatibility is established.
+- `PCLExprParse` tests for `OpenBracket` before calling `PCL2PosParse`, but `PCL2PosParse` itself expects a positive integer as the current token and does not consume the opening bracket. Rust preserves the mismatch for both quote and compound arguments. Any grammar repair remains tracked by `E_Rust_Port-j76.4.931` and `E_Rust_Port-j76.3.43`.
+- `PCLExprPrintTSTP` ignores stored argument/quote positions even though PCL rendering prints them. Rust mirrors and tests that split; deciding whether position metadata belongs in TSTP annotations remains tracked by `E_Rust_Port-j76.4.932`.
+- `PCLOpURewrite` exists in the opcode enum and has a weight constant, but this unit neither parses nor prints it. Rust keeps the discriminant and the lemma-weight entry while leaving expression syntax absent; follow-up remains tracked by `E_Rust_Port-j76.4.933`.
+- Variable-arity operators `cdclpropres` and `ar` require at least one child because the C parser enters the argument parser whenever `arg_no` is `PCL_VAR_ARG` (`-1`). Rust preserves that grammar; any empty-list extension remains tracked by `E_Rust_Port-j76.4.934`.
 <!-- END MANUAL REVIEW: c_source_docs -->

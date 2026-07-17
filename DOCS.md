@@ -66,6 +66,8 @@ The 2026-07-17 PCL-mini-clause audit confirms that one owning literal vector rep
 
 The 2026-07-17 PCL-identifier audit confirms that vector length safely replaces C's `-1` terminator because live decimal components include zero but cannot be negative. Parsing/printing scale geometrically to long identifiers, while protocol comparison still injects the sentinel and preserves C's subtraction-to-`int` truncation—even its wide-component equality collapse—until the separately tracked strict-order cleanup.
 
+The 2026-07-17 PCL-expression audit confirms that typed recursive ownership replaces C's untagged two-slot-per-argument array and separate full/mini destruction paths. Exhaustive coverage pins every opcode and parser/printer spelling, a 2,048-parent case validates amortized argument growth, and the tracked position-parser mismatch, TSTP position omission, absent `URewrite` syntax, and one-or-more variable arities remain exact.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

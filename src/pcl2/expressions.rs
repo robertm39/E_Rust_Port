@@ -585,22 +585,67 @@ pub fn pcl_step_extract(extra: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{pcl_step_extract, PclExpression, PclExpressionData, PclOpCode, PclQuote};
+    use super::{
+        pcl_step_extract, PclExprArgument, PclExpression, PclExpressionData, PclOpCode, PclQuote,
+    };
     use crate::inout::scanner::Scanner;
+    use crate::pcl2::idents::PclId;
+    use crate::pcl2::positions::Pcl2Position;
 
     fn parse(source: &str, mini: bool) -> PclExpression {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         PclExpression::parse(&mut scanner, mini).unwrap()
     }
 
+    fn parse_id(source: &str) -> PclId {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        PclId::parse(&mut scanner).unwrap()
+    }
+
+    fn parse_position(source: &str) -> Pcl2Position {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        Pcl2Position::parse(&mut scanner).unwrap()
+    }
+
     #[test]
     fn enum_values_match_c_order() {
-        assert_eq!(PclOpCode::NoOp as i32, 0);
-        assert_eq!(PclOpCode::Initial as i32, 1);
-        assert_eq!(PclOpCode::IntroDef as i32, 2);
-        assert_eq!(PclOpCode::Quote as i32, 3);
-        assert_eq!(PclOpCode::FofAssumeNegation as i32, 29);
-        assert_eq!(PclOpCode::MaxOp as i32, 30);
+        let opcodes = [
+            PclOpCode::NoOp,
+            PclOpCode::Initial,
+            PclOpCode::IntroDef,
+            PclOpCode::Quote,
+            PclOpCode::EvalGc,
+            PclOpCode::Paramod,
+            PclOpCode::SimParamod,
+            PclOpCode::EResolution,
+            PclOpCode::SatCheck,
+            PclOpCode::Condense,
+            PclOpCode::EFactoring,
+            PclOpCode::SimplifyReflect,
+            PclOpCode::ContextSimplifyReflect,
+            PclOpCode::ACResolution,
+            PclOpCode::Rewrite,
+            PclOpCode::URewrite,
+            PclOpCode::ClauseNormalize,
+            PclOpCode::SplitClause,
+            PclOpCode::SplitEquiv,
+            PclOpCode::ApplyDef,
+            PclOpCode::FofSplitConjunct,
+            PclOpCode::FofSimplify,
+            PclOpCode::FofDeMorgan,
+            PclOpCode::FofDistributeQuantors,
+            PclOpCode::FofDistributeDisjunction,
+            PclOpCode::AnnotateQuestion,
+            PclOpCode::EvalAnswers,
+            PclOpCode::FofVarRename,
+            PclOpCode::FofSkolemize,
+            PclOpCode::FofAssumeNegation,
+            PclOpCode::MaxOp,
+        ];
+
+        for (discriminant, opcode) in opcodes.into_iter().enumerate() {
+            assert_eq!(opcode as usize, discriminant);
+        }
     }
 
     #[test]
@@ -674,6 +719,162 @@ mod tests {
     }
 
     #[test]
+    fn every_c_parser_operator_round_trips_and_has_exact_tstp_output() {
+        let cases = [
+            (
+                "evalgc(1)",
+                PclOpCode::EvalGc,
+                "inference(evalgc,[status(thm)],[1])",
+            ),
+            (
+                "er(1)",
+                PclOpCode::EResolution,
+                "inference(er,[status(thm)],[1])",
+            ),
+            (
+                "pm(1,2)",
+                PclOpCode::Paramod,
+                "inference(pm,[status(thm)],[1,2])",
+            ),
+            (
+                "spm(1,2)",
+                PclOpCode::SimParamod,
+                "inference(spm,[status(thm)],[1,2])",
+            ),
+            (
+                "ef(1)",
+                PclOpCode::EFactoring,
+                "inference(ef,[status(thm)],[1])",
+            ),
+            (
+                "cdclpropres(1,2)",
+                PclOpCode::SatCheck,
+                "inference(cdclpropres,[status(thm)],[1,2])",
+            ),
+            (
+                "condense(1)",
+                PclOpCode::Condense,
+                "inference(condense,[status(thm)],[1])",
+            ),
+            (
+                "rw(1,2)",
+                PclOpCode::Rewrite,
+                "inference(rw,[status(thm)],[1,2])",
+            ),
+            (
+                "sr(1,2)",
+                PclOpCode::SimplifyReflect,
+                "inference(sr,[status(thm)],[1,2])",
+            ),
+            (
+                "csr(1,2)",
+                PclOpCode::ContextSimplifyReflect,
+                "inference(csr,[status(thm)],[1,2])",
+            ),
+            (
+                "ar(1,2)",
+                PclOpCode::ACResolution,
+                "inference(ar,[status(thm)],[1,2])",
+            ),
+            (
+                "cn(1)",
+                PclOpCode::ClauseNormalize,
+                "inference(cn,[status(thm)],[1])",
+            ),
+            (
+                "split(1)",
+                PclOpCode::SplitClause,
+                "inference(split,[split(esplit,[])],[1])",
+            ),
+            (
+                "split_conjunct(1)",
+                PclOpCode::FofSplitConjunct,
+                "inference(split_conjunct,[status(thm)],[1])",
+            ),
+            (
+                "split_equiv(1)",
+                PclOpCode::SplitEquiv,
+                "inference(split_equiv,[status(thm)],[1])",
+            ),
+            (
+                "fof_simplification(1)",
+                PclOpCode::FofSimplify,
+                "inference(fof_simplification,[status(thm)],[1])",
+            ),
+            (
+                "fof_nnf(1)",
+                PclOpCode::FofDeMorgan,
+                "inference(fof_nnf,[status(thm)],[1])",
+            ),
+            ("introduced", PclOpCode::IntroDef, "introduced(definition)"),
+            (
+                "apply_def(1,2)",
+                PclOpCode::ApplyDef,
+                "inference(apply_def,[status(thm)],[1,2])",
+            ),
+            (
+                "shift_quantors(1)",
+                PclOpCode::FofDistributeQuantors,
+                "inference(shift_quantors,[status(thm)],[1])",
+            ),
+            (
+                "variable_rename(1)",
+                PclOpCode::FofVarRename,
+                "inference(variable_rename,[status(thm)],[1])",
+            ),
+            (
+                "skolemize(1)",
+                PclOpCode::FofSkolemize,
+                "inference(skolemize,[status(esa)],[1])",
+            ),
+            (
+                "distribute(1)",
+                PclOpCode::FofDistributeDisjunction,
+                "inference(distribute,[status(thm)],[1])",
+            ),
+            (
+                "add_answer_literal(1)",
+                PclOpCode::AnnotateQuestion,
+                "inference(add_answer_literal,[status(thm)],[1,theory(answers)])",
+            ),
+            (
+                "eval_answer_literal(1)",
+                PclOpCode::EvalAnswers,
+                "inference(eval_answer_literal,[status(thm)],[1,theory(answers)])",
+            ),
+            (
+                "assume_negation(1)",
+                PclOpCode::FofAssumeNegation,
+                "inference(assume_negation,[status(cth)],[1])",
+            ),
+        ];
+
+        for (source, opcode, tstp) in cases {
+            let expression = parse(source, false);
+            assert_eq!(expression.op(), opcode, "{source}");
+            assert_eq!(expression.print_string(false), source, "{source}");
+            assert_eq!(expression.print_tstp_string(false), tstp, "{source}");
+        }
+    }
+
+    #[test]
+    fn variable_arity_storage_grows_to_large_proofs_without_layout_sentinels() {
+        let arguments = (0..2_048)
+            .map(|argument| argument.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!("ar({arguments})");
+        let expression = parse(&source, false);
+        let PclExpressionData::Compound(stored) = expression.data() else {
+            panic!("compound expression expected");
+        };
+
+        assert_eq!(stored.len(), 2_048);
+        assert!(stored.capacity() >= stored.len());
+        assert_eq!(expression.print_string(false), source);
+    }
+
+    #[test]
     fn prints_tstp_special_cases() {
         assert_eq!(
             parse("split(7)", false).print_tstp_string(false),
@@ -715,11 +916,47 @@ mod tests {
     }
 
     #[test]
+    fn stored_positions_print_in_pcl_and_are_omitted_from_tstp_like_c() {
+        let position = parse_position("3.L.12.5");
+        let quote = PclExpression {
+            op: PclOpCode::Quote,
+            data: PclExpressionData::Quote {
+                quote: PclQuote::Full(parse_id("7")),
+                position: Some(position.clone()),
+            },
+        };
+        assert_eq!(quote.print_string(false), "73.L125");
+        assert_eq!(quote.print_tstp_string(false), "7");
+
+        let compound = PclExpression {
+            op: PclOpCode::Paramod,
+            data: PclExpressionData::Compound(vec![
+                PclExprArgument::new(parse("1", false), Some(position)),
+                PclExprArgument::new(parse("2", false), None),
+            ]),
+        };
+        assert_eq!(compound.print_string(false), "pm(13.L125,2)");
+        assert_eq!(
+            compound.print_tstp_string(false),
+            "inference(pm,[status(thm)],[1,2])"
+        );
+    }
+
+    #[test]
+    fn quote_position_guard_has_the_same_c_parser_mismatch() {
+        let mut scanner = Scanner::from_user_string("1(2)", false).unwrap();
+        let error = PclExpression::parse(&mut scanner, false).unwrap_err();
+        assert!(error.message().contains("Integer"));
+        assert_eq!(scanner.current_token().literal(), "(");
+    }
+
+    #[test]
     fn step_extract_matches_c_prefix_logic() {
         assert!(!pcl_step_extract(None));
         assert!(pcl_step_extract(Some("proof root")));
         assert!(pcl_step_extract(Some("'final answer'")));
         assert!(pcl_step_extract(Some("\"extract this\"")));
+        assert!(pcl_step_extract(Some("proofless")));
         assert!(!pcl_step_extract(Some("other proof")));
     }
 }
