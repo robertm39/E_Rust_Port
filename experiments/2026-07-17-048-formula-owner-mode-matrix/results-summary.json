@@ -1,0 +1,569 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "fixture_count": 7,
+  "mode_count": 4,
+  "case_count": 28,
+  "all_exact_match": true,
+  "results": [
+    {
+      "fixture": "nested_quantifier",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/CNFTest.p",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_quantifier",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/CNFTest.p",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 72,
+        "stdout_sha256": "f62eaa8edb03daecff65ea89c6a63b6552979ec5018e039fcd77f31f866e6949",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 72,
+        "stdout_sha256": "f62eaa8edb03daecff65ea89c6a63b6552979ec5018e039fcd77f31f866e6949",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_quantifier",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/CNFTest.p",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_quantifier",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/CNFTest.p",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 400,
+        "stdout_sha256": "61d2b96a7b858190c3cbbd2d3b4d69e2190145ac393f458255d9fafc4b50c8c0",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 400,
+        "stdout_sha256": "61d2b96a7b858190c3cbbd2d3b4d69e2190145ac393f458255d9fafc4b50c8c0",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_existential",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/GROUP1st.p",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_existential",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/GROUP1st.p",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 162,
+        "stdout_sha256": "23a8c923c796e63716f2cafb304016bc4b979dd35509e1abb915ce60ec05778d",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 162,
+        "stdout_sha256": "23a8c923c796e63716f2cafb304016bc4b979dd35509e1abb915ce60ec05778d",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_existential",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/GROUP1st.p",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "nested_existential",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/GROUP1st.p",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 475,
+        "stdout_sha256": "c1f75e7b1625aebee6253f092676d4b322009848a073a8b4cf67de49d73d5553",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 475,
+        "stdout_sha256": "c1f75e7b1625aebee6253f092676d4b322009848a073a8b4cf67de49d73d5553",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "conjecture",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "conjecture",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 156,
+        "stdout_sha256": "5b33dd6d32a4e655fec3d61be27b61e9cff91dc9b1b406b51b5c5df1a499e559",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 156,
+        "stdout_sha256": "5b33dd6d32a4e655fec3d61be27b61e9cff91dc9b1b406b51b5c5df1a499e559",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "conjecture",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "conjecture",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 478,
+        "stdout_sha256": "3c49ac4687d4fd639623958701418667b837a4201e628e6ab65c2963826ab489",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 478,
+        "stdout_sha256": "3c49ac4687d4fd639623958701418667b837a4201e628e6ab65c2963826ab489",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "question",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ans_test06.p",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "question",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ans_test06.p",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 213,
+        "stdout_sha256": "8290a05ac6166249707ac0fd1443a0458670bebe30f197cb9cfd21cba62f5853",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 213,
+        "stdout_sha256": "8290a05ac6166249707ac0fd1443a0458670bebe30f197cb9cfd21cba62f5853",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "question",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ans_test06.p",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "question",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ans_test06.p",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 559,
+        "stdout_sha256": "7bfb9cb997855fcf305b3483f161d09c196428f251fcb59672aa1a10f487cbba",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 559,
+        "stdout_sha256": "7bfb9cb997855fcf305b3483f161d09c196428f251fcb59672aa1a10f487cbba",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "mixed_clause_formula",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "mixed_clause_formula",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 592,
+        "stdout_sha256": "d3212aa400924630a649292b79d79a431672e876737f6f3b3650220823f5f714",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 592,
+        "stdout_sha256": "d3212aa400924630a649292b79d79a431672e876737f6f3b3650220823f5f714",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "mixed_clause_formula",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "mixed_clause_formula",
+      "path": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/ALL_RULES.p",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 825,
+        "stdout_sha256": "4b9f2e2efea3410b94428f5ed0fed59be9a3d4dc3cbbb06e77ee97571743be8a",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 825,
+        "stdout_sha256": "4b9f2e2efea3410b94428f5ed0fed59be9a3d4dc3cbbb06e77ee97571743be8a",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_set",
+      "path": "eprover/PROVER/SET366+4+rm_eq_rstfp.tptp",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_set",
+      "path": "eprover/PROVER/SET366+4+rm_eq_rstfp.tptp",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 1065,
+        "stdout_sha256": "5e4673220748bed000e4e5b6bea70d189addac91446fdb8215df41ef6386af3f",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 1065,
+        "stdout_sha256": "5e4673220748bed000e4e5b6bea70d189addac91446fdb8215df41ef6386af3f",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_set",
+      "path": "eprover/PROVER/SET366+4+rm_eq_rstfp.tptp",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_set",
+      "path": "eprover/PROVER/SET366+4+rm_eq_rstfp.tptp",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 1769,
+        "stdout_sha256": "0ed23c408005514ba8d825eb7f3e525d059be89868730daba10b54b20863f7f5",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 1769,
+        "stdout_sha256": "0ed23c408005514ba8d825eb7f3e525d059be89868730daba10b54b20863f7f5",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_ring",
+      "path": "eprover/PROVER/RNG019-6+rm_eq_rstfp.tptp",
+      "mode": "syntax_only",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 44,
+        "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_ring",
+      "path": "eprover/PROVER/RNG019-6+rm_eq_rstfp.tptp",
+      "mode": "print_formulas",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 1572,
+        "stdout_sha256": "28d71b1da9a1989ee4f6b9cc92867158eec336eea55435d8b38aec538f361e67",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 1572,
+        "stdout_sha256": "28d71b1da9a1989ee4f6b9cc92867158eec336eea55435d8b38aec538f361e67",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_ring",
+      "path": "eprover/PROVER/RNG019-6+rm_eq_rstfp.tptp",
+      "mode": "prune",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 127,
+        "stdout_sha256": "1bf52492e2c5a1a74e3a3d7493527363e31cdcfcdc5bd4f015e73ba3d71d7cbf",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "fixture": "old_tptp_ring",
+      "path": "eprover/PROVER/RNG019-6+rm_eq_rstfp.tptp",
+      "mode": "cnf",
+      "exact_match": true,
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 1246,
+        "stdout_sha256": "dab5270a67ab42e6c8a81ae4ed0f831ad7a5b6a4e20b70ed7f0dc87586b7a892",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 1246,
+        "stdout_sha256": "dab5270a67ab42e6c8a81ae4ed0f831ad7a5b6a4e20b70ed7f0dc87586b7a892",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ]
+}

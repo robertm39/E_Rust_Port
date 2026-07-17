@@ -29197,6 +29197,61 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_formula_owner_modes_match_nested_quantifier_smoke_fixture() {
+        let _guard = global_state_lock();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("eprover/EXAMPLE_PROBLEMS/SMOKETEST/CNFTest.p");
+        let path_arg = path.to_string_lossy().into_owned();
+        let cases = [
+            (
+                vec!["eprover", "--syntax-only", "--silent", path_arg.as_str()],
+                "\n% Parsing successful!\n% SZS status Unknown\n".to_owned(),
+            ),
+            (
+                vec!["eprover", "--print-formulas", "--silent", path_arg.as_str()],
+                "fof(test1, axiom, ![X1, X2]:((p(X1,X2)&?[X1]:((q(X2,X1)=>q(X1,X2)))))).\n"
+                    .to_owned(),
+            ),
+            (
+                vec!["eprover", "--prune", "--silent", path_arg.as_str()],
+                format!(
+                    "{}\n% Pruning successful!\n% SZS status Unknown\n",
+                    default_preprocessing_debug_line()
+                ),
+            ),
+            (
+                vec!["eprover", "--cnf", "--silent", path_arg.as_str()],
+                format!(
+                    "{}\n\
+                     % CNFization successful!\n\
+                     % SZS status Unknown\n\
+                     % Processed positive unit clauses:\n\n\
+                     % Processed negative unit clauses:\n\n\
+                     % Processed non-unit clauses:\n\n\
+                     % Unprocessed positive unit clauses:\n\n\
+                     % Unprocessed negative unit clauses:\n\n\
+                     % Unprocessed non-unit clauses:\n\
+                     cnf(i_0_1, plain, (q(esk2_1(X1),X1)|~q(X1,esk1_1(X1)))).\n\n\n",
+                    default_preprocessing_debug_line()
+                ),
+            ),
+        ];
+
+        for (args, expected) in cases {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let status = run(args, &mut stdout, &mut stderr).unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            assert_eq!(
+                rebase_tstp_clause_ids(&String::from_utf8(stdout).unwrap()),
+                expected
+            );
+            assert!(stderr.is_empty());
+        }
+    }
+
+    #[test]
     fn run_proof_search_auto_detects_tstp_selected_clause_progress() {
         let _guard = global_state_lock();
         let path = temp_path("proof-search-auto-tstp-initialization");
