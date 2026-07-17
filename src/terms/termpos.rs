@@ -202,7 +202,7 @@ mod tests {
     use crate::terms::signature::{Signature, SIG_LET_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::Term;
+    use crate::terms::termtypes::{term_identity_id, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn sample_term() -> (Term, Term, Term, Term, Term) {
@@ -315,12 +315,15 @@ mod tests {
     #[test]
     fn debug_address_print_uses_comment_lines() {
         let (root, _, _, _, _) = sample_term();
+        let root_id = term_identity_id(&root);
         let mut pos = TermPos::new();
         pos.push_component(root, 0);
         let mut output = String::new();
         pos.write_debug_addresses(&mut output).unwrap();
-        assert!(output.starts_with("# TermPos--\n# <0x"));
-        assert!(output.ends_with(" Subterm 0\n# --TermPos\n"));
+        assert_eq!(
+            output,
+            format!("# TermPos--\n# <0x{root_id:x}> Subterm 0\n# --TermPos\n")
+        );
     }
 
     #[test]
@@ -378,6 +381,24 @@ mod tests {
             output,
             "# TermPos--\n# $let(tp_let_f : $i, tp_let_f := tp_let_value, tp_let_f)...\
              $let(tp_let_f : $i, tp_let_f := tp_let_value, tp_let_f) Subterm 1\n# --TermPos\n"
+        );
+    }
+
+    #[test]
+    fn debug_term_print_keeps_let_as_higher_order_application() {
+        let mut bank = formula_bank();
+        let let_term = first_order_let_term(&mut bank);
+        let mut pos = TermPos::new();
+        pos.push_component(let_term, 1);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# $let @ (((tp_let_f)=(tp_let_value))) @ tp_let_f...\
+             $let @ (((tp_let_f)=(tp_let_value))) @ tp_let_f Subterm 1\n# --TermPos\n"
         );
     }
 
