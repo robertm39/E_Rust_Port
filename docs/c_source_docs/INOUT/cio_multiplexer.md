@@ -102,15 +102,16 @@ Source files reviewed: `INOUT/cio_multiplexer.h`, `INOUT/cio_multiplexer.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/multiplexer.rs` ports `TCPChannel` as an owned `Read + Write` stream plus FIFO inbound and outbound `TcpMessage` queues.
+- `src/inout/multiplexer.rs` ports `TCPChannel` as an owned `Read + Write` stream plus FIFO inbound and outbound `TcpMessage` queues. `Option<S>` records C's open/nonnegative versus closed/`-1` socket state without permitting a stale live descriptor.
 - The Rust channel preserves the C read-side shape: allocate a new inbound message when the queue is empty or the last inbound message is complete, otherwise continue filling the latest incomplete message.
 - The normal Rust write side drains the outbound queue one single-message write call at a time, while an explicit compatibility method mirrors C `TCPChannelWrite` by checking and draining the inbound queue. The channel also exposes queue-length and readiness helpers for tests, and reports closed-stream writes/reads as `NWError` equivalents.
-- Tests cover empty-channel allocation shape, reading multiple messages through the latest-incomplete rule, outbound send/write draining, inbound-message preservation while writing, C inbound-queue write behavior, and close/error behavior.
+- Closing takes and drops the owned stream immediately; dropping an open channel releases it once, dropping an explicitly closed channel cannot release it again, and `into_inner` explicitly transfers the stream lifetime to its caller. This is the safe equivalent of C's `TCPChannelClose`/`TCPChannelFree` split. C ignores the `close(2)` return in both functions, so Rust's ownership drop has no missing close-error diagnostic.
+- The owning `ESession` retains the live OS descriptor for readiness and the verbosity-gated exact `Closing channel <descriptor>` notice. Rust returns a recoverable diagnostic for a direct safe double-close request rather than reproducing C's debug assertion; the session state machine prevents that request in normal control flow.
+- Tests cover empty-channel allocation shape, reading multiple messages through the latest-incomplete rule, outbound send/write draining, inbound-message preservation while writing, C inbound-queue write behavior, exact-once stream release, ownership transfer, close/error behavior, the close notice, and real loopback-socket release.
 
 ### Change Later
 
 - C `TCPChannelSendMsg` stores messages in `channel->out` and `TCPChannelHasOutMsg` checks that outbound queue, but `TCPChannelWrite` checks and drains `channel->in`. Rust exposes the inbound-draining behavior through an explicit compatibility method while keeping the ordinary write API outbound-correct; revisit against the C server/client paths before deciding which behavior executable-facing multiplexer owners should select.
-- C channel ownership is a raw socket descriptor closed by both `TCPChannelClose` and `TCPChannelFree` when nonnegative. Rust uses `Option<S>` stream ownership to prevent double-close through safe APIs; a future descriptor-level bridge should document whether double-close assertions or silent free-time close behavior are required.
 
 ### Porting Focus
 

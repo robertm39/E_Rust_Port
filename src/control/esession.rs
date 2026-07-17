@@ -1,8 +1,9 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::verbose::verbose_enabled;
 use crate::inout::multiplexer::TcpChannel;
 use crate::inout::network::MsgStatus;
 use std::collections::BTreeSet;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -228,6 +229,20 @@ where
     }
 
     fn close_as_stale(&mut self) {
+        if verbose_enabled() {
+            let stderr = io::stderr();
+            let mut output = stderr.lock();
+            self.close_as_stale_to(&mut output);
+            return;
+        }
+        self.close_as_stale_to(&mut io::sink());
+    }
+
+    fn close_as_stale_to(&mut self, output: &mut impl Write) {
+        if verbose_enabled() {
+            let _ignored = writeln!(output, "Closing channel {}", self.descriptor.value());
+            let _ignored = output.flush();
+        }
         let _ = self.channel.close();
         self.state = ESessionState::Stale;
     }
@@ -259,6 +274,11 @@ mod tests {
     use super::{Descriptor, DescriptorInterestSet, ESession, ESessionState, SessionProcessSet};
     use crate::inout::network::{MsgStatus, TcpMessage};
     use std::io::{self, Cursor, Read, Write};
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::time::Duration;
+
+    use crate::basics::verbose::set_verbose_level;
+    use crate::test_support::global_state_lock;
 
     #[derive(Debug)]
     struct Duplex {
@@ -417,5 +437,45 @@ mod tests {
 
         assert_eq!(session.state(), ESessionState::Stale);
         assert_eq!(session.channel_mut().read(), MsgStatus::Error);
+    }
+
+    #[test]
+    fn verbose_stale_close_reports_the_exact_live_descriptor() {
+        let _guard = global_state_lock();
+        let old_level = set_verbose_level(1);
+        let descriptor = Descriptor::new(73);
+        let mut session = session(Duplex::new(Vec::new(), 1, 1), descriptor);
+        session.set_state(ESessionState::Active);
+        let mut output = Vec::new();
+
+        session.close_as_stale_to(&mut output);
+
+        let _ = set_verbose_level(old_level);
+        assert_eq!(session.state(), ESessionState::Stale);
+        assert_eq!(String::from_utf8(output).unwrap(), "Closing channel 73\n");
+    }
+
+    #[test]
+    fn stale_close_releases_real_socket_and_removes_readiness_interest() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let mut session = ESession::from_tcp_stream(server_stream).unwrap();
+        let descriptor = session.descriptor();
+        session.set_state(ESessionState::Active);
+        let mut output = Vec::new();
+
+        session.close_as_stale_to(&mut output);
+
+        let mut interests = DescriptorInterestSet::default();
+        assert_eq!(session.init_fd_set(&mut interests), Descriptor::ZERO);
+        assert!(!interests.contains_read(descriptor));
+        assert!(!interests.contains_write(descriptor));
+        let mut byte = [0_u8; 1];
+        assert_eq!(client.read(&mut byte).unwrap(), 0);
     }
 }

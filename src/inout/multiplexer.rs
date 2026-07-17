@@ -134,7 +134,9 @@ fn channel_error(message: impl Into<String>) -> Diagnostic {
 mod tests {
     use super::TcpChannel;
     use crate::inout::network::{MsgStatus, TcpMessage};
+    use std::cell::Cell;
     use std::io::{self, Cursor, Read, Write};
+    use std::rc::Rc;
 
     #[derive(Debug)]
     struct Duplex {
@@ -167,6 +169,33 @@ mod tests {
             let limit = buffer.len().min(self.max_write);
             self.written.extend_from_slice(&buffer[..limit]);
             Ok(limit)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DropProbe {
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    impl Read for DropProbe {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl Write for DropProbe {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -288,5 +317,43 @@ mod tests {
         assert!(channel.close().is_err());
         assert_eq!(channel.read(), MsgStatus::Error);
         assert_eq!(channel.write(), MsgStatus::Error);
+    }
+
+    #[test]
+    fn close_releases_stream_once_and_channel_drop_does_not_release_it_again() {
+        let drops = Rc::new(Cell::new(0));
+        let mut channel = TcpChannel::new(DropProbe {
+            drops: Rc::clone(&drops),
+        });
+
+        channel.close().unwrap();
+        assert_eq!(drops.get(), 1);
+        drop(channel);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn dropping_open_channel_releases_stream_once() {
+        let drops = Rc::new(Cell::new(0));
+        let channel = TcpChannel::new(DropProbe {
+            drops: Rc::clone(&drops),
+        });
+
+        assert_eq!(drops.get(), 0);
+        drop(channel);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn into_inner_transfers_stream_ownership() {
+        let drops = Rc::new(Cell::new(0));
+        let channel = TcpChannel::new(DropProbe {
+            drops: Rc::clone(&drops),
+        });
+
+        let stream = channel.into_inner().unwrap();
+        assert_eq!(drops.get(), 0);
+        drop(stream);
+        assert_eq!(drops.get(), 1);
     }
 }
