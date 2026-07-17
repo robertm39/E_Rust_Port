@@ -20846,6 +20846,62 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_app_encode_omits_synthetic_typed_application_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-unshared-typed-application-types");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(b_type, type, b: person).\n\
+             tff(c_type, type, c: person).\n\
+             tff(h_type, type, h: (person * person) > person).\n\
+             tff(encoded, axiom, h(a, b) = c).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\
+                 %-- $o > $o.\n\
+                 tff(typedecl1, type, type_7: $tType).\n\
+                 %-- ($o * $o) > $o.\n\
+                 tff(typedecl2, type, type_8: $tType).\n\
+                 %-- $i > $o.\n\
+                 tff(typedecl3, type, type_9: $tType).\n\
+                 %-- person.\n\
+                 tff(typedecl4, type, type_10: $tType).\n\
+                 %-- (person * person) > person.\n\
+                 tff(typedecl5, type, type_11: $tType).\n\
+                 %-- person > person.\n\
+                 tff(typedecl6, type, type_12: $tType).\n\
+                 tff(symboltypedecl2, type, a: type_10).\n\
+                 tff(symboltypedecl3, type, b: type_10).\n\
+                 tff(symboltypedecl4, type, c: type_10).\n\
+                 tff(symboltypedecl5, type, h: type_11).\n\
+                 tff(symboltypedecl6, type, app_12_10_10: (type_12 * type_10) > type_10).\n\
+                 tff(symboltypedecl7, type, app_11_10_12: (type_11 * type_10) > type_12).\n\
+                 tff(encoded, axiom, app_12_10_10(app_11_10_12(h,a),b)=c).\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_accepts_simple_thf_formula() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-simple-thf");
