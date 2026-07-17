@@ -2147,7 +2147,7 @@ fn find_positive_unit_simplifier<'set>(
     left: &Term,
     right: &Term,
 ) -> Option<&'set Clause> {
-    if set.demod_index_search_uses_compact_candidates() {
+    if set.demod_index_search_uses_exact_candidates() {
         return find_simplifying_unit(set, left, right, true).map(SimplifyingUnit::clause);
     }
     set.iter().find(|candidate| {
@@ -2169,7 +2169,7 @@ fn find_positive_unit_simplifier_with_bank<'set>(
     left: &Term,
     right: &Term,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
-    if set.demod_index_search_uses_compact_candidates() {
+    if set.demod_index_search_uses_exact_candidates() {
         return Ok(
             find_simplifying_unit_with_bank(bank, set, left, right, true)?
                 .map(SimplifyingUnit::clause),
@@ -2289,7 +2289,7 @@ fn find_top_unit_simplifier<'set>(
     right: &Term,
     positive: bool,
 ) -> Option<&'set Clause> {
-    if set.demod_index_search_uses_compact_candidates() {
+    if set.demod_index_search_uses_exact_candidates() {
         return find_signed_top_simplifying_unit(set, left, right, positive)
             .map(SimplifyingUnit::clause);
     }
@@ -2313,7 +2313,7 @@ fn find_top_unit_simplifier_with_bank<'set>(
     right: &Term,
     positive: bool,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
-    if set.demod_index_search_uses_compact_candidates() {
+    if set.demod_index_search_uses_exact_candidates() {
         return Ok(
             find_signed_top_simplifying_unit_with_bank(bank, set, left, right, positive)?
                 .map(SimplifyingUnit::clause),

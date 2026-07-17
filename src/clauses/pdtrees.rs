@@ -8,6 +8,7 @@ use crate::basics::error::Diagnostic;
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
 use crate::basics::sysdate::SysDate;
+use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db};
@@ -120,6 +121,7 @@ pub struct PrefixMatch {
 pub struct PdtIndexedOccurrence {
     pub clause_id: i64,
     pub side: EqnSide,
+    clause_ref: ClauseDerivationRef,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,7 +161,7 @@ pub struct PdTree {
     variable_child_heads: Vec<u32>,
     variable_children: Vec<PdtVariableChild>,
     free_variable_child: u32,
-    normalized_occurrence_paths: BTreeMap<(i64, i32), PdtNormalizedOccurrence>,
+    normalized_occurrence_paths: BTreeMap<(ClauseDerivationRef, i32), PdtNormalizedOccurrence>,
     term_count: usize,
     live_node_count: usize,
     arr_storage_estimate: usize,
@@ -361,17 +363,35 @@ impl PdTerminalEntry {
 impl PdtIndexedOccurrence {
     #[must_use]
     pub const fn new(clause_id: i64, side: EqnSide) -> Self {
-        Self { clause_id, side }
+        Self {
+            clause_id,
+            side,
+            clause_ref: ClauseDerivationRef::new(clause_id, 0),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_clause_ref(clause_ref: ClauseDerivationRef, side: EqnSide) -> Self {
+        Self {
+            clause_id: clause_ref.ident(),
+            side,
+            clause_ref,
+        }
     }
 
     #[must_use]
     pub const fn clause_id(self) -> i64 {
         self.clause_id
     }
+
+    #[must_use]
+    pub const fn clause_ref(self) -> ClauseDerivationRef {
+        self.clause_ref
+    }
 }
 
-const fn occurrence_key(occurrence: PdtIndexedOccurrence) -> (i64, i32) {
-    (occurrence.clause_id, occurrence.side as i32)
+const fn occurrence_key(occurrence: PdtIndexedOccurrence) -> (ClauseDerivationRef, i32) {
+    (occurrence.clause_ref, occurrence.side as i32)
 }
 
 impl Default for PdTree {

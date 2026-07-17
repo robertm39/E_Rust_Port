@@ -1112,7 +1112,7 @@ fn find_plain_demodulator<'a>(
     subst: &mut Substitution,
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
-    if demodulators.demod_index_search_uses_compact_candidates() {
+    if demodulators.demod_index_search_uses_exact_candidates() {
         return find_indexed_demodulator(ocb, bank, term, date, demodulators, subst, restricted_rw);
     }
 
@@ -1143,7 +1143,8 @@ fn find_indexed_demodulator<'a>(
     while let Some(candidate) =
         demodulators.demod_index_search_next_candidate_side_with_subst(subst)
     {
-        let Some(clause) = demodulators.find_indexed_by_id(candidate.clause_id) else {
+        let Some(clause) = demodulators.find_indexed_by_derivation_ref(candidate.clause_ref())
+        else {
             continue;
         };
         let Some(match_) = try_pre_matched_demodulator_clause_side(
@@ -1174,7 +1175,8 @@ fn find_materialized_indexed_demodulator<'a>(
     restricted_rw: bool,
 ) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
     while let Some(candidate) = demodulators.demod_index_search_next_candidate_side() {
-        let Some(clause) = demodulators.find_indexed_by_id(candidate.clause_id) else {
+        let Some(clause) = demodulators.find_indexed_by_derivation_ref(candidate.clause_ref())
+        else {
             continue;
         };
         let Some(match_) = try_demodulator_clause_side(

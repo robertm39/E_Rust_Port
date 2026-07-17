@@ -259,6 +259,7 @@ pub struct ClauseSet {
     demod_index_coverage: Cell<Option<bool>>,
     position_indexed: bool,
     indexed_clause_positions: BTreeMap<i64, usize>,
+    indexed_clause_derivation_positions: BTreeMap<ClauseDerivationRef, usize>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
     eval_object_slots: Vec<Option<ClauseSlot>>,
@@ -286,6 +287,7 @@ impl ClauseSet {
             demod_index_coverage: Cell::new(None),
             position_indexed: false,
             indexed_clause_positions: BTreeMap::new(),
+            indexed_clause_derivation_positions: BTreeMap::new(),
             fv_anchor: None,
             eval_indices: Vec::new(),
             eval_object_slots: Vec::new(),
@@ -394,7 +396,7 @@ impl ClauseSet {
     }
 
     #[must_use]
-    pub fn demod_index_search_uses_compact_candidates(&self) -> bool {
+    pub fn demod_index_search_uses_exact_candidates(&self) -> bool {
         self.demod_index.is_some() && self.demod_index_covers_units()
     }
 
@@ -859,6 +861,7 @@ impl ClauseSet {
         );
         let eval_object = clause.evaluations().and_then(EvalCell::object);
         let ident = clause.ident();
+        let derivation_ref = ClauseDerivationRef::from(&clause);
         let slot = self.clauses.push_back(clause);
         if let Some(object) = eval_object {
             if self.eval_object_slots.len() <= object {
@@ -868,6 +871,9 @@ impl ClauseSet {
         }
         if self.demod_index.is_some() || self.position_indexed {
             self.indexed_clause_positions.entry(ident).or_insert(slot);
+            self.indexed_clause_derivation_positions
+                .entry(derivation_ref)
+                .or_insert(slot);
         }
     }
 
@@ -1024,8 +1030,28 @@ impl ClauseSet {
     }
 
     #[must_use]
-    pub(crate) fn find_indexed_position_by_id(&self, ident: i64) -> Option<(usize, &Clause)> {
+    pub(crate) fn find_indexed_by_derivation_ref(
+        &self,
+        parent: ClauseDerivationRef,
+    ) -> Option<&Clause> {
+        let slot = *self.indexed_clause_derivation_positions.get(&parent)?;
+        self.clauses.get_slot(slot)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    fn find_indexed_position_by_id(&self, ident: i64) -> Option<(usize, &Clause)> {
         let slot = *self.indexed_clause_positions.get(&ident)?;
+        let position = self.clauses.position_of_slot(slot)?;
+        self.clauses.get_slot(slot).map(|clause| (position, clause))
+    }
+
+    #[must_use]
+    pub(crate) fn find_indexed_position_by_derivation_ref(
+        &self,
+        parent: ClauseDerivationRef,
+    ) -> Option<(usize, &Clause)> {
+        let slot = *self.indexed_clause_derivation_positions.get(&parent)?;
         let position = self.clauses.position_of_slot(slot)?;
         self.clauses.get_slot(slot).map(|clause| (position, clause))
     }
@@ -1694,6 +1720,7 @@ impl ClauseSet {
         let entries = eval_index_entries(clause);
         let eval_object = clause.evaluations().and_then(EvalCell::object);
         let ident = clause.ident();
+        let derivation_ref = ClauseDerivationRef::from(clause);
         for (pos, entry) in entries {
             if let Some(root) = self.eval_indices.get_mut(pos) {
                 root.remove(&entry);
@@ -1719,6 +1746,20 @@ impl ClauseSet {
                 self.indexed_clause_positions.insert(ident, next_slot);
             } else {
                 self.indexed_clause_positions.remove(&ident);
+            }
+        }
+        if self
+            .indexed_clause_derivation_positions
+            .get(&derivation_ref)
+            == Some(&slot)
+        {
+            let next_slot = self.slot_by_derivation_ref(derivation_ref);
+            if let Some(next_slot) = next_slot {
+                self.indexed_clause_derivation_positions
+                    .insert(derivation_ref, next_slot);
+            } else {
+                self.indexed_clause_derivation_positions
+                    .remove(&derivation_ref);
             }
         }
         Some(clause)
@@ -1776,6 +1817,7 @@ impl ClauseSet {
 
     fn rebuild_indexed_clause_positions(&mut self) {
         self.indexed_clause_positions.clear();
+        self.indexed_clause_derivation_positions.clear();
         if self.demod_index.is_none() && !self.position_indexed {
             return;
         }
@@ -1786,6 +1828,9 @@ impl ClauseSet {
                 .expect("occupied clause slot must contain a clause");
             self.indexed_clause_positions
                 .entry(clause.ident())
+                .or_insert(slot);
+            self.indexed_clause_derivation_positions
+                .entry(ClauseDerivationRef::from(clause))
                 .or_insert(slot);
         }
     }
@@ -1830,13 +1875,16 @@ fn index_demodulator_clause(index: &mut PdTree, clause: &Clause) {
     index.insert_term_occurrence(
         literal.left(),
         clause.date(),
-        PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide),
+        PdtIndexedOccurrence::with_clause_ref(ClauseDerivationRef::from(clause), EqnSide::LeftSide),
     );
     if !literal.is_oriented() {
         index.insert_term_occurrence(
             literal.right(),
             clause.date(),
-            PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide),
+            PdtIndexedOccurrence::with_clause_ref(
+                ClauseDerivationRef::from(clause),
+                EqnSide::RightSide,
+            ),
         );
     }
 }
@@ -1868,7 +1916,8 @@ fn index_demodulator_clause_with_bank(
     } else {
         Some(normalize_pd_tree_term(bank, literal.right())?)
     };
-    let left = PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide);
+    let left =
+        PdtIndexedOccurrence::with_clause_ref(ClauseDerivationRef::from(clause), EqnSide::LeftSide);
     let _ = index.insert_normalized_term_occurrence(
         literal.left(),
         &normalized_left,
@@ -1876,7 +1925,10 @@ fn index_demodulator_clause_with_bank(
         left,
     );
     if let Some(normalized_right) = normalized_right {
-        let right = PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide);
+        let right = PdtIndexedOccurrence::with_clause_ref(
+            ClauseDerivationRef::from(clause),
+            EqnSide::RightSide,
+        );
         let _ = index.insert_normalized_term_occurrence(
             literal.right(),
             &normalized_right,
@@ -1900,13 +1952,16 @@ fn delete_demodulator_clause(index: &mut PdTree, clause: &Clause) {
     let _ = index.delete_term_occurrence(
         literal.left(),
         clause.date(),
-        PdtIndexedOccurrence::new(clause.ident(), EqnSide::LeftSide),
+        PdtIndexedOccurrence::with_clause_ref(ClauseDerivationRef::from(clause), EqnSide::LeftSide),
     );
     if !literal.is_oriented() {
         let _ = index.delete_term_occurrence(
             literal.right(),
             clause.date(),
-            PdtIndexedOccurrence::new(clause.ident(), EqnSide::RightSide),
+            PdtIndexedOccurrence::with_clause_ref(
+                ClauseDerivationRef::from(clause),
+                EqnSide::RightSide,
+            ),
         );
     }
 }
@@ -2850,6 +2905,7 @@ mod tests {
         let g_a = typed_unary(&mut bank, "candidate_side_g", &a);
         let clause = clause_from(vec![literal(&mut bank, &f_a, &g_a, true)]);
         let clause_id = clause.ident();
+        let clause_ref = ClauseDerivationRef::from(&clause);
         let mut set = ClauseSet::new_demod_indexed();
 
         set.indexed_insert_clause_owned(clause, &bank);
@@ -2857,14 +2913,17 @@ mod tests {
         set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(
             set.demod_index_search_candidate_sides(),
-            Some(vec![PdtIndexedOccurrence::new(
-                clause_id,
+            Some(vec![PdtIndexedOccurrence::with_clause_ref(
+                clause_ref,
                 EqnSide::LeftSide
             )])
         );
         assert_eq!(
             set.demod_index_search_next_candidate_side(),
-            Some(PdtIndexedOccurrence::new(clause_id, EqnSide::LeftSide))
+            Some(PdtIndexedOccurrence::with_clause_ref(
+                clause_ref,
+                EqnSide::LeftSide
+            ))
         );
         assert_eq!(set.demod_index_search_next_candidate_side(), None);
         set.record_demod_index_search_exit();
@@ -2872,14 +2931,17 @@ mod tests {
         set.record_demod_index_search_init(&g_a, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(
             set.demod_index_search_candidate_sides(),
-            Some(vec![PdtIndexedOccurrence::new(
-                clause_id,
+            Some(vec![PdtIndexedOccurrence::with_clause_ref(
+                clause_ref,
                 EqnSide::RightSide
             )])
         );
         assert_eq!(
             set.demod_index_search_next_candidate_side(),
-            Some(PdtIndexedOccurrence::new(clause_id, EqnSide::RightSide))
+            Some(PdtIndexedOccurrence::with_clause_ref(
+                clause_ref,
+                EqnSide::RightSide
+            ))
         );
         assert_eq!(set.demod_index_search_next_candidate_side(), None);
         set.record_demod_index_search_exit();
@@ -2892,6 +2954,54 @@ mod tests {
         set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);
         assert_eq!(set.demod_index_search_candidate_sides(), Some(Vec::new()));
         assert_eq!(set.demod_index_search_next_candidate_side(), None);
+        set.record_demod_index_search_exit();
+    }
+
+    #[test]
+    fn demod_index_candidates_resolve_duplicate_visible_ids_exactly() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "exact_candidate_left");
+        let first_right = typed_const(&mut bank, "exact_candidate_first_right");
+        let second_right = typed_const(&mut bank, "exact_candidate_second_right");
+        let mut first = clause_from(vec![literal(&mut bank, &left, &first_right, true)]);
+        first.set_ident(93_001);
+        first.refresh_derivation_generation();
+        let first_ref = ClauseDerivationRef::from(&first);
+        let mut second = clause_from(vec![literal(&mut bank, &left, &second_right, true)]);
+        second.set_ident(93_001);
+        second.refresh_derivation_generation();
+        let second_ref = ClauseDerivationRef::from(&second);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        set.indexed_insert_clause_owned(first, &bank);
+        set.indexed_insert_clause_owned(second, &bank);
+        set.record_demod_index_search_init(&left, PDTREE_IGNORE_NF_DATE, false);
+
+        let candidate = set
+            .demod_index_search_next_candidate_side()
+            .expect("latest matching occurrence is returned first");
+        assert_eq!(candidate.clause_ref(), second_ref);
+        assert_eq!(
+            set.find_indexed_by_derivation_ref(candidate.clause_ref())
+                .map(ClauseDerivationRef::from),
+            Some(second_ref)
+        );
+        set.record_demod_index_search_exit();
+
+        let removed = set
+            .extract_by_derivation_ref(second_ref)
+            .expect("exact indexed clause remains extractable");
+        assert!(!removed.query_prop(CP_IS_D_INDEXED));
+        set.record_demod_index_search_init(&left, PDTREE_IGNORE_NF_DATE, false);
+        let remaining = set
+            .demod_index_search_next_candidate_side()
+            .expect("first occurrence remains indexed");
+        assert_eq!(remaining.clause_ref(), first_ref);
+        assert_eq!(
+            set.find_indexed_by_derivation_ref(remaining.clause_ref())
+                .map(ClauseDerivationRef::from),
+            Some(first_ref)
+        );
         set.record_demod_index_search_exit();
     }
 
@@ -2929,14 +3039,14 @@ mod tests {
         set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
         assert!(set.demod_index_search_may_have_match());
         assert_eq!(set.demod_index_coverage.get(), Some(true));
-        assert!(set.demod_index_search_uses_compact_candidates());
+        assert!(set.demod_index_search_uses_exact_candidates());
         assert_eq!(set.demod_index_coverage.get(), Some(true));
         set.record_demod_index_search_exit();
 
         let _ = set.iter_mut().next();
         assert_eq!(set.demod_index_coverage.get(), None);
         set.record_demod_index_search_init(&a, PDTREE_IGNORE_NF_DATE, false);
-        assert!(set.demod_index_search_uses_compact_candidates());
+        assert!(set.demod_index_search_uses_exact_candidates());
         assert_eq!(set.demod_index_coverage.get(), Some(true));
         set.record_demod_index_search_exit();
 

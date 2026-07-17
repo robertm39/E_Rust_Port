@@ -241,8 +241,7 @@ pub fn find_simplifying_unit_with_bank<'set>(
 }
 
 /// Simplifies `clause` with a unit set, matching C
-/// `ClauseSimplifyWithUnitSet` aside from full `PDTreeFindNextDemodulator`
-/// traversal over live clause positions.
+/// `ClauseSimplifyWithUnitSet` through exact PDT occurrence traversal.
 ///
 /// Returns `false` when a same-signed unit subsumes the clause, otherwise
 /// returns `true` after applying all opposite-signed unit cuts.
@@ -412,7 +411,7 @@ fn find_top_simplifying_unit_with_sign<'set>(
 ) -> Option<SimplifyingUnit<'set>> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
-        if units.demod_index_search_uses_compact_candidates() {
+        if units.demod_index_search_uses_exact_candidates() {
             find_indexed_top_simplifying_unit(units, left, right, sign)
         } else {
             find_plain_top_simplifying_unit(units, left, right, sign)
@@ -433,7 +432,7 @@ fn find_top_simplifying_unit_with_sign_and_bank<'set>(
 ) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
     units.record_demod_index_search_init_with_bank(bank, left, PDTREE_IGNORE_NF_DATE, false)?;
     let result = if units.demod_index_search_may_have_match() {
-        if units.demod_index_search_uses_compact_candidates() {
+        if units.demod_index_search_uses_exact_candidates() {
             find_indexed_top_simplifying_unit_with_bank(bank, units, left, right, sign)
         } else {
             find_plain_top_simplifying_unit_with_bank(bank, units, left, right, sign)
@@ -452,7 +451,7 @@ fn find_indexed_top_simplifying_unit<'set>(
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
     while let Some(candidate) = units.demod_index_search_next_candidate_side() {
-        let Some(clause) = units.find_indexed_by_id(candidate.clause_id) else {
+        let Some(clause) = units.find_indexed_by_derivation_ref(candidate.clause_ref()) else {
             continue;
         };
         let Some(literal) = unit_literal(clause) else {
@@ -479,7 +478,7 @@ fn find_indexed_top_simplifying_unit_with_bank<'set>(
     sign: Option<bool>,
 ) -> Result<Option<SimplifyingUnit<'set>>, Diagnostic> {
     while let Some(candidate) = units.demod_index_search_next_candidate_side() {
-        let Some(clause) = units.find_indexed_by_id(candidate.clause_id) else {
+        let Some(clause) = units.find_indexed_by_derivation_ref(candidate.clause_ref()) else {
             continue;
         };
         let Some(literal) = unit_literal(clause) else {
@@ -645,7 +644,9 @@ fn find_indexed_top_simplifying_unit_index(
     sign: Option<bool>,
 ) -> Option<usize> {
     while let Some(candidate) = units.demod_index_search_next_candidate_side() {
-        let Some((index, clause)) = units.find_indexed_position_by_id(candidate.clause_id) else {
+        let Some((index, clause)) =
+            units.find_indexed_position_by_derivation_ref(candidate.clause_ref())
+        else {
             continue;
         };
         let Some(literal) = unit_literal(clause) else {
@@ -684,7 +685,7 @@ fn find_top_simplifying_unit_index(
 ) -> Option<usize> {
     units.record_demod_index_search_init(left, PDTREE_IGNORE_NF_DATE, false);
     let result = if units.demod_index_search_may_have_match() {
-        if units.demod_index_search_uses_compact_candidates() {
+        if units.demod_index_search_uses_exact_candidates() {
             find_indexed_top_simplifying_unit_index(units, left, right, sign)
         } else {
             find_plain_top_simplifying_unit_index(units, left, right, sign)
