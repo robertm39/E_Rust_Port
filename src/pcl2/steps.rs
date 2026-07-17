@@ -1514,4 +1514,55 @@ mod tests {
 
         assert!(pcl_step_id_compare(&left, &right) < 0);
     }
+
+    #[test]
+    fn boxed_clause_address_survives_step_vector_relocation() {
+        let (step, mut bank, _) = parse_step("17 : : [++stable(a)] : initial", false);
+        let clause_address = match step.logic() {
+            PclStepLogic::Clause(clause) => std::ptr::from_ref(clause.as_ref()),
+            _ => panic!("expected clausal PCL step"),
+        };
+        let template = step.clone();
+        let mut steps = Vec::with_capacity(1);
+        steps.push(step);
+        for _ in 0..1_024 {
+            steps.push(template.clone());
+        }
+
+        let relocated_address = match steps[0].logic() {
+            PclStepLogic::Clause(clause) => std::ptr::from_ref(clause.as_ref()),
+            _ => panic!("expected clausal PCL step"),
+        };
+        assert_eq!(relocated_address, clause_address);
+        assert_eq!(
+            steps[0]
+                .print_extra_string(&mut bank, ProblemType::FirstOrder, false)
+                .unwrap(),
+            "     17 :  : [++stable(a)] : initial"
+        );
+    }
+
+    #[test]
+    fn shell_parse_option_is_local_to_each_parse() {
+        let source = "3 : : : 2 : final";
+        for support_shell_pcl in [false, true, false] {
+            let mut bank = test_bank();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+            scanner.set_format(IoFormat::Tptp);
+            let parsed = PclStep::parse(
+                &mut scanner,
+                &mut bank,
+                PclStepParseOptions {
+                    support_shell_pcl,
+                    ..PclStepParseOptions::default()
+                },
+            );
+
+            if support_shell_pcl {
+                assert!(parsed.unwrap().is_shell());
+            } else {
+                assert!(parsed.is_err());
+            }
+        }
+    }
 }
