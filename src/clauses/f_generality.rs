@@ -117,12 +117,9 @@ impl GenDistrib {
         self.internal_symbols = signature.internal_symbols();
         let new_size = signature_size(signature);
         if signature.f_count() >= usize_to_i64(self.size()) {
-            self.dist_array.resize_with(new_size, || FunGen::new(0));
-            for (index, entry) in self.dist_array.iter_mut().enumerate() {
-                if entry.f_code != usize_to_i64(index) {
-                    *entry = FunGen::new(usize_to_i64(index));
-                }
-            }
+            let old_size = self.size();
+            self.dist_array
+                .extend((old_size..new_size).map(|index| FunGen::new(usize_to_i64(index))));
             self.f_distrib = vec![0; new_size];
         }
     }
@@ -621,6 +618,26 @@ mod tests {
     }
 
     #[test]
+    fn gen_distrib_size_adjust_preserves_counts_and_initializes_only_new_cells() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "resize_a");
+        let clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut dist = GenDistrib::new(bank.signature());
+        dist.add_clause(&clause, 1);
+        dist.f_distrib[usize::try_from(a.f_code()).unwrap()] = 17;
+        let old_size = dist.size();
+
+        let b = typed_const(&mut bank, "resize_b");
+        dist.size_adjust(bank.signature());
+
+        assert_eq!(dist.size(), old_size + 1);
+        assert_eq!(entry_counts(&dist, a.f_code()), (2, 1));
+        assert_eq!(entry_counts(&dist, b.f_code()), (0, 0));
+        assert_eq!(dist.entry(b.f_code()).unwrap().f_code(), b.f_code());
+        assert!(dist.f_distrib.iter().all(|count| *count == 0));
+    }
+
+    #[test]
     fn gen_distrib_clause_set_stack_adds_and_backtracks_from_requested_start() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "stack_a");
@@ -734,6 +751,51 @@ mod tests {
         assert_eq!(dist.scratch_value(a.f_code()), Some(0));
         assert_eq!(dist.scratch_value(b.f_code()), Some(0));
         assert_eq!(dist.scratch_value(c.f_code()), Some(0));
+    }
+
+    #[test]
+    fn clause_compute_d_rel_formulas_measure_uses_formula_frequency_first() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "formula_measure_a");
+        let b = typed_const(&mut bank, "formula_measure_b");
+        let many_a = clause_from(vec![
+            literal(&mut bank, &a, &a, true),
+            literal(&mut bank, &a, &a, true),
+            literal(&mut bank, &a, &a, true),
+        ]);
+        let one_b = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let current = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut dist = GenDistrib::new(bank.signature());
+        dist.add_clause(&many_a, 1);
+        dist.add_clause(&one_b, 1);
+        dist.add_clause(&one_b, 1);
+
+        assert_eq!(entry_counts(&dist, a.f_code()), (6, 1));
+        assert_eq!(entry_counts(&dist, b.f_code()), (4, 2));
+
+        let mut term_result = PStack::new();
+        clause_compute_d_rel(
+            &mut dist,
+            GeneralityMeasure::Terms,
+            10.0,
+            0,
+            &current,
+            &mut term_result,
+        );
+        let mut formula_result = PStack::new();
+        clause_compute_d_rel(
+            &mut dist,
+            GeneralityMeasure::Formulas,
+            10.0,
+            0,
+            &current,
+            &mut formula_result,
+        );
+
+        assert_eq!(term_result.as_slice(), &[b.f_code()]);
+        assert_eq!(formula_result.as_slice(), &[a.f_code()]);
+        assert_eq!(dist.scratch_value(a.f_code()), Some(0));
+        assert_eq!(dist.scratch_value(b.f_code()), Some(0));
     }
 
     #[test]

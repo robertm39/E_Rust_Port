@@ -112,7 +112,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated with Change Later notes on 2026-07-08.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated with Change Later notes on 2026-07-08; reconciled with the Rust port on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c`.
 
@@ -137,7 +137,7 @@ Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c
 
 - `GenDistribAddClause` and `GenDistribAddFormula` use temporary scratch counts, merge only the symbols recorded in each scratch stack into `dist_array`, increment `fc_freq` once per seen symbol, and clear the scratch entries by popping the stack afterward. Rust preserves the clause/formula scratch-reset shape, formula-set stack traversal, and the signed factor path used by add/backtrack operations over staged `WrappedFormula` owners.
 - `FunGenTGCmp` sorts by term frequency, then formula/clause frequency, then `f_code`; `FunGenCGCmp` swaps the first two keys. `ClauseComputeDRel` and `FormulaComputeDRel` sort only symbols found in the current object, filter them with `f_code >= sig->internal_symbols`, compute `least_gen*benevolence` through a C `double` to `long` conversion, cap the limit by the `generosity`-indexed symbol, and push all symbols up to that limit. Rust preserves this ordering, inclusive internal-symbol boundary, truncating limit calculation, and conjecture formula implication trimming through the ported `TermTrimImplications` helper.
-- `GenDistribSizeAdjust` extends `dist_array` to `sig->f_count+1` but frees and recreates the temporary `f_distrib` scratch array as all zeroes. Rust mirrors that behavior; callers should not rely on scratch contents surviving size adjustment.
+- `GenDistribSizeAdjust` extends `dist_array` to `sig->f_count+1`, initializes only the appended `FunGen` cells, and frees and recreates the temporary `f_distrib` scratch array as all zeroes. Rust now mirrors both the append-only initialization cost and scratch reset; callers should not rely on scratch contents surviving size adjustment.
 - `GenDistribPrint` reports the raw `GenDistrib` pointer with `%p`, sums only symbols from `sig->internal_symbols+1` onward, and uses `sig->internal_symbols+limit` as the exclusive printed-row bound. Rust preserves the address-like debug identity and this off-by-one-looking limit rule; a cleaned diagnostics path should use stable identifiers and an explicit row count after compatibility is covered.
 
 ### Change Later
@@ -145,7 +145,7 @@ Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c
 - `extract_generality` and `compute_d_rel` only implement `GMTerms` and `GMFormulas`, while the shared parser/name table also exposes literal, polarity-specific formula, and polarity-specific term measures. Rust preserves the same split with parser rejection plus D-relation assertions; implement or remove those apparent measures only together with `che_axfilter` strategy-file compatibility tests.
 - `compute_d_rel` accepts symbols with `f_code >= sig->internal_symbols`, while `GenDistribPrint` totals and row output begin at `sig->internal_symbols+1`. Rust preserves both boundaries; a later signature API should make the internal-symbol cutoff explicit before normalizing these tests.
 - The D-relation limit multiplies a `long` count by `double benevolence` and assigns the result back to `long`, then caps it by the `generosity`-indexed sorted symbol. Rust mirrors the C truncation and cap shape; replace it with checked arithmetic only after reference strategies cover edge values for benevolence and generosity.
-- `GenDistribSizeAdjust` keeps the main distribution dense by f-code, initializes only newly added `FunGen` cells, and recreates the temporary scratch array as all zeroes. A later sparse or generation-counted scratch representation could reduce resize cost, but should wait until symbol allocation order and debug-output identity are covered by tests.
+- `GenDistribSizeAdjust` keeps the main distribution dense by f-code, initializes only newly added `FunGen` cells, and recreates the temporary scratch array as all zeroes. Rust has regression coverage for preserved historical counts, sequential new f-codes, and the complete scratch reset, and no longer rescans historical cells during growth. A later sparse or generation-counted scratch representation could further reduce resize cost, but should preserve those observable results.
 - `TermTrimImplications` skips leading quantifiers and then strips only a right-nested implication chain, and only if it sees at least 10 implications. Rust preserves this for SInE compatibility; after compatibility, consider replacing the magic threshold/right-spine special case with an explicit formula-normalization policy.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
