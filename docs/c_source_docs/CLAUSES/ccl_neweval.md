@@ -117,7 +117,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled with production clause-set ownership on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_neweval.h`, `CLAUSES/ccl_neweval.c`.
 
@@ -130,6 +130,14 @@ Source files reviewed: `CLAUSES/ccl_neweval.h`, `CLAUSES/ccl_neweval.c`.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- Rust retains the complete exported splay-tree surface in `EvalTree`, using arena handles in place of raw `EvalCell*` links. Insertion, hit/miss splaying, extraction, deletion, smallest lookup, traversal, duplicate handling, and debug rendering preserve the C-shaped standalone behavior.
+- Production clause ownership does not put one evaluation cell into several intrusive trees. `ClauseSet` owns one safe ordered root per evaluation position plus an exact evaluation-object-to-sparse-slot map. Insertion snapshots C's priority/heuristic/FIFO comparison key, extraction removes every root entry before moving the clause, and bounded sparse compaction rebuilds the object map without changing evaluation order.
+- `ClauseSetFindBest`, standard/single-weight HCB selection, orphan deletion, `HCBClauseSetDelProp`, axiom initialization in `Uniq` order, processed-clause reset, and generated-clause evaluation all use the owned roots. Priority changes that affect ordering occur before insertion, or reweighting removes evaluations and rebuilds every root, preserving C's requirement that an in-tree key not be mutated silently.
+- The safe roots use `BTreeSet`, giving logarithmic insertion/removal and direct smallest-entry access, comparable to the amortized logarithmic C splay operations without raw back-pointers. A final evaluation-object tie-breaker retains deliberately cloned cells that C's global `eval_count` uniqueness assumption would otherwise collapse; unique production cells keep exact C order.
+- C's unsafe `EvalsFree` contract remains available only through explicit arena-node removal in the standalone compatibility adapter. Clause-set owners remove root entries before dropping cells, so production cannot leave dangling evaluation pointers.
 
 ### Porting Focus
 

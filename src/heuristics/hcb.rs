@@ -1011,9 +1011,9 @@ pub fn hcb_clause_set_reweight_with_bank<Data>(
 /// schedule.
 ///
 /// This is the scheduling mutation performed by `HCBStandardClauseSelect`
-/// after `ClauseSetFindBest` and orphan deletion. The clause-set evaluation
-/// indices are not owned by Rust `ClauseSet` yet, so this helper ports the
-/// HCB state transition independently.
+/// after `ClauseSetFindBest` and orphan deletion. [`ClauseSet`] owns the
+/// evaluation roots and exact object-to-clause lookup; this helper isolates the
+/// independent HCB schedule transition.
 ///
 /// # Panics
 ///
