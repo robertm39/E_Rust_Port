@@ -176,3 +176,9 @@ The timing includes process startup, parsing, preprocessing, selection, and all
 first-generation inferences; it is not a standalone microbenchmark of
 `ComputeEqRes`. Broader whole-port behavior and performance remain governed by
 the standard differential and benchmark suites.
+
+The 2026-07-17 follow-up in
+`experiments/2026-07-17-025-equality-resolution-branching-csu/` adds the
+complementary eligible case that actually enumerates both an imitation and a
+projection equality resolvent. This earlier experiment remains the external
+C/Rust eligibility and performance record.

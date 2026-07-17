@@ -72,7 +72,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for multi-CSU higher-order trace coverage on 2026-07-15.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for multi-CSU higher-order trace coverage on 2026-07-15; reconciled with an eligible branching-CSU regression on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution.c`.
 
@@ -92,6 +92,7 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 - The all-resolvent wrapper and destructive variable-normalization wrapper expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
 - Proof-control destructive equality-resolution normalization now also routes the proof-state-owned `freshvars` bank through the helper path.
 - The branching-CSU trace in `experiments/2026-07-15-002-equality-resolution-multicsu/` verifies C/Rust maximal-literal eligibility, zero equality resolvents, five total generated clauses, unchanged two-factor proof order, and a `1.078x` Rust/C median for seven alternating native-Linux 200-run batches. Production Rust now threads the parsed higher-order problem type into ordering creation so C's higher-order `set_maximal_0` skip remains active.
+- The eligible branching regression in `experiments/2026-07-17-025-equality-resolution-branching-csu/` resolves `F(a)!=a` while retaining `F(b)=e`, producing distinct projection (`b=e`) and imitation (`a=e`) resolvents. It pins C's CSU-result stack reversal, consecutive proof-documentation order, and aggregate higher-order derivation flag. The prepared C/Rust executable trace could not run in the reconciliation session because that Windows user exposed no WSL distribution; the direct C executable comparison remains reproducible through `trace.sh`, while the source-shaped Rust regression covers the previously missing enumerating branch.
 
 ### Change Later
 

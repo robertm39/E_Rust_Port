@@ -572,6 +572,20 @@ mod tests {
         init_unif_limits(&parms);
     }
 
+    fn init_branching_unif_limits_for_test() {
+        let parms = HeuristicParmsCell {
+            func_proj_limit: 1,
+            imit_limit: 1,
+            unif_mode: UnifMode::Multi,
+            pattern_oracle: false,
+            fixpoint_oracle: false,
+            max_unifiers: 4,
+            max_unif_steps: 32,
+            ..HeuristicParmsCell::default()
+        };
+        init_unif_limits(&parms);
+    }
+
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
@@ -959,6 +973,85 @@ mod tests {
                 DerivationEntry::Operation(set_is_ho(DC_EQ_RES)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
             ]
+        );
+    }
+
+    #[test]
+    fn compute_all_eqn_resolvents_preserves_multi_csu_pop_and_doc_order() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_branching_unif_limits_for_test();
+        let mut bank = test_bank();
+        let function = typed_arrow_var(&mut bank, -2);
+        let imitation_argument = typed_const(&mut bank, "er_multi_a");
+        let projection_argument = typed_const(&mut bank, "er_multi_b");
+        let other_side = typed_const(&mut bank, "er_multi_e");
+        let function_on_imitation = apply_terms(
+            &mut bank,
+            &function,
+            std::slice::from_ref(&imitation_argument),
+        )
+        .unwrap();
+        let function_on_projection = apply_terms(
+            &mut bank,
+            &function,
+            std::slice::from_ref(&projection_argument),
+        )
+        .unwrap();
+        let rest = lit(&mut bank, &function_on_projection, &other_side, true);
+        let mut diseq = lit(
+            &mut bank,
+            &function_on_imitation,
+            &imitation_argument,
+            false,
+        );
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+        clause.set_ident(45);
+        let mut store = ClauseSet::new();
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::HigherOrder);
+
+        let count = compute_all_eqn_resolvents_with_docs(
+            &mut output,
+            &mut session,
+            &mut bank,
+            &clause,
+            &mut store,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        let resolvents = store.iter().collect::<Vec<_>>();
+        assert_eq!(resolvents.len(), 2);
+        assert_eq!(resolvents[0].ident(), 1);
+        assert_eq!(resolvents[1].ident(), 2);
+        assert_eq!(
+            resolvents[0]
+                .literals()
+                .tstp_print_string(&bank, " | ", true, false),
+            "er_multi_b=er_multi_e"
+        );
+        assert_eq!(
+            resolvents[1]
+                .literals()
+                .tstp_print_string(&bank, " | ", true, false),
+            "er_multi_a=er_multi_e"
+        );
+        for resolvent in &resolvents {
+            assert_eq!(
+                resolvent.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(set_is_ho(DC_EQ_RES)),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+                ]
+            );
+        }
+        assert_eq!(
+            output,
+            "     1 : :[++equal(er_multi_b, er_multi_e)] : er(45)\n     2 : :[++equal(er_multi_a, er_multi_e)] : er(45)\n"
         );
     }
 
