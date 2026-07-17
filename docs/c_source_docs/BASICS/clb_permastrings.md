@@ -84,6 +84,12 @@ Source files reviewed: `BASICS/clb_permastrings.h`, `BASICS/clb_permastrings.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- C uses `PermaString`/`PermaStringStore` in only five parameter-parser fields: `sine`, `heuristic_name`, `heuristic_def`, `to_pre_prec`, and `to_pre_weights`. Those pointers survive scanner-token destruction and shallow `HeuristicParmsCell`/`OrderParmsCell` copies, but downstream code compares, parses, or prints their contents; no production caller compares their pointer identities.
+- Rust gives those five production fields direct `String`/`Option<String>` ownership. Parameter cloning therefore preserves C's required lifetime without coupling proof-control and scheduling state to a process-global registry. The separate `PermaStringRegistry` remains the C-shaped exported helper: equal live entries share one `Arc<str>` allocation, owned insertion consumes its `String`, optional helpers preserve the null branches, and clearing starts a fresh identity epoch.
+- C calls `PermaStringsFree` only during final `eprover` teardown after freeing parameter and definition owners. Rust relies on ordinary owner drop for production parameter strings; the explicit registry-clear helper applies only to callers that chose the compatibility registry.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
