@@ -6497,13 +6497,16 @@ pub fn clause_set_replace_injectivity_defs(
     archive: &mut ClauseSet,
     bank: &mut TermBank,
 ) -> Result<i64, Diagnostic> {
-    let ids = set.iter().map(Clause::ident).collect::<Vec<_>>();
+    let sources = set
+        .iter()
+        .map(ClauseDerivationRef::from)
+        .collect::<Vec<_>>();
     let mut replacements = ClauseSet::new();
-    let mut archived_ids = Vec::new();
+    let mut archived_sources = Vec::new();
     let mut count = 0;
 
-    for id in ids {
-        let Some(clause) = set.find_by_id(id) else {
+    for source in sources {
+        let Some(clause) = set.find_by_derivation_ref(source) else {
             continue;
         };
         let Some(replacement) = clause_recognize_injectivity(bank, clause)? else {
@@ -6512,14 +6515,14 @@ pub fn clause_set_replace_injectivity_defs(
         if replacement.query_prop(CP_IS_PURE_INJECTIVITY)
             && !clause_set_injectivity_is_defined(&replacements, &replacement, bank)?
         {
-            archived_ids.push(id);
+            archived_sources.push(source);
             replacements.insert(replacement);
             count += 1;
         }
     }
 
-    for id in archived_ids {
-        if let Some(clause) = set.extract_by_id(id) {
+    for source in archived_sources {
+        if let Some(clause) = set.extract_by_derivation_ref(source) {
             archive.insert(clause);
         }
     }
@@ -10692,6 +10695,49 @@ mod tests {
             .expect("replacement clause inserted");
         assert!(generated.query_prop(CP_IS_SOS));
         assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn replace_injectivity_defs_uses_exact_owner_when_visible_ids_repeat() {
+        let mut bank = test_bank();
+        let f_code = typed_binary_code(&mut bank, "replace_inj_duplicate_id_f");
+        let noise_left = typed_var(&bank, -70);
+        let noise_right = typed_var(&bank, -72);
+
+        let mut noise = clause_from(vec![literal(&mut bank, &noise_left, &noise_right, true)]);
+        noise.set_ident(10_646);
+        noise.refresh_derivation_generation();
+        let noise_ref = ClauseDerivationRef::from(&noise);
+
+        let x = typed_var(&bank, -66);
+        let y = typed_var(&bank, -67);
+        let shared = typed_var(&bank, -68);
+        let left = typed_binary_with_code(&mut bank, f_code, &x, &shared);
+        let right = typed_binary_with_code(&mut bank, f_code, &y, &shared);
+        let mut definition = clause_from(vec![
+            literal(&mut bank, &left, &right, false),
+            literal(&mut bank, &x, &y, true),
+        ]);
+        definition.set_ident(noise.ident());
+        definition.refresh_derivation_generation();
+        let definition_ref = ClauseDerivationRef::from(&definition);
+        assert_ne!(noise_ref, definition_ref);
+
+        let mut set = ClauseSet::from_clauses([noise, definition]);
+        let mut archive = ClauseSet::new();
+
+        assert_eq!(
+            clause_set_replace_injectivity_defs(&mut set, &mut archive, &mut bank).unwrap(),
+            1
+        );
+
+        assert!(set.find_by_derivation_ref(noise_ref).is_some());
+        assert!(set.find_by_derivation_ref(definition_ref).is_none());
+        assert!(archive.find_by_derivation_ref(definition_ref).is_some());
+        assert!(archive.find_by_derivation_ref(noise_ref).is_none());
+        assert!(set
+            .iter()
+            .any(|clause| clause.query_prop(CP_IS_PURE_INJECTIVITY)));
     }
 
     #[test]

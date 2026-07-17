@@ -975,6 +975,12 @@ impl ClauseSet {
         self.extract_at_slot(slot)
     }
 
+    /// Extracts the exact clause identified by a stable derivation reference.
+    pub fn extract_by_derivation_ref(&mut self, parent: ClauseDerivationRef) -> Option<Clause> {
+        let slot = self.slot_by_derivation_ref(parent)?;
+        self.extract_at_slot(slot)
+    }
+
     pub fn delete_by_id(&mut self, ident: i64) -> bool {
         self.extract_by_id(ident).is_some()
     }
@@ -1658,6 +1664,14 @@ impl ClauseSet {
             self.clauses
                 .get_slot(slot)
                 .is_some_and(|clause| clause.ident() == ident)
+        })
+    }
+
+    fn slot_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<ClauseSlot> {
+        self.clauses.occupied_slots().find(|&slot| {
+            self.clauses
+                .get_slot(slot)
+                .is_some_and(|clause| ClauseDerivationRef::from(clause) == parent)
         })
     }
 
