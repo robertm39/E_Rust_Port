@@ -231,8 +231,9 @@ fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool
             } else {
                 ocb.wb -= ocb.fun_weight(current.f_code());
             }
-            for arg in current.argument_clones().into_iter().flatten() {
-                stack.push((arg, current_deref));
+            let arguments = current.arguments();
+            for arg in arguments.iter().flatten() {
+                stack.push((arg.clone(), current_deref));
             }
         }
     }
