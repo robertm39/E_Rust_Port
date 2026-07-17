@@ -46,6 +46,8 @@ The 2026-07-17 `cte_termpos` audit closes both `TermPosDebugPrint` branches. Rus
 
 The 2026-07-17 `TermFree`/`TermTopFree` ownership audit confirms that Rust's reference-counted `Term` drop boundaries are the completed safe equivalent: unretained unshared descendants are released with their final root, VarBank variables remain bank-owned, and children retained elsewhere survive disposal of a temporary top wrapper. No manual-free API is needed.
 
+The 2026-07-17 base `TermCell` reconciliation closes the raw flexible-array representation item as a measured Rust design decision. `Term` and `Option<Term>` stay one pointer wide, compact link storage has exact heap and proof-search evidence, and the separate LFHO owner-bank/binding-cache work remains explicitly tracked under its existing post-compatibility Beads.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

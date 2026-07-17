@@ -1098,6 +1098,11 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn term_links_share_one_compact_interior_mutation_boundary() {
+        assert_eq!(std::mem::size_of::<Term>(), std::mem::size_of::<usize>());
+        assert_eq!(
+            std::mem::size_of::<Option<Term>>(),
+            std::mem::size_of::<Term>()
+        );
         assert_eq!(std::mem::size_of::<super::TermLinks>(), 40);
         assert_eq!(
             std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
