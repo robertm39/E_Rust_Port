@@ -1,5 +1,11 @@
 # PCL proof-checking compatibility edges
 
+> Historical baseline note: this experiment records the exact C-compatible
+> doubled-marker behavior at commit `2b616f7e`. Rust intentionally corrected
+> the E marker on 2026-07-17 so real `% Proof found!` output verifies; the
+> paired real-E evidence is in
+> [`experiment 2026-07-17-001`](../2026-07-17-001-pcl-proofcheck-real-e-marker/FINDINGS.md).
+
 ## Question
 
 Does the current `pcl_proofcheck` implementation cover the remaining legacy

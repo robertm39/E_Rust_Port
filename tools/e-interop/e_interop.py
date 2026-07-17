@@ -99,6 +99,20 @@ TOOL_CASE_METADATA_KEYS = frozenset(
         "output_absent_files",
         "output_directories",
         "normalize_legacy_classify_feature_suffix",
+        "expected_mismatches",
+    }
+)
+TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
+    {
+        "exit_code",
+        "timed_out",
+        "status",
+        "shape",
+        "normalized_stdout",
+        "normalized_stderr",
+        "output_files",
+        "output_absent_files",
+        "output_directories",
     }
 )
 PROBLEM_SUFFIXES = {".p", ".lop"}
@@ -357,9 +371,10 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
         (
-            "real-e-single-percent-marker-failure",
-            ('--executable="{companion:eprover}"',),
+            "real-e-single-percent-marker-success",
+            ("--output-level=3", "--executable={companion:eprover}"),
             "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n",
+            {"expected_mismatches": ["normalized_stdout"]},
         ),
         (
             "real-e-failure",
@@ -367,12 +382,13 @@ TOOL_FUNCTIONAL_CASES = {
             "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n",
         ),
         (
-            "e-single-percent-marker-failure",
+            "e-single-percent-marker-success",
             ("--output-level=3", "--executable=echo % Proof found!"),
             (
                 "1 : : [++p(X),--q(f(X))] : initial\n"
                 "2 : : [++r(X),--s(X)] : 1\n"
             ),
+            {"expected_mismatches": ["normalized_stdout"]},
         ),
         (
             "e-double-percent-marker-success",
@@ -2630,6 +2646,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             "output_absent_files": [],
             "output_directories": [],
             "normalize_legacy_classify_feature_suffix": False,
+            "expected_mismatches": [],
         }
     if len(fixture_tail) != 1:
         raise InteropError("Functional support-tool cases accept at most one metadata argument")
@@ -2654,6 +2671,19 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         normalize_legacy_classify_feature_suffix = tail.get(
             "normalize_legacy_classify_feature_suffix", False
         )
+        expected_mismatches = tail.get("expected_mismatches", ())
+        if isinstance(expected_mismatches, (str, bytes)):
+            raise InteropError(
+                "Functional support-tool expected_mismatches must be a sequence"
+            )
+        unknown_mismatches = sorted(
+            set(expected_mismatches) - TOOL_COMPARISON_MISMATCH_FIELDS
+        )
+        if unknown_mismatches:
+            raise InteropError(
+                "Unknown functional support-tool expected mismatch(es): "
+                + ", ".join(unknown_mismatches)
+            )
     else:
         fixture_files = tail
         isolated_workdir = False
@@ -2663,6 +2693,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         output_absent_files = ()
         output_directories = ()
         normalize_legacy_classify_feature_suffix = False
+        expected_mismatches = ()
 
     return {
         "fixture_files": dict(fixture_files),
@@ -2675,6 +2706,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         "normalize_legacy_classify_feature_suffix": bool(
             normalize_legacy_classify_feature_suffix
         ),
+        "expected_mismatches": list(expected_mismatches),
     }
 
 
@@ -2919,6 +2951,7 @@ def compare_tools(args: argparse.Namespace) -> None:
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
+    expected_difference_count = 0
     reference_companions = {
         "eprover": Path(manifest["builds"]["fol"]["binary"]),
     }
@@ -3082,9 +3115,19 @@ def compare_tools(args: argparse.Namespace) -> None:
         if not output_directories_equal:
             mismatches.append("output_directories")
 
-        if mismatches:
+        expected_mismatches = (
+            [] if args.self_test else list(case.get("expected_mismatches", ()))
+        )
+        mismatch_expectation_met = sorted(mismatches) == sorted(expected_mismatches)
+        if expected_mismatches and mismatch_expectation_met:
+            expected_difference_count += 1
+        if not mismatch_expectation_met:
             mismatch_count += 1
-            mismatch_dir = run_dir / "mismatches" / f"{index:04d}"
+        if mismatches or not mismatch_expectation_met:
+            difference_kind = (
+                "expected-differences" if mismatch_expectation_met else "mismatches"
+            )
+            mismatch_dir = run_dir / difference_kind / f"{index:04d}"
             mismatch_dir.mkdir(parents=True, exist_ok=True)
             for label, result in (("reference", reference), ("candidate", candidate)):
                 (mismatch_dir / f"{label}.stdout").write_text(result["stdout"], encoding="utf-8")
@@ -3155,6 +3198,8 @@ def compare_tools(args: argparse.Namespace) -> None:
                 "normalized_stdout_equal": normalized_stdout_equal,
                 "normalized_stderr_equal": normalized_stderr_equal,
                 "mismatches": mismatches,
+                "expected_mismatches": expected_mismatches,
+                "mismatch_expectation_met": mismatch_expectation_met,
             }
         )
 
@@ -3166,12 +3211,16 @@ def compare_tools(args: argparse.Namespace) -> None:
         "timeout_seconds": args.timeout,
         "case_count": len(records),
         "mismatch_count": mismatch_count,
+        "expected_difference_count": expected_difference_count,
         "cases": records,
     }
     write_json(run_dir / "tool-comparison.json", summary)
     write_csv(run_dir / "tool-comparison.csv", records)
     print(f"Tool comparison report: {run_dir}")
-    print(f"Cases: {len(records)}; mismatches: {mismatch_count}")
+    print(
+        f"Cases: {len(records)}; mismatches: {mismatch_count}; "
+        f"expected differences: {expected_difference_count}"
+    )
     if mismatch_count:
         raise InteropError("Support-tool compatibility mismatches were found")
 

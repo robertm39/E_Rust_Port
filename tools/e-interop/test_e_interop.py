@@ -266,6 +266,19 @@ class ComparisonTests(unittest.TestCase):
             ["exit_code", "status", "shape"],
         )
 
+    def test_tool_expected_mismatch_metadata_is_validated(self):
+        metadata = e_interop.tool_functional_case_metadata(
+            ({"expected_mismatches": ["normalized_stdout"]},)
+        )
+        self.assertEqual(metadata["expected_mismatches"], ["normalized_stdout"])
+
+        with self.assertRaisesRegex(
+            e_interop.InteropError, "Unknown functional support-tool expected mismatch"
+        ):
+            e_interop.tool_functional_case_metadata(
+                ({"expected_mismatches": ["not-a-field"]},)
+            )
+
     def test_geometric_mean(self):
         self.assertTrue(math.isclose(e_interop.geometric_mean([0.5, 2.0]), 1.0))
         self.assertIsNone(e_interop.geometric_mean([]))
@@ -410,15 +423,15 @@ class ComparisonTests(unittest.TestCase):
                     ["--prover-type=scheme-setheo"],
                 ),
                 (
-                    "checkproof/real-e-single-percent-marker-failure",
-                    ['--executable="{companion:eprover}"'],
+                    "checkproof/real-e-single-percent-marker-success",
+                    ["--output-level=3", "--executable={companion:eprover}"],
                 ),
                 (
                     "checkproof/real-e-failure",
                     ['--executable="{companion:eprover}"'],
                 ),
                 (
-                    "checkproof/e-single-percent-marker-failure",
+                    "checkproof/e-single-percent-marker-success",
                     ["--output-level=3", "--executable=echo % Proof found!"],
                 ),
                 (
@@ -1053,26 +1066,34 @@ class ComparisonTests(unittest.TestCase):
             "checkproof/setheo-release-failure"
         ]
         self.assertIn("3 : : [++r(a)] : split(2)", checkproof_setheo_case["stdin"])
-        checkproof_marker_bug_case = cases_by_name[
-            "checkproof/e-single-percent-marker-failure"
+        checkproof_marker_case = cases_by_name[
+            "checkproof/e-single-percent-marker-success"
         ]
-        self.assertIn("[++p(X),--q(f(X))]", checkproof_marker_bug_case["stdin"])
+        self.assertIn("[++p(X),--q(f(X))]", checkproof_marker_case["stdin"])
         self.assertEqual(
-            checkproof_marker_bug_case["arguments"],
+            checkproof_marker_case["arguments"],
             ["--output-level=3", "--executable=echo % Proof found!"],
+        )
+        self.assertEqual(
+            checkproof_marker_case["expected_mismatches"],
+            ["normalized_stdout"],
         )
         self.assertEqual(
             cases_by_name["checkproof/e-double-percent-marker-success"]["arguments"],
             ["--output-level=3", "--executable=echo %% Proof found!"],
         )
         checkproof_real_e_case = cases_by_name[
-            "checkproof/real-e-single-percent-marker-failure"
+            "checkproof/real-e-single-percent-marker-success"
         ]
         self.assertEqual(
             checkproof_real_e_case["arguments"],
-            ['--executable="{companion:eprover}"'],
+            ["--output-level=3", "--executable={companion:eprover}"],
         )
         self.assertIn("2 : : [++p(a)] : 1", checkproof_real_e_case["stdin"])
+        self.assertEqual(
+            checkproof_real_e_case["expected_mismatches"],
+            ["normalized_stdout"],
+        )
         self.assertEqual(
             cases_by_name["checkproof/otter-shell-failure"]["arguments"],
             ["--prover-type=Otter", "--executable=echo NO-PROOF"],

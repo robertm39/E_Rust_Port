@@ -663,6 +663,37 @@ mod tests {
     }
 
     #[test]
+    fn eprover_single_percent_marker_verifies_derived_step() {
+        let _guard = global_state_lock();
+        let protocol = "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n";
+        let (status, output, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--executable=echo % Proof found!"],
+            protocol,
+        );
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert!(output.contains("% Checked (by prover)\n\n"));
+        assert!(output
+            .ends_with("% Successfully checked 2 of 2 steps (0 unchecked):  Proof verified!\n"));
+    }
+
+    #[test]
+    fn eprover_output_without_proof_marker_still_fails_derived_step() {
+        let _guard = global_state_lock();
+        let protocol = "1 : : [++p(a)] : initial\n2 : : [++p(a)] : 1\n";
+        let (status, output, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "--executable=echo NO-PROOF"], protocol);
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert!(output.contains("% FAILED\n\n"));
+        assert!(output.ends_with(
+            "% Successfully checked 1 of 2 steps (0 unchecked):  Failed to verify proof!\n"
+        ));
+    }
+
+    #[test]
     fn scheme_setheo_matches_release_failure_and_split_unchecked_paths() {
         let _guard = global_state_lock();
         let (status, output, stderr) =

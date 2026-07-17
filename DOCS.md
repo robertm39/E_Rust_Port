@@ -28,6 +28,8 @@ Retroactive audit status as of 2026-07-11: the existing C-source manual-review p
 
 The 2026-07-17 KBO6 traversal follow-up applied this rule retroactively to C's local pointer-stack balance walkers and direct argument-array traversal. The paired `cto_kbolin` review records the ownership and push-order behavior that Rust now mirrors without constructing a temporary argument vector at every visited term.
 
+The 2026-07-17 proofcheck-marker follow-up records an intentional correctness divergence from C's misuse of printf-escaped `COMCHAR` in a raw substring search. The paired `pcl_proofcheck` review documents why Rust recognizes real `% Proof found!` output while preserving C's fixed output-chunk and trace boundaries.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

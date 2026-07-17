@@ -132,6 +132,12 @@ Use `-Tool classify_problem -Tool eground` to restrict the comparison. Use
 themselves. Tool reports are written beside the main compatibility reports under
 `.artifacts/e-compare/<timestamp>-tools/`.
 
+Functional tool cases may declare an exact `expected_mismatches` field set for
+an intentional Rust correctness or safety divergence. The report preserves
+those outputs under `expected-differences/` and counts them separately; an
+extra or missing difference still fails the command. Self-tests ignore those
+declarations and require exact archived-C equality.
+
 ## Performance comparison
 
 ```powershell
