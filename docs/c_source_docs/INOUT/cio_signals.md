@@ -96,6 +96,12 @@ Source files reviewed: `INOUT/cio_signals.h`, `INOUT/cio_signals.c`.
 - `ESignalHandler(SIGTERM|SIGINT)` performs temp-file cleanup once, resets the active handler to `SIG_DFL`, and re-raises the same signal so ordinary process termination continues. Rust now preserves the testable cleanup outcome separately, and the normal Linux signal trampoline performs the default-handler restoration and re-raise after that outcome is produced.
 - `ESigTermSchedHandler(SIGTERM)` increments `SigTermCaught` and immediately restores the default `SIGTERM` handler so a later termination signal is no longer swallowed by the scheduler handler. Rust now exposes that scheduler-handler outcome, including the post-increment count and default-reset attempt, while confining the real `signal(SIGTERM, SIG_DFL)` call to normal Linux builds.
 
+### Compatibility Evidence
+
+- Retained WSL-native logs under `.artifacts/experiments/2026-07-13-005-hen011-divergence/`, created after commit `e11b51e9` installed the Linux hard-limit trampoline, record actual `SIGXCPU` delivery with the exact doubled-comment failure banner, `SZS status ResourceOut`, fatal stderr text, exit status 8, and approximately 60 seconds of user CPU. The direct failure bytes precede pending ordinary stdout in the captured non-silent logs.
+- The same-tree comparison `.artifacts/e-compare/20260717-002556-450711/comparison.json` matches actual C `SIGXCPU` expiry on Linux to Rust's cooperative Windows process-CPU deadline for `SWB008+1.p` and `SWV851-1.p`: both sides report silent `ResourceOut`, exit status 8, equal normalized output, and no mismatches.
+- No retained artifact live-injects `SIGTERM`/`SIGINT` into the normal Linux trampoline. Rust's cleanup-once, outcome, scheduler-latch, and default-reset behavior are source-aligned and deterministically tested, but live delivery is not claimed. Moving the remaining high-level work behind a smaller async-signal-safe boundary remains the post-compatibility item below.
+
 ### Rust Port Status Notes
 
 - `src/inout/signals.rs` ports the public signal globals, setup/handler/scheduler-handler outcomes, CPU-limit configuration and deadline checks, soft-timeout latch and rearm behavior, hard-timeout finalizer, unexpected-signal warning text, termination cleanup outcome, Linux normal-build signal trampolines, and test-only non-mutating paths. The executable proof-search path uses the cooperative hard-deadline finalizer where native signal delivery is not available or would bypass C-shaped output.
