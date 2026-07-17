@@ -174,6 +174,7 @@ const DEFAULT_FORMULA_DEF_LIMIT: i64 = 24;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
+const EMPTY_INPUT_MESSAGE: &str = "Input file contains no clauses or formulas";
 const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
 const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--e-rust-port-schedule-search-worker";
 const NO_SCHEDULE_STDIN_SNAPSHOT: &str = "-";
@@ -2374,6 +2375,7 @@ fn config_conversion_error(message: String) -> Diagnostic {
 #[derive(Debug)]
 pub enum EProverError {
     Diagnostic(Diagnostic),
+    EmptyInput,
     Io(io::Error),
 }
 
@@ -2382,7 +2384,7 @@ impl EProverError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Diagnostic(diagnostic) => diagnostic.code(),
-            Self::Io(_) => ErrorCode::OTHER_ERROR,
+            Self::EmptyInput | Self::Io(_) => ErrorCode::OTHER_ERROR,
         }
     }
 
@@ -2390,6 +2392,7 @@ impl EProverError {
     pub fn message(&self) -> String {
         match self {
             Self::Diagnostic(diagnostic) => diagnostic.message().to_owned(),
+            Self::EmptyInput => EMPTY_INPUT_MESSAGE.to_owned(),
             Self::Io(error) => error.to_string(),
         }
     }
@@ -5124,31 +5127,46 @@ fn run_config_with_stderr(
     }
     output.flush()?;
 
+    let result = run_config_action(&mut output, stderr, config, &mut runtime_config);
+    if matches!(result, Err(EProverError::EmptyInput)) {
+        writeln!(output, "{DEFAULT_COMCHAR_RAW} Error: {EMPTY_INPUT_MESSAGE}")?;
+        write_tstp_status(&mut output, "InputError")?;
+        output.flush()?;
+    }
+    result
+}
+
+fn run_config_action<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    stderr: Option<&mut dyn Write>,
+    config: &EProverConfig,
+    runtime_config: &mut EProverConfig,
+) -> Result<u8, EProverError> {
     if config.print_strategy.is_some() {
-        run_print_strategy(&mut output, config)?;
-        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
+        run_print_strategy(output, config)?;
+        return finish_run_config(output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.flags.contains(EProverFlag::SyntaxOnly) {
-        run_syntax_only(&mut output, &mut runtime_config)?;
+        run_syntax_only(output, runtime_config)?;
         if !runtime_config.flags.contains(EProverFlag::PrintFormulas) {
-            write_syntax_only_success(&mut output)?;
+            write_syntax_only_success(output)?;
         }
-        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.encoding.app_encode {
-        let status = run_app_encode(&mut output, &mut runtime_config)?;
-        return finish_run_config(&mut output, config, status);
+        let status = run_app_encode(output, runtime_config)?;
+        return finish_run_config(output, config, status);
     }
 
     if config.flags.contains(EProverFlag::PruneOnly) {
-        let status = run_prune_only(&mut output, &mut runtime_config)?;
-        return finish_run_config(&mut output, config, status);
+        let status = run_prune_only(output, runtime_config)?;
+        return finish_run_config(output, config, status);
     }
 
-    let status = run_proof_search(&mut output, stderr, &mut runtime_config)?;
-    finish_run_config(&mut output, config, status)
+    let status = run_proof_search(output, stderr, runtime_config)?;
+    finish_run_config(output, config, status)
 }
 
 fn finish_run_config(
@@ -5251,28 +5269,17 @@ fn run_app_encode<W: Write + ?Sized>(
         };
         output.write_stdout_side_channel(include_echoes.as_bytes())?;
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_input_owner {
-            return Err(Diagnostic::new(
-                ErrorCode::INPUT_SEMANTIC_ERROR,
-                format!("Input file {file} did not contain any clauses"),
-            )
-            .into());
-        }
         saw_any_input_owner |= parsed_file.saw_input_owner;
         saw_any_formula_owner |= parsed_file.saw_formula_owner;
         app_encode_problem_type =
             combine_problem_types(app_encode_problem_type, parsed_file.problem_type);
     }
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
-        return Err(Diagnostic::new(
-            ErrorCode::INPUT_SEMANTIC_ERROR,
-            "Input did not contain any clauses",
-        )
-        .into());
-    }
-
     state.process_distinct()?;
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
+        return Err(EProverError::EmptyInput);
+    }
 
     let mut heuristic_params = heuristic_parms_from_config(config)?;
     match apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)? {
@@ -6790,28 +6797,17 @@ fn parse_input_files_into_axioms(
             })?;
             watchlist.insert_set(&mut parsed_watchlist);
         }
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
-            return Err(Diagnostic::new(
-                ErrorCode::INPUT_SEMANTIC_ERROR,
-                format!("Input file {file} did not contain any clauses"),
-            )
-            .into());
-        }
         debug_assert_eq!(state.axiom_count(), before.saturating_add(parsed_count));
     }
 
     reset_problem_type();
     set_problem_type(parsed_problem_type)?;
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
-        return Err(Diagnostic::new(
-            ErrorCode::INPUT_SEMANTIC_ERROR,
-            "Input did not contain any clauses",
-        )
-        .into());
-    }
-
     state.process_distinct()?;
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
+        return Err(EProverError::EmptyInput);
+    }
 
     Ok(parsed_total)
 }
@@ -6843,27 +6839,16 @@ fn parse_input_files_into_formula_owners(
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         input_owner_seen |= parsed_file.input_owner_seen;
         parsed_problem_type = combine_problem_types(parsed_problem_type, parsed_file.problem_type);
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
-            return Err(Diagnostic::new(
-                ErrorCode::INPUT_SEMANTIC_ERROR,
-                format!("Input file {file} did not contain any clauses"),
-            )
-            .into());
-        }
     }
 
     reset_problem_type();
     set_problem_type(parsed_problem_type)?;
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
-        return Err(Diagnostic::new(
-            ErrorCode::INPUT_SEMANTIC_ERROR,
-            "Input did not contain any clauses",
-        )
-        .into());
-    }
-
     state.process_distinct()?;
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
+        return Err(EProverError::EmptyInput);
+    }
 
     Ok(parsed_problem_type)
 }
@@ -15794,7 +15779,7 @@ mod tests {
         ParsedAppEncodeFormula, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
         ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
         SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
         INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
         PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
@@ -15906,6 +15891,10 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("eprover-{name}-{}.out", std::process::id()))
+    }
+
+    fn empty_input_stdout() -> String {
+        format!("% Error: {EMPTY_INPUT_MESSAGE}\n% SZS status InputError\n")
     }
 
     fn write_temp_strategy_file(
@@ -16790,6 +16779,19 @@ mod tests {
 
     fn default_preprocessing_debug_line() -> String {
         preprocessing_config_debug_line(&EProverConfig::default())
+    }
+
+    fn empty_cnf_clause_output() -> String {
+        format!(
+            "{}\n% CNFization successful!\n% SZS status Unknown\n\
+             % Processed positive unit clauses:\n\n\
+             % Processed negative unit clauses:\n\n\
+             % Processed non-unit clauses:\n\n\
+             % Unprocessed positive unit clauses:\n\n\
+             % Unprocessed negative unit clauses:\n\n\
+             % Unprocessed non-unit clauses:\n\n\n",
+            default_preprocessing_debug_line()
+        )
     }
 
     fn default_proof_search_prefix() -> String {
@@ -21517,11 +21519,11 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap_err();
 
-        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
-        assert!(error.message().contains("did not contain any clauses"));
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "include('empty_inc.ax').\n"
+            format!("include('empty_inc.ax').\n{}", empty_input_stdout())
         );
         assert!(stderr.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -21592,9 +21594,9 @@ input_clause(c2,axiom,[++q(X)]).
             )
             .unwrap_err();
 
-            assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
-            assert!(error.message().contains("did not contain any clauses"));
-            assert!(stdout.is_empty());
+            assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+            assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
+            assert_eq!(String::from_utf8(stdout).unwrap(), empty_input_stdout());
             assert!(stderr.is_empty());
             std::fs::remove_file(&path).unwrap();
         }
@@ -21621,9 +21623,9 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap_err();
 
-        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
-        assert!(error.message().contains("did not contain any clauses"));
-        assert!(stdout.is_empty());
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
+        assert_eq!(String::from_utf8(stdout).unwrap(), empty_input_stdout());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -29035,6 +29037,50 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_cnf_error_on_empty_accepts_formula_owners_that_lower_to_no_clauses() {
+        let _guard = global_state_lock();
+        let type_path = temp_path("cnf-type-owner-without-clauses");
+        let true_path = temp_path("cnf-true-owner-without-clauses");
+        std::fs::write(
+            &type_path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n",
+        )
+        .unwrap();
+        std::fs::write(&true_path, "fof(true_formula, axiom, $true).\n").unwrap();
+
+        for path in [&type_path, &true_path] {
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                [
+                    "eprover",
+                    "--tstp-in",
+                    "--error-on-empty",
+                    "--cnf",
+                    "--silent",
+                    path_arg.as_str(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                empty_cnf_clause_output()
+            );
+            assert!(stderr.is_empty());
+        }
+
+        std::fs::remove_file(&type_path).unwrap();
+        std::fs::remove_file(&true_path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_accepts_supported_formula_bridge_input_without_saturation() {
         let _guard = global_state_lock();
         let path = temp_path("proof-cnf-formula-bridge");
@@ -34342,9 +34388,9 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         )
         .unwrap_err();
 
-        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
-        assert!(error.message().contains("did not contain any clauses"));
-        assert!(stdout.is_empty());
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
+        assert_eq!(String::from_utf8(stdout).unwrap(), empty_input_stdout());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -37075,11 +37121,109 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         )
         .unwrap_err();
 
-        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
-        assert!(error.message().contains("did not contain any clauses"));
-        assert!(stdout.is_empty());
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
+        assert_eq!(String::from_utf8(stdout).unwrap(), empty_input_stdout());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_error_on_empty_routes_status_to_configured_output() {
+        let _guard = global_state_lock();
+        let input_path = temp_path("empty-configured-output-input");
+        let output_path = temp_path("empty-configured-output-result");
+        std::fs::write(&input_path, "% no input owners\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let output_arg = output_path.to_string_lossy().into_owned();
+        let output_option = format!("--output-file={output_arg}");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--error-on-empty",
+                output_option.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(error.message(), EMPTY_INPUT_MESSAGE);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            empty_input_stdout()
+        );
+
+        std::fs::remove_file(&input_path).unwrap();
+        std::fs::remove_file(&output_path).unwrap();
+    }
+
+    #[test]
+    fn run_error_on_empty_checks_selected_owners_after_all_input_files() {
+        let _guard = global_state_lock();
+        let empty_path = temp_path("selected-owner-empty-first");
+        let clause_path = temp_path("selected-owner-clause-second");
+        std::fs::write(&empty_path, "% no input owners\n").unwrap();
+        std::fs::write(&clause_path, "cnf(selected, axiom, p(a)).\n").unwrap();
+        let empty_arg = empty_path.to_string_lossy().into_owned();
+        let clause_arg = clause_path.to_string_lossy().into_owned();
+
+        let mut syntax_stdout = Vec::new();
+        let mut syntax_stderr = Vec::new();
+        let syntax_status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--error-on-empty",
+                "--syntax-only",
+                empty_arg.as_str(),
+                clause_arg.as_str(),
+            ],
+            &mut syntax_stdout,
+            &mut syntax_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(syntax_status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(syntax_stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(syntax_stderr.is_empty());
+
+        let mut app_stdout = Vec::new();
+        let mut app_stderr = Vec::new();
+        let app_status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--error-on-empty",
+                "--app-encode",
+                empty_arg.as_str(),
+                clause_arg.as_str(),
+            ],
+            &mut app_stdout,
+            &mut app_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(app_status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(app_stdout).unwrap(),
+            default_preprocessing_debug_line()
+        );
+        assert!(app_stderr.is_empty());
+
+        std::fs::remove_file(&empty_path).unwrap();
+        std::fs::remove_file(&clause_path).unwrap();
     }
 
     #[test]
