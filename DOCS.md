@@ -58,6 +58,8 @@ The 2026-07-17 full PCL-protocol audit confirms that a sorted owning step vector
 
 The 2026-07-17 PCL-position storage audit confirms that Rust's term-path vector structurally replaces C's nullable `PDArray` plus separate length: both avoid allocation until the first component, while Rust cannot represent a stale pointer/length pair. Exact multi-digit coverage retains C's intentionally tracked dotless printer shape.
 
+The 2026-07-17 PCL-mini-step audit confirms that an owning logic enum and caller-supplied protocol bank replace C's untagged union and raw `TB_p` back-pointer without changing production parsing or printing. Executable shell modes are reproduced with call-scoped options, while numeric ids, narrow extras, zero-id parsing, and shell TSTP punctuation retain their tracked legacy behavior.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

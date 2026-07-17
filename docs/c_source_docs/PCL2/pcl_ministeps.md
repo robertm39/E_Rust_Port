@@ -79,7 +79,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for ownership and compatibility equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_ministeps.h`, `PCL2/pcl_ministeps.c`.
 
@@ -103,14 +103,15 @@ Source files reviewed: `PCL2/pcl_ministeps.h`, `PCL2/pcl_ministeps.c`.
 
 ### Rust Port Status
 
-- Initial Rust support is in `src/pcl2/ministeps.rs`, covering mini-step representation, numeric mini-step parsing, clausal minification, formula-backed steps, explicit shell-step parsing, PCL/TSTP rendering, and format dispatch for the C-supported PCL/TSTP branches.
-- Rust uses explicit `PclMiniStepParseOptions` for `SupportShellPCL` instead of a mutable process-global flag. Formula and clause printing require the caller to pass the owning `TermBank`, preserving the C lifetime requirement without storing a raw bank pointer.
+- Initial Rust support is in `src/pcl2/ministeps.rs`, covering a discriminated owned logic representation, numeric mini-step parsing, clausal minification, formula-backed steps, explicit shell-step parsing, PCL/TSTP rendering, and format dispatch for the C-supported PCL/TSTP branches. The enum prevents C's untagged clause/formula union from being read under inconsistent property bits.
+- Rust uses explicit `PclMiniStepParseOptions` for `SupportShellPCL` instead of a mutable process-global flag. C initializes the global to false and only `epclextract` assigns true; the corresponding Rust executable call sites pass those same values, and regression coverage proves consecutive disabled/enabled/disabled parses cannot leak state.
+- C stores the parsing `TB_p` for formula printing but still receives the bank as an argument for clause printing. Its only production mini-step print callers are the owning mini-protocol, which passes its own bank. Rust makes that invariant explicit: mini-step terms are safe shared handles, the step retains no raw owner pointer, and mini-protocol rendering always supplies its bank for either logic variant.
 
 ### Change Later
 
-- `PCLMiniStepParse` rejects compound identifiers after parsing the first integer, even though full PCL steps accept `PCLId` lists. Rust preserves this mini-mode restriction; later protocol tooling should make the accepted identifier shape explicit in user-facing errors.
-- The C parser's shell-step behavior depends on the global `SupportShellPCL` flag and a second colon immediately after the type field. Rust makes this an explicit parse option, but executable integration should verify whether existing tools expect process-wide mutation.
-- `PCLMiniStepFree` asserts that `junk->id` is nonzero even though `PCLMiniStepParse` can parse `0` as an id. Rust does not model a destructor assertion; later validation should decide whether id zero is invalid input or only an accidental free-time invariant.
-- Mini-step extras accept only `SQString`, while full PCL step extras also accept `Name|PosInt`. Keep this narrower mini-protocol surface unless reference tools prove otherwise.
-- `PCLMiniStepPrintTSTP` prints shell clausal steps with an empty formula slot, producing a double-comma shape such as `cnf(id,plain,,just).`. Rust preserves this for compatibility, but a cleaned proof-object format should avoid empty logical content in TSTP output.
+- `PCLMiniStepParse` rejects compound identifiers after parsing the first integer, even though full PCL steps accept `PCLId` lists. Rust preserves this mini-mode restriction exactly; any syntax expansion remains tracked by `E_Rust_Port-j76.4.955`.
+- The C parser's shell-step behavior depends on the global `SupportShellPCL` flag and a second colon immediately after the type field. Rust preserves the grammar and executable modes with a call-scoped option; reconsidering process-global mutation remains tracked by `E_Rust_Port-j76.4.956` and `E_Rust_Port-j76.4.979`.
+- `PCLMiniStepFree` asserts that `junk->id` is nonzero even though standalone `PCLMiniStepParse` accepts `0`. Rust retains the parse result but uses ordinary infallible destruction; protocol parsing still begins only on `PosInt`. Reproducing or tightening the contradictory C invariant remains tracked by `E_Rust_Port-j76.4.957` and the protocol-level `E_Rust_Port-j76.4.950`.
+- Mini-step extras accept only `SQString`, while full PCL step extras also accept `Name|PosInt`. Rust retains that narrower grammar; any expansion remains tracked by `E_Rust_Port-j76.4.958`.
+- `PCLMiniStepPrintTSTP` prints shell clausal steps with an empty formula slot, producing a double-comma shape such as `cnf(id,plain,,just).`. Rust preserves the exact output; any cleaned proof-object format remains tracked by `E_Rust_Port-j76.4.959`.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -43,6 +43,11 @@ pub enum PclMiniStepLogic {
     Formula(Term),
 }
 
+/// Compact PCL step with owned logical content.
+///
+/// Terms are shared handles interned by the caller-owned protocol bank. The
+/// same bank must therefore be supplied when rendering a parsed step; unlike
+/// C's `PCLMiniStepCell`, the step does not retain a raw pointer into its owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PclMiniStep {
     id: i64,
@@ -410,6 +415,30 @@ mod tests {
     }
 
     #[test]
+    fn shell_parse_option_is_local_to_each_parse() {
+        let source = "3 : : : 2";
+        for support_shell_pcl in [false, true, false] {
+            let mut bank = test_bank();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+            scanner.set_format(IoFormat::Tptp);
+            let parsed = PclMiniStep::parse(
+                &mut scanner,
+                &mut bank,
+                PclMiniStepParseOptions {
+                    support_shell_pcl,
+                    ..PclMiniStepParseOptions::default()
+                },
+            );
+
+            if support_shell_pcl {
+                assert!(parsed.unwrap().is_shell());
+            } else {
+                assert!(parsed.is_err());
+            }
+        }
+    }
+
+    #[test]
     fn shell_shape_without_option_falls_through_to_formula_parser() {
         let mut bank = test_bank();
         let mut scanner = Scanner::from_user_string("3 : : : 2", false).unwrap();
@@ -446,6 +475,20 @@ mod tests {
             .unwrap_err();
 
         assert!(error.message().contains("String enclosed in single quote"));
+    }
+
+    #[test]
+    fn standalone_zero_id_preserves_parse_behavior_and_drops_safely() {
+        let (step, mut bank, scanner) = parse("0 : : [++p] : initial tail", false);
+
+        assert_eq!(step.id(), 0);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        assert_eq!(
+            step.print_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "     0 :  : [++p] : initial"
+        );
+        drop(step);
     }
 
     #[test]
