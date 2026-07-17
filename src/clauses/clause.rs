@@ -1354,8 +1354,8 @@ pub fn clause_parse(
     clause_parse_with_options(scanner, bank, problem_type, ClauseParseOptions::default())
 }
 
-/// Parses the C `ClauseParse` control flow over the currently ported simple
-/// term/equation parser.
+/// Parses the C `ClauseParse` control flow through the banked
+/// `TBTermParse`-equivalent equation parser.
 ///
 /// # Panics
 ///
@@ -1403,8 +1403,8 @@ pub fn clause_pcl_parse(
     clause_pcl_parse_with_options(scanner, bank, problem_type, ClauseParseOptions::default())
 }
 
-/// Parses the C `ClausePCLParse` shape over the currently ported simple
-/// term/equation parser.
+/// Parses the C `ClausePCLParse` shape through the banked
+/// `TBTermParse`-equivalent equation parser.
 ///
 /// # Panics
 ///

@@ -6532,13 +6532,13 @@ pub fn clause_set_replace_injectivity_defs(
 
 /// Recognizes a C defined-choice axiom and records its choice symbol.
 ///
-/// This mirrors the represented `ClauseRecognizeChoice` path for already
-/// beta/eta-normal clauses of shape `~P X | P (choice P)`. Full eta reduction
-/// remains tied to the broader lambda-normalization port.
+/// This mirrors `ClauseRecognizeChoice` for clauses of shape
+/// `~P X | P (choice P)`, including eta reduction followed by beta
+/// normalization of both literal heads.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from beta normalization.
+/// Returns diagnostics from eta reduction or beta normalization.
 pub fn clause_recognize_choice(
     bank: &mut TermBank,
     clause: &mut Clause,
@@ -6563,7 +6563,7 @@ pub fn clause_recognize_choice(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from beta normalization.
+/// Returns diagnostics from eta reduction or beta normalization.
 pub fn clause_recognizes_choice(bank: &mut TermBank, clause: &Clause) -> Result<bool, Diagnostic> {
     clause_choice_candidate(bank, clause, &BTreeMap::new()).map(|candidate| candidate.is_some())
 }
@@ -6572,8 +6572,9 @@ pub fn clause_recognizes_choice(bank: &mut TermBank, clause: &Clause) -> Result<
 ///
 /// The C helper stores pointers to clauses that remain in the source set,
 /// despite a stale comment saying they are moved to the archive. Rust stores
-/// owned clause copies until proof-state clause handles are stable enough to
-/// represent the pointer map directly.
+/// owned snapshots with the same derivation identity, which lets choice
+/// instantiation retain the definition independently of set relocation while
+/// preserving its exact proof parent.
 ///
 /// # Errors
 ///
@@ -6620,8 +6621,10 @@ fn clause_choice_candidate(
         return Ok(None);
     }
 
-    let negative_term = beta_normalize_db(bank, negative_literal.left())?;
-    let positive_term = beta_normalize_db(bank, positive_literal.left())?;
+    let negative_eta_reduced = lambda_eta_reduce_db(bank, negative_literal.left())?;
+    let negative_term = beta_normalize_db(bank, &negative_eta_reduced)?;
+    let positive_eta_reduced = lambda_eta_reduce_db(bank, positive_literal.left())?;
+    let positive_term = beta_normalize_db(bank, &positive_eta_reduced)?;
     if !negative_term.is_applied_free_var()
         || !positive_term.is_applied_free_var()
         || negative_term.arity() != 2
@@ -10762,6 +10765,64 @@ mod tests {
         assert_eq!(stored.ident(), live.ident());
         assert!(live.literals().as_slice()[0].left().is_applied_free_var());
         assert!(live.literals().as_slice()[1].left().is_applied_free_var());
+    }
+
+    #[test]
+    fn recognize_choice_axiom_eta_reduces_before_beta_normalization() {
+        let _problem_type = ProblemTypeReset::higher_order();
+        let mut bank = test_bank();
+        let predicate = predicate_var(&mut bank, -74);
+        let witness = typed_var(&bank, -76);
+        let choice = choice_const(&mut bank, "choice_eta_reduced");
+        let choice_code = choice.f_code();
+        let argument_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&argument_type, 0);
+        let eta_matrix = apply_many(&mut bank, &predicate, std::slice::from_ref(&db0));
+        let eta_predicate = close_with_db_var(&mut bank, &argument_type, &eta_matrix).unwrap();
+        let expanded_choice = apply_many(&mut bank, &choice, std::slice::from_ref(&eta_predicate));
+        let expanded_negative =
+            apply_many(&mut bank, &eta_predicate, std::slice::from_ref(&witness));
+        let expanded_positive = apply_many(
+            &mut bank,
+            &eta_predicate,
+            std::slice::from_ref(&expanded_choice),
+        );
+        assert!(expanded_negative.has_lambda_subterm());
+        assert!(expanded_positive.has_lambda_subterm());
+
+        let normalized_choice = apply_many(&mut bank, &choice, std::slice::from_ref(&predicate));
+        let normalized_negative = apply_many(&mut bank, &predicate, std::slice::from_ref(&witness));
+        let normalized_positive = apply_many(
+            &mut bank,
+            &predicate,
+            std::slice::from_ref(&normalized_choice),
+        );
+        let true_term = bank.true_term().clone();
+        let choice_clause = clause_from(vec![
+            literal(&mut bank, &expanded_negative, &true_term, false),
+            literal(&mut bank, &expanded_positive, &true_term, true),
+        ]);
+
+        let mut set = ClauseSet::from_clauses([choice_clause]);
+        let mut choice_symbols = BTreeMap::new();
+        assert_eq!(
+            clause_set_recognize_choice(&mut bank, &mut set, &mut choice_symbols).unwrap(),
+            1
+        );
+
+        let live = set.iter().next().expect("choice clause remains in set");
+        for literal in live.literals().as_slice() {
+            let expected = if literal.is_positive() {
+                &normalized_positive
+            } else {
+                &normalized_negative
+            };
+            assert_eq!(literal.left(), expected);
+        }
+        assert_eq!(
+            ClauseDerivationRef::from(&choice_symbols[&choice_code]),
+            ClauseDerivationRef::from(live)
+        );
     }
 
     #[test]
