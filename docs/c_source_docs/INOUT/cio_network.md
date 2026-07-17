@@ -120,8 +120,15 @@ Source files reviewed: `INOUT/cio_network.h`, `INOUT/cio_network.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack and payload read accumulation, partial single-read/write status behavior, C `TCPMsgRead` progress tracing as an explicit read/receive path, blocking send/receive loops, string send/receive wrappers, safe `TcpListener`/`TcpStream` socket constructors including C's final-address client-connect outcome, and Linux/Windows server-socket creation with `SO_REUSEADDR` plus C backlog setup before wrapping the listening socket.
-- Tests cover message status values, new-message shape, packed header bytes, NUL truncation during pack/unpack/read accumulation, partial writes, send loops, partial header/payload reads, C progress trace text, closed-connection reporting, empty-payload status, receive loops, string wrappers, and ephemeral server binding.
+- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack and payload read accumulation, partial single-read/write status behavior, C `TCPMsgRead` progress tracing as an explicit read/receive path, blocking send/receive loops, string send/receive wrappers, safe `TcpListener`/`TcpStream` socket constructors including C's final-address client-connect outcome, Linux/Windows server-socket creation with `SO_REUSEADDR` plus C backlog setup before wrapping the listening socket, C-shaped two-line server/connect system diagnostics, and Unix `gai_strerror` detail recovery from Rust's resolver wrapper.
+- Tests cover message status values, new-message shape, packed header bytes, NUL truncation during pack/unpack/read accumulation, partial writes, send loops, partial header/payload reads, C progress trace text, closed-connection reporting, empty-payload status, receive loops, string wrappers, ephemeral server binding, a real loopback server/client byte exchange, and deterministic socket diagnostic shapes.
+
+### Compatibility Evidence
+
+- `EServerListen`, `e_server`, and `e_deduction_server` are the only server-creation callers, and each calls `Listen` immediately after creation. Rust safely folds bind plus backlog-10 listen into the owning `TcpListener` constructor and retains `listen` as an idempotent compatibility call, avoiding a safe type that temporarily owns a bound-but-not-listening socket.
+- C uses raw descriptors for readiness and successful `Accepted %d` output, but the numeric values are process-local OS allocation results. Rust retains the actual raw listener/session descriptors at those boundaries; only cross-process comparison output normalizes successful descriptor numbers.
+- C has no close-error diagnostic here: it ignores failed-client close results and leaks the server descriptor on option/bind failure. Rust preserves silence while closing all still-owned resources. The final-address return outcome remains C-shaped, while the earlier-success lifetime difference stays in the post-compatibility item below.
+- Rust's Unix standard library builds resolver failures from the platform `gai_strerror` detail with a fixed `failed to lookup address information: ` prefix. Removing that prefix recovers C's one-line `Could not resolve address (<detail>)` diagnostic; other host errors retain native text.
 
 ### Change Later
 

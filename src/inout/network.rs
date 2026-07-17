@@ -1,5 +1,5 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
-use std::io::{ErrorKind, Read, Write};
+use crate::basics::error::{program_name, Diagnostic, ErrorCode};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 
 pub const TCP_BACKLOG: usize = 10;
@@ -134,6 +134,31 @@ fn c_string_prefix(bytes: &[u8]) -> &[u8] {
 
 fn network_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYSTEM_ERROR, message)
+}
+
+fn network_system_error(message: impl Into<String>, error: &io::Error) -> Diagnostic {
+    network_system_error_for_program(message, error, &program_name())
+}
+
+fn network_system_error_for_program(
+    message: impl Into<String>,
+    error: &io::Error,
+    current_program_name: &str,
+) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYSTEM_ERROR,
+        format!("{}\n{current_program_name}: {error}", message.into()),
+    )
+}
+
+fn resolver_error_detail(error: &io::Error) -> String {
+    const RUST_LOOKUP_PREFIX: &str = "failed to lookup address information: ";
+
+    let detail = error.to_string();
+    detail
+        .strip_prefix(RUST_LOOKUP_PREFIX)
+        .unwrap_or(&detail)
+        .to_owned()
 }
 
 fn append_header(message: &mut TcpMessage) -> MsgStatus {
@@ -363,12 +388,13 @@ pub fn tcp_string_recv_from_or_error(reader: &mut impl Read) -> Result<String, D
 
 #[must_use]
 pub fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
-    platform_server_socket::create_server_socket_no_fail(port)
+    platform_server_socket::create_server_socket(port).ok()
 }
 
 pub fn create_server_socket(port: u16) -> Result<TcpListener, Diagnostic> {
-    create_server_socket_no_fail(port)
-        .ok_or_else(|| network_error(format!("Cannot create socket for port {port}")))
+    platform_server_socket::create_server_socket(port).map_err(|error| {
+        network_system_error(format!("Cannot create socket for port {port}"), &error)
+    })
 }
 
 pub fn listen(_listener: &TcpListener) -> Result<(), Diagnostic> {
@@ -376,15 +402,18 @@ pub fn listen(_listener: &TcpListener) -> Result<(), Diagnostic> {
 }
 
 pub fn create_client_socket_no_fail(host: &str, port: u16) -> Result<TcpStream, Diagnostic> {
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| network_error(format!("Could not resolve address ({error})")))?;
+    let addresses = (host, port).to_socket_addrs().map_err(|error| {
+        network_error(format!(
+            "Could not resolve address ({})",
+            resolver_error_detail(&error)
+        ))
+    })?;
 
     connect_client_like_c(addresses, TcpStream::connect).map_err(|last_error| {
-        network_error(match last_error {
-            Some(error) => format!("Could not create connected socket: {error}"),
-            None => "Could not resolve address".to_owned(),
-        })
+        last_error.map_or_else(
+            || network_error("Could not resolve address"),
+            |error| network_system_error("Could not create connected socket", &error),
+        )
     })
 }
 
@@ -416,6 +445,7 @@ where
 mod platform_server_socket {
     use super::TCP_BACKLOG;
     use std::ffi::c_void;
+    use std::io;
     use std::mem::size_of_val;
     use std::net::TcpListener;
     use std::os::fd::FromRawFd;
@@ -463,29 +493,34 @@ mod platform_server_socket {
         fn close(fd: c_int) -> c_int;
     }
 
-    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
+    pub(super) fn create_server_socket(port: u16) -> io::Result<TcpListener> {
         // SAFETY: socket is called with C constants matching the AF_INET TCP
         // stream socket shape used by cio_network.c. On success, the returned
         // fd is either closed on error paths or transferred to TcpListener.
         let fd = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
         if fd == -1 {
-            return None;
+            return Err(io::Error::last_os_error());
         }
 
-        if set_reuse_addr(fd).is_none() || bind_any(fd, port).is_none() || listen_fd(fd).is_none() {
+        if let Err(error) = set_reuse_addr(fd)
+            .and_then(|()| bind_any(fd, port))
+            .and_then(|()| listen_fd(fd))
+        {
             close_fd(fd);
-            return None;
+            return Err(error);
         }
 
         // SAFETY: fd is a live listening TCP socket created by socket, bound
         // and switched to listening mode above. Ownership moves into
         // TcpListener, so this module must not close fd after this point.
-        Some(unsafe { TcpListener::from_raw_fd(fd) })
+        Ok(unsafe { TcpListener::from_raw_fd(fd) })
     }
 
-    fn set_reuse_addr(fd: c_int) -> Option<()> {
+    fn set_reuse_addr(fd: c_int) -> io::Result<()> {
         let yes: c_int = 1;
-        let option_len = SockLen::try_from(size_of_val(&yes)).ok()?;
+        let option_len = SockLen::try_from(size_of_val(&yes)).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "socket option length overflow")
+        })?;
         // SAFETY: &yes points to a valid c_int option value for the duration
         // of the call, and fd is owned by this module until success wrapping.
         if unsafe {
@@ -498,15 +533,17 @@ mod platform_server_socket {
             )
         } == -1
         {
-            None
+            Err(io::Error::last_os_error())
         } else {
-            Some(())
+            Ok(())
         }
     }
 
-    fn bind_any(fd: c_int, port: u16) -> Option<()> {
+    fn bind_any(fd: c_int, port: u16) -> io::Result<()> {
         let address = SockAddrIn {
-            family: u16::try_from(AF_INET).ok()?,
+            family: u16::try_from(AF_INET).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "address family overflow")
+            })?,
             port: port.to_be(),
             address: InAddr { s_addr: 0 },
             zero: [0; 8],
@@ -514,20 +551,21 @@ mod platform_server_socket {
         // SAFETY: address is a properly initialized sockaddr_in with the C ABI
         // layout used by bind for AF_INET. fd is a live socket owned here.
         if unsafe { bind(fd, (&raw const address).cast::<SockAddr>(), SOCKADDR_IN_LEN) } == -1 {
-            None
+            Err(io::Error::last_os_error())
         } else {
-            Some(())
+            Ok(())
         }
     }
 
-    fn listen_fd(fd: c_int) -> Option<()> {
-        let backlog = c_int::try_from(TCP_BACKLOG).ok()?;
+    fn listen_fd(fd: c_int) -> io::Result<()> {
+        let backlog = c_int::try_from(TCP_BACKLOG)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "TCP backlog overflow"))?;
         // SAFETY: fd is a bound TCP socket owned by this module, and backlog
         // is the C TCP_BACKLOG value represented as c_int.
         if unsafe { listen(fd, backlog) } == -1 {
-            None
+            Err(io::Error::last_os_error())
         } else {
-            Some(())
+            Ok(())
         }
     }
 
@@ -545,6 +583,7 @@ mod platform_server_socket {
 mod platform_server_socket {
     use super::TCP_BACKLOG;
     use std::ffi::c_void;
+    use std::io;
     use std::mem::MaybeUninit;
     use std::net::TcpListener;
     use std::os::raw::{c_char, c_int};
@@ -596,9 +635,10 @@ mod platform_server_socket {
         fn bind(socket: Socket, address: *const SockAddr, address_len: c_int) -> c_int;
         fn listen(socket: Socket, backlog: c_int) -> c_int;
         fn closesocket(socket: Socket) -> c_int;
+        fn WSAGetLastError() -> c_int;
     }
 
-    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
+    pub(super) fn create_server_socket(port: u16) -> io::Result<TcpListener> {
         winsock_ready()?;
 
         // SAFETY: socket is called with Winsock constants matching the AF_INET
@@ -606,39 +646,46 @@ mod platform_server_socket {
         // socket is either closed on error paths or transferred to TcpListener.
         let socket = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
         if socket == INVALID_SOCKET {
-            return None;
+            return Err(last_socket_error());
         }
 
-        if set_reuse_addr(socket).is_none()
-            || bind_any(socket, port).is_none()
-            || listen_socket(socket).is_none()
+        if let Err(error) = set_reuse_addr(socket)
+            .and_then(|()| bind_any(socket, port))
+            .and_then(|()| listen_socket(socket))
         {
             close_socket(socket);
-            return None;
+            return Err(error);
         }
 
         // SAFETY: socket is a live listening TCP socket created by Winsock,
         // bound and switched to listening mode above. Ownership moves into
         // TcpListener, so this module must not close it after this point.
-        Some(unsafe { TcpListener::from_raw_socket(socket as RawSocket) })
+        Ok(unsafe { TcpListener::from_raw_socket(socket as RawSocket) })
     }
 
-    fn winsock_ready() -> Option<()> {
-        static WINSOCK_READY: OnceLock<bool> = OnceLock::new();
-        WINSOCK_READY.get_or_init(start_winsock).then_some(())
+    fn winsock_ready() -> io::Result<()> {
+        static WINSOCK_STATUS: OnceLock<c_int> = OnceLock::new();
+        let status = *WINSOCK_STATUS.get_or_init(start_winsock);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(status))
+        }
     }
 
-    fn start_winsock() -> bool {
+    fn start_winsock() -> c_int {
         let mut data = MaybeUninit::<[usize; 128]>::uninit();
         // SAFETY: WSAStartup writes a WSADATA record into the supplied buffer.
         // The buffer is pointer-aligned and intentionally larger than the
         // documented WSADATA layout on supported Windows targets.
-        unsafe { WSAStartup(WINSOCK_VERSION_2_2, data.as_mut_ptr().cast::<c_void>()) == 0 }
+        unsafe { WSAStartup(WINSOCK_VERSION_2_2, data.as_mut_ptr().cast::<c_void>()) }
     }
 
-    fn set_reuse_addr(socket: Socket) -> Option<()> {
+    fn set_reuse_addr(socket: Socket) -> io::Result<()> {
         let yes: c_int = 1;
-        let option_len = c_int::try_from(size_of::<c_int>()).ok()?;
+        let option_len = c_int::try_from(size_of::<c_int>()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "socket option length overflow")
+        })?;
         // SAFETY: &yes points to a valid c_int option value for the duration
         // of the call, and socket is owned by this module until success
         // wrapping.
@@ -652,15 +699,17 @@ mod platform_server_socket {
             )
         } == SOCKET_ERROR
         {
-            None
+            Err(last_socket_error())
         } else {
-            Some(())
+            Ok(())
         }
     }
 
-    fn bind_any(socket: Socket, port: u16) -> Option<()> {
+    fn bind_any(socket: Socket, port: u16) -> io::Result<()> {
         let address = SockAddrIn {
-            family: u16::try_from(AF_INET).ok()?,
+            family: u16::try_from(AF_INET).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "address family overflow")
+            })?,
             port: port.to_be(),
             address: InAddr { s_addr: 0 },
             zero: [0; 8],
@@ -676,21 +725,28 @@ mod platform_server_socket {
             )
         } == SOCKET_ERROR
         {
-            None
+            Err(last_socket_error())
         } else {
-            Some(())
+            Ok(())
         }
     }
 
-    fn listen_socket(socket: Socket) -> Option<()> {
-        let backlog = c_int::try_from(TCP_BACKLOG).ok()?;
+    fn listen_socket(socket: Socket) -> io::Result<()> {
+        let backlog = c_int::try_from(TCP_BACKLOG)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "TCP backlog overflow"))?;
         // SAFETY: socket is a bound TCP socket owned by this module, and
         // backlog is the C TCP_BACKLOG value represented as c_int.
         if unsafe { listen(socket, backlog) } == SOCKET_ERROR {
-            None
+            Err(last_socket_error())
         } else {
-            Some(())
+            Ok(())
         }
+    }
+
+    fn last_socket_error() -> io::Error {
+        // SAFETY: WSAGetLastError has no arguments and returns the calling
+        // thread's most recent Winsock status code.
+        io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
     }
 
     fn close_socket(socket: Socket) {
@@ -702,20 +758,22 @@ mod platform_server_socket {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 mod platform_server_socket {
+    use std::io;
     use std::net::{Ipv4Addr, TcpListener};
 
-    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
-        TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).ok()
+    pub(super) fn create_server_socket(port: u16) -> io::Result<TcpListener> {
+        TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_client_like_c, create_server_socket, tcp_msg_read_from, tcp_msg_read_from_tracing,
-        tcp_msg_recv_from, tcp_msg_recv_from_tracing, tcp_msg_send_to, tcp_msg_try_read_from,
-        tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to, MsgStatus, TcpMessage,
-        TCP_HEADER_SIZE,
+        connect_client_like_c, create_client_socket, create_server_socket, listen,
+        network_system_error_for_program, resolver_error_detail, tcp_msg_read_from,
+        tcp_msg_read_from_tracing, tcp_msg_recv_from, tcp_msg_recv_from_tracing, tcp_msg_send_to,
+        tcp_msg_try_read_from, tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to,
+        MsgStatus, TcpMessage, TCP_HEADER_SIZE,
     };
     use std::io::{self, Cursor, Read, Write};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1012,6 +1070,52 @@ mod tests {
     fn server_socket_wrapper_binds_to_ephemeral_port() {
         let listener = create_server_socket(0).unwrap();
         assert_ne!(listener.local_addr().unwrap().port(), 0);
+    }
+
+    #[test]
+    fn server_and_client_socket_wrappers_exchange_loopback_bytes() {
+        let listener = create_server_socket(0).unwrap();
+        listen(&listener).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"ping");
+            stream.write_all(b"pong").unwrap();
+        });
+
+        let mut stream = create_client_socket("127.0.0.1", port).unwrap();
+        stream.write_all(b"ping").unwrap();
+        let mut response = [0; 4];
+        stream.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"pong");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn socket_diagnostics_preserve_c_system_and_resolver_shapes() {
+        let system_error = io::Error::new(io::ErrorKind::ConnectionRefused, "test refusal");
+        let diagnostic = network_system_error_for_program(
+            "Could not create connected socket",
+            &system_error,
+            "e_client",
+        );
+        assert_eq!(
+            diagnostic.code(),
+            crate::basics::error::ErrorCode::SYS_ERROR
+        );
+        assert_eq!(
+            diagnostic.message(),
+            "Could not create connected socket\ne_client: test refusal"
+        );
+
+        let resolver_error =
+            io::Error::other("failed to lookup address information: Name or service not known");
+        assert_eq!(
+            resolver_error_detail(&resolver_error),
+            "Name or service not known"
+        );
     }
 
     #[test]
