@@ -367,4 +367,59 @@ mod tests {
         assert!(rendered.contains("% Standardweight:"));
         assert!(rendered.contains("      2 :  : [++q(a),--r(X1)] : 1 : 'derived'"));
     }
+
+    #[test]
+    fn empty_protocol_keeps_c_zero_denominator_averages_without_representatives() {
+        let mut protocol = parse_protocol("");
+
+        let data = protocol_prop_analyse(&mut protocol);
+        let rendered =
+            protocol_prop_data_print_string(&mut protocol, &data, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(data.fof_formulae, 0);
+        assert_eq!(data.pos_clauses + data.neg_clauses + data.mix_clauses, 0);
+        assert_eq!(data.longest_clause, None);
+        assert_eq!(data.max_symbol_clause, None);
+        assert_eq!(data.max_standard_weight_clause, None);
+        assert_eq!(data.max_depth_clause, None);
+        assert_eq!(rendered.matches("    NaN\n").count(), 10);
+        assert!(!rendered.contains("% Standardweight:"));
+    }
+
+    #[test]
+    fn fof_only_protocol_is_scanned_for_maxima_but_not_clause_counts() {
+        let mut protocol = parse_protocol("1 : : p(a) : initial");
+
+        let data = protocol_prop_analyse(&mut protocol);
+        let rendered =
+            protocol_prop_data_print_string(&mut protocol, &data, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(data.fof_formulae, 1);
+        assert_eq!(data.pos_clauses + data.neg_clauses + data.mix_clauses, 0);
+        assert_eq!(data.longest_clause, Some(parse_id("1")));
+        assert_eq!(data.max_symbol_clause, Some(parse_id("1")));
+        assert_eq!(data.max_standard_weight_clause, Some(parse_id("1")));
+        assert_eq!(data.max_depth_clause, Some(parse_id("1")));
+        assert_eq!(rendered.matches("      1 :  : ").count(), 4);
+        assert!(rendered.contains("p(a)"));
+        assert!(!rendered.contains("% Standardweight:"));
+    }
+
+    #[test]
+    fn shell_only_protocol_uses_zero_metrics_without_union_access() {
+        let mut protocol = parse_protocol("1 : : : initial");
+
+        let data = protocol_prop_analyse(&mut protocol);
+        let rendered =
+            protocol_prop_data_print_string(&mut protocol, &data, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(data.fof_formulae, 0);
+        assert_eq!(data.pos_clauses + data.neg_clauses + data.mix_clauses, 0);
+        assert_eq!(data.longest_clause, Some(parse_id("1")));
+        assert_eq!(data.max_symbol_clause, Some(parse_id("1")));
+        assert_eq!(data.max_standard_weight_clause, Some(parse_id("1")));
+        assert_eq!(data.max_depth_clause, Some(parse_id("1")));
+        assert_eq!(rendered.matches("      1 :  :  : initial").count(), 4);
+        assert!(!rendered.contains("% Standardweight:"));
+    }
 }
