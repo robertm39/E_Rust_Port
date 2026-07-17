@@ -75,8 +75,8 @@ impl EqnList {
         self.literals.push(literal);
     }
 
-    /// Parses the C `EqnListParse` shape using the currently ported equation
-    /// and term parsers.
+    /// Parses the C `EqnListParse` shape using the banked equation and
+    /// `TBTermParse`-equivalent term parsers.
     ///
     /// # Panics
     ///
@@ -468,10 +468,24 @@ impl EqnList {
     }
 
     #[must_use]
-    pub fn to_stack(&self) -> PStack<Eqn> {
+    pub fn to_stack(&self) -> PStack<&Eqn> {
         let mut stack = PStack::new();
         for literal in &self.literals {
-            stack.push(literal.clone());
+            stack.push(literal);
+        }
+        stack
+    }
+
+    /// Moves all literals into a stack without copying their cells.
+    ///
+    /// This is the owned Rust counterpart to consuming C pointers with
+    /// `EqnListFromStack`; [`Self::to_stack`] provides C's non-owning pointer
+    /// view when the list must remain intact.
+    #[must_use]
+    pub fn into_stack(self) -> PStack<Eqn> {
+        let mut stack = PStack::new();
+        for literal in self.literals {
+            stack.push(literal);
         }
         stack
     }
@@ -632,14 +646,14 @@ impl EqnList {
     }
 
     #[must_use]
-    pub fn split_to_stacks(&self, prop: EqnProperties) -> (PStack<Eqn>, PStack<Eqn>) {
+    pub fn split_to_stacks(&self, prop: EqnProperties) -> (PStack<&Eqn>, PStack<&Eqn>) {
         let mut matching = PStack::new();
         let mut non_matching = PStack::new();
         for literal in &self.literals {
             if literal.query_prop(prop) {
-                matching.push(literal.clone());
+                matching.push(literal);
             } else {
-                non_matching.push(literal.clone());
+                non_matching.push(literal);
             }
         }
         (matching, non_matching)
@@ -1223,6 +1237,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_routes_distinct_term_tokens_through_the_banked_term_parser() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string(
+            "++equal(42,42);--equal(3/4,3/4);++equal(1.5,1.5);--equal(\"obj\",\"obj\")",
+            false,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tptp);
+
+        let list = EqnList::parse(
+            &mut scanner,
+            &mut bank,
+            TokenType::SEMICOLON,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+
+        assert_eq!(list.len(), 4);
+        assert!(list.as_slice()[0].is_positive());
+        assert!(list.as_slice()[1].is_negative());
+        assert!(list.as_slice()[2].is_positive());
+        assert!(list.as_slice()[3].is_negative());
+        assert_eq!(
+            list.as_slice()
+                .iter()
+                .map(|literal| bank.signature().find_name(literal.left().f_code()).unwrap())
+                .collect::<Vec<_>>(),
+            vec!["42", "3/4", "1.500000", "\"obj\""]
+        );
+    }
+
+    #[test]
     fn property_helpers_apply_to_each_literal() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
@@ -1350,11 +1396,15 @@ mod tests {
         let mut list = EqnList::from_array(vec![first.clone(), second.clone(), third.clone()]);
 
         let stack = list.to_stack();
-        assert_eq!(
-            stack.as_slice(),
-            &[first.clone(), second.clone(), third.clone()]
-        );
-        let rebuilt = EqnList::from_stack(stack);
+        assert!(stack
+            .as_slice()
+            .iter()
+            .zip(list.as_slice())
+            .all(|(stack_literal, list_literal)| std::ptr::eq(*stack_literal, list_literal)));
+        drop(stack);
+
+        let transfer = EqnList::from_array(vec![first.clone(), second.clone(), third.clone()]);
+        let rebuilt = EqnList::from_stack(transfer.into_stack());
         assert_eq!(
             rebuilt.as_slice(),
             &[first.clone(), second.clone(), third.clone()]
@@ -1660,9 +1710,14 @@ mod tests {
         list.negate_eqns();
         assert!(list.as_slice().iter().all(Eqn::is_negative));
 
-        let (negative, positive) = list.split_to_stacks(EP_IS_POSITIVE);
-        assert!(negative.is_empty());
-        assert_eq!(positive.len(), 2);
+        let (matching, non_matching) = list.split_to_stacks(EP_IS_POSITIVE);
+        assert!(matching.is_empty());
+        assert_eq!(non_matching.len(), 2);
+        assert!(non_matching
+            .as_slice()
+            .iter()
+            .zip(list.as_slice())
+            .all(|(stack_literal, list_literal)| std::ptr::eq(*stack_literal, list_literal)));
     }
 
     #[test]
@@ -1744,7 +1799,7 @@ mod tests {
         literal.set_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
         let list = EqnList::from_vec(vec![literal]);
 
-        let roundtrip = EqnList::from_stack(list.to_stack());
+        let roundtrip = EqnList::from_stack(list.into_stack());
         assert!(roundtrip.as_slice()[0].is_oriented());
 
         let mut unoriented = roundtrip.as_slice()[0].clone();

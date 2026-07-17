@@ -206,7 +206,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled with the Rust port on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 
@@ -227,13 +227,14 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 - `EqnListPrint` has no format state of its own: it prints nothing for an empty list, writes the first literal without a leading separator, then writes the caller's separator before each remaining literal while forwarding `negated` and `fullterms` directly to `EqnPrint`. Rust preserves this exact list assembly over an owned vector.
 - `EqnListPrintDeref` uses the same no-leading-separator loop and forwards one `DerefType` to every literal. Rust preserves the separator behavior while keeping dereference expansion explicit in the literal helper.
 - `EqnListTSTPPrint` reuses the same first-literal/no-leading-separator loop but always delegates to `EqnTSTPPrint` without a negation argument. Rust keeps the separator behavior and forwards explicit `fullterms` and oriented-output choices to the bank-explicit TSTP literal writer.
-- `EqnListParse` first checks for a format-specific literal start and returns an empty list without consuming input if none is present; otherwise it parses the first literal and then consumes the caller-supplied separator before each following literal. Rust preserves that control flow over the currently ported equation/simple-term parser.
-- `EqnListMaximalLiterals` temporarily extracts and relinks literals while using a stack archive to restore the original list order. Rust preserves the maximal and strictly-maximal flag results through an index-based active-candidate list; later stable literal-handle ownership should keep this temporary relinking unobservable.
+- `EqnListParse` first checks for a format-specific literal start and returns an empty list without consuming input if none is present; otherwise it parses the first literal and then consumes the caller-supplied separator before each following literal. Rust preserves that control flow and delegates each literal side to the banked `TBTermParse`-equivalent parser, including distinct integer, rational, float, and object terms.
+- `EqnListToStack` and `EqnListSplitToStacks` push the existing literal pointers without copying cells, while `EqnListFromStack` consumes the stack and relinks those cells in their original order. Rust exposes borrowed `PStack<&Eqn>` views for the non-owning operations and a separate consuming `into_stack`/`from_stack` path for ownership transfer, so safe borrowing replaces raw pointers without cloning literal cells.
+- `EqnListMaximalLiterals` temporarily extracts and relinks literals while using a stack archive to restore the original list order. Rust preserves the maximal and strictly-maximal flag results through an index-based active-candidate list, making the temporary C relinking unobservable without requiring intrusive literal handles.
 - `EqnListMapTerms` delegates every literal to `EqnMap`, so mapped `$false` sides become `$true` with a polarity flip, `$true` is swapped away from the left side, and the equational-literal property is recomputed. Rust preserves this in `Eqn::map_terms`, and `EqnListLambdaNormalize` is now represented by `EqnList::lambda_normalize` over `LambdaNormalizeDB`.
 
 ### Rust Port Status Notes
 
-- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, stack-shaped conversion, property mutation/querying, term-existence checks, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking plus C's direct maximal/strict-maximal query predicates over already marked literals, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering over the currently ported term/equation parser surface.
+- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, no-copy borrowed stack views, consuming stack conversion, property mutation/querying, term-existence checks, banked list parsing, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking plus C's direct maximal/strict-maximal query predicates over already marked literals, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering.
 
 ### Change Later
 
