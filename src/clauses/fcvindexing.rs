@@ -468,6 +468,44 @@ impl FvIndex {
         })
     }
 
+    /// Returns the two output streams produced by C `FVIndexPrint` in LOP mode.
+    ///
+    /// The first string is what C writes to the caller-supplied `out` stream;
+    /// the second is what it writes directly to `stderr`. C sends indentation
+    /// and clause bodies to `out`, but sends the root marker, alternative
+    /// labels, and leaf line endings to `stderr`.
+    #[must_use]
+    pub fn print_lop_split_stream_strings(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+    ) -> (String, String) {
+        self.print_split_stream_strings_with_clause_renderer(|clause| {
+            clause_print_lop_format_string(bank, clause, full_terms)
+        })
+    }
+
+    /// Returns the two output streams produced by C `FVIndexPrint` with
+    /// explicit `ClausePrint` dispatch.
+    ///
+    /// The first string represents the caller-supplied `out` stream and the
+    /// second represents C's direct `stderr` writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects a stored clause.
+    pub fn print_format_split_stream_strings(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<(String, String), Diagnostic> {
+        self.print_split_stream_strings_with_result_clause_renderer(|clause| {
+            fv_index_clause_rendered_string(bank, clause, full_terms, output_format, problem_type)
+        })
+    }
+
     #[must_use]
     pub fn print_string_with_clause_renderer<R>(&self, mut render_clause: R) -> String
     where
@@ -488,6 +526,32 @@ impl FvIndex {
         let mut output = "* ROOT *\n".to_owned();
         self.write_print_result(&mut output, 0, &mut render_clause)?;
         Ok(output)
+    }
+
+    fn print_split_stream_strings_with_clause_renderer<R>(
+        &self,
+        mut render_clause: R,
+    ) -> (String, String)
+    where
+        R: FnMut(&Clause) -> String,
+    {
+        let mut output = String::new();
+        let mut stderr = "* ROOT *\n".to_owned();
+        self.write_print_split(&mut output, &mut stderr, 0, &mut render_clause);
+        (output, stderr)
+    }
+
+    fn print_split_stream_strings_with_result_clause_renderer<R>(
+        &self,
+        mut render_clause: R,
+    ) -> Result<(String, String), Diagnostic>
+    where
+        R: FnMut(&Clause) -> Result<String, Diagnostic>,
+    {
+        let mut output = String::new();
+        let mut stderr = "* ROOT *\n".to_owned();
+        self.write_print_split_result(&mut output, &mut stderr, 0, &mut render_clause)?;
+        Ok((output, stderr))
     }
 
     fn insert_vector_clause(
@@ -626,6 +690,64 @@ impl FvIndex {
                 }
                 let _ = writeln!(output, "Alternative {key}: ");
                 successor.write_print_result(output, level + 1, render_clause)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_print_split<R>(
+        &self,
+        output: &mut String,
+        stderr: &mut String,
+        level: usize,
+        render_clause: &mut R,
+    ) where
+        R: FnMut(&Clause) -> String,
+    {
+        if self.final_node {
+            for clause in self.clauses.values() {
+                for _ in 0..=level {
+                    output.push_str("--");
+                }
+                output.push_str(&render_clause(clause));
+                stderr.push_str(" \n");
+            }
+        } else {
+            for (key, successor) in &self.successors {
+                for _ in 0..level {
+                    output.push_str("--");
+                }
+                let _ = writeln!(stderr, "Alternative {key}: ");
+                successor.write_print_split(output, stderr, level + 1, render_clause);
+            }
+        }
+    }
+
+    fn write_print_split_result<R>(
+        &self,
+        output: &mut String,
+        stderr: &mut String,
+        level: usize,
+        render_clause: &mut R,
+    ) -> Result<(), Diagnostic>
+    where
+        R: FnMut(&Clause) -> Result<String, Diagnostic>,
+    {
+        if self.final_node {
+            for clause in self.clauses.values() {
+                for _ in 0..=level {
+                    output.push_str("--");
+                }
+                output.push_str(&render_clause(clause)?);
+                stderr.push_str(" \n");
+            }
+        } else {
+            for (key, successor) in &self.successors {
+                for _ in 0..level {
+                    output.push_str("--");
+                }
+                let _ = writeln!(stderr, "Alternative {key}: ");
+                successor.write_print_split_result(output, stderr, level + 1, render_clause)?;
             }
         }
         Ok(())
@@ -1184,6 +1306,25 @@ mod tests {
     }
 
     #[test]
+    fn index_print_lop_split_streams_preserve_c_routing() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_index_a");
+        let second = typed_const(&mut bank, "fv_index_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)], 50);
+        let mut index = FvIndex::new();
+
+        assert!(
+            index
+                .insert_vector_clause(&FreqVector::from_values(vec![2, 0]), 1, clause)
+                .inserted_clause
+        );
+
+        let (output, stderr) = index.print_lop_split_stream_strings(&bank, true);
+        assert_eq!(output, "--------fv_index_a=fv_index_b <- .");
+        assert_eq!(stderr, "* ROOT *\nAlternative 2: \nAlternative 0: \n \n");
+    }
+
+    #[test]
     fn index_print_format_string_dispatches_clause_output() {
         let mut bank = test_bank();
         let first = typed_const(&mut bank, "fv_format_a");
@@ -1221,6 +1362,16 @@ mod tests {
                 .print_format_string(&bank, true, IoFormat::Auto, ProblemType::FirstOrder)
                 .unwrap_or_else(|err| panic!("{err}")),
             index.print_lop_string(&bank, true)
+        );
+
+        let (split_output, split_stderr) = index
+            .print_format_split_stream_strings(&bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(split_output.starts_with("--------input_clause("));
+        assert!(split_output.contains("++equal(fv_format_a, fv_format_b)"));
+        assert_eq!(
+            split_stderr,
+            "* ROOT *\nAlternative 3: \nAlternative 1: \n \n"
         );
     }
 

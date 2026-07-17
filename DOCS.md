@@ -70,6 +70,8 @@ The 2026-07-17 PCL-expression audit confirms that typed recursive ownership repl
 
 The 2026-07-17 frequency-vector ownership audit closes the old raw-clause-alias blocker by separating ordinary vector snapshots from a non-cloneable packed clause owner. Unpacking is an ownership transfer, compatibility printing borrows the live clause explicitly, source-clause destruction cannot dangle vector metadata, and FV-index insertion no longer clones the feature vector.
 
+The 2026-07-17 FV-index fidelity audit closes the deferred storage and output-routing gap. Rust reproduces C's signed `IntMap` representation-transition deltas, insertion-only `FVIndexStorage` counter, combined same-stream tree output, and exact distinct `out`/`stderr` fragments for LOP/TPTP/TSTP rendering without introducing global output state.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.
