@@ -405,6 +405,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn type_handles_and_optional_slots_are_one_pointer_wide() {
+        assert_eq!(std::mem::size_of::<super::Type>(), 8);
+        assert_eq!(std::mem::size_of::<Option<super::Type>>(), 8);
+    }
+
+    #[test]
     fn single_argument_arrow_returns_the_argument_identity() {
         let individual = individual_sort();
         let arrow = alloc_arrow_type(vec![individual.clone()]);
@@ -515,18 +522,23 @@ mod tests {
 
         let left_arg = individual_sort();
         let right_arg = individual_sort();
+        let arg_order = super::type_identity_cmp(&left_arg, &right_arg);
         let left = alloc_arrow_type(vec![left_arg, bool.clone()]);
         let right = alloc_arrow_type(vec![right_arg, bool]);
-        assert_ne!(types_cmp(&left, &right), 0);
+        assert_eq!(types_cmp(&left, &right), arg_order);
     }
 
     #[test]
     fn type_identity_cmp_uses_pointer_identity() {
         let left = individual_sort();
         let right = individual_sort();
+        let left_address = std::rc::Rc::as_ptr(&left.0) as usize;
+        let right_address = std::rc::Rc::as_ptr(&right.0) as usize;
+        let address_order =
+            i32::from(left_address > right_address) - i32::from(left_address < right_address);
 
         assert_eq!(super::type_identity_cmp(&left, &left), 0);
-        assert_ne!(super::type_identity_cmp(&left, &right), 0);
+        assert_eq!(super::type_identity_cmp(&left, &right), address_order);
     }
 
     #[test]

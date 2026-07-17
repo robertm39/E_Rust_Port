@@ -126,7 +126,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-17.
 
 Source files reviewed: `TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`.
 
@@ -140,6 +140,11 @@ Source files reviewed: `TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- `TypesCmp` orders first by constructor code, then arity, then the raw addresses of corresponding argument types through `PCmp`. C's own source notes that this causes clause-sorting differences; allocator address order and reuse are therefore process-local implementation details rather than reproducible cross-build values. Rust preserves the same rule with actual `Rc` allocation addresses, while `Rc::ptr_eq` preserves type identity. On 64-bit targets, both `Type` and `Option<Type>` remain one pointer wide.
+- Shared types remain live in their `TypeBank`, so the address used for identity and ordering is stable for the bank's lifetime. Rust's reference counting replaces manual `TypeFree`/`TypeTopFree` ownership without changing the pointer-identity predicates used by `IsChoiceType`, signature/type-bank sharing, term comparison, or higher-order ordering.
 
 ### Porting Focus
 
