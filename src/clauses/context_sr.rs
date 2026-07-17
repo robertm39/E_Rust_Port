@@ -9,10 +9,9 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
-    clause_set_find_subsumed_clauses_with_index,
-    clause_set_find_subsumed_clauses_with_index_and_bank, clause_set_subsumes_clause_with_index,
-    clause_set_subsumes_clause_with_index_and_bank, clause_subsume_order_sort_lits,
-    clause_subsumes_clause, clause_subsumes_clause_with_bank,
+    clause_set_find_subsumed_clauses_owned, clause_set_find_subsumed_clauses_owned_with_bank,
+    clause_set_subsumes_clause_owned, clause_set_subsumes_clause_owned_with_bank,
+    clause_subsume_order_sort_lits, clause_subsumes_clause, clause_subsumes_clause_with_bank,
 };
 use crate::terms::termbanks::TermBank;
 use std::fmt;
@@ -212,7 +211,7 @@ pub fn clause_set_find_context_sr_clauses<'set>(
             continue;
         }
         clause_subsume_order_sort_lits(clause, bank);
-        clause_set_find_subsumed_clauses_with_index(set, set.fv_anchor(), clause, result, bank);
+        clause_set_find_subsumed_clauses_owned(set, clause, result, bank);
         let restored = flip_literal_sign(clause, &flipped);
         debug_assert!(restored, "flipped literal must be restored after lookup");
     }
@@ -245,13 +244,7 @@ pub fn clause_set_find_context_sr_clauses_with_bank<'set>(
             continue;
         }
         clause_subsume_order_sort_lits(clause, bank);
-        let lookup = clause_set_find_subsumed_clauses_with_index_and_bank(
-            set,
-            set.fv_anchor(),
-            clause,
-            result,
-            bank,
-        );
+        let lookup = clause_set_find_subsumed_clauses_owned_with_bank(set, clause, result, bank);
         let restored = flip_literal_sign(clause, &flipped);
         debug_assert!(restored, "flipped literal must be restored after lookup");
         if let Err(error) = lookup {
@@ -271,7 +264,7 @@ fn clause_set_subsumes_context_clause<'set>(
     bank: &TermBank,
 ) -> Option<&'set Clause> {
     match set.fv_anchor() {
-        Some(index) => clause_set_subsumes_clause_with_index(set, Some(index), clause, bank),
+        Some(_) => clause_set_subsumes_clause_owned(set, clause, bank),
         None => set
             .iter()
             .find(|candidate| clause_subsumes_clause(candidate, clause, bank)),
@@ -283,7 +276,7 @@ fn clause_set_subsumes_context_clause_with_bank<'set>(
     clause: &Clause,
     bank: &mut TermBank,
 ) -> Result<Option<&'set Clause>, Diagnostic> {
-    let Some(index) = set.fv_anchor() else {
+    let Some(_) = set.fv_anchor() else {
         for candidate in set.iter() {
             if clause_subsumes_clause_with_bank(candidate, clause, bank)? {
                 return Ok(Some(candidate));
@@ -291,7 +284,7 @@ fn clause_set_subsumes_context_clause_with_bank<'set>(
         }
         return Ok(None);
     };
-    clause_set_subsumes_clause_with_index_and_bank(set, Some(index), clause, bank)
+    clause_set_subsumes_clause_owned_with_bank(set, clause, bank)
 }
 
 fn literal_stack(clause: &Clause) -> Vec<Eqn> {

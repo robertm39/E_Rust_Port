@@ -15,7 +15,7 @@ use crate::clauses::eqn_props::{EP_IS_POSITIVE, EP_IS_SPLIT_LIT};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::subsumption::{
-    clause_set_find_variant_clause_indexed_with_bank, clause_subsume_order_sort_lits,
+    clause_set_find_variant_clause_owned_with_bank, clause_subsume_order_sort_lits,
     clause_subsumes_clause_with_bank,
 };
 use crate::terms::signature::FP_CL_SPLIT_DEF;
@@ -803,10 +803,9 @@ fn find_definition_variant(
     query: &Clause,
     bank: &mut TermBank,
 ) -> Result<Option<i64>, Diagnostic> {
-    if let Some(anchor) = store.fv_anchor() {
+    if store.fv_anchor().is_some() {
         return Ok(
-            clause_set_find_variant_clause_indexed_with_bank(anchor, query, bank)?
-                .map(Clause::ident),
+            clause_set_find_variant_clause_owned_with_bank(store, query, bank)?.map(Clause::ident),
         );
     }
 

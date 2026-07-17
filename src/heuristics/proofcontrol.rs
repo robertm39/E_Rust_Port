@@ -84,9 +84,9 @@ use crate::clauses::subsumption::{
     clause_negative_simplify_reflect_with_docs_and_bank,
     clause_positive_simplify_reflect_with_strong_and_bank,
     clause_positive_simplify_reflect_with_strong_and_docs_and_bank,
-    clause_set_find_first_subsumed_clause_with_index_and_bank,
-    clause_set_find_subsumed_clauses_with_index_and_bank, clause_set_subsumes_clause_with_index,
-    clause_set_subsumes_clause_with_index_and_bank, clause_subsume_order_sort_lits,
+    clause_set_find_first_subsumed_clause_owned_with_bank,
+    clause_set_find_subsumed_clauses_owned_with_bank, clause_set_subsumes_clause_owned,
+    clause_set_subsumes_clause_owned_with_bank, clause_subsume_order_sort_lits,
     eqn_topsubsumes_termpair_with_bank, unit_clause_set_subsumes_clause,
     unit_clause_set_subsumes_clause_with_bank, unit_clause_set_subsumes_clause_with_strong,
 };
@@ -1383,12 +1383,8 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     clause.set_weight(clause.standard_weight());
 
     if static_watchlist {
-        let subsumed = clause_set_find_first_subsumed_clause_with_index_and_bank(
-            watchlist,
-            watchlist.fv_anchor(),
-            clause,
-            terms,
-        )?;
+        let subsumed =
+            clause_set_find_first_subsumed_clause_owned_with_bank(watchlist, clause, terms)?;
         if subsumed.is_some() {
             clause.set_prop(CP_SUBSUMES_WATCH);
             return Ok(ProofStateWatchlistOutcome {
@@ -1707,13 +1703,8 @@ fn remove_watchlist_subsumed<W: fmt::Write>(
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut stack = PStack::new();
-    let expected_removed = clause_set_find_subsumed_clauses_with_index_and_bank(
-        watchlist,
-        watchlist.fv_anchor(),
-        subsumer,
-        &mut stack,
-        terms,
-    )?;
+    let expected_removed =
+        clause_set_find_subsumed_clauses_owned_with_bank(watchlist, subsumer, &mut stack, terms)?;
     let ids = stack
         .as_slice()
         .iter()
@@ -2442,13 +2433,9 @@ pub fn proof_state_forward_subsumption_with_strong(
     }
     if !subsumer_found && clause.literal_number() > 1 && non_unit_subsumption {
         clause_subsume_order_sort_lits(clause, state.terms());
-        subsumer_found = clause_set_subsumes_clause_with_index(
-            state.processed_non_units(),
-            state.processed_non_units().fv_anchor(),
-            clause,
-            state.terms(),
-        )
-        .is_some();
+        subsumer_found =
+            clause_set_subsumes_clause_owned(state.processed_non_units(), clause, state.terms())
+                .is_some();
     }
 
     if subsumer_found {
@@ -2499,13 +2486,9 @@ pub fn proof_state_forward_subsumption_with_bank(
     }
     if !subsumer_found && clause.literal_number() > 1 && non_unit_subsumption {
         clause_subsume_order_sort_lits(clause, terms);
-        subsumer_found = clause_set_subsumes_clause_with_index_and_bank(
-            processed_sets.non_units,
-            processed_sets.non_units.fv_anchor(),
-            clause,
-            terms,
-        )?
-        .is_some();
+        subsumer_found =
+            clause_set_subsumes_clause_owned_with_bank(processed_sets.non_units, clause, terms)?
+                .is_some();
     }
 
     if subsumer_found {
@@ -8587,9 +8570,8 @@ fn subsumed_ids_in_set(
     terms: &mut TermBank,
 ) -> Result<Vec<i64>, Diagnostic> {
     let mut matched_clauses = PStack::new();
-    let _ = clause_set_find_subsumed_clauses_with_index_and_bank(
+    let _ = clause_set_find_subsumed_clauses_owned_with_bank(
         set,
-        set.fv_anchor(),
         subsumer,
         &mut matched_clauses,
         terms,

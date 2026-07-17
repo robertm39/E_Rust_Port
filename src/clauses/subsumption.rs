@@ -1062,9 +1062,10 @@ pub fn clause_set_find_first_subsumed_clause_with_bank<'set>(
 /// Returns the first clause that subsumes `sub_candidate`, using `index` when
 /// one is available and otherwise scanning `set`.
 ///
-/// This mirrors the indexed/plain branch in `ClauseSetSubsumesClause`. Until
-/// `ClauseSet` owns index lifecycle, callers must pass an anchor that reflects
-/// the same set contents.
+/// This mirrors the indexed/plain branch in `ClauseSetSubsumesClause`. It is a
+/// lower-level compatibility surface for tests or interop code that owns an
+/// anchor separately; production clause-set callers should use the set-owned
+/// wrapper so lookup follows the set's insertion/extraction lifecycle.
 ///
 /// # Panics
 ///
@@ -1117,12 +1118,37 @@ pub fn clause_set_subsumes_clause_with_index_and_bank<'set>(
     fv_index_subsumes_packed_clause_with_bank(index.index(), &packed_candidate, bank)
 }
 
+/// Returns the first clause that subsumes `sub_candidate`, selecting the
+/// FV-indexed or plain path from the index owned by `set`.
+#[must_use]
+pub fn clause_set_subsumes_clause_owned<'set>(
+    set: &'set ClauseSet,
+    sub_candidate: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    clause_set_subsumes_clause_with_index(set, set.fv_anchor(), sub_candidate, bank)
+}
+
+/// Bank-aware set-owned FV-index/plain subsumer lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_subsumes_clause_owned_with_bank<'set>(
+    set: &'set ClauseSet,
+    sub_candidate: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    clause_set_subsumes_clause_with_index_and_bank(set, set.fv_anchor(), sub_candidate, bank)
+}
+
 /// Pushes every clause subsumed by `subsumer`, using `index` when one is
 /// available and otherwise scanning `set`.
 ///
 /// Returns the number of newly pushed clauses, matching the
-/// `ClauseSetFindSubsumedClauses` stack delta. Until `ClauseSet` owns index
-/// lifecycle, callers must pass an anchor that reflects the same set contents.
+/// `ClauseSetFindSubsumedClauses` stack delta. This lower-level surface accepts
+/// a separately owned anchor for tests and interop; production clause-set
+/// callers should use the set-owned wrapper.
 ///
 /// # Panics
 ///
@@ -1167,11 +1193,42 @@ pub fn clause_set_find_subsumed_clauses_with_index_and_bank<'set>(
     fv_index_find_subsumed_clauses_with_bank(index.index(), &packed_subsumer, result, bank)
 }
 
+/// Pushes every clause owned by `set` that is subsumed by `subsumer`, selecting
+/// the indexed or plain path from the set's owned FV anchor.
+pub fn clause_set_find_subsumed_clauses_owned<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &TermBank,
+) -> i64 {
+    clause_set_find_subsumed_clauses_with_index(set, set.fv_anchor(), subsumer, result, bank)
+}
+
+/// Bank-aware set-owned FV-index/plain lookup of all subsumed clauses.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_find_subsumed_clauses_owned_with_bank<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    clause_set_find_subsumed_clauses_with_index_and_bank(
+        set,
+        set.fv_anchor(),
+        subsumer,
+        result,
+        bank,
+    )
+}
+
 /// Returns the first clause subsumed by `subsumer`, using `index` when one is
 /// available and otherwise scanning `set`.
 ///
-/// Until `ClauseSet` owns index lifecycle, callers must pass an anchor that
-/// reflects the same set contents.
+/// This lower-level surface accepts a separately owned anchor for tests and
+/// interop; production clause-set callers should use the set-owned wrapper.
 ///
 /// # Panics
 ///
@@ -1215,6 +1272,30 @@ pub fn clause_set_find_first_subsumed_clause_with_index_and_bank<'set>(
     fv_index_find_first_subsumed_clause_with_bank(index.index(), &packed_subsumer, bank)
 }
 
+/// Returns the first clause owned by `set` that is subsumed by `subsumer`,
+/// selecting the indexed or plain path from the set's owned FV anchor.
+#[must_use]
+pub fn clause_set_find_first_subsumed_clause_owned<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    clause_set_find_first_subsumed_clause_with_index(set, set.fv_anchor(), subsumer, bank)
+}
+
+/// Bank-aware set-owned FV-index/plain lookup of the first subsumed clause.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+pub fn clause_set_find_first_subsumed_clause_owned_with_bank<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    clause_set_find_first_subsumed_clause_with_index_and_bank(set, set.fv_anchor(), subsumer, bank)
+}
+
 /// Returns the first indexed clause that is a variant of `clause`.
 ///
 /// This is the packed-query wrapper for C's `ClauseSetFindVariantClause`; the C
@@ -1246,6 +1327,44 @@ pub fn clause_set_find_variant_clause_indexed_with_bank<'index>(
 ) -> Result<Option<&'index Clause>, Diagnostic> {
     let packed_clause = fv_index_pack_clause(clause.clone(), Some(index));
     fv_index_find_variant_clause_with_bank(index.index(), &packed_clause, bank)
+}
+
+/// Returns the first indexed clause owned by `set` that is a variant of
+/// `clause`.
+///
+/// # Panics
+///
+/// Panics if `set` has no FV anchor, matching C `ClauseSetFindVariantClause`.
+#[must_use]
+pub fn clause_set_find_variant_clause_owned<'set>(
+    set: &'set ClauseSet,
+    clause: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    let index = set
+        .fv_anchor()
+        .expect("variant lookup requires an FV-indexed clause set");
+    clause_set_find_variant_clause_indexed(index, clause, bank)
+}
+
+/// Bank-aware set-owned indexed variant lookup.
+///
+/// # Errors
+///
+/// Returns diagnostics from higher-order matching or normalization.
+///
+/// # Panics
+///
+/// Panics if `set` has no FV anchor, matching C `ClauseSetFindVariantClause`.
+pub fn clause_set_find_variant_clause_owned_with_bank<'set>(
+    set: &'set ClauseSet,
+    clause: &Clause,
+    bank: &mut TermBank,
+) -> Result<Option<&'set Clause>, Diagnostic> {
+    let index = set
+        .fv_anchor()
+        .expect("variant lookup requires an FV-indexed clause set");
+    clause_set_find_variant_clause_indexed_with_bank(index, clause, bank)
 }
 
 /// Returns the first indexed clause that subsumes `sub_candidate`.
@@ -2243,6 +2362,7 @@ mod tests {
         clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
         clause_set_find_subsumed_clauses_with_index, clause_set_find_unit_subsumed_clause,
         clause_set_find_variant_clause_indexed, clause_set_subsumes_clause,
+        clause_set_subsumes_clause_owned, clause_set_subsumes_clause_owned_with_bank,
         clause_set_subsumes_clause_with_index, clause_set_subsumes_clause_with_index_and_bank,
         clause_subsume_order_sort_lits, clause_subsumes_clause, clause_subsumes_clause_with_bank,
         eqn_subsumes_termpair, eqn_topsubsumes_termpair, eqn_topsubsumes_termpair_with_bank,
@@ -2781,6 +2901,39 @@ mod tests {
             .map(Clause::ident),
             Some(indexed_id)
         );
+    }
+
+    #[test]
+    fn set_owned_fv_index_drives_lookup_and_tracks_extraction() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let expected = typed_const(&mut bank, "owned_index_expected");
+        let witness = typed_const(&mut bank, "owned_index_witness");
+        let mut indexed = clause_from(vec![literal(&mut bank, &variable, &expected, true)]);
+        let mut candidate = clause_from(vec![literal(&mut bank, &witness, &expected, true)]);
+        prepare(&mut indexed, &bank);
+        prepare(&mut candidate, &bank);
+        let indexed_id = indexed.ident();
+        let mut set = ClauseSet::new();
+        set.set_fv_anchor(Some(ac_anchor_for_bank(&bank)));
+        set.indexed_insert_clause_owned(indexed, &bank);
+
+        assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 1);
+        assert_eq!(
+            clause_set_subsumes_clause_owned(&set, &candidate, &bank).map(Clause::ident),
+            Some(indexed_id)
+        );
+        assert_eq!(
+            clause_set_subsumes_clause_owned_with_bank(&set, &candidate, &mut bank)
+                .unwrap()
+                .map(Clause::ident),
+            Some(indexed_id)
+        );
+
+        let extracted = set.extract_by_id(indexed_id).expect("indexed clause");
+        assert_eq!(extracted.ident(), indexed_id);
+        assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 0);
+        assert!(clause_set_subsumes_clause_owned(&set, &candidate, &bank).is_none());
     }
 
     #[test]
