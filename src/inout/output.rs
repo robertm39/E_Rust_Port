@@ -299,6 +299,8 @@ mod tests {
         reset_output_for_tests, set_output_level, OutputDestination, STDOUT_FILENO_COMPAT,
         UNKNOWN_FILENO_COMPAT,
     };
+    #[cfg(any(unix, all(windows, any(target_env = "msvc", target_env = "gnu"))))]
+    use crate::basics::defines::write_str_to_fd;
     use crate::basics::error::ErrorCode;
     use crate::test_support::global_state_lock;
     use std::io::Write;
@@ -390,6 +392,23 @@ mod tests {
         assert_ne!(fd, UNKNOWN_FILENO_COMPAT);
         #[cfg(not(any(unix, all(windows, any(target_env = "msvc", target_env = "gnu")))))]
         assert_eq!(fd, UNKNOWN_FILENO_COMPAT);
+    }
+
+    #[cfg(any(unix, all(windows, any(target_env = "msvc", target_env = "gnu"))))]
+    #[test]
+    fn global_output_file_fd_writes_to_the_owned_target() {
+        let _guard = global_state_lock();
+        reset_output_for_tests();
+        let path = temp_path("global-fd-write");
+
+        open_global_out(Some(&path)).unwrap();
+        let fd = global_out_fd();
+        assert_eq!(write_str_to_fd(fd, "raw-"), 4);
+        assert!(outprint_global(1, "owned").unwrap());
+        close_global_out().unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"raw-owned");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

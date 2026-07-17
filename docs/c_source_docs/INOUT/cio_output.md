@@ -90,8 +90,9 @@ Source files reviewed: `INOUT/cio_output.h`, `INOUT/cio_output.c`.
 ### Rust Port Status Notes
 
 - `src/inout/output.rs` ports the process-global output level, stdout/file output destination handling, `OutOpen`/`OutClose`-style open and flush behavior, `OpenGlobalOut`/`CloseGlobalOut`-style global target switching, raw `GlobalOutFD` compatibility values for supported platforms, `OUTPRINT`-style level gating, and `PrintDashedStatuses` formatting.
-- The native Windows file-descriptor compatibility path uses a narrowly scoped external-DLL boundary to duplicate an owned file handle into a C-runtime descriptor while keeping close ownership explicit, using UCRT on MSVC and MSVCRT on GNU/MinGW.
-- Tests cover output-level gating, `-` as stdout, file writes and diagnostics, global output reset, supported-platform descriptor values, and all dashed-status cases.
+- Unix exposes the owned file's native descriptor directly. The native Windows path uses a narrowly scoped external-DLL boundary to duplicate the owned file handle into a C-runtime descriptor while keeping close ownership explicit, using UCRT on MSVC and MSVCRT on GNU/MinGW. The descriptor and Rust file handle share the target position, while their close ownership remains independent.
+- `STDOUT_FILENO` remains exactly `1`. Non-Unix targets without the MSVC or GNU/MinGW C-runtime ABI retain an explicit `-1` sentinel rather than exposing a handle with the wrong descriptor ABI; they are outside the Linux-reference/native-Windows deployment contract and their low-level `WriteStr` fallback reports failure.
+- Tests cover output-level gating, `-` as stdout, file writes and diagnostics, global output reset, supported-platform descriptor values, a real direct raw-descriptor write followed by an owned-target write, and all dashed-status cases.
 
 ### Change Later
 
