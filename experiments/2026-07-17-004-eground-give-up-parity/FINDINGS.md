@@ -41,8 +41,10 @@ unconstrained case. Both are exact against archived upstream commit
 
 `.artifacts/e-compare/20260717-015547-388865-tools/`
 
-It has four remaining diagnostic-only mismatches; both give-up cases, the
-DIMACS split-output case, and all explicit propositional output routes match.
+Both give-up cases, the DIMACS split-output case, and all explicit
+propositional output routes match. The subsequent diagnostic-parity report at
+`.artifacts/e-compare/20260717-021359-566837-tools/` closes all 22 cases at zero
+mismatches and zero expected differences.
 
 ## Validation
 

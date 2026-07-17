@@ -217,6 +217,7 @@ pub struct FormulaSetCnfResult {
     pub cnf_formulas_archived: i64,
     pub term_garbage_collections: i64,
     pub terms_recovered_by_gc: i64,
+    pub term_gc_recoveries: Vec<i64>,
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
     pub formulas_lets_lifted: i64,
@@ -268,6 +269,8 @@ impl FormulaSetCnfResult {
         self.formulas_simplified += result.formulas_changed;
         self.term_garbage_collections += result.term_garbage_collections;
         self.terms_recovered_by_gc += result.terms_recovered_by_gc;
+        self.term_gc_recoveries
+            .extend(result.term_gc_recoveries.iter().copied());
         self.formula_derivation_ops
             .extend(result.formula_derivation_ops.iter().copied());
     }
@@ -1109,6 +1112,7 @@ fn collect_formula_set_cnf_garbage(
     let recovered = gc_context.collect(bank, set, Some(archive), Some(clauseset));
     result.term_garbage_collections += 1;
     result.terms_recovered_by_gc += recovered;
+    result.term_gc_recoveries.push(recovered);
 }
 
 fn collect_formula_set_simplify_garbage(
@@ -1122,6 +1126,7 @@ fn collect_formula_set_simplify_garbage(
     let recovered = gc_context.collect(bank, set, archive, clauses);
     result.term_garbage_collections += 1;
     result.terms_recovered_by_gc += recovered;
+    result.term_gc_recoveries.push(recovered);
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1129,6 +1134,7 @@ pub struct FormulaSetSimplifyResult {
     pub formulas_changed: i64,
     pub term_garbage_collections: i64,
     pub terms_recovered_by_gc: i64,
+    pub term_gc_recoveries: Vec<i64>,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -4275,6 +4281,9 @@ impl FormulaSet {
         result.term_garbage_collections += simplify_result.term_garbage_collections;
         result.terms_recovered_by_gc += simplify_result.terms_recovered_by_gc;
         result
+            .term_gc_recoveries
+            .extend(simplify_result.term_gc_recoveries);
+        result
             .formula_derivation_ops
             .extend(simplify_result.formula_derivation_ops);
 
@@ -6252,6 +6261,14 @@ mod tests {
         assert_eq!(result.formulas_changed, 1);
         assert!(result.term_garbage_collections >= 1);
         assert!(result.terms_recovered_by_gc >= 1);
+        assert_eq!(
+            usize::try_from(result.term_garbage_collections).unwrap(),
+            result.term_gc_recoveries.len()
+        );
+        assert_eq!(
+            result.term_gc_recoveries.iter().sum::<i64>(),
+            result.terms_recovered_by_gc
+        );
         assert!(bank.find(&dropped).is_none());
         let simplified = set.iter().next().unwrap().formula().clone();
         assert_eq!(simplified.f_code(), neqn_code);
@@ -9047,6 +9064,14 @@ mod tests {
         assert!(set.is_empty());
         assert!(result.term_garbage_collections >= 1);
         assert!(result.terms_recovered_by_gc >= 1);
+        assert_eq!(
+            usize::try_from(result.term_garbage_collections).unwrap(),
+            result.term_gc_recoveries.len()
+        );
+        assert_eq!(
+            result.term_gc_recoveries.iter().sum::<i64>(),
+            result.terms_recovered_by_gc
+        );
         assert!(bank.find(&dropped).is_none());
         assert!(bank.find(&archive_root).is_some());
         assert!(bank.find(&clause_root).is_some());

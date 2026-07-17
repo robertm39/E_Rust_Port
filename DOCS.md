@@ -38,6 +38,8 @@ The 2026-07-17 `ccl_propclauses` routing audit extends the permanent `eground` m
 
 The paired 2026-07-17 `ccl_grounding` audit records C's unconstrained `--give-up` bug: the constant count is assigned to `bool tmp`, so positive thresholds see `1^vars`; constrained grounding keeps a real estimate. Rust preserves both executable behaviors behind explicit outcomes, with exact archived-C cases for the inert and stopping branches.
 
+The 2026-07-17 eground diagnostic audit closes the permanent 22-case executable matrix at zero mismatches. Rust now uses C's `<stdin>` scanner source, `stat`-before-open file diagnostics, `Opened`/`Closing` scanner lifecycle, and ordered recovery counts from the real formula-CNF term-bank sweeps; no diagnostic-only garbage collections are introduced.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

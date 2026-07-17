@@ -38,6 +38,13 @@ error suffix on file failures.
 
 ## Verbose progress timing
 
+> 2026-07-17 correction: the archived optimized C executable emits scanner
+> `Opened`/`Closing` messages, not the lower-level `Input is coming`/`Closing
+> input` pair recorded from the earlier native-only approximation. It also
+> reports both real formula-CNF term-bank sweeps. The exact sequence and
+> zero-mismatch 22-case report are recorded in
+> `experiments/2026-07-17-005-eground-diagnostic-parity/FINDINGS.md`.
+
 C changes `Verbose` while processing options, before resource setup and
 `OpenGlobalOut`. Its successful stdin conjecture path emits, in order:
 
@@ -53,8 +60,8 @@ eground: Closing output
 Rust now preserves this timing. Named inputs also retain the level-2 `Trying
 file` message before opening and the level-1 `Input file is` message only after
 a successful open. Parser failures do not fabricate C's later close message.
-The permanent verbose case pins the exact stderr above beside `% Success!` on
-stdout.
+The permanent case was corrected by the later archived-C comparison cited
+above; `% Success!` remains the exact stdout.
 
 `--memory-limit=Auto` is likewise option-order sensitive. At verbose level one,
 Rust prints the detected physical MB followed by the converted byte limit with

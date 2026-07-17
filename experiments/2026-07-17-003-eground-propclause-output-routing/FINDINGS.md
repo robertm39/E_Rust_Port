@@ -36,11 +36,10 @@ exit status, stdout, and stderr. The fresh report is:
 
 `.artifacts/e-compare/20260717-014049-604631-tools/`
 
-The later 22-case matrix still reports four `eground` diagnostic mismatches
-outside this output-routing task: verbose GC/input wording, two stdin diagnostic
-source labels, and named missing-input wording. The earlier `--give-up=1`
-difference was resolved after runtime inspection exposed C's `bool tmp`
-truncation; none of the four routing cases mismatches.
+The later report at `.artifacts/e-compare/20260717-021359-566837-tools/`
+closes the full 22-case `eground` matrix at zero mismatches and zero expected
+differences. The earlier `--give-up=1` and diagnostic differences were resolved
+in subsequent slices; none of those changes regressed the four routing cases.
 
 ## Validation
 

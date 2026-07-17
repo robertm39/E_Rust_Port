@@ -26,6 +26,7 @@ use crate::heuristics::clausesetfeatures::{
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
+use crate::inout::fileops::input_open;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
@@ -735,6 +736,8 @@ fn parse_input_files_to_formula_set_with_progress(
         if file != "-" {
             write_verbose_arg_progress(stderr, "Input file is ", file)?;
         }
+        let source_label = input_source_label(file);
+        write_verbose_arg_progress(stderr, "Opened ", source_label)?;
         let parsed = parse_clause_scanner_into_formula_set_with_options(
             &mut scanner,
             config.parse_format,
@@ -745,7 +748,7 @@ fn parse_input_files_to_formula_set_with_progress(
             &mut ignored_watchlist,
         )?;
         scanner.check_tok(TokenType::NO_TOKEN)?;
-        write_verbose_progress(stderr, "Closing input\n")?;
+        write_verbose_arg_progress(stderr, "Closing ", source_label)?;
         if config.parse_format == IoFormat::Auto && parsed.detected_format == IoFormat::Tstp {
             output_format = IoFormat::Tstp;
         }
@@ -793,6 +796,7 @@ fn clausify_input_formulas_with_progress(
     let options = FormulaSetCnfOptions::new(EGROUND_CNF_MINISCOPE_LIMIT, true, problem_type)
         .with_def_limit(config.formula_def_limit);
     let cnf = formulas.cnf2_into(&mut archive, clauses, bank, &fresh_vars, options)?;
+    write_term_gc_progress(stderr, &cnf.term_gc_recoveries)?;
     if cnf.clauses_generated != 0 {
         write_verbose_progress(stderr, "CNFization done\n")?;
     }
@@ -1067,9 +1071,25 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        Scanner::from_file_content("-", data, false)
+        Scanner::from_file_content("<stdin>", data, false)
     } else {
-        Scanner::from_file(Path::new(name), false).map_err(eground_scanner_open_diagnostic)
+        let path = Path::new(name);
+        let mut source = input_open(Some(path), true)
+            .map_err(eground_scanner_open_diagnostic)?
+            .ok_or_else(|| io_diagnostic(format!("Cannot open file {name} for reading")))?;
+        let mut data = Vec::new();
+        source.read_to_end(&mut data).map_err(|error| {
+            eground_sys_error_diagnostic(format!("Cannot read file {name}"), &error)
+        })?;
+        Scanner::from_file_content(name, data, false)
+    }
+}
+
+fn input_source_label(name: &str) -> &str {
+    if name == "-" {
+        "<stdin>"
+    } else {
+        name
     }
 }
 
@@ -1159,12 +1179,28 @@ fn write_output_open_progress(
 
 fn write_input_open_progress(file: &str, stderr: &mut impl Write) -> Result<(), Diagnostic> {
     if file == "-" {
-        write_verbose_progress(stderr, "Input is coming from <stdin>\n")
+        Ok(())
     } else {
         verbout_arg2(stderr, PROGRAM_NAME, "Trying file ", file)
             .map(|_| ())
             .map_err(|error| verbose_io_diagnostic(&error))
     }
+}
+
+fn write_term_gc_progress(
+    stderr: &mut impl Write,
+    term_gc_recoveries: &[i64],
+) -> Result<(), Diagnostic> {
+    for recovered in term_gc_recoveries {
+        write_verbose_progress(stderr, "Garbage collection started.\n")?;
+        if verbose_level() > 0 {
+            writeln_diag(
+                stderr,
+                &format!("Garbage collection reclaimed {recovered} unused term cells."),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn write_verbose_progress(stderr: &mut impl Write, message: &str) -> Result<(), Diagnostic> {
@@ -1293,7 +1329,10 @@ fn eground_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) ->
 }
 
 fn eground_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -1483,7 +1522,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "-:1:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
+            "<stdin>:1:(Column 7):(just read '.'): Closing bracket (')') expected, but Fullstop ('.') read "
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -1507,7 +1546,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "-:1:(Column 7):(just read ','): No token (probably EOF) expected, but Comma (',') read "
+            "<stdin>:1:(Column 7):(just read ','): No token (probably EOF) expected, but Comma (',') read "
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -1539,12 +1578,58 @@ mod tests {
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             "eground: Output is going to <stdout>\n\
-             eground: Input is coming from <stdin>\n\
-             eground: Closing input\n\
+             eground: Opened <stdin>\n\
+             eground: Closing <stdin>\n\
              eground: Negated conjectures.\n\
+             eground: Garbage collection started.\n\
+             Garbage collection reclaimed 2 unused term cells.\n\
+             eground: Garbage collection started.\n\
+             Garbage collection reclaimed 2 unused term cells.\n\
              eground: CNFization done\n\
              eground: Closing output\n"
         );
+    }
+
+    #[test]
+    fn verbose_named_input_preserves_c_scanner_lifecycle() {
+        let _guard = global_state_lock();
+        let input_path = temp_path("eground-verbose-input");
+        fs::write(&input_path, "p(a).\n").unwrap();
+        let input_name = input_path.to_str().unwrap();
+        let mut stdin: &[u8] = b"";
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--lop-in",
+                "--verbose=1",
+                "--silent",
+                "--suppress-result",
+                input_name,
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("verbose named-input run succeeds");
+
+        assert_eq!(status, 0);
+        assert_eq!(String::from_utf8(stdout).unwrap(), "% Success!\n");
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!(
+                "eground: Output is going to <stdout>\n\
+                 eground: Input file is {input_name}\n\
+                 eground: Opened {input_name}\n\
+                 eground: Closing {input_name}\n\
+                 eground: CNFization done\n\
+                 eground: Closing output\n"
+            )
+        );
+
+        fs::remove_file(input_path).unwrap();
     }
 
     #[test]
@@ -2196,10 +2281,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -2230,10 +2314,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(fs::read_to_string(&output_path).unwrap(), "");
         assert!(stdout.is_empty());
