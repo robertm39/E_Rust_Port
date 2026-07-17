@@ -32,7 +32,6 @@ use crate::clauses::derivation::{
     DC_VAR_RENAME,
 };
 use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
-use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::inferencedoc::{
     FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationInference,
     ProofDocSession, ProofDocWriteResult,
@@ -65,6 +64,40 @@ static FORMULA_IDENT_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
 const TFORMULA_GC_LIMIT_NUMERATOR: i64 = 3;
 const TFORMULA_GC_LIMIT_DENOMINATOR: i64 = 2;
 const MAX_DEF_SYMBOL_REWRITE_STEPS: i32 = 500;
+
+pub(crate) trait FormulaSetGcContext {
+    fn collect(
+        &self,
+        bank: &mut TermBank,
+        active: &FormulaSet,
+        archive: Option<&FormulaSet>,
+        clauses: Option<&ClauseSet>,
+    ) -> i64;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LocalFormulaSetGcContext;
+
+impl FormulaSetGcContext for LocalFormulaSetGcContext {
+    fn collect(
+        &self,
+        bank: &mut TermBank,
+        active: &FormulaSet,
+        archive: Option<&FormulaSet>,
+        clauses: Option<&ClauseSet>,
+    ) -> i64 {
+        if let Some(clauses) = clauses {
+            for clause in clauses.iter() {
+                clause.gc_mark_terms(bank);
+            }
+        }
+        active.gc_mark_cells(bank);
+        if let Some(archive) = archive {
+            archive.gc_mark_cells(bank);
+        }
+        bank.gc_sweep()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormulaPrintFormat {
@@ -940,6 +973,7 @@ struct FormulaSetCnfDrain<'a> {
     old_nodes: &'a mut i64,
     gc_threshold: &'a mut i64,
     result: &'a mut FormulaSetCnfResult,
+    gc_context: &'a dyn FormulaSetGcContext,
 }
 
 struct FormulaSetCnfDocDrain<'a, W: fmt::Write> {
@@ -954,6 +988,7 @@ struct FormulaSetCnfDocDrain<'a, W: fmt::Write> {
     session: &'a mut ProofDocSession,
     render_options: FormulaProofDocRenderOptions,
     result: &'a mut FormulaSetCnfDocResult,
+    gc_context: &'a dyn FormulaSetGcContext,
 }
 
 fn drain_formula_set_to_cnf(
@@ -996,6 +1031,7 @@ fn drain_formula_set_to_cnf(
                 drain.archive,
                 drain.clauseset,
                 drain.result,
+                drain.gc_context,
             );
             *drain.old_nodes = drain.bank.non_var_term_nodes();
             *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
@@ -1050,6 +1086,7 @@ fn drain_formula_set_to_cnf_with_docs<W: fmt::Write>(
                 drain.archive,
                 drain.clauseset,
                 &mut drain.result.cnf,
+                drain.gc_context,
             );
             *drain.old_nodes = drain.bank.non_var_term_nodes();
             *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
@@ -1067,8 +1104,9 @@ fn collect_formula_set_cnf_garbage(
     archive: &FormulaSet,
     clauseset: &ClauseSet,
     result: &mut FormulaSetCnfResult,
+    gc_context: &dyn FormulaSetGcContext,
 ) {
-    let recovered = tb_gc_collect(bank, &[clauseset], &[set, archive]);
+    let recovered = gc_context.collect(bank, set, Some(archive), Some(clauseset));
     result.term_garbage_collections += 1;
     result.terms_recovered_by_gc += recovered;
 }
@@ -1076,14 +1114,12 @@ fn collect_formula_set_cnf_garbage(
 fn collect_formula_set_simplify_garbage(
     bank: &mut TermBank,
     set: &FormulaSet,
-    clause_roots: &[&ClauseSet],
-    formula_roots: &[&FormulaSet],
+    archive: Option<&FormulaSet>,
+    clauses: Option<&ClauseSet>,
     result: &mut FormulaSetSimplifyResult,
+    gc_context: &dyn FormulaSetGcContext,
 ) {
-    let mut all_formula_roots = Vec::with_capacity(formula_roots.len() + 1);
-    all_formula_roots.push(set);
-    all_formula_roots.extend_from_slice(formula_roots);
-    let recovered = tb_gc_collect(bank, clause_roots, &all_formula_roots);
+    let recovered = gc_context.collect(bank, set, archive, clauses);
     result.term_garbage_collections += 1;
     result.terms_recovered_by_gc += recovered;
 }
@@ -3107,15 +3143,22 @@ impl FormulaSet {
         bank: &mut TermBank,
         do_garbage_collect: bool,
     ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
-        self.simplify_with_garbage_collection_roots(bank, do_garbage_collect, &[], &[])
+        self.simplify_with_garbage_collection_context(
+            bank,
+            do_garbage_collect,
+            None,
+            None,
+            &LocalFormulaSetGcContext,
+        )
     }
 
-    fn simplify_with_garbage_collection_roots(
+    fn simplify_with_garbage_collection_context(
         &mut self,
         bank: &mut TermBank,
         do_garbage_collect: bool,
-        clause_roots: &[&ClauseSet],
-        formula_roots: &[&FormulaSet],
+        archive: Option<&FormulaSet>,
+        clauses: Option<&ClauseSet>,
+        gc_context: &dyn FormulaSetGcContext,
     ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
         let mut result = FormulaSetSimplifyResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
@@ -3134,9 +3177,10 @@ impl FormulaSet {
                     collect_formula_set_simplify_garbage(
                         bank,
                         self,
-                        clause_roots,
-                        formula_roots,
+                        archive,
+                        clauses,
                         &mut result,
+                        gc_context,
                     );
                     old_nodes = bank.non_var_term_nodes();
                     gc_threshold = formula_set_gc_threshold(old_nodes);
@@ -3149,9 +3193,10 @@ impl FormulaSet {
             collect_formula_set_simplify_garbage(
                 bank,
                 self,
-                clause_roots,
-                formula_roots,
+                archive,
+                clauses,
                 &mut result,
+                gc_context,
             );
         }
         Ok(result)
@@ -3182,23 +3227,24 @@ impl FormulaSet {
         problem_type: ProblemType,
         do_garbage_collect: bool,
     ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
-        self.simplify_with_garbage_collection_and_docs_roots(
+        self.simplify_with_garbage_collection_and_docs_context(
             output,
             bank,
             session,
             full_terms,
             problem_type,
             do_garbage_collect,
-            &[],
-            &[],
+            None,
+            None,
+            &LocalFormulaSetGcContext,
         )
     }
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "C-compatible formula simplification keeps proof-document and GC-root contexts explicit"
+        reason = "C-compatible formula simplification keeps proof-document and GC contexts explicit"
     )]
-    fn simplify_with_garbage_collection_and_docs_roots<W: fmt::Write>(
+    fn simplify_with_garbage_collection_and_docs_context<W: fmt::Write>(
         &mut self,
         output: &mut W,
         bank: &mut TermBank,
@@ -3206,8 +3252,9 @@ impl FormulaSet {
         full_terms: bool,
         problem_type: ProblemType,
         do_garbage_collect: bool,
-        clause_roots: &[&ClauseSet],
-        formula_roots: &[&FormulaSet],
+        archive: Option<&FormulaSet>,
+        clauses: Option<&ClauseSet>,
+        gc_context: &dyn FormulaSetGcContext,
     ) -> Result<FormulaSetSimplifyDocResult, Diagnostic> {
         let mut result = FormulaSetSimplifyDocResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
@@ -3246,9 +3293,10 @@ impl FormulaSet {
                     collect_formula_set_simplify_garbage(
                         bank,
                         self,
-                        clause_roots,
-                        formula_roots,
+                        archive,
+                        clauses,
                         &mut result.simplify,
+                        gc_context,
                     );
                     old_nodes = bank.non_var_term_nodes();
                     gc_threshold = formula_set_gc_threshold(old_nodes);
@@ -3261,9 +3309,10 @@ impl FormulaSet {
             collect_formula_set_simplify_garbage(
                 bank,
                 self,
-                clause_roots,
-                formula_roots,
+                archive,
+                clauses,
                 &mut result.simplify,
+                gc_context,
             );
         }
         Ok(result)
@@ -4114,9 +4163,10 @@ impl FormulaSet {
     /// preprocessing, optional set-level FOOL unrolling, formula
     /// simplification, definition introduction, then the archive/copy/CNF
     /// drain loop, and optional post-CNF clause lambda lifting. Higher-order
-    /// formula-set lift-lambda preprocessing, proof-document output, and some
-    /// term-bank GC side effects from full `FormulaSetCNF2` are still
-    /// deferred.
+    /// formula-set lift-lambda preprocessing and proof-document output are
+    /// still deferred. Standalone calls collect through the active formula
+    /// set, its archive, and the generated clause set; proof-state callers can
+    /// supply their typed registered-owner context.
     ///
     /// # Errors
     ///
@@ -4134,6 +4184,29 @@ impl FormulaSet {
         bank: &mut TermBank,
         fresh_vars: &VarBank,
         options: FormulaSetCnfOptions,
+    ) -> Result<FormulaSetCnfResult, Diagnostic> {
+        self.cnf2_into_with_gc_context(
+            archive,
+            clauseset,
+            bank,
+            fresh_vars,
+            options,
+            &LocalFormulaSetGcContext,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "C FormulaSetCNF2 phase ordering remains visible in one compatibility routine"
+    )]
+    pub(crate) fn cnf2_into_with_gc_context(
+        &mut self,
+        archive: &mut Self,
+        clauseset: &mut ClauseSet,
+        bank: &mut TermBank,
+        fresh_vars: &VarBank,
+        options: FormulaSetCnfOptions,
+        gc_context: &dyn FormulaSetGcContext,
     ) -> Result<FormulaSetCnfResult, Diagnostic> {
         let mut result = FormulaSetCnfResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
@@ -4191,8 +4264,13 @@ impl FormulaSet {
                 .extend(unroll_result.formula_derivation_ops);
         }
 
-        let simplify_result =
-            self.simplify_with_garbage_collection_roots(bank, true, &[&*clauseset], &[&*archive])?;
+        let simplify_result = self.simplify_with_garbage_collection_context(
+            bank,
+            true,
+            Some(&*archive),
+            Some(&*clauseset),
+            gc_context,
+        )?;
         result.formulas_simplified = simplify_result.formulas_changed;
         result.term_garbage_collections += simplify_result.term_garbage_collections;
         result.terms_recovered_by_gc += simplify_result.terms_recovered_by_gc;
@@ -4221,6 +4299,7 @@ impl FormulaSet {
                 old_nodes: &mut old_nodes,
                 gc_threshold: &mut gc_threshold,
                 result: &mut result,
+                gc_context,
             },
         )?;
 
@@ -4236,7 +4315,14 @@ impl FormulaSet {
         }
 
         if bank.non_var_term_nodes() != old_nodes {
-            collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
+            collect_formula_set_cnf_garbage(
+                bank,
+                self,
+                archive,
+                clauseset,
+                &mut result,
+                gc_context,
+            );
         }
 
         Ok(result)
@@ -4268,6 +4354,31 @@ impl FormulaSet {
         bank: &mut TermBank,
         fresh_vars: &VarBank,
         options: FormulaSetCnfOptions,
+    ) -> Result<FormulaSetCnfDocResult, Diagnostic> {
+        self.cnf2_into_with_docs_and_gc_context(
+            doc,
+            archive,
+            clauseset,
+            bank,
+            fresh_vars,
+            options,
+            &LocalFormulaSetGcContext,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible formula CNF keeps proof-document and GC contexts explicit"
+    )]
+    pub(crate) fn cnf2_into_with_docs_and_gc_context<W: fmt::Write>(
+        &mut self,
+        doc: &mut WrappedFormulaCnfDocContext<'_, W>,
+        archive: &mut Self,
+        clauseset: &mut ClauseSet,
+        bank: &mut TermBank,
+        fresh_vars: &VarBank,
+        options: FormulaSetCnfOptions,
+        gc_context: &dyn FormulaSetGcContext,
     ) -> Result<FormulaSetCnfDocResult, Diagnostic> {
         let mut result = FormulaSetCnfDocResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
@@ -4313,15 +4424,16 @@ impl FormulaSet {
             result.cnf.add_fool_unroll(&unroll_result);
         }
 
-        let simplify_result = self.simplify_with_garbage_collection_and_docs_roots(
+        let simplify_result = self.simplify_with_garbage_collection_and_docs_context(
             &mut *doc.output,
             bank,
             &mut *doc.session,
             doc.render_options.full_terms,
             doc.render_options.problem_type,
             true,
-            &[&*clauseset],
-            &[&*archive],
+            Some(&*archive),
+            Some(&*clauseset),
+            gc_context,
         )?;
         result.add_simplify_doc(simplify_result);
 
@@ -4349,6 +4461,7 @@ impl FormulaSet {
                 session: &mut *doc.session,
                 render_options: doc.render_options,
                 result: &mut result,
+                gc_context,
             },
         )?;
 
@@ -4364,7 +4477,14 @@ impl FormulaSet {
         }
 
         if bank.non_var_term_nodes() != old_nodes {
-            collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result.cnf);
+            collect_formula_set_cnf_garbage(
+                bank,
+                self,
+                archive,
+                clauseset,
+                &mut result.cnf,
+                gc_context,
+            );
         }
 
         Ok(result)

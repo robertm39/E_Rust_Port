@@ -7262,7 +7262,8 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
     let mut session = proof_doc_session(config, start_ident, options.problem_type)?;
     let clauses_generated = {
         let fresh_vars = state.fresh_vars().clone();
-        let (bank, clauses, formulas, archive) = state.terms_axioms_formula_sets_cnf_mut();
+        let (bank, clauses, formulas, archive, gc_context) =
+            state.terms_axioms_formula_sets_cnf_with_gc_mut();
         let render_options =
             FormulaProofDocRenderOptions::new(config.pcl_output.full_terms, options.problem_type);
         let _initial = formulas.doc_initial(
@@ -7283,13 +7284,14 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
         )?;
         let mut doc_context =
             WrappedFormulaCnfDocContext::new(&mut rendered, &mut session, render_options);
-        let cnf = formulas.cnf2_into_with_docs(
+        let cnf = formulas.cnf2_into_with_docs_and_gc_context(
             &mut doc_context,
             archive,
             clauses,
             bank,
             &fresh_vars,
             options,
+            &gc_context,
         )?;
         cnf.cnf.clauses_generated
     };
@@ -7308,7 +7310,8 @@ fn clausify_formula_axioms_silent(
 ) -> Result<FormulaCnfPreparationResult, EProverError> {
     let fresh_vars = state.fresh_vars().clone();
     let clauses_generated = {
-        let (bank, clauses, formulas, archive) = state.terms_axioms_formula_sets_cnf_mut();
+        let (bank, clauses, formulas, archive, gc_context) =
+            state.terms_axioms_formula_sets_cnf_with_gc_mut();
         let _archived = formulas.archive_into(archive);
         let _preprocessed = formulas.preproc_conjectures(
             bank,
@@ -7316,7 +7319,7 @@ fn clausify_formula_axioms_silent(
             config.flags.contains(EProverFlag::ConjecturesAreQuestions),
         )?;
         formulas
-            .cnf2_into(archive, clauses, bank, &fresh_vars, options)?
+            .cnf2_into_with_gc_context(archive, clauses, bank, &fresh_vars, options, &gc_context)?
             .clauses_generated
     };
     Ok(FormulaCnfPreparationResult {

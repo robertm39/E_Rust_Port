@@ -18,7 +18,9 @@ use crate::clauses::derivation::{
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
-use crate::clauses::formulasets::{wformula_deriv_find_first, FormulaSet, WrappedFormula};
+use crate::clauses::formulasets::{
+    wformula_deriv_find_first, FormulaSet, FormulaSetGcContext, WrappedFormula,
+};
 use crate::clauses::freqvectors::FvCollect;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::rewrite::REWRITE_UNCACHED;
@@ -40,45 +42,65 @@ use std::{
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 pub const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
 
-const GC_AXIOMS: GcSetHandle = GcSetHandle::new(1);
-const GC_AX_ARCHIVE: GcSetHandle = GcSetHandle::new(2);
-const GC_PROCESSED_POS_RULES: GcSetHandle = GcSetHandle::new(3);
-const GC_PROCESSED_POS_EQNS: GcSetHandle = GcSetHandle::new(4);
-const GC_PROCESSED_NEG_UNITS: GcSetHandle = GcSetHandle::new(5);
-const GC_PROCESSED_NON_UNITS: GcSetHandle = GcSetHandle::new(6);
-const GC_UNPROCESSED: GcSetHandle = GcSetHandle::new(7);
-const GC_TMP_STORE: GcSetHandle = GcSetHandle::new(8);
-const GC_EVAL_STORE: GcSetHandle = GcSetHandle::new(9);
-const GC_ARCHIVE: GcSetHandle = GcSetHandle::new(10);
-const GC_WATCHLIST: GcSetHandle = GcSetHandle::new(11);
-const GC_DEFINITION_STORE: GcSetHandle = GcSetHandle::new(12);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum ProofStateClauseGcRoot {
+    Axioms = 1,
+    AxiomArchive = 2,
+    ProcessedPositiveRules = 3,
+    ProcessedPositiveEquations = 4,
+    ProcessedNegativeUnits = 5,
+    ProcessedNonUnits = 6,
+    Unprocessed = 7,
+    TemporaryStore = 8,
+    EvaluationStore = 9,
+    Archive = 10,
+    Watchlist = 11,
+    DefinitionStore = 12,
+}
 
-const GC_F_AXIOMS: GcSetHandle = GcSetHandle::new(101);
-const GC_F_AX_ARCHIVE: GcSetHandle = GcSetHandle::new(102);
-const GC_DEFINITION_FORMULA_ARCHIVE: GcSetHandle = GcSetHandle::new(103);
-const GC_F_ARCHIVE: GcSetHandle = GcSetHandle::new(104);
+impl ProofStateClauseGcRoot {
+    const ALL: [Self; 12] = [
+        Self::Axioms,
+        Self::AxiomArchive,
+        Self::ProcessedPositiveRules,
+        Self::ProcessedPositiveEquations,
+        Self::ProcessedNegativeUnits,
+        Self::ProcessedNonUnits,
+        Self::Unprocessed,
+        Self::TemporaryStore,
+        Self::EvaluationStore,
+        Self::Archive,
+        Self::Watchlist,
+        Self::DefinitionStore,
+    ];
 
-const PROOF_STATE_CLAUSE_GC_ROOTS: [GcSetHandle; 12] = [
-    GC_AXIOMS,
-    GC_AX_ARCHIVE,
-    GC_PROCESSED_POS_RULES,
-    GC_PROCESSED_POS_EQNS,
-    GC_PROCESSED_NEG_UNITS,
-    GC_PROCESSED_NON_UNITS,
-    GC_UNPROCESSED,
-    GC_TMP_STORE,
-    GC_EVAL_STORE,
-    GC_ARCHIVE,
-    GC_WATCHLIST,
-    GC_DEFINITION_STORE,
-];
+    const fn handle(self) -> GcSetHandle {
+        GcSetHandle::new(self as usize)
+    }
+}
 
-const PROOF_STATE_FORMULA_GC_ROOTS: [GcSetHandle; 4] = [
-    GC_F_AXIOMS,
-    GC_F_AX_ARCHIVE,
-    GC_DEFINITION_FORMULA_ARCHIVE,
-    GC_F_ARCHIVE,
-];
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum ProofStateFormulaGcRoot {
+    Axioms = 101,
+    AxiomArchive = 102,
+    DefinitionArchive = 103,
+    Archive = 104,
+}
+
+impl ProofStateFormulaGcRoot {
+    const ALL: [Self; 4] = [
+        Self::Axioms,
+        Self::AxiomArchive,
+        Self::DefinitionArchive,
+        Self::Archive,
+    ];
+
+    const fn handle(self) -> GcSetHandle {
+        GcSetHandle::new(self as usize)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WatchlistSource<'a> {
@@ -616,6 +638,138 @@ pub struct ProofState {
     answer_outputs: Vec<String>,
 }
 
+pub(crate) struct ProofStateFormulaGcContext<'a> {
+    axiom_archive: &'a ClauseSet,
+    processed_positive_rules: &'a ClauseSet,
+    processed_positive_equations: &'a ClauseSet,
+    processed_negative_units: &'a ClauseSet,
+    processed_non_units: &'a ClauseSet,
+    unprocessed: &'a ClauseSet,
+    temporary_store: &'a ClauseSet,
+    evaluation_store: &'a ClauseSet,
+    clause_archive: &'a ClauseSet,
+    watchlist: Option<&'a ClauseSet>,
+    definition_store: &'a ClauseSet,
+    definition_archive: &'a FormulaSet,
+    formula_archive: &'a FormulaSet,
+}
+
+impl ProofStateClauseGcRoot {
+    fn resolve(self, state: &ProofState) -> Option<&ClauseSet> {
+        match self {
+            Self::Axioms => Some(&state.axioms),
+            Self::AxiomArchive => Some(&state.ax_archive),
+            Self::ProcessedPositiveRules => Some(&state.processed_pos_rules),
+            Self::ProcessedPositiveEquations => Some(&state.processed_pos_eqns),
+            Self::ProcessedNegativeUnits => Some(&state.processed_neg_units),
+            Self::ProcessedNonUnits => Some(&state.processed_non_units),
+            Self::Unprocessed => Some(&state.unprocessed),
+            Self::TemporaryStore => Some(&state.tmp_store),
+            Self::EvaluationStore => Some(&state.eval_store),
+            Self::Archive => Some(&state.archive),
+            Self::Watchlist => state.watchlist.as_ref(),
+            Self::DefinitionStore => Some(&state.definition_store),
+        }
+    }
+
+    #[cfg(test)]
+    fn resolve_mut(self, state: &mut ProofState) -> Option<&mut ClauseSet> {
+        match self {
+            Self::Axioms => Some(&mut state.axioms),
+            Self::AxiomArchive => Some(&mut state.ax_archive),
+            Self::ProcessedPositiveRules => Some(&mut state.processed_pos_rules),
+            Self::ProcessedPositiveEquations => Some(&mut state.processed_pos_eqns),
+            Self::ProcessedNegativeUnits => Some(&mut state.processed_neg_units),
+            Self::ProcessedNonUnits => Some(&mut state.processed_non_units),
+            Self::Unprocessed => Some(&mut state.unprocessed),
+            Self::TemporaryStore => Some(&mut state.tmp_store),
+            Self::EvaluationStore => Some(&mut state.eval_store),
+            Self::Archive => Some(&mut state.archive),
+            Self::Watchlist => state.watchlist.as_mut(),
+            Self::DefinitionStore => Some(&mut state.definition_store),
+        }
+    }
+}
+
+impl ProofStateFormulaGcRoot {
+    fn resolve(self, state: &ProofState) -> &FormulaSet {
+        match self {
+            Self::Axioms => &state.f_axioms,
+            Self::AxiomArchive => &state.f_ax_archive,
+            Self::DefinitionArchive => &state.definition_formula_archive,
+            Self::Archive => &state.f_archive,
+        }
+    }
+
+    #[cfg(test)]
+    fn resolve_mut(self, state: &mut ProofState) -> &mut FormulaSet {
+        match self {
+            Self::Axioms => &mut state.f_axioms,
+            Self::AxiomArchive => &mut state.f_ax_archive,
+            Self::DefinitionArchive => &mut state.definition_formula_archive,
+            Self::Archive => &mut state.f_archive,
+        }
+    }
+}
+
+impl FormulaSetGcContext for ProofStateFormulaGcContext<'_> {
+    fn collect(
+        &self,
+        bank: &mut TermBank,
+        active: &FormulaSet,
+        axiom_archive: Option<&FormulaSet>,
+        axioms: Option<&ClauseSet>,
+    ) -> i64 {
+        let axioms = axioms.expect("proof-state formula GC requires the clause axiom owner");
+        let axiom_archive =
+            axiom_archive.expect("proof-state formula GC requires the formula axiom archive");
+
+        for root in ProofStateClauseGcRoot::ALL {
+            if !bank.gc().has_clause_set(root.handle()) {
+                continue;
+            }
+            let set = match root {
+                ProofStateClauseGcRoot::Axioms => Some(axioms),
+                ProofStateClauseGcRoot::AxiomArchive => Some(self.axiom_archive),
+                ProofStateClauseGcRoot::ProcessedPositiveRules => {
+                    Some(self.processed_positive_rules)
+                }
+                ProofStateClauseGcRoot::ProcessedPositiveEquations => {
+                    Some(self.processed_positive_equations)
+                }
+                ProofStateClauseGcRoot::ProcessedNegativeUnits => {
+                    Some(self.processed_negative_units)
+                }
+                ProofStateClauseGcRoot::ProcessedNonUnits => Some(self.processed_non_units),
+                ProofStateClauseGcRoot::Unprocessed => Some(self.unprocessed),
+                ProofStateClauseGcRoot::TemporaryStore => Some(self.temporary_store),
+                ProofStateClauseGcRoot::EvaluationStore => Some(self.evaluation_store),
+                ProofStateClauseGcRoot::Archive => Some(self.clause_archive),
+                ProofStateClauseGcRoot::Watchlist => self.watchlist,
+                ProofStateClauseGcRoot::DefinitionStore => Some(self.definition_store),
+            };
+            if let Some(set) = set {
+                gc_mark_clause_set_terms(set, bank);
+            }
+        }
+
+        for root in ProofStateFormulaGcRoot::ALL {
+            if !bank.gc().has_formula_set(root.handle()) {
+                continue;
+            }
+            match root {
+                ProofStateFormulaGcRoot::Axioms => active,
+                ProofStateFormulaGcRoot::AxiomArchive => axiom_archive,
+                ProofStateFormulaGcRoot::DefinitionArchive => self.definition_archive,
+                ProofStateFormulaGcRoot::Archive => self.formula_archive,
+            }
+            .gc_mark_cells(bank);
+        }
+
+        bank.gc_sweep()
+    }
+}
+
 pub type ProofStateDefinitionStoreMut<'a> = (
     &'a mut TermBank,
     &'a mut ClauseSet,
@@ -632,11 +786,11 @@ enum WatchlistActivation {
 }
 
 fn register_proof_state_gc_roots(terms: &mut TermBank) {
-    for root in PROOF_STATE_CLAUSE_GC_ROOTS {
-        terms.register_gc_clause_set(root);
+    for root in ProofStateClauseGcRoot::ALL {
+        terms.register_gc_clause_set(root.handle());
     }
-    for root in PROOF_STATE_FORMULA_GC_ROOTS {
-        terms.register_gc_formula_set(root);
+    for root in ProofStateFormulaGcRoot::ALL {
+        terms.register_gc_formula_set(root.handle());
     }
 }
 
@@ -926,6 +1080,58 @@ impl ProofState {
         (terms, axioms, f_axioms, f_ax_archive)
     }
 
+    pub(crate) fn terms_axioms_formula_sets_cnf_with_gc_mut(
+        &mut self,
+    ) -> (
+        &mut TermBank,
+        &mut ClauseSet,
+        &mut FormulaSet,
+        &mut FormulaSet,
+        ProofStateFormulaGcContext<'_>,
+    ) {
+        let Self {
+            terms,
+            axioms,
+            f_axioms,
+            f_ax_archive,
+            ax_archive,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            processed_non_units,
+            unprocessed,
+            tmp_store,
+            eval_store,
+            archive,
+            f_archive,
+            watchlist,
+            definition_store,
+            definition_formula_archive,
+            ..
+        } = self;
+        (
+            terms,
+            axioms,
+            f_axioms,
+            f_ax_archive,
+            ProofStateFormulaGcContext {
+                axiom_archive: ax_archive,
+                processed_positive_rules: processed_pos_rules,
+                processed_positive_equations: processed_pos_eqns,
+                processed_negative_units: processed_neg_units,
+                processed_non_units,
+                unprocessed,
+                temporary_store: tmp_store,
+                evaluation_store: eval_store,
+                clause_archive: archive,
+                watchlist: watchlist.as_ref(),
+                definition_store,
+                definition_archive: definition_formula_archive,
+                formula_archive: f_archive,
+            },
+        )
+    }
+
     pub fn terms_f_axioms_watchlist_mut(
         &mut self,
     ) -> (&mut TermBank, &mut FormulaSet, Option<&mut ClauseSet>) {
@@ -1209,7 +1415,8 @@ impl ProofState {
 
     pub fn discard_watchlist(&mut self) -> Option<ClauseSet> {
         self.watchlist_activation = WatchlistActivation::Inactive;
-        self.terms.deregister_gc_clause_set(GC_WATCHLIST);
+        self.terms
+            .deregister_gc_clause_set(ProofStateClauseGcRoot::Watchlist.handle());
         self.watchlist.take()
     }
 
@@ -2101,52 +2308,21 @@ impl ProofState {
     /// Marks proof-state clause terms and sweeps unreachable term-bank entries.
     ///
     /// C `TBGCCollect(state->terms)` marks registered clause/formula sets through
-    /// the term bank's GC admin. Rust stores stable handles for the represented
-    /// proof-state owners and resolves those handles to the owned sets here.
+    /// the term bank's GC admin. Rust registers typed proof-state root variants,
+    /// resolves them directly to their owner fields, and marks only variants
+    /// still present in the term bank's registry.
     pub fn collect_term_garbage(&mut self) -> i64 {
-        let clause_handles = self.terms.gc().clause_set_handles().collect::<Vec<_>>();
-        let formula_handles = self.terms.gc().formula_set_handles().collect::<Vec<_>>();
-        let clause_roots = [
-            (GC_AXIOMS, Some(&self.axioms)),
-            (GC_AX_ARCHIVE, Some(&self.ax_archive)),
-            (GC_PROCESSED_POS_RULES, Some(&self.processed_pos_rules)),
-            (GC_PROCESSED_POS_EQNS, Some(&self.processed_pos_eqns)),
-            (GC_PROCESSED_NEG_UNITS, Some(&self.processed_neg_units)),
-            (GC_PROCESSED_NON_UNITS, Some(&self.processed_non_units)),
-            (GC_UNPROCESSED, Some(&self.unprocessed)),
-            (GC_TMP_STORE, Some(&self.tmp_store)),
-            (GC_EVAL_STORE, Some(&self.eval_store)),
-            (GC_ARCHIVE, Some(&self.archive)),
-            (GC_WATCHLIST, self.watchlist.as_ref()),
-            (GC_DEFINITION_STORE, Some(&self.definition_store)),
-        ];
-        let formula_roots = [
-            (GC_F_AXIOMS, &self.f_axioms),
-            (GC_F_AX_ARCHIVE, &self.f_ax_archive),
-            (
-                GC_DEFINITION_FORMULA_ARCHIVE,
-                &self.definition_formula_archive,
-            ),
-            (GC_F_ARCHIVE, &self.f_archive),
-        ];
-
-        for handle in clause_handles {
-            for (registered, set) in &clause_roots {
-                if *registered == handle {
-                    if let Some(set) = *set {
-                        gc_mark_clause_set_terms(set, &self.terms);
-                    }
-                    break;
+        for root in ProofStateClauseGcRoot::ALL {
+            if self.terms.gc().has_clause_set(root.handle()) {
+                if let Some(set) = root.resolve(self) {
+                    gc_mark_clause_set_terms(set, &self.terms);
                 }
             }
         }
 
-        for handle in formula_handles {
-            for (registered, set) in &formula_roots {
-                if *registered == handle {
-                    (*set).gc_mark_cells(&self.terms);
-                    break;
-                }
+        for root in ProofStateFormulaGcRoot::ALL {
+            if self.terms.gc().has_formula_set(root.handle()) {
+                root.resolve(self).gc_mark_cells(&self.terms);
             }
         }
 
@@ -2818,10 +2994,8 @@ mod tests {
         derived_dot_node_colour, derived_in_proof, derived_is_eval_gc, derived_set_in_proof,
         generated_clause_statistics_count, generated_literal_statistics_count, proof_state_alloc,
         DerivedView, DerivedViewMut, ProofObjectAnalysis, ProofObjectGraph, ProofObjectGraphEdge,
-        ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, ProofStateGcAnalysis,
-        ProofStateStatistics, WatchlistSource, GC_DEFINITION_FORMULA_ARCHIVE, GC_F_ARCHIVE,
-        GC_F_AXIOMS, GC_F_AX_ARCHIVE, GC_WATCHLIST, PROOF_STATE_CLAUSE_GC_ROOTS,
-        PROOF_STATE_FORMULA_GC_ROOTS,
+        ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, ProofStateClauseGcRoot,
+        ProofStateFormulaGcRoot, ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2843,7 +3017,7 @@ mod tests {
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
-    use crate::clauses::formulasets::WrappedFormula;
+    use crate::clauses::formulasets::{FormulaSetCnfOptions, WrappedFormula};
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{WATCHLIST_INLINE_QSTRING, WATCHLIST_INLINE_STRING};
     use crate::heuristics::to_params::TermOrdering;
@@ -2880,6 +3054,14 @@ mod tests {
         term.set_type(Some(bank.signature().type_bank().default_type()));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(bank.signature().type_bank().bool_type()));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -3234,25 +3416,28 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let gc = state.terms().gc();
 
-        assert_eq!(gc.clause_set_count(), PROOF_STATE_CLAUSE_GC_ROOTS.len());
-        assert_eq!(gc.formula_set_count(), PROOF_STATE_FORMULA_GC_ROOTS.len());
-        for root in PROOF_STATE_CLAUSE_GC_ROOTS {
-            assert!(gc.has_clause_set(root));
+        assert_eq!(gc.clause_set_count(), ProofStateClauseGcRoot::ALL.len());
+        assert_eq!(gc.formula_set_count(), ProofStateFormulaGcRoot::ALL.len());
+        for root in ProofStateClauseGcRoot::ALL {
+            assert!(gc.has_clause_set(root.handle()));
         }
-        for root in PROOF_STATE_FORMULA_GC_ROOTS {
-            assert!(gc.has_formula_set(root));
+        for root in ProofStateFormulaGcRoot::ALL {
+            assert!(gc.has_formula_set(root.handle()));
         }
-        assert!(gc.has_clause_set(GC_WATCHLIST));
-        assert!(gc.has_formula_set(GC_F_AXIOMS));
-        assert!(gc.has_formula_set(GC_F_AX_ARCHIVE));
-        assert!(gc.has_formula_set(GC_DEFINITION_FORMULA_ARCHIVE));
-        assert!(gc.has_formula_set(GC_F_ARCHIVE));
+        assert!(gc.has_clause_set(ProofStateClauseGcRoot::Watchlist.handle()));
+        assert!(gc.has_formula_set(ProofStateFormulaGcRoot::Axioms.handle()));
+        assert!(gc.has_formula_set(ProofStateFormulaGcRoot::AxiomArchive.handle()));
+        assert!(gc.has_formula_set(ProofStateFormulaGcRoot::DefinitionArchive.handle()));
+        assert!(gc.has_formula_set(ProofStateFormulaGcRoot::Archive.handle()));
 
         assert!(state.discard_watchlist().is_some());
-        assert!(!state.terms().gc().has_clause_set(GC_WATCHLIST));
+        assert!(!state
+            .terms()
+            .gc()
+            .has_clause_set(ProofStateClauseGcRoot::Watchlist.handle()));
         assert_eq!(
             state.terms().gc().clause_set_count(),
-            PROOF_STATE_CLAUSE_GC_ROOTS.len() - 1
+            ProofStateClauseGcRoot::ALL.len() - 1
         );
     }
 
@@ -4399,37 +4584,84 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_collect_term_garbage_marks_registered_formula_roots() {
+    fn proof_state_collect_term_garbage_marks_every_registered_owner_root() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (formula_arg, formula_term, definition_arg, definition_term, dropped) = {
-            let bank = state.terms_mut();
-            let formula_arg = typed_const(bank, "registered_gc_formula_arg");
-            let formula_term = typed_unary(bank, "registered_gc_formula", &formula_arg);
-            let definition_arg = typed_const(bank, "registered_gc_definition_arg");
-            let definition_term =
-                typed_unary(bank, "registered_gc_definition_formula", &definition_arg);
-            let dropped = typed_const(bank, "registered_gc_dropped");
-            (
-                formula_arg,
-                formula_term,
-                definition_arg,
-                definition_term,
-                dropped,
-            )
-        };
+        let mut live_terms = Vec::new();
 
-        state
-            .f_axioms_mut()
-            .insert(WrappedFormula::wt_formula_alloc(formula_term.clone()));
-        state
-            .definition_formula_archive_mut()
-            .insert(WrappedFormula::wt_formula_alloc(definition_term.clone()));
+        for (index, root) in ProofStateClauseGcRoot::ALL.into_iter().enumerate() {
+            let clause = simple_clause(
+                &mut state,
+                &format!("registered_gc_clause_{index}"),
+                i64::try_from(index + 1).unwrap(),
+            );
+            live_terms.push(clause.literals().as_slice()[0].left().clone());
+            root.resolve_mut(&mut state).unwrap().insert(clause);
+        }
+
+        for (index, root) in ProofStateFormulaGcRoot::ALL.into_iter().enumerate() {
+            let bank = state.terms_mut();
+            let argument = typed_const(bank, &format!("registered_gc_formula_arg_{index}"));
+            let formula = typed_unary(bank, &format!("registered_gc_formula_{index}"), &argument);
+            live_terms.extend([argument, formula.clone()]);
+            root.resolve_mut(&mut state)
+                .insert(WrappedFormula::wt_formula_alloc(formula));
+        }
+
+        let dropped = typed_const(state.terms_mut(), "registered_gc_dropped");
 
         assert_eq!(state.collect_term_garbage(), 1);
-        assert!(state.terms_mut().find(&formula_arg).is_some());
-        assert!(state.terms_mut().find(&formula_term).is_some());
-        assert!(state.terms_mut().find(&definition_arg).is_some());
-        assert!(state.terms_mut().find(&definition_term).is_some());
+        for term in live_terms {
+            assert!(state.terms_mut().find(&term).is_some());
+        }
+        assert!(state.terms_mut().find(&dropped).is_none());
+    }
+
+    #[test]
+    fn proof_state_formula_cnf_gc_marks_unrelated_registered_owners() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (retained_argument, retained_formula, active_formula, dropped) = {
+            let bank = state.terms_mut();
+            let retained_argument = typed_const(bank, "cnf_registered_root_argument");
+            let retained_formula =
+                typed_unary(bank, "cnf_registered_root_formula", &retained_argument);
+            let first = typed_const(bank, "cnf_registered_first");
+            let second = typed_const(bank, "cnf_registered_second");
+            let third = typed_const(bank, "cnf_registered_third");
+            let fourth = typed_const(bank, "cnf_registered_fourth");
+            let eqn_code = bank.signature_mut().get_eqn_code(true);
+            let left = bool_binary_with_code(bank, eqn_code, &first, &second);
+            let right = bool_binary_with_code(bank, eqn_code, &third, &fourth);
+            let equiv_code = bank.signature().equiv_code();
+            let active_formula = bool_binary_with_code(bank, equiv_code, &left, &right);
+            let dropped = typed_const(bank, "cnf_registered_dropped");
+            (retained_argument, retained_formula, active_formula, dropped)
+        };
+        state
+            .f_archive_mut()
+            .insert(WrappedFormula::wt_formula_alloc(retained_formula.clone()));
+        state
+            .f_axioms_mut()
+            .insert(WrappedFormula::wt_formula_alloc(active_formula));
+        let fresh_vars = state.fresh_vars().clone();
+
+        let result = {
+            let (bank, clauses, formulas, archive, gc_context) =
+                state.terms_axioms_formula_sets_cnf_with_gc_mut();
+            formulas
+                .cnf2_into_with_gc_context(
+                    archive,
+                    clauses,
+                    bank,
+                    &fresh_vars,
+                    FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder),
+                    &gc_context,
+                )
+                .unwrap()
+        };
+
+        assert!(result.term_garbage_collections >= 1);
+        assert!(state.terms_mut().find(&retained_argument).is_some());
+        assert!(state.terms_mut().find(&retained_formula).is_some());
         assert!(state.terms_mut().find(&dropped).is_none());
     }
 

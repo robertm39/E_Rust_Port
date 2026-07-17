@@ -1241,9 +1241,17 @@ fn clausify_real_input_formula_axioms_with_options(
     options: FormulaSetCnfOptions,
 ) -> Result<(), Diagnostic> {
     let fresh_vars = state.fresh_vars().clone();
-    let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_cnf_mut();
+    let (bank, axioms, f_axioms, f_ax_archive, gc_context) =
+        state.terms_axioms_formula_sets_cnf_with_gc_mut();
     let _preprocessed = f_axioms.preproc_conjectures(bank, false, false)?;
-    let _cnf = f_axioms.cnf2_into(f_ax_archive, axioms, bank, &fresh_vars, options)?;
+    let _cnf = f_axioms.cnf2_into_with_gc_context(
+        f_ax_archive,
+        axioms,
+        bank,
+        &fresh_vars,
+        options,
+        &gc_context,
+    )?;
     Ok(())
 }
 
