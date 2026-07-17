@@ -703,15 +703,13 @@ impl FvIndexAnchor {
         let _timer = crate::basics::perf_counters::start(
             crate::basics::perf_counters::PerfCounter::FvIndexTimer,
         );
-        let vector = packed
-            .vector()
-            .expect("FV-index insertion requires a packed frequency vector")
-            .clone();
-        clause_subsume_order_sort_lits(packed.clause_mut(), bank);
-        let clause_identity = fv_clause_key(packed.clause());
-        let result =
-            self.index
-                .insert_vector_clause(&vector, clause_identity, packed.clause().clone());
+        let (vector, clause) = packed.vector_and_clause_mut();
+        let vector = vector.expect("FV-index insertion requires a packed frequency vector");
+        clause_subsume_order_sort_lits(clause, bank);
+        let clause_identity = fv_clause_key(clause);
+        let result = self
+            .index
+            .insert_vector_clause(vector, clause_identity, clause.clone());
         self.apply_storage_delta(result.storage_delta);
         result.inserted_clause
     }

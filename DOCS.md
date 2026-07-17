@@ -68,6 +68,8 @@ The 2026-07-17 PCL-identifier audit confirms that vector length safely replaces 
 
 The 2026-07-17 PCL-expression audit confirms that typed recursive ownership replaces C's untagged two-slot-per-argument array and separate full/mini destruction paths. Exhaustive coverage pins every opcode and parser/printer spelling, a 2,048-parent case validates amortized argument growth, and the tracked position-parser mismatch, TSTP position omission, absent `URewrite` syntax, and one-or-more variable arities remain exact.
 
+The 2026-07-17 frequency-vector ownership audit closes the old raw-clause-alias blocker by separating ordinary vector snapshots from a non-cloneable packed clause owner. Unpacking is an ownership transfer, compatibility printing borrows the live clause explicitly, source-clause destruction cannot dangle vector metadata, and FV-index insertion no longer clones the feature vector.
+
 The 2026-07-13 contextual-simplify-reflect audit applied this rule retroactively to FV-index routing, indexed unit-query preconditions, and pointer-keyed FV-index leaf order; the detailed notes are in the paired `ccl_context_sr` and `ccl_subsumption` pages.
 
 The 2026-07-13 indexed-paramodulation follow-up applied this rule retroactively to active-substitution lifetime and noncommutative metadata-parent ordering; the detailed notes are in the `cco_paramodulation` page.

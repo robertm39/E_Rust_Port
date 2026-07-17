@@ -166,6 +166,10 @@ impl FvCollect {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FreqVector {
     array: Vec<i64>,
+    /// Diagnostic identity snapshot replacing C's unprotected `Clause_p`.
+    ///
+    /// Compatibility rendering borrows the live clause explicitly instead of
+    /// retaining a relocatable alias.
     clause_ident: Option<i64>,
 }
 
@@ -361,7 +365,12 @@ fn freq_vector_clause_rendered_string(
     clause_print_format_string(bank, clause, full_terms, output_format, problem_type)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Ownership-transfer wrapper for a clause and its optional feature vector.
+///
+/// C aliases this to `FreqVectorCell` and relies on the chosen free routine to
+/// decide whether `clause` is borrowed or owned. This distinct, non-`Clone`
+/// type always owns the clause; unpacking transfers that ownership onward.
+#[derive(Debug, PartialEq)]
 pub struct FvPackedClause {
     vector: Option<FreqVector>,
     clause: Clause,
@@ -380,6 +389,10 @@ impl FvPackedClause {
 
     pub fn clause_mut(&mut self) -> &mut Clause {
         &mut self.clause
+    }
+
+    pub(crate) fn vector_and_clause_mut(&mut self) -> (Option<&FreqVector>, &mut Clause) {
+        (self.vector.as_ref(), &mut self.clause)
     }
 
     #[must_use]
@@ -907,6 +920,7 @@ mod tests {
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_DELETE_CLAUSE;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::IoFormat;
@@ -1213,5 +1227,43 @@ mod tests {
         let packed = fv_pack_clause(clause, None, Some(&cspec));
         assert!(packed.vector().is_some());
         assert_eq!(packed.clause().ident(), ident);
+    }
+
+    #[test]
+    fn packed_clause_transfers_one_mutable_clause_owner_through_unpacking() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "packed_owner_a");
+        let second = typed_const(&mut bank, "packed_owner_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let ident = clause.ident();
+        let mut packed = fv_pack_clause(clause, None, None);
+
+        packed.clause_mut().set_prop(CP_DELETE_CLAUSE);
+        let unpacked = fv_unpack_clause(packed);
+
+        assert_eq!(unpacked.ident(), ident);
+        assert!(unpacked.query_prop(CP_DELETE_CLAUSE));
+    }
+
+    #[test]
+    fn frequency_vector_identity_snapshot_survives_source_clause_drop() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "vector_snapshot_a");
+        let second = typed_const(&mut bank, "vector_snapshot_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let ident = clause.ident();
+        let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
+        cspec.set_max_symbols(usize::try_from(second.f_code()).unwrap() + 1);
+        let vector = var_freq_vector_compute(&clause, &cspec);
+
+        drop(clause);
+
+        assert_eq!(vector.clause_ident(), Some(ident));
+        assert!(vector
+            .print_string()
+            .starts_with(&format!("% FV for clause #{ident}.\n")));
+        assert!(vector
+            .print_lop_string(&bank, None, true)
+            .starts_with("% FV, no clause given.\n"));
     }
 }
