@@ -1,0 +1,78 @@
+{
+  "case_count": 3,
+  "comparisons": [
+    {
+      "args": [
+        "--tstp-format",
+        "--specsig",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      },
+      "case": "clauses",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--specsig",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      },
+      "case": "formulas",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--specsig",
+        "--no-preprocessing",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      },
+      "case": "formulas_no_preprocessing",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 643,
+        "stdout_sha256": "B0B626D7E5510751FAFDE5C58F7D2C5BC7B049666CB42E237734033FEECA3D56"
+      }
+    }
+  ],
+  "exact_count": 3,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}

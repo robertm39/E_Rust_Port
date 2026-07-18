@@ -3041,6 +3041,31 @@ mod tests {
     }
 
     #[test]
+    fn specsig_collects_formula_owners_only_after_clause_conversion() {
+        let _guard = global_state_lock();
+        let clauses = "cnf(ax_eq, axiom, (f(a)=g(b))).\n\
+                       cnf(ax_pred, axiom, (p(f(a),b)|~q(c))).\n\
+                       cnf(goal, negated_conjecture, (~p(f(a),b))).\n";
+        let formulas = "fof(ax_eq, axiom, f(a)=g(b)).\n\
+                        fof(ax_pred, axiom, p(f(a),b)|~q(c)).\n\
+                        fof(goal, conjecture, p(f(a),b)).\n";
+
+        let clause_result = run_with_stdin(&[PROGRAM_NAME, "--tstp-format", "--specsig"], clauses)
+            .expect("clause-owner classification succeeds");
+        let formula_result =
+            run_with_stdin(&[PROGRAM_NAME, "--tstp-format", "--specsig"], formulas)
+                .expect("formula-owner classification succeeds");
+
+        assert_eq!(formula_result, clause_result);
+        let (_, stdout, _) = formula_result;
+        let vector = stdout
+            .strip_prefix("- : ")
+            .and_then(|value| value.strip_suffix(" : \n"))
+            .expect("specsig output should wrap one feature vector");
+        assert_eq!(vector.split(',').count(), 91);
+    }
+
+    #[test]
     fn stdin_standard_real_problem_can_print_tptp_header() {
         let _guard = global_state_lock();
         let input = "cnf(c1, axiom, (p(a))).\n";
