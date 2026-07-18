@@ -2120,7 +2120,8 @@ impl ProofState {
             }
             DerivationParentRef::Demodulator(demodulator) => demodulator_clause_refs(demodulator)
                 .into_iter()
-                .filter_map(|parent| self.proof_clause_by_derivation_ref(parent))
+                .find_map(|parent| self.proof_clause_by_derivation_ref(parent))
+                .into_iter()
                 .collect(),
             DerivationParentRef::Formula(_) => Vec::new(),
         }
@@ -2136,8 +2137,18 @@ impl ProofState {
         let mut marked = 0;
 
         while let Some(parent) = pending.pop() {
-            let DerivationParentRef::Clause(parent) = parent else {
-                continue;
+            let parent = match parent {
+                DerivationParentRef::Clause(parent) => parent,
+                DerivationParentRef::Demodulator(demodulator) => {
+                    let Some(parent) = demodulator_clause_refs(demodulator)
+                        .into_iter()
+                        .find(|parent| self.proof_clause_by_derivation_ref(*parent).is_some())
+                    else {
+                        continue;
+                    };
+                    parent
+                }
+                DerivationParentRef::Formula(_) => continue,
             };
             if !visited.insert(parent) {
                 continue;
@@ -3011,7 +3022,7 @@ mod tests {
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
         ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
         DC_APPLY_DEF, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_EQ_RES, DC_EXPAND_DISTINCT,
-        DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -3025,7 +3036,7 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{FP_DISTINCT_PROP, FP_IGNORE_PROPS};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, RewriteDemodulator, Term};
     use std::path::PathBuf;
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -3685,6 +3696,33 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_mark_proof_clause_ancestors_follows_demodulator() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let preferred = simple_clause(&mut state, "proof_mark_demod_preferred", 99);
+        let alternate = simple_clause(&mut state, "proof_mark_demod_alternate", -98);
+        let mut root = Clause::alloc(EqnList::new());
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_REWRITE));
+        derivation.push(DerivationEntry::Demodulator(RewriteDemodulator::new(99)));
+        root.set_derivation(Some(derivation));
+
+        state.archive_mut().insert(preferred);
+        state.axioms_mut().insert(alternate);
+
+        assert_eq!(state.mark_proof_clause_ancestors(&root), 1);
+        assert!(state
+            .archive()
+            .find_by_id(99)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(!state
+            .axioms()
+            .find_by_id(-98)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+    }
+
+    #[test]
     fn proof_state_proof_object_analysis_counts_reachable_clause_steps() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut source = simple_clause(&mut state, "proof_analysis_source", 20_006);
@@ -3998,6 +4036,39 @@ mod tests {
                     child_index: 1,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_resolves_one_demodulator_encoding() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let preferred = simple_clause(&mut state, "proof_graph_demod_preferred", 99);
+        let alternate = simple_clause(&mut state, "proof_graph_demod_alternate", -98);
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(100);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_REWRITE));
+        derivation.push(DerivationEntry::Demodulator(RewriteDemodulator::new(99)));
+        root.set_derivation(Some(derivation));
+
+        state.archive_mut().insert(preferred);
+        state.axioms_mut().insert(alternate);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![100, 99]
+        );
+        assert_eq!(
+            graph.mixed_edges,
+            vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Clause(1),
+                child: ProofObjectGraphNode::Clause(0),
+            }]
         );
     }
 

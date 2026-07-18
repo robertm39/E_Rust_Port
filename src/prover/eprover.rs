@@ -42,8 +42,8 @@ use crate::clauses::clause::{
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
-    CP_IS_LAMBDA_DEF, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
-    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
+    CP_IS_LAMBDA_DEF, CP_IS_PROCESSED, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+    CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
     clause_set_archive_copy, clause_set_recognize_choice, parse_tstp_negated_distinct_formula,
@@ -55,9 +55,8 @@ use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_dummy_quote_parent_ref, demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
-    deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids, op_has_arg1,
-    op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
-    FormulaDerivationRef, DC_CNF_QUOTE,
+    deriv_stack_tstp_string_with_formula_ids, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::{
     eqn_fof_parse, prepare_predicate_literal, Eqn, EqnFofPrintOptions, EqnPrintOptions,
@@ -83,9 +82,10 @@ use crate::clauses::pred_elim::{
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
 };
 use crate::clauses::proofstate::{
-    derived_dot_node_colour_for_proof_member, proof_state_alloc, DerivedView, ProofObjectAnalysis,
-    ProofObjectGraph, ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState,
-    RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
+    derived_dot_node_colour, derived_dot_node_colour_for_proof_member, derived_in_proof,
+    derived_is_eval_gc, proof_state_alloc, DerivedView, ProofObjectAnalysis, ProofObjectGraph,
+    ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, RawFormulaFeatures,
+    WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
@@ -6715,7 +6715,10 @@ fn process_success_proof_object_gc<W: Write + ?Sized>(
     let _ = state.mark_proof_clause_ancestors(clause);
     let _ = state.analyse_gc();
     if let Some(training_flags) = config.training_examples {
-        write_training_examples(output, config, state, training_flags)?;
+        let roots = proof_success_object_roots(config, state, clause);
+        let graph = state.proof_object_graph_for_mixed_roots(roots.clauses, roots.formulas);
+        let display_ids = proof_object_clause_display_ids(&graph);
+        write_training_examples(output, config, state, training_flags, &display_ids)?;
     }
     Ok(())
 }
@@ -8518,6 +8521,26 @@ fn proof_object_display_ids_by_ordinal(
     display_ids_by_ordinal
 }
 
+fn proof_object_clause_display_ids(graph: &ProofObjectGraph<'_>) -> HashMap<*const Clause, i64> {
+    let display_order = proof_object_list_display_order(graph);
+    let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
+    graph
+        .clauses
+        .iter()
+        .enumerate()
+        .map(|(index, clause)| {
+            (
+                std::ptr::from_ref(*clause),
+                proof_object_display_id_for_node(
+                    graph,
+                    ProofObjectGraphNode::Clause(index),
+                    &display_ids_by_ordinal,
+                ),
+            )
+        })
+        .collect()
+}
+
 fn proof_object_display_ac_axioms(
     graph: &ProofObjectGraph<'_>,
     ac_axioms: &[ClauseDerivationRef],
@@ -9068,6 +9091,14 @@ fn proof_object_root_marker(clause: &Clause) -> &'static str {
     }
 }
 
+struct ProofObjectDotRenderContext<'a> {
+    config: &'a EProverConfig,
+    bank: &'a TermBank,
+    proof_problem_type: ProblemType,
+    ac_axioms: &'a [ClauseDerivationRef],
+    formula_ids: &'a BTreeMap<i64, String>,
+}
+
 fn write_proof_object_dot(
     output: &mut impl Write,
     config: &EProverConfig,
@@ -9082,7 +9113,26 @@ fn write_proof_object_dot(
     let display_order = proof_object_list_display_order(graph);
     let display_ids_by_ordinal = proof_object_display_ids_by_ordinal(graph, &display_order);
     let ac_axioms = proof_object_display_ac_axioms(graph, bank.signature().ac_axioms());
-    for item in proof_object_list_display_items(graph) {
+    let mixed_edges = proof_object_list_mixed_edges(graph);
+    let proof_members = proof_object_dot_proof_members(graph, &mixed_edges);
+    let items = proof_object_list_display_items(graph);
+    let formula_ids = items
+        .iter()
+        .filter_map(|item| match item {
+            ProofObjectListDisplayItem::Formula(formula) => {
+                Some((formula.ident(), formula.get_id(true)))
+            }
+            ProofObjectListDisplayItem::Clause { .. } => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let render_context = ProofObjectDotRenderContext {
+        config,
+        bank,
+        proof_problem_type,
+        ac_axioms: &ac_axioms,
+        formula_ids: &formula_ids,
+    };
+    for (node, item) in display_order.into_iter().zip(items) {
         if axiom_open && proof_object_display_item_has_derivation(&item) {
             output.write_all(b"   }\n")?;
             axiom_open = false;
@@ -9091,66 +9141,99 @@ fn write_proof_object_dot(
             ProofObjectListDisplayItem::Clause { clause, .. } => {
                 write_proof_object_dot_clause(
                     output,
-                    config,
-                    bank,
+                    &render_context,
                     &clause,
                     clause.ident(),
-                    proof_problem_type,
-                    &ac_axioms,
+                    proof_object_dot_node_in_proof(graph, node, &proof_members),
                 )?;
             }
             ProofObjectListDisplayItem::Formula(formula) => {
                 write_proof_object_dot_formula(
                     output,
-                    config,
-                    bank,
+                    &render_context,
                     &formula,
                     formula.ident(),
-                    proof_problem_type,
+                    proof_object_dot_node_in_proof(graph, node, &proof_members),
                 )?;
             }
+        }
+        for edge in mixed_edges.iter().copied().filter(|edge| {
+            edge.child == node && matches!(edge.parent, ProofObjectGraphNode::Clause(_))
+        }) {
+            write_proof_object_dot_edge(
+                output,
+                graph,
+                edge,
+                &display_ids_by_ordinal,
+                &proof_members,
+            )?;
+        }
+        for edge in mixed_edges.iter().copied().filter(|edge| {
+            edge.child == node && matches!(edge.parent, ProofObjectGraphNode::Formula(_))
+        }) {
+            write_proof_object_dot_edge(
+                output,
+                graph,
+                edge,
+                &display_ids_by_ordinal,
+                &proof_members,
+            )?;
         }
     }
     if axiom_open {
         output.write_all(b"   }\n")?;
     }
-    for edge in proof_object_list_mixed_edges(graph) {
-        writeln!(
-            output,
-            "    {} -> {} [style=\"bold\"{}]",
-            proof_object_display_id_for_node(graph, edge.parent, &display_ids_by_ordinal),
-            proof_object_display_id_for_node(graph, edge.child, &display_ids_by_ordinal),
-            proof_object_dot_graph_node_colour(graph, edge.child)
-        )?;
-    }
     output.write_all(b"}\n")?;
+    Ok(())
+}
+
+fn write_proof_object_dot_edge(
+    output: &mut impl Write,
+    graph: &ProofObjectGraph<'_>,
+    edge: ProofObjectGraphMixedEdge,
+    display_ids_by_ordinal: &[i64],
+    proof_members: &[bool],
+) -> Result<(), EProverError> {
+    writeln!(
+        output,
+        "    {} -> {} [style=\"bold\"{}]",
+        proof_object_display_id_for_node(graph, edge.parent, display_ids_by_ordinal),
+        proof_object_display_id_for_node(graph, edge.child, display_ids_by_ordinal),
+        proof_object_dot_graph_edge_colour(graph, edge, proof_members)
+    )?;
     Ok(())
 }
 
 fn write_proof_object_dot_clause(
     output: &mut impl Write,
-    config: &EProverConfig,
-    bank: &TermBank,
+    context: &ProofObjectDotRenderContext<'_>,
     clause: &Clause,
     node_id: i64,
-    proof_problem_type: ProblemType,
-    ac_axioms: &[ClauseDerivationRef],
+    in_proof: bool,
 ) -> Result<(), EProverError> {
-    let label = if config.proof_output > 2 {
-        let proof_problem_type = proof_output_problem_type(proof_problem_type);
+    let shape =
+        if derived_is_eval_gc(DerivedView::Clause(clause)) && clause.query_prop(CP_IS_PROCESSED) {
+            "ellipse"
+        } else {
+            "box"
+        };
+    let label = if context.config.proof_output > 2 {
+        let proof_problem_type = proof_output_problem_type(context.proof_problem_type);
         let mut rendered = String::new();
         clause_write_tstp_with_type_suffixes(
             &mut rendered,
-            bank,
+            context.bank,
             clause,
             true,
             false,
             proof_problem_type,
-            config.encoding.print_types,
+            context.config.encoding.print_types,
         )?;
-        if let Some(derivation) =
-            deriv_stack_tstp_string_with_ac_axioms(clause.derivation(), ac_axioms)
-        {
+        if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
+            clause.derivation(),
+            context.ac_axioms,
+            context.formula_ids,
+        ) {
             rendered.push_str(",\n");
             rendered.push_str(&derivation);
         } else {
@@ -9167,9 +9250,9 @@ fn write_proof_object_dot_clause(
     };
     writeln!(
         output,
-        "  {} [shape=box{},style=filled,label=\"{}\"]",
+        "  {} [shape={shape}{},style=filled,label=\"{}\"]",
         node_id,
-        derived_dot_node_colour_for_proof_member(DerivedView::Clause(clause)),
+        proof_object_dot_node_colour(DerivedView::Clause(clause), in_proof),
         dot_label_escape(&label)
     )?;
     Ok(())
@@ -9184,16 +9267,16 @@ const fn proof_output_problem_type(proof_problem_type: ProblemType) -> ProblemTy
 
 fn write_proof_object_dot_formula(
     output: &mut impl Write,
-    config: &EProverConfig,
-    bank: &TermBank,
+    context: &ProofObjectDotRenderContext<'_>,
     formula: &WrappedFormula,
     node_id: i64,
-    proof_problem_type: ProblemType,
+    in_proof: bool,
 ) -> Result<(), EProverError> {
-    let label = if config.proof_output > 2 {
-        let proof_problem_type = proof_output_problem_type(proof_problem_type);
-        let mut rendered = formula.proof_object_tstp_string(bank, proof_problem_type)?;
-        if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(formula.derivation(), &[])
+    let label = if context.config.proof_output > 2 {
+        let proof_problem_type = proof_output_problem_type(context.proof_problem_type);
+        let mut rendered = formula.proof_object_tstp_string(context.bank, proof_problem_type)?;
+        if let Some(derivation) =
+            deriv_stack_tstp_string_with_formula_ids(formula.derivation(), &[], context.formula_ids)
         {
             rendered.push_str(",\n");
             rendered.push_str(&derivation);
@@ -9213,7 +9296,7 @@ fn write_proof_object_dot_formula(
         output,
         "  {} [shape=box{},style=filled,label=\"{}\"]",
         node_id,
-        derived_dot_node_colour_for_proof_member(DerivedView::Formula(formula)),
+        proof_object_dot_node_colour(DerivedView::Formula(formula), in_proof),
         dot_label_escape(&label)
     )?;
     Ok(())
@@ -9226,18 +9309,84 @@ fn proof_object_display_item_has_derivation(item: &ProofObjectListDisplayItem) -
     }
 }
 
-fn proof_object_dot_graph_node_colour(
+fn proof_object_dot_node_colour(derived: DerivedView<'_>, in_proof: bool) -> &'static str {
+    if in_proof {
+        derived_dot_node_colour_for_proof_member(derived)
+    } else {
+        derived_dot_node_colour(derived)
+    }
+}
+
+fn proof_object_dot_graph_node_view<'a>(
+    graph: &ProofObjectGraph<'a>,
+    node: ProofObjectGraphNode,
+) -> DerivedView<'a> {
+    match node {
+        ProofObjectGraphNode::Clause(index) => DerivedView::Clause(graph.clauses[index]),
+        ProofObjectGraphNode::Formula(index) => DerivedView::Formula(graph.formulas[index]),
+    }
+}
+
+fn proof_object_dot_node_in_proof(
     graph: &ProofObjectGraph<'_>,
     node: ProofObjectGraphNode,
-) -> &'static str {
-    match node {
-        ProofObjectGraphNode::Clause(index) => {
-            derived_dot_node_colour_for_proof_member(DerivedView::Clause(graph.clauses[index]))
-        }
-        ProofObjectGraphNode::Formula(index) => {
-            derived_dot_node_colour_for_proof_member(DerivedView::Formula(graph.formulas[index]))
+    proof_members: &[bool],
+) -> bool {
+    proof_object_list_node_ordinal(graph, node)
+        .and_then(|ordinal| proof_members.get(ordinal).copied())
+        .unwrap_or(false)
+}
+
+fn proof_object_dot_proof_members(
+    graph: &ProofObjectGraph<'_>,
+    edges: &[ProofObjectGraphMixedEdge],
+) -> Vec<bool> {
+    let mut members = Vec::with_capacity(proof_object_list_node_count(graph));
+    members.extend(
+        graph
+            .clauses
+            .iter()
+            .map(|clause| derived_in_proof(DerivedView::Clause(clause))),
+    );
+    members.extend(
+        graph
+            .formulas
+            .iter()
+            .map(|formula| derived_in_proof(DerivedView::Formula(formula))),
+    );
+    let mut pending = members
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, member)| member.then_some(ordinal))
+        .collect::<Vec<_>>();
+    while let Some(child_ordinal) = pending.pop() {
+        for edge in edges {
+            if proof_object_list_node_ordinal(graph, edge.child) != Some(child_ordinal) {
+                continue;
+            }
+            let Some(parent_ordinal) = proof_object_list_node_ordinal(graph, edge.parent) else {
+                continue;
+            };
+            if !members[parent_ordinal] {
+                members[parent_ordinal] = true;
+                pending.push(parent_ordinal);
+            }
         }
     }
+    members
+}
+
+fn proof_object_dot_graph_edge_colour(
+    graph: &ProofObjectGraph<'_>,
+    edge: ProofObjectGraphMixedEdge,
+    proof_members: &[bool],
+) -> &'static str {
+    let parent_in_proof = proof_object_dot_node_in_proof(graph, edge.parent, proof_members);
+    let child_in_proof = proof_object_dot_node_in_proof(graph, edge.child, proof_members);
+    if !parent_in_proof || !child_in_proof {
+        return ",color=gray, fillcolor=gray";
+    }
+    proof_object_dot_node_colour(proof_object_dot_graph_node_view(graph, edge.child), true)
 }
 
 fn dot_label_escape(label: &str) -> String {
@@ -9538,6 +9687,7 @@ fn write_training_examples(
     config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     flags: i64,
+    display_ids: &HashMap<*const Clause, i64>,
 ) -> Result<(), EProverError> {
     let examples = state.pick_training_examples();
     writeln!(
@@ -9548,12 +9698,26 @@ fn write_training_examples(
     )?;
     if flags & TRAINING_PRINT_POS != 0 {
         write_comment_line(output, "Training: Positive examples begin")?;
-        write_training_clause_examples(output, config, state, &examples.positive, "% trainpos")?;
+        write_training_clause_examples(
+            output,
+            config,
+            state,
+            &examples.positive,
+            "%% trainpos",
+            display_ids,
+        )?;
         write_comment_line(output, "Training: Positive examples end")?;
     }
     if flags & TRAINING_PRINT_NEG != 0 {
         write_comment_line(output, "Training: Negative examples begin")?;
-        write_training_clause_examples(output, config, state, &examples.negative, "%trainneg")?;
+        write_training_clause_examples(
+            output,
+            config,
+            state,
+            &examples.negative,
+            "%%trainneg",
+            display_ids,
+        )?;
         write_comment_line(output, "Training: Negative examples end")?;
     }
     Ok(())
@@ -9565,12 +9729,19 @@ fn write_training_clause_examples(
     state: &crate::clauses::proofstate::ProofState,
     clauses: &[&Clause],
     extra: &str,
+    display_ids: &HashMap<*const Clause, i64>,
 ) -> Result<(), EProverError> {
     let eqn_print_options = config
         .equation_print
         .into_eqn_print_options(config.output_format)
         .with_print_types(config.encoding.print_types);
     for clause in clauses {
+        let display_clause = display_ids.get(&std::ptr::from_ref(*clause)).map(|ident| {
+            let mut display = (*clause).clone();
+            display.set_ident(*ident);
+            display
+        });
+        let clause = display_clause.as_ref().unwrap_or(clause);
         let rendered = clause_print_for_output_format(
             state.terms(),
             clause,
@@ -15956,14 +16127,15 @@ mod tests {
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::clauses::clause::{clause_parse, Clause, ClauseParseOptions};
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_PROCESSED, CP_IS_PROOF_CLAUSE, CP_TYPE_AXIOM,
+        CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_ac_res_derivation, clause_push_derivation, clause_push_formula_derivation,
-        ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE, DC_EQ_RES,
-        DC_FOF_QUOTE, DC_PARAMOD,
+        ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        DC_EQ_RES, DC_FOF_QUOTE, DC_PARAMOD,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -31511,7 +31683,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(printed.contains("proof-graph-source-info-dot"));
         assert!(printed.contains(", source_node)).\"]\n"));
         assert!(
-            printed.contains("cnf(c_0_1, axiom, (p(a)),\\nc_0_0)."),
+            printed.contains("cnf(c_0_1, axiom, (p(a)),\\nsource_node)."),
             "{printed}"
         );
         assert!(stderr.is_empty());
@@ -31568,10 +31740,88 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
+    fn proof_graph_dot_writer_prints_each_edge_after_its_child() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let formula = WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "dot_parent"));
+        let formula_ref = FormulaDerivationRef::new(formula.ident());
+        let mut child = Clause::empty();
+        child.set_ident(42);
+        clause_push_formula_derivation(&mut child, DC_FOF_QUOTE, Some(formula_ref), None);
+        let mut root = Clause::empty();
+        root.set_ident(43);
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&child), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&child, &root],
+            formulas: vec![&formula],
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: vec![
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Formula(0),
+                    child: ProofObjectGraphNode::Clause(0),
+                },
+                ProofObjectGraphMixedEdge {
+                    parent: ProofObjectGraphNode::Clause(0),
+                    child: ProofObjectGraphNode::Clause(1),
+                },
+            ],
+            root_indices: vec![1],
+            formula_root_indices: Vec::new(),
+        };
+        let config = EProverConfig {
+            proof_output: 2,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_dot(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        let child_node = printed.find("  1 [").unwrap();
+        let child_edge = printed.find("    0 -> 1 ").unwrap();
+        let root_node = printed.find("  2 [").unwrap();
+        let root_edge = printed.find("    1 -> 2 ").unwrap();
+        assert!(child_node < child_edge, "{printed}");
+        assert!(child_edge < root_node, "{printed}");
+        assert!(root_node < root_edge, "{printed}");
+    }
+
+    #[test]
+    fn proof_graph_dot_writer_uses_ellipse_for_processed_eval_gc() {
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause_push_derivation(&mut clause, DC_CNF_EVAL_GC, None, None);
+        clause.set_prop(CP_IS_PROCESSED);
+        let graph = ProofObjectGraph {
+            clauses: vec![&clause],
+            formulas: Vec::new(),
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: Vec::new(),
+            root_indices: vec![0],
+            formula_root_indices: Vec::new(),
+        };
+        let config = EProverConfig {
+            proof_output: 3,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_dot(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("[shape=ellipse"), "{printed}");
+    }
+
+    #[test]
     fn proof_graph_dot_writer_uses_higher_order_formula_labels() {
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
         let mut formula = WrappedFormula::wt_formula_alloc(bool_const(&mut bank, "dot_formula"));
         formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        formula.set_prop(CP_IS_PROOF_CLAUSE);
         let graph = ProofObjectGraph {
             clauses: Vec::new(),
             formulas: vec![&formula],
@@ -31774,8 +32024,8 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(printed.contains("% Training examples: 1 positive, 0 negative\n"));
         assert!(printed.contains("% Training: Positive examples begin\n"));
         assert!(printed.contains("cnf("));
-        assert!(printed.contains(", ($false)).% trainpos\n"));
-        assert!(!printed.contains("\n <- a=a.% trainpos\n"));
+        assert!(printed.contains(", ($false)).%% trainpos\n"));
+        assert!(!printed.contains("\n <- a=a.%% trainpos\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -31866,14 +32116,13 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\ndigraph proof{\n"));
         assert!(
             printed.contains(
-                "  0 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"keep\"]\n"
+                "  0 [shape=box,color=gray, fillcolor=gray66,style=filled,label=\"keep\"]\n"
             ),
             "{printed}"
         );
-        assert!(printed.contains(
-            "  1 [shape=box,color=green,fillcolor=palegreen,style=filled,label=\"c1\"]\n"
-        ));
-        assert!(printed.contains("    0 -> 1 [style=\"bold\",color=green,fillcolor=palegreen]\n"));
+        assert!(printed
+            .contains("  1 [shape=box,color=gray, fillcolor=gray,style=filled,label=\"c1\"]\n"));
+        assert!(printed.contains("    0 -> 1 [style=\"bold\",color=gray, fillcolor=gray]\n"));
         assert!(!printed.contains("SZS output start Saturation"));
         assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
