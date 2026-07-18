@@ -67,7 +67,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for indexed contextual contraction parity on 2026-07-13.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for indexed contextual contraction parity on 2026-07-13 and executable proof-session ownership on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 
@@ -83,12 +83,13 @@ Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 - When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and records `DCContextSR` with a compact subsumer reference; an opt-in documenting helper now emits represented `DocClauseModification(inf_context_simplify_reflect, subsumer)` steps for proof-control callers with a `ProofDocSession`.
 - `ClauseSetFindContextSRClauses` flips and sorts the query for each literal and pushes every subsumed set clause, including duplicate pushes for the same clause if multiple flipped literals work.
 - Rust now exposes mutable-bank contextual simplify-reflect and subsumed-clause discovery variants, and proof control uses them so forward and backward contextual contraction reaches C's complete higher-order matcher. Both directions now route through the owning clause set's feature-vector anchor when present, matching C's automatic `set->fvindex` dispatch; plain standalone sets retain a linear fallback.
+- C's sole production mutation call is the forward-contraction path; backward contextual simplify-reflect only discovers and requeues candidates, which are mutated when selected again. Rust now gives the selected-clause `ProcessClause` owner its live `ProofDocSession` when it invokes forward contraction, so an executable proof run emits the `csr` modification before the survivor's `new_given` quote. The focused C/Rust owner evidence is retained in [`experiments/2026-07-17-075-context-sr-doc-owner`](../../../experiments/2026-07-17-075-context-sr-doc-owner/FINDINGS.md).
 
 ### Change Later
 
 - C relies on raw `Eqn_p` stack entries remaining valid across literal-list sorting. Rust matches by literal properties and term handles while ignoring the mutable position field; revisit if duplicate literal identity becomes observable outside cleanup-normalized clauses.
 - C stores the raw contextual subsumer pointer in the derivation stack. Rust currently records a compact clause reference; replace it with a stable clause handle before proof-object traversal needs the full parent object.
-- C couples contextual simplify-reflect proof documentation to the same mutation loop and process-global output/id state. Rust keeps the compatibility behavior behind an explicit session/output wrapper; collapse this into a single proof-control output owner once the remaining proof-documentation call sites are threaded.
+- C couples contextual simplify-reflect proof documentation to the same mutation loop and process-global output/id state. Rust keeps the compatibility behavior behind an explicit session/output wrapper, now selected by the production `ProcessClause` owner whenever a proof session exists. A later unified proof-control output owner would be API cleanup rather than missing executable compatibility behavior.
 - C hides indexed-versus-linear behavior behind nullable mutable `ClauseSet` index state. Rust preserves automatic owned-anchor dispatch for compatibility, but a cleaned API should require an explicit query view or stable indexed owner so performance-critical callers cannot accidentally select the linear fallback.
 - After a successful deletion, contextual simplify-reflect can query a now-unit target. C's indexed `ClauseSetSubsumesClause` path accepts that query while its plain fallback asserts that the target has more than one literal. Rust preserves this asymmetric contract; later code should make the unit policy uniform instead of encoding it in index availability.
 

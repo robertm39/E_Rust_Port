@@ -7134,8 +7134,19 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         condense_clause: control.heuristic_parms().condensing,
         level: RewriteLevel::FullRewrite,
     };
-    let Some(mut packed) = proof_state_forward_contract_clause(state, control, clause, options)?
-    else {
+    let packed = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+        proof_state_forward_contract_clause_with_docs(
+            &mut **output,
+            session,
+            state,
+            control,
+            clause,
+            options,
+        )?
+    } else {
+        proof_state_forward_contract_clause(state, control, clause, options)?
+    };
+    let Some(mut packed) = packed else {
         if let Some(archived_ref) = archived_ref {
             let _ = state.archive_mut().delete_by_id(archived_ref.ident());
         }
@@ -14506,6 +14517,77 @@ mod tests {
         assert!(state.processed_pos_eqns().find_by_id(4_153).is_none());
         assert!(state.processed_neg_units().find_by_id(4_153).is_none());
         assert!(state.processed_non_units().find_by_id(4_153).is_none());
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_emits_forward_context_sr_modification() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, selected) = {
+            let terms = state.terms_mut();
+            let p_code = unary_predicate_code(terms, "pc_process_context_doc_p");
+            let q_code = unary_predicate_code(terms, "pc_process_context_doc_q");
+            let arg = typed_const(terms, "pc_process_context_doc_a");
+            let p_atom = unary_predicate(terms, p_code, &arg);
+            let q_atom = unary_predicate(terms, q_code, &arg);
+            let truth = terms.true_term().clone();
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &p_atom, &truth, true),
+                literal(terms, &q_atom, &truth, false),
+            ]));
+            subsumer.set_ident(4_154);
+            subsumer.set_prop(CP_IS_PROCESSED | CP_LIMITED_RW);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &p_atom, &truth, true),
+                literal(terms, &q_atom, &truth, true),
+            ]));
+            selected.set_ident(4_155);
+            selected.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            (subsumer, selected)
+        };
+        clause_subsume_order_sort_lits(&mut subsumer, state.terms());
+        subsumer.set_weight(subsumer.standard_weight());
+        state.processed_non_units_mut().insert(subsumer);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().forward_context_sr = true;
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { class, .. } = outcome else {
+            panic!("contextually simplified clause should be processed");
+        };
+        let csr_position = output.find("csr(4155,4154)").unwrap();
+        let new_given_position = output.find(" : 1 : 'new_given'\n").unwrap();
+        assert!(csr_position < new_given_position);
+        assert_eq!(state.statistics().context_sr_count, 1);
+        assert_eq!(session.id_source.current_ident(), 4);
+        let processed = match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(2),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(2),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(2),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(2),
+        }
+        .expect("documented survivor should retain the latest proof id");
+        assert_eq!(processed.literal_number(), 1);
+        assert_eq!(
+            processed.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CONTEXT_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_154, 0)),
+            ]
+        );
     }
 
     #[test]

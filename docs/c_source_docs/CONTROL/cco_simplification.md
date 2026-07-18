@@ -97,7 +97,7 @@ Source files reviewed: `CONTROL/cco_simplification.h`, `CONTROL/cco_simplificati
 
 ### Rust Port Status Notes
 
-- `src/heuristics/proofcontrol.rs` ports the `cco_simplification` behavior through the public `proof_state_backward_simplify*` family: backward rewriting via four plain processed-set scans when no backward index exists or one authoritative explicitly supplied indexed lookup across all processed sets when it does, backward subsumption, unit back-simplification, contextual simplify-reflect, C-ordered global-index deletion before movement, archive/dead-original handling, tmp-store requeueing, statistics, and opt-in proof-documentation quotes.
+- `src/heuristics/proofcontrol.rs` ports the `cco_simplification` behavior through the public `proof_state_backward_simplify*` family: backward rewriting via four plain processed-set scans when no backward index exists or one authoritative explicitly supplied indexed lookup across all processed sets when it does, backward subsumption, unit back-simplification, contextual simplify-reflect, C-ordered global-index deletion before movement, archive/dead-original handling, tmp-store requeueing, statistics, and opt-in proof-documentation quotes. As in C, backward contextual simplify-reflect only discovers and requeues candidates; the later selected-clause forward-contraction owner performs and documents the actual `csr` mutation.
 - `proof_state_simplify_watchlist*` ports the watchlist-oriented rewrite-and-requeue path over the same archive/dead-original shape, including explicitly supplied watchlist indices and represented proof-documentation output.
 
 ### Change Later

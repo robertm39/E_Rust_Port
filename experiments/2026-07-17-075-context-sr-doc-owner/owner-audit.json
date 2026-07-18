@@ -1,0 +1,15 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_backward_owner_uses_discovery_then_move": true,
+    "c_forward_owner_calls_modifier": true,
+    "permanent_process_owner_regression": true,
+    "rust_backward_owner_quotes_before_requeue": true,
+    "rust_executable_owns_documented_saturation": true,
+    "rust_forward_wrapper_threads_context_docs": true,
+    "rust_process_owner_selects_documented_forward_wrapper": true
+  },
+  "passed": 7,
+  "schema_version": 1,
+  "total": 7
+}

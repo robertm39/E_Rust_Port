@@ -1,0 +1,109 @@
+{
+  "c": {
+    "counters": {
+      "Backward-subsumed": 1,
+      "Contextual simplify-reflections": 1,
+      "Processed clauses": 2
+    },
+    "csr_event_count": 1,
+    "events": [
+      {
+        "clause": "(q(a)|p(a))",
+        "kind": "new_given",
+        "parent_roles": [
+          "external"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "csr",
+        "parent_roles": [
+          "external",
+          "event:0"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "new_given",
+        "parent_roles": [
+          "event:1"
+        ]
+      },
+      {
+        "clause": "(q(a)|p(a))",
+        "kind": "subsumed",
+        "parent_roles": [
+          "event:0",
+          "event:2"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "exists",
+        "parent_roles": [
+          "event:2"
+        ]
+      }
+    ],
+    "exit_code": 10,
+    "stderr": ""
+  },
+  "display_args": [
+    "--output-level=6",
+    "--no-generation",
+    "--forward-context-sr",
+    "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+    "$FIXTURE"
+  ],
+  "focused_exact": true,
+  "rust": {
+    "counters": {
+      "Backward-subsumed": 1,
+      "Contextual simplify-reflections": 1,
+      "Processed clauses": 2
+    },
+    "csr_event_count": 1,
+    "events": [
+      {
+        "clause": "(q(a)|p(a))",
+        "kind": "new_given",
+        "parent_roles": [
+          "external"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "csr",
+        "parent_roles": [
+          "external",
+          "event:0"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "new_given",
+        "parent_roles": [
+          "event:1"
+        ]
+      },
+      {
+        "clause": "(q(a)|p(a))",
+        "kind": "subsumed",
+        "parent_roles": [
+          "event:0",
+          "event:2"
+        ]
+      },
+      {
+        "clause": "(p(a))",
+        "kind": "exists",
+        "parent_roles": [
+          "event:2"
+        ]
+      }
+    ],
+    "exit_code": 10,
+    "stderr": ""
+  },
+  "schema_version": 1
+}
