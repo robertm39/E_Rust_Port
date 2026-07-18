@@ -3020,6 +3020,43 @@ pub fn proof_state_forward_contract_set_reweight(
     Ok(None)
 }
 
+/// Applies C `ForwardContractSetReweight` while emitting represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from documenting set contraction or HCB reweighting.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible set contraction keeps the proof-documentation session explicit"
+)]
+pub fn proof_state_forward_contract_set_reweight_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+    count_eliminated: &mut u64,
+) -> Result<Option<Clause>, Diagnostic> {
+    let empty = proof_state_forward_contract_set_with_docs(
+        output,
+        session,
+        state,
+        control,
+        set,
+        non_unit_subsumption,
+        level,
+        count_eliminated,
+        true,
+    )?;
+    if empty.is_some() {
+        return Ok(empty);
+    }
+    proof_control_clause_set_reweight_with_bank(control, state.terms_mut(), set)?;
+    Ok(None)
+}
+
 /// Removes trivial clauses and re-evaluates the set, matching C's misspelled
 /// `ClauseSetFilterReweigth`.
 ///
@@ -3234,19 +3271,21 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
     current_storage: i64,
     mut parent_is_dead: impl FnMut(DerivationParentRef) -> bool,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
-    proof_state_cleanup_unprocessed_clauses_impl(
+    proof_state_cleanup_unprocessed_clauses_impl::<String>(
         state,
         control,
         |_| current_storage,
         |state| clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead),
+        None,
     )
 }
 
-fn proof_state_cleanup_unprocessed_clauses_impl(
+fn proof_state_cleanup_unprocessed_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     mut current_storage: impl FnMut(&ProofState) -> i64,
     mut delete_orphans: impl FnMut(&mut ProofState) -> i64,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
     let mut outcome = CleanupUnprocessedOutcome::default();
     let back_simplified = state
@@ -3275,15 +3314,29 @@ fn proof_state_cleanup_unprocessed_clauses_impl(
     ) {
         let mut count_eliminated = 0;
         let mut unprocessed = std::mem::take(state.unprocessed_mut());
-        let unsatisfiable = match proof_state_forward_contract_set(
-            state,
-            control,
-            &mut unprocessed,
-            false,
-            RewriteLevel::FullRewrite,
-            &mut count_eliminated,
-            true,
-        ) {
+        let contract_result = match doc_context.as_mut() {
+            Some((output, session)) => proof_state_forward_contract_set_with_docs(
+                output,
+                session,
+                state,
+                control,
+                &mut unprocessed,
+                false,
+                RewriteLevel::FullRewrite,
+                &mut count_eliminated,
+                true,
+            ),
+            None => proof_state_forward_contract_set(
+                state,
+                control,
+                &mut unprocessed,
+                false,
+                RewriteLevel::FullRewrite,
+                &mut count_eliminated,
+                true,
+            ),
+        };
+        let unsatisfiable = match contract_result {
             Ok(unsatisfiable) => unsatisfiable,
             Err(err) => {
                 *state.unprocessed_mut() = unprocessed;
@@ -3353,6 +3406,31 @@ pub fn proof_state_cleanup_unprocessed_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
+    proof_state_cleanup_unprocessed_clauses_impl::<String>(
+        state,
+        control,
+        proof_state_storage_estimate,
+        |state| {
+            let parent_liveness = ParentLivenessSnapshot::from_state(state);
+            clause_set_delete_orphans_with(state.unprocessed_mut(), |parent| {
+                parent_liveness.parent_is_dead(parent)
+            })
+        },
+        None,
+    )
+}
+
+/// Applies C `cleanup_unprocessed_clauses` while emitting represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from documenting forward contraction or later cleanup stages.
+pub fn proof_state_cleanup_unprocessed_clauses_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
     proof_state_cleanup_unprocessed_clauses_impl(
         state,
         control,
@@ -3363,6 +3441,7 @@ pub fn proof_state_cleanup_unprocessed_clauses(
                 parent_liveness.parent_is_dead(parent)
             })
         },
+        Some((output, session)),
     )
 }
 
@@ -8022,7 +8101,8 @@ impl SatCheckRefutation {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+    clippy::too_many_lines,
+    reason = "C-compatible Saturate bridge keeps the original limits and main-loop gate order visible"
 )]
 fn proof_state_saturate_impl<W: fmt::Write>(
     state: &mut ProofState,
@@ -8117,7 +8197,16 @@ fn proof_state_saturate_impl<W: fmt::Write>(
             }
         }
 
-        let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
+        let cleanup = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+            proof_state_cleanup_unprocessed_clauses_with_docs(
+                &mut **output,
+                session,
+                state,
+                control,
+            )?
+        } else {
+            proof_state_cleanup_unprocessed_clauses(state, control)?
+        };
         if let Some((output, _session, output_level)) = doc_context.as_mut() {
             write_cleanup_unprocessed_fmt_output(&mut **output, *output_level, &cleanup)?;
         } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
@@ -8132,9 +8221,12 @@ fn proof_state_saturate_impl<W: fmt::Write>(
             ));
         }
 
-        if let Some(refutation) =
-            proof_state_saturate_sat_check_gate(state, control, &mut sat_check_thresholds)?
-        {
+        if let Some(refutation) = proof_state_saturate_sat_check_gate(
+            state,
+            control,
+            &mut sat_check_thresholds,
+            &mut doc_context,
+        )? {
             return Ok(refutation.into_saturate_outcome(state, processed_steps));
         }
     }
@@ -8358,10 +8450,11 @@ fn i64_as_c_unsigned_long(value: i64) -> u64 {
     u64::from_ne_bytes(value.to_ne_bytes())
 }
 
-fn proof_state_saturate_sat_check_gate(
+fn proof_state_saturate_sat_check_gate<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     thresholds: &mut SatCheckThresholds,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<Option<SatCheckRefutation>, Diagnostic> {
     let params = control.heuristic_parms();
     if params.sat_check_grounding == GroundingStrategy::NoGrounding {
@@ -8386,14 +8479,15 @@ fn proof_state_saturate_sat_check_gate(
         return Ok(None);
     };
 
-    let empty = proof_state_sat_check(state, control)?;
+    let empty = proof_state_sat_check(state, control, doc_context)?;
     *thresholds = thresholds.advance_after(trigger, control.heuristic_parms());
     Ok(empty)
 }
 
-fn proof_state_sat_check(
+fn proof_state_sat_check<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<Option<SatCheckRefutation>, Diagnostic> {
     let sat_check_normalize = control.heuristic_parms().sat_check_normalize;
     let sat_check_grounding = control.heuristic_parms().sat_check_grounding;
@@ -8404,14 +8498,29 @@ fn proof_state_sat_check(
     if sat_check_normalize {
         let mut eliminated = 0_u64;
         let mut unprocessed = std::mem::take(state.unprocessed_mut());
-        let empty = match proof_state_forward_contract_set_reweight(
-            state,
-            control,
-            &mut unprocessed,
-            false,
-            RewriteLevel::FullRewrite,
-            &mut eliminated,
-        ) {
+        let contraction_result = match doc_context.as_mut() {
+            Some((output, session, _output_level)) => {
+                proof_state_forward_contract_set_reweight_with_docs(
+                    &mut **output,
+                    session,
+                    state,
+                    control,
+                    &mut unprocessed,
+                    false,
+                    RewriteLevel::FullRewrite,
+                    &mut eliminated,
+                )
+            }
+            None => proof_state_forward_contract_set_reweight(
+                state,
+                control,
+                &mut unprocessed,
+                false,
+                RewriteLevel::FullRewrite,
+                &mut eliminated,
+            ),
+        };
+        let empty = match contraction_result {
             Ok(empty) => empty,
             Err(err) => {
                 *state.unprocessed_mut() = unprocessed;
@@ -9835,9 +9944,11 @@ mod tests {
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
         proof_state_check_watchlist_with_global_indices, proof_state_check_watchlist_with_output,
         proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_cleanup_unprocessed_clauses_with_docs, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight,
+        proof_state_forward_contract_set_reweight_with_docs,
         proof_state_forward_contract_set_with_docs, proof_state_forward_modify_clause,
         proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
         proof_state_forward_subsumption, proof_state_forward_subsumption_with_bank,
@@ -12871,6 +12982,58 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_forward_contract_set_reweight_with_docs_keeps_modified_survivor_evaluated() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let first = typed_const(terms, "pc_forward_set_reweight_doc_a");
+            let second = typed_const(terms, "pc_forward_set_reweight_doc_b");
+            let positive = literal(terms, &first, &second, true);
+            let duplicate = literal(terms, &second, &first, true);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![positive, duplicate]));
+            clause.set_ident(4_097);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            clause
+        };
+        let mut set = ClauseSet::new();
+        set.insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ForwardSetReweightDocsTest");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+        let mut eliminated = 0;
+
+        let empty = proof_state_forward_contract_set_reweight_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut set,
+            false,
+            RewriteLevel::RuleRewrite,
+            &mut eliminated,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(eliminated, 0);
+        assert_eq!(set.members(), 1);
+        let survivor = set.iter().next().expect("contracted clause should survive");
+        assert_eq!(survivor.ident(), 1);
+        assert_eq!(survivor.literal_number(), 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("cn(4097)"), "{rendered}");
+        let evaluations = survivor
+            .evaluations()
+            .expect("documented contraction survivor should be reweighted");
+        assert_eq!(evaluations.eval_no(), 1);
+        assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+        assert_eq!(set.eval_order_cloned(0).len(), 1);
+    }
+
+    #[test]
     fn proof_control_clause_set_filter_reweigth_removes_trivial_and_reweights() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (trivial, survivor) = {
@@ -13186,6 +13349,47 @@ mod tests {
         assert!(survivor.evaluations().is_some());
         assert_eq!(state.statistics().other_redundant_count, 1);
         assert_eq!(state.statistics().forward_contract_base, 3);
+    }
+
+    #[test]
+    fn proof_state_cleanup_unprocessed_with_docs_records_preprocessing_refutation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let same = typed_const(terms, "pc_cleanup_forward_doc_same");
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &same, &same, false)]));
+            clause.set_ident(4_115);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            clause
+        };
+        state.unprocessed_mut().insert(clause);
+        state.statistics_mut().processed_count = 1;
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().forward_contract_limit = 0;
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let outcome = proof_state_cleanup_unprocessed_clauses_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let empty = outcome
+            .unsatisfiable
+            .expect("documenting cleanup should return the minimized empty clause");
+        assert!(empty.is_empty());
+        assert_eq!(empty.ident(), 1);
+        assert!(outcome.forward_contract_triggered);
+        assert_eq!(state.unprocessed().members(), 0);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("cn(4115)"), "{rendered}");
     }
 
     #[test]
@@ -17144,6 +17348,74 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_saturate_with_docs_records_cleanup_contraction_before_status() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected =
+            unit_clause_with_id(state.terms_mut(), "pc_saturate_cleanup_doc_given", 4_157);
+        let cleanup_clause = {
+            let terms = state.terms_mut();
+            let same = typed_const(terms, "pc_saturate_cleanup_doc_same");
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &same, &same, false)]));
+            clause.set_ident(4_158);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        queue_unprocessed_for_process(&mut state, &mut control, cleanup_clause);
+        control.heuristic_parms_mut().forward_contract_limit = 0;
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
+        let mut watchlist_indices = GlobalIndices::new("NoIndex", "NoIndex", "NoIndex", 0);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+            &mut output,
+            &mut session,
+            2,
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+            &mut indices,
+            &mut watchlist_indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let SaturateOutcome::Returned {
+            clause,
+            reason,
+            processed_steps,
+        } = outcome
+        else {
+            panic!("maintenance cleanup should return its documented empty clause");
+        };
+        assert!(clause.is_empty());
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(reason, SaturateReturnReason::Cleanup);
+        assert_eq!(processed_steps, 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        let contraction = output
+            .find("cn(4158)")
+            .unwrap_or_else(|| panic!("missing cleanup contraction in {output}"));
+        let status = output
+            .find("Special forward-contraction")
+            .unwrap_or_else(|| panic!("missing cleanup status in {output}"));
+        assert!(contraction < status, "{output}");
+    }
+
+    #[test]
     fn proof_state_saturate_with_output_reports_dynamic_ac_activation() {
         let _guard = global_state_lock();
         let _time_limits =
@@ -17465,6 +17737,74 @@ mod tests {
         assert_eq!(state.extract_roots(), std::slice::from_ref(clause.as_ref()));
         assert_eq!(reason, SaturateReturnReason::SatCheckPreprocessing);
         assert_eq!(processed_steps, 1);
+        assert_eq!(state.statistics().satcheck_count, 0);
+        assert_eq!(state.statistics().satcheck_success, 0);
+        assert_eq!(control.solver().generation(), 1);
+    }
+
+    #[test]
+    fn proof_state_saturate_with_docs_records_sat_check_normalization_refutation() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let positive = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_doc_preprocessing",
+            4_147,
+            true,
+        );
+        let negative = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_doc_preprocessing",
+            4_148,
+            false,
+        );
+        queue_unprocessed_for_process(&mut state, &mut control, positive);
+        queue_unprocessed_for_process(&mut state, &mut control, negative);
+        control.heuristic_parms_mut().sat_check_grounding = GroundingStrategy::GlobalMin;
+        control.heuristic_parms_mut().sat_check_step_limit = 1;
+        control.heuristic_parms_mut().sat_check_normalize = true;
+        let mut indices = GlobalIndices::new("NoIndex", "FP1", "FP1", 0);
+        let mut watchlist_indices = GlobalIndices::new("NoIndex", "NoIndex", "NoIndex", 0);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_saturate_with_global_and_watchlist_indices_and_docs(
+            &mut output,
+            &mut session,
+            2,
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+            &mut indices,
+            &mut watchlist_indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let SaturateOutcome::Returned {
+            clause,
+            reason,
+            processed_steps,
+        } = outcome
+        else {
+            panic!("SATCheck normalization should return its documented empty clause");
+        };
+        assert!(clause.is_empty());
+        assert_eq!(clause.ident(), 1, "{output}");
+        assert_eq!(reason, SaturateReturnReason::SatCheckPreprocessing);
+        assert_eq!(processed_steps, 1);
+        assert_eq!(session.id_source.current_ident(), 1, "{output}");
+        assert!(output.contains("cn(4148)"), "{output}");
         assert_eq!(state.statistics().satcheck_count, 0);
         assert_eq!(state.statistics().satcheck_success, 0);
         assert_eq!(control.solver().generation(), 1);

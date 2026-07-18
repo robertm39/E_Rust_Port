@@ -1,0 +1,25 @@
+{
+  "all_passed": true,
+  "contracts": {
+    "c_cleanup_reports_after_contraction": true,
+    "c_cleanup_uses_set_contraction": true,
+    "c_satcheck_uses_set_reweight": true,
+    "cleanup_dispatches_documenting_contraction": true,
+    "cleanup_docs_regression": true,
+    "cleanup_exposes_documenting_wrapper": true,
+    "cleanup_impl_accepts_session": true,
+    "documenting_set_reweight_wrapper": true,
+    "plain_cleanup_fallback_retained": true,
+    "plain_sat_reweight_fallback_retained": true,
+    "sat_gate_forwards_session": true,
+    "sat_gate_receives_session": true,
+    "sat_normalization_dispatches_documenting_reweight": true,
+    "saturate_cleanup_docs_regression": true,
+    "saturate_dispatches_documenting_cleanup": true,
+    "saturate_satcheck_docs_regression": true,
+    "set_reweight_docs_regression": true
+  },
+  "passed": 17,
+  "schema_version": 1,
+  "total": 17
+}
