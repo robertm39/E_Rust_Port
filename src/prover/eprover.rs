@@ -59,7 +59,9 @@ use crate::clauses::derivation::{
     op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
     FormulaDerivationRef, DC_CNF_QUOTE,
 };
-use crate::clauses::eqn::{eqn_fof_parse, prepare_predicate_literal, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{
+    eqn_fof_parse, prepare_predicate_literal, Eqn, EqnFofPrintOptions, EqnPrintOptions,
+};
 use crate::clauses::eqn_props::PatEqnDirection;
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
@@ -5296,7 +5298,18 @@ fn run_syntax_only_print_formulas(
 
     let rendered = {
         let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
-        formulas.pretty_print_tstp_string(bank, true, print_problem_type, true)?
+        formulas.pretty_print_tstp_string_with_eqn_options(
+            bank,
+            true,
+            print_problem_type,
+            true,
+            EqnFofPrintOptions {
+                output_format: config.output_format,
+                pcl: false,
+                higher_order_parentheses: false,
+                print_types: config.encoding.print_types,
+            },
+        )?
     };
     output.write_all(rendered.as_bytes())?;
     Ok(())
@@ -5635,6 +5648,12 @@ fn run_proof_search<W: Write + ?Sized>(
     }
     let formula_cnf_result =
         clausify_formula_axioms_with_docs(output, config, &mut state, &heuristic_params, 1)?;
+    let initial_docs_next_ident = write_watchlist_initial_clause_docs(
+        output,
+        config,
+        &mut state,
+        formula_cnf_result.next_doc_ident,
+    )?;
     let raw_clause_no = state.axioms().members();
     debug_assert!(raw_clause_no >= formula_cnf_result.clauses_generated);
     let preproc_result = apply_clause_set_preprocessing_with_docs(
@@ -5646,7 +5665,7 @@ fn run_proof_search<W: Write + ?Sized>(
             replace_injectivity_defs: heuristic_params.replace_inj_defs,
             eqdef_incrlimit: heuristic_params.eqdef_incrlimit,
             eqdef_maxclauses: heuristic_params.eqdef_maxclauses,
-            start_ident: formula_cnf_result.next_doc_ident,
+            start_ident: initial_docs_next_ident,
         },
     )?;
     let preproc_removed = preproc_result.removed;
@@ -5681,10 +5700,7 @@ fn run_proof_search<W: Write + ?Sized>(
         heuristic_params.add_goal_defs_neg,
         heuristic_params.add_goal_defs_subterms,
     )?;
-    let next_doc_ident =
-        write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
-    let mut next_doc_ident =
-        write_watchlist_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
+    let mut next_doc_ident = preproc_result.next_doc_ident;
 
     match apply_auto_mode_search_selection(
         output,
@@ -7391,17 +7407,15 @@ fn clausify_formula_axioms_with_docs<W: Write + ?Sized>(
     params: &HeuristicParmsCell,
     start_ident: i64,
 ) -> Result<FormulaCnfPreparationResult, EProverError> {
-    if state.f_axioms().is_empty() {
-        return Ok(FormulaCnfPreparationResult {
-            clauses_generated: 0,
-            next_doc_ident: start_ident,
-        });
-    }
-
     let proof_problem_type = problem_type();
     let options = formula_cnf_options(params, proof_problem_type);
     if config.output_level >= 2 {
         clausify_formula_axioms_documented(output, config, state, options, start_ident)
+    } else if state.f_axioms().is_empty() {
+        Ok(FormulaCnfPreparationResult {
+            clauses_generated: 0,
+            next_doc_ident: start_ident,
+        })
     } else {
         clausify_formula_axioms_silent(state, config, options, start_ident)
     }
@@ -7414,21 +7428,44 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
     options: FormulaSetCnfOptions,
     start_ident: i64,
 ) -> Result<FormulaCnfPreparationResult, EProverError> {
+    let mut session = preprocessing_proof_doc_session(config, start_ident, options.problem_type)?;
     let mut rendered = String::new();
-    let mut session = proof_doc_session(config, start_ident, options.problem_type)?;
+    {
+        let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
+        let render_options = FormulaProofDocRenderOptions::new(true, options.problem_type)
+            .with_eqn_output_format(config.output_format)
+            .with_print_types(config.encoding.print_types);
+        let _initial = formulas.doc_initial(&mut rendered, bank, &mut session, render_options)?;
+    }
+    output.write_all(rendered.as_bytes())?;
+
+    let source_infos = initial_doc_source_infos(state, state.axioms());
+    {
+        let (bank, axioms) = state.terms_and_axioms_mut();
+        write_clause_set_initial_docs_with_session(
+            output,
+            bank,
+            axioms,
+            &mut session,
+            &source_infos,
+        )?;
+    }
+
+    if state.f_axioms().is_empty() {
+        return Ok(FormulaCnfPreparationResult {
+            clauses_generated: 0,
+            next_doc_ident: session.id_source.current_ident().saturating_add(1),
+        });
+    }
+
+    rendered.clear();
     let clauses_generated = {
         let fresh_vars = state.fresh_vars().clone();
         let (bank, clauses, formulas, archive, gc_context) =
             state.terms_axioms_formula_sets_cnf_with_gc_mut();
-        let render_options =
-            FormulaProofDocRenderOptions::new(config.pcl_output.full_terms, options.problem_type);
-        let _initial = formulas.doc_initial(
-            &mut rendered,
-            bank,
-            &mut session,
-            config.pcl_output.full_terms,
-            options.problem_type,
-        )?;
+        let render_options = FormulaProofDocRenderOptions::new(true, options.problem_type)
+            .with_eqn_output_format(config.output_format)
+            .with_print_types(config.encoding.print_types);
         let _archived = formulas.archive_into(archive);
         let _preprocessed = formulas.preproc_conjectures_with_docs(
             &mut rendered,
@@ -7515,7 +7552,8 @@ fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
 
     let next_doc_ident = if config.output_level >= 2 {
         let mut rendered = String::new();
-        let mut session = clause_proof_doc_session(config, preprocessing.start_ident)?;
+        let mut session =
+            preprocessing_clause_proof_doc_session(config, preprocessing.start_ident)?;
         {
             let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
             removed += clause_set_unfold_eq_def_normalize_with_docs(
@@ -7724,16 +7762,13 @@ fn write_initial_formula_docs<W: Write + ?Sized>(
 
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(problem_type());
-    let mut session = proof_doc_session(config, start_ident, proof_problem_type)?;
+    let mut session = preprocessing_proof_doc_session(config, start_ident, proof_problem_type)?;
     {
         let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
-        let _initial = formulas.doc_initial(
-            &mut rendered,
-            bank,
-            &mut session,
-            config.pcl_output.full_terms,
-            proof_problem_type,
-        )?;
+        let render_options = FormulaProofDocRenderOptions::new(true, proof_problem_type)
+            .with_eqn_output_format(config.output_format)
+            .with_print_types(config.encoding.print_types);
+        let _initial = formulas.doc_initial(&mut rendered, bank, &mut session, render_options)?;
     }
     output.write_all(rendered.as_bytes())?;
     Ok(session.id_source.current_ident().saturating_add(1))
@@ -7789,12 +7824,19 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     start_ident: i64,
     source_infos: &[Option<ClauseInfo>],
 ) -> Result<i64, EProverError> {
-    let mut session = clause_proof_doc_session(config, start_ident)?;
+    let mut session = preprocessing_clause_proof_doc_session(config, start_ident)?;
+    write_clause_set_initial_docs_with_session(output, bank, set, &mut session, source_infos)?;
+    Ok(session.id_source.current_ident().saturating_add(1))
+}
 
+fn write_clause_set_initial_docs_with_session<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    bank: &TermBank,
+    set: &mut ClauseSet,
+    session: &mut ProofDocSession,
+    source_infos: &[Option<ClauseInfo>],
+) -> Result<(), EProverError> {
     for (index, clause) in set.iter_mut().enumerate() {
-        if clause_has_formula_derivation_parent(clause) {
-            continue;
-        }
         let original_info = if clause.info().is_none() {
             if let Some(Some(info)) = source_infos.get(index).cloned() {
                 clause.set_info(Some(info));
@@ -7828,16 +7870,7 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
             let _ = clause.take_info();
         }
     }
-    Ok(session.id_source.current_ident().saturating_add(1))
-}
-
-fn clause_has_formula_derivation_parent(clause: &Clause) -> bool {
-    clause.derivation().is_some_and(|derivation| {
-        derivation
-            .as_slice()
-            .iter()
-            .any(|entry| matches!(entry, DerivationEntry::FormulaParent(_)))
-    })
+    Ok(())
 }
 
 fn clause_proof_doc_session(
@@ -7849,6 +7882,27 @@ fn clause_proof_doc_session(
         start_ident,
         proof_output_problem_type(problem_type()),
     )
+}
+
+fn preprocessing_clause_proof_doc_session(
+    config: &EProverConfig,
+    start_ident: i64,
+) -> Result<ProofDocSession, EProverError> {
+    preprocessing_proof_doc_session(
+        config,
+        start_ident,
+        proof_output_problem_type(problem_type()),
+    )
+}
+
+fn preprocessing_proof_doc_session(
+    config: &EProverConfig,
+    start_ident: i64,
+    problem_type: ProblemType,
+) -> Result<ProofDocSession, EProverError> {
+    let mut session = proof_doc_session(config, start_ident, problem_type)?;
+    session.step_options.full_terms = true;
+    Ok(session)
 }
 
 fn proof_doc_session(
@@ -22862,7 +22916,7 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_initial_pcl_docs_keep_c_stdout_markers_with_output_file() {
+    fn run_initial_formula_docs_route_to_output_file() {
         let _guard = global_state_lock();
         let output_path = temp_path("initial-doc-output-file");
         let input_path = temp_path("initial-doc-output-input");
@@ -22895,7 +22949,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             std::fs::read_to_string(&output_path).unwrap(),
             format!(
-                "     1 : :[++p(a)] : initial(\"{input_arg}\", at_line_1_column_1)\n\n% Pruning successful!\n% SZS status Unknown\n"
+                "     1 : :p(a) : initial(\"{input_arg}\", at_line_1_column_1)\n\n% Pruning successful!\n% SZS status Unknown\n"
             )
         );
         assert!(stderr.is_empty());
@@ -23599,7 +23653,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let expected = format!(
-            "{}     1 : :[++p(a)] : initial(\"{path_arg}\", at_line_1_column_1)\n\n% Pruning successful!\n% SZS status Unknown\n",
+            "{}     1 : :p(a) : initial(\"{path_arg}\", at_line_1_column_1)\n\n% Pruning successful!\n% SZS status Unknown\n",
             default_preprocessing_debug_line()
         );
         assert_eq!(String::from_utf8(stdout).unwrap(), expected);
@@ -24499,7 +24553,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let expected = format!(
-            "{}cnf(c1, axiom, (p(a)), file('{path_arg}', c1)).\n\n% Pruning successful!\n% SZS status Unknown\n",
+            "{}fof(c1, axiom, p(a), file('{path_arg}', c1)).\n\n% Pruning successful!\n% SZS status Unknown\n",
             default_preprocessing_debug_line()
         );
         assert_eq!(String::from_utf8(stdout).unwrap(), expected);
@@ -24701,7 +24755,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains(&format!("file('{path_arg}', link)")));
         assert!(!printed.contains(&format!("file('{path_arg}', far_clause)")));
         assert!(!printed.contains(&format!("file('{path_arg}', far_formula)")));
-        assert!(printed.contains("cnf(goal, negated_conjecture"));
+        assert!(printed.contains("fof(goal, negated_conjecture"));
         assert!(printed.contains("fof(link, axiom"));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
@@ -24767,7 +24821,7 @@ input_clause(c2,axiom,[++q(X)]).
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains(&format!(
-            "cnf(goal, negated_conjecture, (f(a)=a), file('{path_arg}', goal)).\n"
+            "fof(goal, negated_conjecture, f(a)=a, file('{path_arg}', goal)).\n"
         )));
         assert!(!printed.contains("edef"));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
@@ -24847,7 +24901,7 @@ input_clause(c2,axiom,[++q(X)]).
             format!(
                 "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = LambdaDef)\n\
 % SinE strategy is LambdaDef\n\
-cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
+ fof(goal, negated_conjecture, g=g, file('{path_arg}', goal)).\n\n\
 % Pruning successful!\n\
 % SZS status Unknown\n"
             )
@@ -30653,7 +30707,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
-    fn run_output_level_two_prints_initial_clause_docs_in_default_pcl() {
+    fn run_output_level_two_prints_initial_formula_docs_in_default_pcl() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-pcl");
         std::fs::write(&path, "p(a).\n").unwrap();
@@ -30677,16 +30731,121 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         let expected_prefix = format!(
-            "{}     1 : :[++p(a)] : initial(\"{path_arg}\", at_line_1_column_1)\nXX\n     2 : :[++p(a)] : XX\n",
+            "{}     1 : :p(a) : initial(\"{path_arg}\", at_line_1_column_1)\n",
             default_preprocessing_debug_line()
         );
         assert!(printed.starts_with(&expected_prefix));
-        assert!(printed.contains(
-            "\n     3 : :[++p(a)] : 2 : 'exists'\n\n% Clause set closed under restricted calculus!\n"
-        ));
+        assert!(!printed.contains("XX\n"));
+        assert_eq!(printed.matches(" : initial(").count(), 1);
+        assert!(printed.contains("\n     2 : :[++p(a)] : "));
+        assert!(printed.contains(" : 'exists'\n\n% Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("% SZS status GaveUp\n"));
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_keeps_formula_terms_full_before_compressed_search() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-docs-compressed-pcl");
+        std::fs::write(
+            &path,
+            "fof(deep, axiom, (p(f(f(f(a)))) & q(f(f(f(a)))))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--output-level=2",
+                "--no-generation",
+                "--pcl-terms-compressed",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        let (preprocessing, search) = printed.split_once("% Initializing proof state\n").unwrap();
+        assert!(preprocessing.contains(":(p(f(f(f(a))))&q(f(f(f(a))))) : initial("));
+        assert_eq!(preprocessing.matches(" : split_conjunct(1)").count(), 2);
+        assert!(!preprocessing.contains('*'));
+        assert!(search.contains(":[++*"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_formula_docs_honor_print_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-docs-print-types");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--output-level=2",
+                "--no-generation",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains(":p(a:$i):$o : initial("));
+        assert!(printed.contains(":[++p(a:$i):$o] : "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_tstp_documents_clause_origin_as_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-clause-origin-formula-docs-tstp");
+        std::fs::write(&path, "cnf(c1, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--output-level=2",
+                "--no-generation",
+                "--tstp-out",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        let preprocessing = printed
+            .split("% Initializing proof state\n")
+            .next()
+            .unwrap();
+        assert!(preprocessing.contains("fof(c1, axiom, p(a), file("));
+        assert!(!preprocessing.contains("cnf("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -30709,7 +30868,8 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(printed.contains("\n     3 : :[++p(a)] : 2 : 'final'\n\n% No proof found!\n"));
+        assert!(printed.contains("\n     2 : :[++p(a)] : "));
+        assert!(printed.contains(" : 'final'\n\n% No proof found!\n"));
         assert!(printed.contains("% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -30739,10 +30899,11 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        assert!(printed.contains("\n     3 : :[++p(a)] : 2 : 'eval'\n"));
-        assert!(printed.contains("\n     4 : :[++p(a)] : 3 : 'new_given'\n"));
+        assert!(printed.contains("\n     2 : :[++p(a)] : "));
+        assert!(printed.contains(" : 'eval'\n"));
+        assert!(printed.contains("\n     3 : :[++p(a)] : 2 : 'new_given'\n"));
         assert!(printed.contains(
-            "\n     5 : :[++p(a)] : 4 : 'exists'\n\n% Clause set closed under restricted calculus!\n"
+            "\n     4 : :[++p(a)] : 3 : 'exists'\n\n% Clause set closed under restricted calculus!\n"
         ));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -30766,7 +30927,8 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("\n     4 : :[] : 3 : 'proof'\n\n% Proof found!\n"));
+        assert!(printed.contains("\n     3 : :[] : "));
+        assert!(printed.contains(" : 'proof'\n\n% Proof found!\n"));
         assert!(printed.contains("% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -30790,15 +30952,15 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("\n     4 : :[] : er(3)\n"));
-        assert!(printed.contains("\n     5 : :[] : 4 : 'proof'\n\n% Proof found!\n"));
+        assert!(printed.contains("\n     3 : :[] : er("));
+        assert!(printed.contains("\n     4 : :[] : 3 : 'proof'\n\n% Proof found!\n"));
         assert!(printed.contains("% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn run_output_level_two_prints_initial_clause_docs_in_tstp() {
+    fn run_output_level_two_prints_initial_formula_docs_in_tstp() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-tstp");
         std::fs::write(&path, "p(a).\n").unwrap();
@@ -30823,7 +30985,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         let expected_prefix = format!(
-            "{}cnf(c_0_1, axiom, (p(a)), file('{path_arg}', at_line_1_column_1)).\ncnf(c_0_2, axiom, (p(a)), ).\n",
+            "{}fof(c_0_1, axiom, p(a), file('{path_arg}', at_line_1_column_1)).\n",
             default_preprocessing_debug_line()
         );
         assert!(printed.starts_with(&expected_prefix));
@@ -30891,9 +31053,8 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(
-            printed.contains("\ncnf(c_0_4, plain, ($false), c_0_3,['proof']).\n\n% Proof found!\n")
-        );
+        assert!(printed.contains("\ncnf(c_0_3, plain, ($false), "));
+        assert!(printed.contains(",['proof']).\n\n% Proof found!\n"));
         assert!(printed.contains("% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -32597,13 +32758,13 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             .lines()
             .find(|line| line.contains("inference(cn"))
             .expect("post-filter minimization proof step should be rendered");
-        assert!(minimize.starts_with("cnf(c_0_5,"), "{printed}");
+        assert!(minimize.starts_with("cnf(c_0_3,"), "{printed}");
         let survivor = printed
             .lines()
             .find(|line| line.contains("p(h(b))") && line.contains("['exists']"))
             .expect("filtered survivor should be quoted for the saturated output");
-        assert!(survivor.starts_with("cnf(c_0_7,"), "{printed}");
-        assert!(survivor.contains("c_0_5"), "{printed}");
+        assert!(survivor.starts_with("cnf(c_0_5,"), "{printed}");
+        assert!(survivor.contains("c_0_3"), "{printed}");
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -32673,14 +32834,14 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let input_doc = format!("cnf(input, axiom, (p(a)), file('{path_arg}', input)).\n");
+        let input_doc = format!("fof(input, axiom, p(a), file('{path_arg}', input)).\n");
         let watch_doc =
-            format!("cnf(c_0_3, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
-        let final_doc =
-            "cnf(c_0_4, plain, (p(a)), c_0_2,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+            format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
         let input_doc_pos = printed.find(&input_doc).unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
-        let final_doc_pos = printed.find(final_doc).unwrap();
+        let final_doc_pos = printed.find("cnf(c_0_3, plain, (p(a)), ").unwrap();
+        assert!(printed[final_doc_pos..]
+            .contains(",['final_subsumes_wl']).\n\n% Watchlist is empty!\n"));
         assert!(input_doc_pos < watch_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
         assert!(printed.contains("% SZS status ResourceOut\n"));
@@ -32689,7 +32850,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
-    fn run_output_level_two_unfolds_inline_watchlist_before_docs() {
+    fn run_output_level_two_documents_inline_watchlist_before_unfolding() {
         let _guard = global_state_lock();
         let path = temp_path("proof-inline-watch-eqdef-docs");
         std::fs::write(
@@ -32718,29 +32879,29 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let def_doc = format!("cnf(def, axiom, (f(X1)=X1), file('{path_arg}', def)).\n");
-        let input_doc = format!("cnf(input, axiom, (p(a)), file('{path_arg}', input)).\n");
+        let def_doc = format!("fof(def, axiom, ![X1]:(f(X1)=X1), file('{path_arg}', def)).\n");
+        let input_doc = format!("fof(input, axiom, p(a), file('{path_arg}', input)).\n");
         let watch_doc =
-            format!("cnf(c_0_5, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
-        let final_doc =
-            "cnf(c_0_6, plain, (p(a)), c_0_4,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+            format!("cnf(c_0_3, watchlist, (p(f(a))), file('{path_arg}', watch),['wl']).\n");
         let def_doc_pos = printed.find(&def_doc).unwrap();
         let input_doc_pos = printed.find(&input_doc).unwrap();
-        let unfold_doc_pos = printed.find("Unfolding").unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
-        let final_doc_pos = printed.find(final_doc).unwrap();
+        let unfold_doc_pos = printed.find("Unfolding").unwrap();
+        let final_doc_pos = printed.find("cnf(c_0_5, plain, (p(a)), ").unwrap();
+        assert!(printed[final_doc_pos..]
+            .contains(",['final_subsumes_wl']).\n\n% Watchlist is empty!\n"));
         assert!(def_doc_pos < input_doc_pos);
-        assert!(input_doc_pos < unfold_doc_pos);
-        assert!(unfold_doc_pos < watch_doc_pos);
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < unfold_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
-        assert!(!printed.contains("p(f(a))"));
+        assert!(printed.contains("p(f(a))"));
         assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn run_output_level_two_unfolds_file_watchlist_before_docs() {
+    fn run_output_level_two_documents_file_watchlist_before_unfolding() {
         let _guard = global_state_lock();
         let input_path = temp_path("proof-file-watch-eqdef-input");
         let watch_path = temp_path("proof-file-watch-eqdef-list");
@@ -32774,22 +32935,22 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let def_doc = format!("cnf(def, axiom, (f(X1)=X1), file('{input_arg}', def)).\n");
-        let input_doc = format!("cnf(input, axiom, (p(a)), file('{input_arg}', input)).\n");
+        let def_doc = format!("fof(def, axiom, ![X1]:(f(X1)=X1), file('{input_arg}', def)).\n");
+        let input_doc = format!("fof(input, axiom, p(a), file('{input_arg}', input)).\n");
         let watch_doc =
-            format!("cnf(c_0_5, watchlist, (p(a)), file('{watch_path_arg}', watch),['wl']).\n");
-        let final_doc =
-            "cnf(c_0_6, plain, (p(a)), c_0_4,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+            format!("cnf(c_0_3, watchlist, (p(f(a))), file('{watch_path_arg}', watch),['wl']).\n");
         let def_doc_pos = printed.find(&def_doc).unwrap();
         let input_doc_pos = printed.find(&input_doc).unwrap();
-        let unfold_doc_pos = printed.find("Unfolding").unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
-        let final_doc_pos = printed.find(final_doc).unwrap();
+        let unfold_doc_pos = printed.find("Unfolding").unwrap();
+        let final_doc_pos = printed.find("cnf(c_0_5, plain, (p(a)), ").unwrap();
+        assert!(printed[final_doc_pos..]
+            .contains(",['final_subsumes_wl']).\n\n% Watchlist is empty!\n"));
         assert!(def_doc_pos < input_doc_pos);
-        assert!(input_doc_pos < unfold_doc_pos);
-        assert!(unfold_doc_pos < watch_doc_pos);
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < unfold_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
-        assert!(!printed.contains("p(f(a))"));
+        assert!(printed.contains("p(f(a))"));
         assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
@@ -32870,16 +33031,21 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let input_doc =
-            format!("     1 : :[++p(a)] : initial(\"{input_arg}\", at_line_1_column_1)\n");
+        let input_doc = format!("     1 : :p(a) : initial(\"{input_arg}\", at_line_1_column_1)\n");
         let watch_doc = format!(
-            "     3 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1) : 'wl'\n",
+            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1) : 'wl'\n",
             watch_path.to_string_lossy()
         );
-        let final_doc = "     4 : :[++p(a)] : 2 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n";
         let input_doc_pos = printed.find(&input_doc).unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
-        let final_doc_pos = printed.find(final_doc).unwrap();
+        let final_doc_pos = printed
+            .find("     3 : :[++p(a)] : ")
+            .filter(|position| {
+                printed[*position..].starts_with("     3 : :[++p(a)] : ")
+                    && printed[*position..]
+                        .contains(" : 'final_subsumes_wl'\n\n% Watchlist is empty!\n")
+            })
+            .unwrap();
         assert!(input_doc_pos < watch_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
         assert!(printed.contains("% SZS status ResourceOut\n"));
@@ -33136,7 +33302,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(stdout, stderr, &["p(a)"]);
+        assert_formula_owner_print(stdout, stderr, &["p(a:$i):$o"]);
 
         let mut tptp_stdout = Vec::new();
         let mut tptp_stderr = Vec::new();
@@ -33155,7 +33321,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(tptp_stdout, tptp_stderr, &["p(a)"]);
+        assert_formula_owner_print(tptp_stdout, tptp_stderr, &["p(a:$i):$o"]);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -33195,10 +33361,10 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             &[
                 "type, a: person",
                 "type, p: person > $o",
-                "fof(person_type, axiom, $true)",
-                "fof(a_type, axiom, $true)",
-                "fof(p_type, axiom, $true)",
-                "tff(test1, axiom, p(a))",
+                "fof(person_type, axiom, $true:$o)",
+                "fof(a_type, axiom, $true:$o)",
+                "fof(p_type, axiom, $true:$o)",
+                "tff(test1, axiom, p(a:person):$o)",
             ],
         );
         std::fs::remove_file(&path).unwrap();
@@ -33456,7 +33622,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             &[
                 "type, a: person",
                 "type, p: person > $o",
-                "tff(test1, axiom, p(a))",
+                "tff(test1, axiom, p(a:person):$o)",
             ],
         );
         std::fs::remove_file(&path).unwrap();
@@ -33498,7 +33664,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             &[
                 "type, a: person",
                 "type, p: person > $o",
-                "tff(test1, axiom, p(a))",
+                "tff(test1, axiom, p(a:person):$o)",
             ],
         );
         std::fs::remove_file(&path).unwrap();
@@ -33944,7 +34110,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_formula_owner_print(stdout, stderr, &["a=b"]);
+        assert_formula_owner_print(stdout, stderr, &["equal(a, b)"]);
         std::fs::remove_file(&path).unwrap();
     }
 

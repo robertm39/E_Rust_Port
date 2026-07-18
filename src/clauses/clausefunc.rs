@@ -281,6 +281,18 @@ impl TFormulaTptpPrintOptions {
     pub const fn tstp(problem_type: ProblemType) -> Self {
         Self::new(problem_type, EqnFofPrintOptions::tstp())
     }
+
+    #[must_use]
+    pub const fn with_eqn_options(mut self, eqn_options: EqnFofPrintOptions) -> Self {
+        self.eqn_options = eqn_options;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_print_types(mut self, print_types: bool) -> Self {
+        self.eqn_options = self.eqn_options.with_print_types(print_types);
+        self
+    }
 }
 
 #[must_use]

@@ -2,8 +2,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
-    clause_pcl_string, clause_print_lop_format_string, clause_print_tptp_format_string,
-    clause_print_tstp_core_string, clause_tstp_string, Clause,
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_print_tstp_core_string,
+    clause_tstp_string, Clause,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM,
@@ -32,12 +32,14 @@ use crate::clauses::derivation::{
     DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_EQUIV,
     DC_VAR_RENAME,
 };
+use crate::clauses::eqn::EqnFofPrintOptions;
 use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::inferencedoc::{
     FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationInference,
     ProofDocSession, ProofDocWriteResult,
 };
 use crate::clauses::pdtrees::{PdTree, PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
+use crate::inout::scanner::IoFormat;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
     abstract_vars, apply_terms, beta_normalize_db, decode_formulas_for_cnf, lambda_eta_reduce_db,
@@ -125,6 +127,7 @@ pub struct FormulaTstpPrintOptions {
     pub completeness: FormulaTstpCompleteness,
     pub clause_mode: FormulaTstpClauseMode,
     pub keep_input_names: bool,
+    pub eqn_options: EqnFofPrintOptions,
 }
 
 impl FormulaTstpPrintOptions {
@@ -135,6 +138,7 @@ impl FormulaTstpPrintOptions {
             completeness: FormulaTstpCompleteness::Complete,
             clause_mode: FormulaTstpClauseMode::AsFormula,
             keep_input_names,
+            eqn_options: EqnFofPrintOptions::tstp(),
         }
     }
 
@@ -145,6 +149,7 @@ impl FormulaTstpPrintOptions {
             completeness: FormulaTstpCompleteness::Open,
             clause_mode: FormulaTstpClauseMode::AsFormula,
             keep_input_names,
+            eqn_options: EqnFofPrintOptions::tstp(),
         }
     }
 
@@ -153,18 +158,25 @@ impl FormulaTstpPrintOptions {
         self.clause_mode = clause_mode;
         self
     }
+
+    #[must_use]
+    pub const fn with_eqn_options(mut self, eqn_options: EqnFofPrintOptions) -> Self {
+        self.eqn_options = eqn_options;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormulaProofDocRenderOptions {
     pub full_terms: bool,
     pub problem_type: ProblemType,
+    pub eqn_output_format: IoFormat,
+    pub print_types: bool,
 }
 
 struct FormulaProofDocRenderings {
     formula: String,
-    clause_pcl: Option<String>,
-    clause_tstp: Option<String>,
+    formula_pcl: String,
 }
 
 impl FormulaProofDocRenderOptions {
@@ -173,7 +185,21 @@ impl FormulaProofDocRenderOptions {
         Self {
             full_terms,
             problem_type,
+            eqn_output_format: IoFormat::Lop,
+            print_types: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_eqn_output_format(mut self, eqn_output_format: IoFormat) -> Self {
+        self.eqn_output_format = eqn_output_format;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_print_types(mut self, print_types: bool) -> Self {
+        self.print_types = print_types;
+        self
     }
 }
 
@@ -1223,11 +1249,7 @@ fn doc_introduced_definition<W: fmt::Write>(
 ) -> Result<(), Diagnostic> {
     if let Some(context) = doc_context.as_mut() {
         let (write_result, new_ident, new_properties) = {
-            let renderings = formula.proof_doc_renderings(
-                bank,
-                context.render_options.full_terms,
-                context.render_options.problem_type,
-            )?;
+            let renderings = formula.proof_doc_renderings(bank, context.render_options)?;
             let mut view = formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_creation(
                 context.output,
@@ -1254,17 +1276,10 @@ fn doc_split_equiv_definition<W: fmt::Write>(
 ) -> Result<(), Diagnostic> {
     if let Some(context) = doc_context.as_mut() {
         let (write_result, new_ident, new_properties) = {
-            let parent_renderings = neutral_formula.proof_doc_renderings(
-                bank,
-                context.render_options.full_terms,
-                context.render_options.problem_type,
-            )?;
+            let parent_renderings =
+                neutral_formula.proof_doc_renderings(bank, context.render_options)?;
             let parent_view = neutral_formula.proof_doc_view_from_renderings(&parent_renderings);
-            let renderings = split_formula.proof_doc_renderings(
-                bank,
-                context.render_options.full_terms,
-                context.render_options.problem_type,
-            )?;
+            let renderings = split_formula.proof_doc_renderings(bank, context.render_options)?;
             let mut view = split_formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_creation(
                 context.output,
@@ -1295,11 +1310,7 @@ fn doc_applied_definitions<W: fmt::Write>(
                 .iter()
                 .map(|definition| definition.ident())
                 .collect::<Vec<_>>();
-            let renderings = formula.proof_doc_renderings(
-                bank,
-                context.render_options.full_terms,
-                context.render_options.problem_type,
-            )?;
+            let renderings = formula.proof_doc_renderings(bank, context.render_options)?;
             let mut view = formula.proof_doc_view_from_renderings(&renderings);
             let write_result = context.session.doc_formula_intro_defs(
                 context.output,
@@ -1394,11 +1405,7 @@ fn rewrite_formulas_with_def_symbols<W: fmt::Write>(
             formula.set_formula(rewritten);
             if let Some(context) = doc_context.as_mut() {
                 let (write_result, new_ident, new_properties) = {
-                    let renderings = formula.proof_doc_renderings(
-                        bank,
-                        context.render_options.full_terms,
-                        context.render_options.problem_type,
-                    )?;
+                    let renderings = formula.proof_doc_renderings(bank, context.render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = context.session.doc_formula_modification(
                         context.output,
@@ -2266,21 +2273,28 @@ impl WrappedFormula {
         full_terms: bool,
         problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
+        self.proof_doc_formula_body_string_with_options(
+            bank,
+            full_terms,
+            problem_type,
+            EqnFofPrintOptions::tstp(),
+        )
+    }
+
+    fn proof_doc_formula_body_string_with_options(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        eqn_options: EqnFofPrintOptions,
+    ) -> Result<String, Diagnostic> {
+        let print_options =
+            TFormulaTptpPrintOptions::tstp(problem_type).with_eqn_options(eqn_options);
         if self.is_clause {
             let closure = tformula_closure(bank, self.formula(), true)?;
-            tformula_tptp_string(
-                bank,
-                &closure,
-                full_terms,
-                TFormulaTptpPrintOptions::tstp(problem_type),
-            )
+            tformula_tptp_string(bank, &closure, full_terms, print_options)
         } else {
-            tformula_tptp_string(
-                bank,
-                self.formula(),
-                full_terms,
-                TFormulaTptpPrintOptions::tstp(problem_type),
-            )
+            tformula_tptp_string(bank, self.formula(), full_terms, print_options)
         }
     }
 
@@ -2308,25 +2322,33 @@ impl WrappedFormula {
     fn proof_doc_renderings(
         &self,
         bank: &mut TermBank,
-        full_terms: bool,
-        problem_type: ProblemType,
+        options: FormulaProofDocRenderOptions,
     ) -> Result<FormulaProofDocRenderings, Diagnostic> {
-        let formula = self.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
-        let (clause_pcl, clause_tstp) = if self.is_clause {
-            let clause = self.form_clause_to_clause(bank)?;
-            (
-                Some(clause_pcl_string(bank, &clause, full_terms)),
-                Some(clause_print_tstp_core_string(
-                    bank, &clause, full_terms, false,
-                )),
-            )
-        } else {
-            (None, None)
+        let tstp_eqn_options = EqnFofPrintOptions {
+            output_format: options.eqn_output_format,
+            pcl: false,
+            higher_order_parentheses: false,
+            print_types: options.print_types,
         };
+        let formula = self.proof_doc_formula_body_string_with_options(
+            bank,
+            options.full_terms,
+            options.problem_type,
+            tstp_eqn_options,
+        )?;
+        let pcl_eqn_options = EqnFofPrintOptions {
+            pcl: true,
+            ..tstp_eqn_options
+        };
+        let formula_pcl = tformula_tptp_string(
+            bank,
+            self.formula(),
+            options.full_terms,
+            TFormulaTptpPrintOptions::pcl(options.problem_type).with_eqn_options(pcl_eqn_options),
+        )?;
         Ok(FormulaProofDocRenderings {
             formula,
-            clause_pcl,
-            clause_tstp,
+            formula_pcl,
         })
     }
 
@@ -2335,12 +2357,7 @@ impl WrappedFormula {
         renderings: &'a FormulaProofDocRenderings,
     ) -> FormulaDocView<'a> {
         let mut view = self.proof_doc_view(&renderings.formula);
-        if let (Some(pcl), Some(tstp)) = (
-            renderings.clause_pcl.as_deref(),
-            renderings.clause_tstp.as_deref(),
-        ) {
-            view = view.with_clause_renderings(pcl, tstp);
-        }
+        view = view.with_proof_renderings(&renderings.formula_pcl, None);
         view
     }
 
@@ -2510,11 +2527,7 @@ impl WrappedFormula {
             self.set_formula(phase.formula().clone());
             if let Some(inference) = cnf_phase_formula_inference(phase.op()) {
                 let (write_result, new_ident, new_properties) = {
-                    let renderings = self.proof_doc_renderings(
-                        bank,
-                        doc.render_options.full_terms,
-                        doc.render_options.problem_type,
-                    )?;
+                    let renderings = self.proof_doc_renderings(bank, doc.render_options)?;
                     let mut view = self.proof_doc_view_from_renderings(&renderings);
                     let write_result = doc.session.doc_formula_modification(
                         &mut *doc.output,
@@ -2533,11 +2546,7 @@ impl WrappedFormula {
         self.set_formula(cnf_result.formula().clone());
 
         let source = self.derivation_ref();
-        let parent_renderings = self.proof_doc_renderings(
-            bank,
-            doc.render_options.full_terms,
-            doc.render_options.problem_type,
-        )?;
+        let parent_renderings = self.proof_doc_renderings(bank, doc.render_options)?;
         let parent_view = self.proof_doc_view_from_renderings(&parent_renderings);
         let clause_doc_result = tformula_to_cnf_with_docs(
             TFormulaToCnfDocContext::new(&mut *doc.output, &mut *doc.session, &parent_view),
@@ -2626,7 +2635,8 @@ impl WrappedFormula {
                         bank,
                         &closure,
                         options.full_terms,
-                        TFormulaTptpPrintOptions::tstp(problem_type),
+                        TFormulaTptpPrintOptions::tstp(problem_type)
+                            .with_eqn_options(options.eqn_options),
                     )?
                 }
                 FormulaTstpClauseMode::AsClauseCore => {
@@ -2639,7 +2649,7 @@ impl WrappedFormula {
                 bank,
                 self.formula(),
                 options.full_terms,
-                TFormulaTptpPrintOptions::tstp(problem_type),
+                TFormulaTptpPrintOptions::tstp(problem_type).with_eqn_options(options.eqn_options),
             )?
         };
         let mut output = format!(
@@ -2722,6 +2732,7 @@ impl WrappedFormula {
                 },
                 clause_mode: FormulaTstpClauseMode::AsFormula,
                 keep_input_names,
+                eqn_options: EqnFofPrintOptions::tstp(),
             },
         )
     }
@@ -3011,12 +3022,11 @@ impl FormulaSet {
         output: &mut W,
         bank: &mut TermBank,
         session: &mut ProofDocSession,
-        full_terms: bool,
-        problem_type: ProblemType,
+        render_options: FormulaProofDocRenderOptions,
     ) -> Result<FormulaSetDocInitialResult, Diagnostic> {
         let mut result = FormulaSetDocInitialResult::default();
         for formula in &mut self.formulas {
-            let renderings = formula.proof_doc_renderings(bank, full_terms, problem_type)?;
+            let renderings = formula.proof_doc_renderings(bank, render_options)?;
             let (write_result, new_ident) = {
                 let mut view = formula.proof_doc_view_from_renderings(&renderings);
                 let write_result = session.doc_formula_creation(
@@ -3321,6 +3331,7 @@ impl FormulaSet {
         let mut old_nodes = bank.non_var_term_nodes();
         let mut gc_threshold = formula_set_gc_threshold(old_nodes);
         let mut index = 0;
+        let render_options = FormulaProofDocRenderOptions::new(full_terms, problem_type);
 
         while index < self.formulas.len() {
             let changed = {
@@ -3332,8 +3343,7 @@ impl FormulaSet {
                 result.simplify.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let renderings =
-                        formula.proof_doc_renderings(bank, full_terms, problem_type)?;
+                    let renderings = formula.proof_doc_renderings(bank, render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
@@ -3453,11 +3463,7 @@ impl FormulaSet {
                     .push(DC_ANNO_QUESTION);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let renderings = formula.proof_doc_renderings(
-                        bank,
-                        render_options.full_terms,
-                        render_options.problem_type,
-                    )?;
+                    let renderings = formula.proof_doc_renderings(bank, render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
@@ -3487,11 +3493,7 @@ impl FormulaSet {
                     .push(DC_NEGATE_CONJECTURE);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let renderings = formula.proof_doc_renderings(
-                        bank,
-                        render_options.full_terms,
-                        render_options.problem_type,
-                    )?;
+                    let renderings = formula.proof_doc_renderings(bank, render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
@@ -3623,11 +3625,7 @@ impl FormulaSet {
                     .push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let renderings = formula.proof_doc_renderings(
-                        bank,
-                        render_options.full_terms,
-                        render_options.problem_type,
-                    )?;
+                    let renderings = formula.proof_doc_renderings(bank, render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
@@ -3996,11 +3994,7 @@ impl FormulaSet {
                     .push(DC_FOF_SIMPLIFY);
                 let (write_result, new_ident, new_properties) = {
                     let formula = &self.formulas[index];
-                    let renderings = formula.proof_doc_renderings(
-                        bank,
-                        render_options.full_terms,
-                        render_options.problem_type,
-                    )?;
+                    let renderings = formula.proof_doc_renderings(bank, render_options)?;
                     let mut view = formula.proof_doc_view_from_renderings(&renderings);
                     let write_result = session.doc_formula_modification(
                         output,
@@ -4602,6 +4596,34 @@ impl FormulaSet {
         problem_type: ProblemType,
         keep_input_names: bool,
     ) -> Result<String, Diagnostic> {
+        self.pretty_print_tstp_string_with_eqn_options(
+            bank,
+            full_terms,
+            problem_type,
+            keep_input_names,
+            EqnFofPrintOptions::tstp(),
+        )
+    }
+
+    /// Renders C's `FormulaSetPrettyPrintTSTP` while preserving the global
+    /// equation output mode used by `TFormulaTPTPPrint`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if type declarations or a wrapped formula cannot
+    /// be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term.
+    pub fn pretty_print_tstp_string_with_eqn_options(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+        eqn_options: EqnFofPrintOptions,
+    ) -> Result<String, Diagnostic> {
         let mut output = if self.is_untyped() {
             String::new()
         } else {
@@ -4618,11 +4640,14 @@ impl FormulaSet {
         };
 
         for formula in &self.formulas {
-            output.push_str(&formula.tstp_string_flex(
-                bank,
-                problem_type,
-                FormulaTstpPrintOptions::complete_formula(full_terms, keep_input_names),
-            )?);
+            output.push_str(
+                &formula.tstp_string_flex(
+                    bank,
+                    problem_type,
+                    FormulaTstpPrintOptions::complete_formula(full_terms, keep_input_names)
+                        .with_eqn_options(eqn_options),
+                )?,
+            );
             output.push('\n');
         }
         Ok(output)
@@ -5539,8 +5564,7 @@ mod tests {
                 &mut rendered,
                 &mut bank,
                 &mut session,
-                true,
-                ProblemType::FirstOrder,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
             )
             .unwrap();
 
@@ -5573,15 +5597,9 @@ mod tests {
             2,
             3,
         )));
-        let first_body = first
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
-            .unwrap();
         let mut second = WrappedFormula::wt_formula_alloc(second_formula);
         second.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
         second.set_info(Some(ClauseInfo::new(Some("doc_second"), None, 4, 5)));
-        let second_body = second
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
-            .unwrap();
         let mut set = FormulaSet::new();
         set.insert(first);
         set.insert(second);
@@ -5594,8 +5612,7 @@ mod tests {
                 &mut rendered,
                 &mut bank,
                 &mut session,
-                true,
-                ProblemType::FirstOrder,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
             )
             .unwrap();
 
@@ -5609,8 +5626,11 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            format!(
-                "     1 : :{first_body} : initial(\"doc.p\", doc_first)\n     2 : neg:{second_body} : initial(unknown, doc_second)\n"
+            concat!(
+                "     1 : :equal(doc_first_left, doc_first_right) : ",
+                "initial(\"doc.p\", doc_first)\n",
+                "     2 : neg:equal(doc_second_left, doc_second_right) : ",
+                "initial(unknown, doc_second)\n"
             )
         );
         assert_eq!(
@@ -5645,8 +5665,7 @@ mod tests {
                 &mut rendered,
                 &mut bank,
                 &mut session,
-                true,
-                ProblemType::FirstOrder,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
             )
             .unwrap();
 
@@ -6195,7 +6214,7 @@ mod tests {
         let mut expected_body = WrappedFormula::wt_formula_alloc(changed_atom.clone());
         expected_body.set_tptp_type(CP_TYPE_AXIOM);
         let expected_body = expected_body
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         let mut changed = WrappedFormula::wt_formula_alloc(changed_formula);
         changed.set_tptp_type(CP_TYPE_AXIOM);
@@ -6460,7 +6479,7 @@ mod tests {
         question.set_prop(CP_INPUT_FORMULA);
         let old_ident = question.ident();
         let question_body = question
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         let mut set = FormulaSet::new();
         set.insert(question);
@@ -6494,7 +6513,7 @@ mod tests {
         );
         let formula = set.iter().next().unwrap();
         let final_body = formula
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         assert_eq!(
             rendered,
@@ -6893,13 +6912,13 @@ mod tests {
         );
 
         let archived_body = archived
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         let active_body = formulas[1]
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         let rewritten_body = formulas[0]
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         assert_eq!(
             rendered,
@@ -7042,7 +7061,7 @@ mod tests {
         assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
         let converted_wrapper = set.iter().next().unwrap();
         let converted_body = converted_wrapper
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::HigherOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::HigherOrder)
             .unwrap();
         assert_eq!(
             rendered,
@@ -7562,7 +7581,7 @@ mod tests {
         assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
         let normalized_wrapper = set.iter().next().unwrap();
         let normalized_body = normalized_wrapper
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::HigherOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::HigherOrder)
             .unwrap();
         assert_eq!(
             rendered,
@@ -7777,7 +7796,7 @@ mod tests {
             ]
         );
         let distributed_body = wrapped
-            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .derived_pcl_formula_body_string(&bank, ProblemType::FirstOrder)
             .unwrap();
         assert!(rendered.starts_with(&format!(
             "     1 : neg:{distributed_body} : distribute({old_ident})\n"

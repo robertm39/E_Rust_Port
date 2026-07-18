@@ -1,0 +1,361 @@
+{
+  "all_effects_observed": true,
+  "all_exact": true,
+  "c": {
+    "lop_default": {
+      "exit_code": 0,
+      "output": [
+        "f(a)=a <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_eqn_no_infix": {
+      "exit_code": 0,
+      "output": [
+        "equal(f(a), a) <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_full_equational": {
+      "exit_code": 0,
+      "output": [
+        "f(a)=a <- .",
+        "p(a)=$true <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_oriented_rules": {
+      "exit_code": 0,
+      "output": [
+        "f(a)->a <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "pcl_compact": {
+      "exit_code": 0,
+      "output": [
+        "1::~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "2::~equal(a, a) : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_preprocessing_terms_full": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :(p(f(f(f(a))))&q(f(f(f(a))))) : initial(\"deep-conjunction.p\", deep_conjunction)",
+        "     2 : :[++q(f(f(f(a))))] : split_conjunct(1)",
+        "     3 : :[++p(f(f(f(a))))] : split_conjunct(1)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_print_types": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :$true:$o : initial(\"typed-equation.p\", a_type)",
+        "     2 : :$true:$o : initial(\"typed-equation.p\", f_type)",
+        "     3 : :equal(f(a:$i):$i, a:$i) : initial(\"typed-equation.p\", eq)",
+        "     4 : :$true:$o : fof_nnf(1)",
+        "     5 : :$true:$o : fof_nnf(4)",
+        "     6 : :[++$true:$o] : split_conjunct(5)",
+        "     7 : :$true:$o : fof_nnf(2)",
+        "     8 : :$true:$o : fof_nnf(7)",
+        "     9 : :[++$true:$o] : split_conjunct(8)",
+        "    10 : :[++equal(f(a:$i):$i, a:$i)] : split_conjunct(3)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_shell_0": {
+      "exit_code": 0,
+      "output": [
+        "     1 : :~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : :~equal(a, a) : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_shell_1": {
+      "exit_code": 0,
+      "output": [
+        "     1 : :~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : : : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_shell_2": {
+      "exit_code": 0,
+      "output": [
+        "     1 : : : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : : : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_terms_compressed": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :p(f(f(f(a)))) : initial(\"deep-term.lop\", at_line_1_column_1)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_watchlist_side_channel": {
+      "exit_code": 9,
+      "output": [
+        "     1 : :p(a) : initial(\"clause.lop\", at_line_1_column_1)",
+        "XX",
+        "     2 : :[++p(a)] : XX",
+        "initial(\"watch.lop\", at_line_1_column_1) : 'wl'"
+      ],
+      "status": "% SZS status ResourceOut",
+      "stderr": ""
+    },
+    "print_formulas_ignores_clause_format": {
+      "exit_code": 0,
+      "output": [
+        "fof(i_0_N, axiom, equal(f(a), a)).",
+        "fof(i_0_N, axiom, p(a))."
+      ],
+      "status": null,
+      "stderr": ""
+    },
+    "tptp_format": {
+      "exit_code": 0,
+      "output": [
+        "input_clause(i_0_N,axiom,[++p(a)])."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tptp_out": {
+      "exit_code": 0,
+      "output": [
+        "input_clause(i_0_N,axiom,[++equal(f(a), a)]).",
+        "input_clause(i_0_N,axiom,[++p(a)])."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tstp_docs": {
+      "exit_code": 0,
+      "output": [
+        "fof(c_0_N, axiom, a!=a, file('contradiction.lop', at_line_1_column_1)).",
+        "fof(c_0_N, plain, a!=a,inference(fof_simplification, [status(thm)],[c_0_N]))."
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "tstp_format": {
+      "exit_code": 0,
+      "output": [
+        "cnf(i_0_N, plain, (p(a)))."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tstp_in_out": {
+      "exit_code": 0,
+      "output": [
+        "cnf(i_0_N, plain, (p(a)))."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "case_count": 18,
+  "option_effects": {
+    "compact_steps_observed": true,
+    "eqn_no_infix_observed": true,
+    "full_equational_observed": true,
+    "ordinary_pcl_has_no_xx": true,
+    "oriented_rule_observed": true,
+    "preprocessing_terms_are_full": true,
+    "print_formulas_is_tstp": true,
+    "shell_levels_distinct": true,
+    "tptp_output_observed": true,
+    "tstp_output_observed": true,
+    "watchlist_c_side_channel_preserved": true
+  },
+  "rust": {
+    "lop_default": {
+      "exit_code": 0,
+      "output": [
+        "f(a)=a <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_eqn_no_infix": {
+      "exit_code": 0,
+      "output": [
+        "equal(f(a), a) <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_full_equational": {
+      "exit_code": 0,
+      "output": [
+        "f(a)=a <- .",
+        "p(a)=$true <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "lop_oriented_rules": {
+      "exit_code": 0,
+      "output": [
+        "f(a)->a <- .",
+        "p(a) <- ."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "pcl_compact": {
+      "exit_code": 0,
+      "output": [
+        "1::~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "2::~equal(a, a) : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_preprocessing_terms_full": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :(p(f(f(f(a))))&q(f(f(f(a))))) : initial(\"deep-conjunction.p\", deep_conjunction)",
+        "     2 : :[++q(f(f(f(a))))] : split_conjunct(1)",
+        "     3 : :[++p(f(f(f(a))))] : split_conjunct(1)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_print_types": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :$true:$o : initial(\"typed-equation.p\", a_type)",
+        "     2 : :$true:$o : initial(\"typed-equation.p\", f_type)",
+        "     3 : :equal(f(a:$i):$i, a:$i) : initial(\"typed-equation.p\", eq)",
+        "     4 : :$true:$o : fof_nnf(1)",
+        "     5 : :$true:$o : fof_nnf(4)",
+        "     6 : :[++$true:$o] : split_conjunct(5)",
+        "     7 : :$true:$o : fof_nnf(2)",
+        "     8 : :$true:$o : fof_nnf(7)",
+        "     9 : :[++$true:$o] : split_conjunct(8)",
+        "    10 : :[++equal(f(a:$i):$i, a:$i)] : split_conjunct(3)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_shell_0": {
+      "exit_code": 0,
+      "output": [
+        "     1 : :~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : :~equal(a, a) : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_shell_1": {
+      "exit_code": 0,
+      "output": [
+        "     1 : :~equal(a, a) : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : : : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_shell_2": {
+      "exit_code": 0,
+      "output": [
+        "     1 : : : initial(\"contradiction.lop\", at_line_1_column_1)",
+        "     2 : : : fof_simplification(1)"
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "pcl_terms_compressed": {
+      "exit_code": 10,
+      "output": [
+        "     1 : :p(f(f(f(a)))) : initial(\"deep-term.lop\", at_line_1_column_1)"
+      ],
+      "status": "% SZS status GaveUp",
+      "stderr": ""
+    },
+    "pcl_watchlist_side_channel": {
+      "exit_code": 9,
+      "output": [
+        "     1 : :p(a) : initial(\"clause.lop\", at_line_1_column_1)",
+        "XX",
+        "     2 : :[++p(a)] : XX",
+        "initial(\"watch.lop\", at_line_1_column_1) : 'wl'"
+      ],
+      "status": "% SZS status ResourceOut",
+      "stderr": ""
+    },
+    "print_formulas_ignores_clause_format": {
+      "exit_code": 0,
+      "output": [
+        "fof(i_0_N, axiom, equal(f(a), a)).",
+        "fof(i_0_N, axiom, p(a))."
+      ],
+      "status": null,
+      "stderr": ""
+    },
+    "tptp_format": {
+      "exit_code": 0,
+      "output": [
+        "input_clause(i_0_N,axiom,[++p(a)])."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tptp_out": {
+      "exit_code": 0,
+      "output": [
+        "input_clause(i_0_N,axiom,[++equal(f(a), a)]).",
+        "input_clause(i_0_N,axiom,[++p(a)])."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tstp_docs": {
+      "exit_code": 0,
+      "output": [
+        "fof(c_0_N, axiom, a!=a, file('contradiction.lop', at_line_1_column_1)).",
+        "fof(c_0_N, plain, a!=a,inference(fof_simplification, [status(thm)],[c_0_N]))."
+      ],
+      "status": "% SZS status Unsatisfiable",
+      "stderr": ""
+    },
+    "tstp_format": {
+      "exit_code": 0,
+      "output": [
+        "cnf(i_0_N, plain, (p(a)))."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "tstp_in_out": {
+      "exit_code": 0,
+      "output": [
+        "cnf(i_0_N, plain, (p(a)))."
+      ],
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "schema_version": 1
+}

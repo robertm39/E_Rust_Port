@@ -234,7 +234,7 @@ pub struct FormulaDocView<'a> {
     ident: i64,
     properties: FormulaProperties,
     rendered_formula: &'a str,
-    rendered_clause_pcl: Option<&'a str>,
+    rendered_formula_pcl: Option<&'a str>,
     rendered_clause_tstp: Option<&'a str>,
     info: Option<&'a ClauseInfo>,
     is_untyped: bool,
@@ -247,7 +247,7 @@ impl<'a> FormulaDocView<'a> {
             ident,
             properties,
             rendered_formula,
-            rendered_clause_pcl: None,
+            rendered_formula_pcl: None,
             rendered_clause_tstp: None,
             info: None,
             is_untyped: true,
@@ -267,9 +267,13 @@ impl<'a> FormulaDocView<'a> {
     }
 
     #[must_use]
-    pub const fn with_clause_renderings(mut self, pcl: &'a str, tstp: &'a str) -> Self {
-        self.rendered_clause_pcl = Some(pcl);
-        self.rendered_clause_tstp = Some(tstp);
+    pub const fn with_proof_renderings(
+        mut self,
+        pcl_formula: &'a str,
+        clause_tstp: Option<&'a str>,
+    ) -> Self {
+        self.rendered_formula_pcl = Some(pcl_formula);
+        self.rendered_clause_tstp = clause_tstp;
         self
     }
 
@@ -289,7 +293,7 @@ impl<'a> FormulaDocView<'a> {
 
     #[must_use]
     pub const fn rendered_pcl(&self) -> &'a str {
-        match self.rendered_clause_pcl {
+        match self.rendered_formula_pcl {
             Some(rendered) => rendered,
             None => self.rendered_formula,
         }
@@ -1218,7 +1222,7 @@ impl ProofDocSession {
                     output,
                     formula.ident(),
                     formula.query_tptp_type(),
-                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_pcl()),
                     self.step_options,
                 )
                 .map_err(doc_write_error)?;
