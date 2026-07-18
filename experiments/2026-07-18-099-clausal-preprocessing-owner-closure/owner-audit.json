@@ -1,0 +1,27 @@
+{
+  "all_passed": true,
+  "checks": {
+    "bce_reference_exact": true,
+    "c_bce_first_order_gate": true,
+    "c_clause_preprocessing_order": true,
+    "c_exposes_no_parallel_formula_set_pass": true,
+    "c_formula_cnf_precedes_clause_preprocessing": true,
+    "c_predicate_elimination_first_order_gate": true,
+    "eqdef_reference_exact": true,
+    "goal_definition_reference_exact": true,
+    "higher_order_gate_reference_exact": true,
+    "permanent_bce_formula_owner_regression": true,
+    "permanent_eqdef_formula_owner_regression": true,
+    "permanent_goal_formula_owner_regression": true,
+    "permanent_predicate_formula_owner_regression": true,
+    "permanent_presaturation_formula_owner_regression": true,
+    "permanent_thf_first_order_pass_gate_regression": true,
+    "predicate_elimination_reference_exact": true,
+    "rust_bce_first_order_gate": true,
+    "rust_formula_cnf_and_clause_preprocessing_order": true,
+    "rust_predicate_elimination_first_order_gate": true
+  },
+  "passed": 19,
+  "schema_version": 1,
+  "total": 19
+}

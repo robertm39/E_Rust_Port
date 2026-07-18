@@ -27,9 +27,10 @@ incorrectly eliminate both.
 Unchanged C invokes `FormulaSetCNF2` before `ProofStateClausalPreproc`, and BCE
 is clause-only inside that later function. There is no broader formula-set BCE
 entry point to port. Rust follows the same route for represented FOF owners.
-Permanent executable tests now also pin supported first-order-shaped THF owners:
-formula CNF drains the owners, then BCE sees and eliminates the two produced
-clauses before proof-control initialization.
+A subsequent option-effect audit corrected the THF boundary: C gates BCE on
+the syntactic `PROBLEM_FO` process type, so even first-order-shaped clauses
+lowered from THF skip BCE. Rust now preserves that exact gate, with permanent
+executable coverage and a 15-case C/Rust matrix in experiment `094`.
 
 ## Cross-Bank Equational Blockedness
 
@@ -62,4 +63,5 @@ C:\Users\rober\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\p
 
 `ClauseDerivationRef` completes the safe replacement for C's BCE pointers.
 Formula owners require no parallel BCE path because both implementations lower
-them before clause preprocessing.
+them before clause preprocessing. Whether the pass runs after lowering is
+decided by the same syntactic first-order problem-type gate in both programs.
