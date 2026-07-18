@@ -1,0 +1,17 @@
+{
+  "contract_count": 10,
+  "contracts": {
+    "c_gate_order": true,
+    "c_storage_after_forward_reweight": true,
+    "rust_c_shaped_forward_output": true,
+    "rust_default_refreshes_liveness_in_gate": true,
+    "rust_default_uses_live_storage_estimator": true,
+    "rust_gate_order": true,
+    "rust_orphan_hook_runs_at_both_gates": true,
+    "rust_post_orphan_storage_regression": true,
+    "rust_saturation_cleanup_after_processing": true,
+    "rust_storage_is_late_callback": true
+  },
+  "pass_count": 10,
+  "schema_version": 1
+}

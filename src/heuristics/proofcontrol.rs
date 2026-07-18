@@ -3168,6 +3168,20 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
     current_storage: i64,
     mut parent_is_dead: impl FnMut(DerivationParentRef) -> bool,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
+    proof_state_cleanup_unprocessed_clauses_impl(
+        state,
+        control,
+        |_| current_storage,
+        |state| clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead),
+    )
+}
+
+fn proof_state_cleanup_unprocessed_clauses_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut current_storage: impl FnMut(&ProofState) -> i64,
+    mut delete_orphans: impl FnMut(&mut ProofState) -> i64,
+) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
     let mut outcome = CleanupUnprocessedOutcome::default();
     let back_simplified = state
         .statistics()
@@ -3176,7 +3190,7 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
     let orphan_delta = back_simplified.saturating_sub(state.statistics().filter_orphans_base);
 
     if unsigned_delta_exceeds_limit(orphan_delta, control.heuristic_parms().filter_orphans_limit) {
-        let deleted = clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        let deleted = delete_orphans(state);
         outcome.orphan_cleanup_triggered = true;
         outcome.orphan_cleanup_deleted = deleted;
         outcome.orphan_cleanup_remaining = state.unprocessed().members();
@@ -3233,14 +3247,13 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
         reweight_result?;
     }
 
-    if current_storage > control.heuristic_parms().delete_bad_limit {
+    if current_storage(state) > control.heuristic_parms().delete_bad_limit {
         let target_size = state.unprocessed().members() / 2;
-        let deleted_orphans =
-            clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        let orphan_count = delete_orphans(state);
         outcome.delete_bad_triggered = true;
-        outcome.delete_bad_orphaned_deleted = deleted_orphans;
-        outcome.orphaned_deleted += deleted_orphans;
-        state.statistics_mut().non_redundant_deleted += i64_to_u64_saturating(deleted_orphans);
+        outcome.delete_bad_orphaned_deleted = orphan_count;
+        outcome.orphaned_deleted += orphan_count;
+        state.statistics_mut().non_redundant_deleted += i64_to_u64_saturating(orphan_count);
 
         let active_hcb_handle = control.active_hcb.ok_or_else(|| {
             Diagnostic::new(
@@ -3274,24 +3287,17 @@ pub fn proof_state_cleanup_unprocessed_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
-    let current_storage = proof_state_storage_estimate(state);
-    let back_simplified = state
-        .statistics()
-        .backward_subsumed_count
-        .saturating_add(state.statistics().backward_rewritten_count);
-    let orphan_delta = back_simplified.saturating_sub(state.statistics().filter_orphans_base);
-    let needs_parent_liveness =
-        unsigned_delta_exceeds_limit(orphan_delta, control.heuristic_parms().filter_orphans_limit)
-            || current_storage > control.heuristic_parms().delete_bad_limit;
-
-    if needs_parent_liveness {
-        let parent_liveness = ParentLivenessSnapshot::from_state(state);
-        proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |parent| {
-            parent_liveness.parent_is_dead(parent)
-        })
-    } else {
-        proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |_| false)
-    }
+    proof_state_cleanup_unprocessed_clauses_impl(
+        state,
+        control,
+        proof_state_storage_estimate,
+        |state| {
+            let parent_liveness = ParentLivenessSnapshot::from_state(state);
+            clause_set_delete_orphans_with(state.unprocessed_mut(), |parent| {
+                parent_liveness.parent_is_dead(parent)
+            })
+        },
+    )
 }
 
 /// Applies C `ProofStateFilterUnprocessed` to the state-owned unprocessed set.
@@ -12873,6 +12879,37 @@ mod tests {
         assert!(state.unprocessed().find_by_id(4_118).is_none());
         assert!(state.unprocessed().find_by_id(4_119).is_some());
         assert_eq!(state.statistics().other_redundant_count, 1);
+    }
+
+    #[test]
+    fn cleanup_default_measures_storage_after_orphan_deletion() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut parent = Clause::empty();
+        parent.set_ident(4_123);
+        let mut orphan = Clause::empty();
+        orphan.set_ident(4_124);
+        clause_push_derivation(&mut orphan, DC_ORDERED_FACTOR, Some(&parent), None);
+        parent.set_prop(CP_IS_DEAD);
+        state.archive_mut().insert(parent);
+        let survivor = unit_clause_with_id(state.terms_mut(), "pc_cleanup_order_survivor", 4_125);
+        state.unprocessed_mut().insert(orphan);
+        state.unprocessed_mut().insert(survivor);
+        state.statistics_mut().backward_rewritten_count = 1;
+
+        let storage_before_cleanup = proof_state_storage_estimate(&state);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().filter_orphans_limit = 0;
+        control.heuristic_parms_mut().delete_bad_limit = storage_before_cleanup - 1;
+
+        let outcome = proof_state_cleanup_unprocessed_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let storage_after_cleanup = proof_state_storage_estimate(&state);
+
+        assert!(outcome.orphan_cleanup_triggered);
+        assert_eq!(outcome.orphan_cleanup_deleted, 1);
+        assert!(!outcome.delete_bad_triggered);
+        assert!(storage_after_cleanup < storage_before_cleanup);
+        assert!(storage_after_cleanup <= control.heuristic_parms().delete_bad_limit);
     }
 
     #[test]

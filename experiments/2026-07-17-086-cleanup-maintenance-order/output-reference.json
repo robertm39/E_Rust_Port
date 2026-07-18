@@ -1,0 +1,26 @@
+{
+  "c": {
+    "exit_code": 10,
+    "maintenance_bytes": 300,
+    "maintenance_sha256": "97FEE60C75F77578B425C993136347F8A68E82202FF112C7F310C9D49CC43333",
+    "maintenance_text": "% Special forward-contraction deletes 0 clauses(remaining: 2) \n% Reweighting unprocessed clauses...\n% Special forward-contraction deletes 0 clauses(remaining: 1) \n% Reweighting unprocessed clauses...\n% Special forward-contraction deletes 0 clauses(remaining: 0) \n% Reweighting unprocessed clauses...\n",
+    "stderr_bytes": 0,
+    "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "stdout_bytes": 542,
+    "stdout_sha256": "128A0912EA074824A6858DF1EF1DFF4BF6B1E5A4A21D312E53D7DF99B4360E7C"
+  },
+  "maintenance_exact": true,
+  "process_exact": true,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "rust": {
+    "exit_code": 10,
+    "maintenance_bytes": 300,
+    "maintenance_sha256": "97FEE60C75F77578B425C993136347F8A68E82202FF112C7F310C9D49CC43333",
+    "maintenance_text": "% Special forward-contraction deletes 0 clauses(remaining: 2) \n% Reweighting unprocessed clauses...\n% Special forward-contraction deletes 0 clauses(remaining: 1) \n% Reweighting unprocessed clauses...\n% Special forward-contraction deletes 0 clauses(remaining: 0) \n% Reweighting unprocessed clauses...\n",
+    "stderr_bytes": 0,
+    "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "stdout_bytes": 542,
+    "stdout_sha256": "128A0912EA074824A6858DF1EF1DFF4BF6B1E5A4A21D312E53D7DF99B4360E7C"
+  },
+  "schema_version": 1
+}
