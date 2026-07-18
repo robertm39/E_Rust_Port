@@ -1,0 +1,18 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_classifier_calls_only_clause_preprocess": true,
+    "c_preprocess_body_has_no_eqdef_normalization": true,
+    "c_proof_owner_normalizes_after_preprocess_gate": true,
+    "permanent_cnf_classifier_regression": true,
+    "permanent_formula_classifier_regression": true,
+    "permanent_formula_proof_search_regression": true,
+    "rust_classifier_calls_only_clause_preprocess": true,
+    "rust_classifier_clausifies_formula_owners_first": true,
+    "rust_proof_owner_retains_eqdef_normalization": true,
+    "rust_public_unfold_surface_is_present": true
+  },
+  "passed": 10,
+  "schema_version": 1,
+  "total": 10
+}

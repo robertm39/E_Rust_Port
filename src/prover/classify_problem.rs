@@ -5,7 +5,7 @@ use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_archive_copy;
 use crate::clauses::formulasets::FormulaSetCnfOptions;
 use crate::clauses::proofstate::{proof_state_alloc, ProofState};
-use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
+use crate::clauses::unfold_defs::clause_set_preprocess;
 use crate::heuristics::clausesetfeatures::{
     clause_set_count_eqn_literals, clause_set_count_range_restricted, clause_set_count_singletons,
     clause_set_count_variables, clause_set_max_literal_number, create_default_spec_limits,
@@ -1201,7 +1201,7 @@ fn preprocess_real_input_clauses(
         let (bank, axioms, ax_archive) = state.terms_axioms_ax_archive_mut();
         let _archived = clause_set_archive_copy(ax_archive, axioms, bank)?;
     }
-    let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+    let (bank, axioms, _watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
     if !config.no_preprocessing {
         let _removed = clause_set_preprocess(
             axioms,
@@ -1209,15 +1209,6 @@ fn preprocess_real_input_clauses(
             &mut tmp_bank,
             bank,
             false,
-            config.eqdef_incrlimit,
-            config.eqdef_maxclauses,
-        )?;
-        let _unfolded = clause_set_unfold_eq_def_normalize(
-            axioms,
-            watchlist,
-            archive,
-            &mut tmp_bank,
-            bank,
             config.eqdef_incrlimit,
             config.eqdef_maxclauses,
         )?;
@@ -2671,7 +2662,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_real_input_preprocessing_unfolds_eq_definitions() {
+    fn standard_real_input_preprocessing_keeps_eq_definitions_at_c_caller_boundary() {
         let _guard = global_state_lock();
         let _problem_type_guard = super::ProblemTypeRunGuard::new();
         set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
@@ -2690,9 +2681,33 @@ mod tests {
             .expect("real-input preprocessing succeeds");
 
         let printed = state.axioms().print_tptp_format_string(state.terms());
-        assert_eq!(state.axioms().members(), 1);
-        assert!(printed.contains("p(a)"));
-        assert!(!printed.contains("p(f(a))"));
+        assert_eq!(state.axioms().members(), 2);
+        assert!(printed.contains("p(f(a))"));
+    }
+
+    #[test]
+    fn standard_formula_input_preprocessing_keeps_cnf_eq_definitions() {
+        let _guard = global_state_lock();
+        let _problem_type_guard = super::ProblemTypeRunGuard::new();
+        set_problem_type(ProblemType::FirstOrder).expect("problem type is initialized");
+        let config = ClassifyProblemConfig {
+            parse_format: IoFormat::Tstp,
+            ..ClassifyProblemConfig::default()
+        };
+        let mut state =
+            proof_state_alloc(FP_IGNORE_PROPS).expect("proof state allocation succeeds");
+        let mut stdin: &[u8] = b"fof(def, axiom, ![X]:(f(X)=X)).\n\
+            fof(use, axiom, p(f(a))).\n";
+
+        let parsed_problem_type = parse_real_input_file(&config, "-", &mut stdin, &mut state)
+            .expect("formula-owner parsing succeeds");
+        preprocess_real_input_clauses(&config, &mut state, parsed_problem_type)
+            .expect("formula CNF and caller-local preprocessing succeed");
+
+        let printed = state.axioms().print_tptp_format_string(state.terms());
+        assert_eq!(state.f_axioms().cardinality(), 0);
+        assert_eq!(state.axioms().members(), 2);
+        assert!(printed.contains("p(f(a))"));
     }
 
     #[test]
