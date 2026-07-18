@@ -18385,6 +18385,62 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_installs_varweight_with_active_owner_context() {
+        let mut bank = test_bank();
+        let left_base = typed_const(&mut bank, "pc_varweight_left");
+        let right_base = typed_const(&mut bank, "pc_varweight_right");
+        let left = typed_unary(&mut bank, "pc_varweight_f", &left_base);
+        let right = typed_unary(&mut bank, "pc_varweight_g", &right_base);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &left, &right, true,
+        )]));
+        let mut axioms = ClauseSet::new();
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "VarOwnerSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec!["var_owner=Depthweight(ConstPrio,2,1,3.0,5.0,7.0,11.0)".to_owned()];
+        let mut hcb_defs = vec!["VarOwnerSearch=(1*var_owner)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+        assert!(!clause.literals().as_slice()[0].is_maximal());
+        let active_hcb_handle = control.active_hcb.expect("varweight HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("varweight HCB should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(clause.query_prop(CP_IS_ORIENTED));
+        assert!(clause.literals().as_slice()[0].is_maximal());
+        assert_eq!(
+            clause
+                .evaluations()
+                .expect("HCB should attach one varweight evaluation")
+                .eval_no(),
+            1
+        );
+    }
+
+    #[test]
     fn proof_control_installs_tsm_with_shared_proof_state_bank() {
         let kb_dir = proof_control_tsm_kb_dir();
         write_proof_control_tsm_kb(&kb_dir);
