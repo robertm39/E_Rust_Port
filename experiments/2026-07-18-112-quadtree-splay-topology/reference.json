@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_quadtrees_c_sha256": "ca5b1c8ac7ea9b2e516e40359398254cb899c4279c97b71a51ccd4f33108665c",
+    "clb_quadtrees_h_sha256": "0fbcc162d699da6210afc061576f560fa1839c73979a5a8fd91580607997d1b3",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "46754e1822a59476c35c299fab6278c31e5e238c12042f597de22b9ab78f673c"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "initial=.\nstore-a.inserted=1\nstore-a=[4,0,40,0]=40(.,.)\nstore-b.inserted=1\nstore-b=[2,0,20,0]=20(.,[4,0,40,0]=40(.,.))\nstore-c.inserted=1\nstore-c=[6,0,60,0]=60([4,0,40,0]=40([2,0,20,0]=20(.,.),.),.)\nstore-d.inserted=1\nstore-d=[4,-1,40,0]=39([2,0,20,0]=20(.,.),[4,0,40,0]=40(.,[6,0,60,0]=60(.,.)))\nduplicate-a.inserted=0\nduplicate-a=[4,0,40,0]=40([4,-1,40,0]=39([2,0,20,0]=20(.,.),.),[6,0,60,0]=60(.,.))\nfind-b.found=20\nfind-b=[2,0,20,0]=20(.,[4,-1,40,0]=39(.,[4,0,40,0]=40(.,[6,0,60,0]=60(.,.))))\nmiss-low.found=-1\nmiss-low=[2,0,20,0]=20(.,[4,-1,40,0]=39(.,[4,0,40,0]=40(.,[6,0,60,0]=60(.,.))))\nmiss-high.found=-1\nmiss-high=[6,0,60,0]=60([4,-1,40,0]=39([2,0,20,0]=20(.,.),[4,0,40,0]=40(.,.)),.)\nfind-a.found=40\nfind-a=[4,0,40,0]=40([4,-1,40,0]=39([2,0,20,0]=20(.,.),.),[6,0,60,0]=60(.,.))\nextract-middle.found=-1\nextract-middle=[6,0,60,0]=60([4,0,40,0]=40([4,-1,40,0]=39([2,0,20,0]=20(.,.),.),.),.)\nextract-d.found=39\nextract-d=[2,0,20,0]=20(.,[4,0,40,0]=40(.,[6,0,60,0]=60(.,.)))\ndelete-c.deleted=1\ndelete-c=[4,0,40,0]=40([2,0,20,0]=20(.,.),.)\n"
+  },
+  "schema_version": 1
+}
