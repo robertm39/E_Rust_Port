@@ -638,15 +638,20 @@ mod tests {
 
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
         let individual = individual(bank);
+        typed_unary_with_type(bank, name, arg, &individual)
+    }
+
+    fn typed_unary_with_type(bank: &mut TermBank, name: &str, arg: &Term, type_: &Type) -> Term {
         let code = bank.signature_mut().insert_id(name, 1, false);
+        let function_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone()]));
         bank.signature_mut()
-            .declare_final_type(
-                code,
-                alloc_arrow_type(vec![individual.clone(), individual.clone()]),
-            )
+            .declare_final_type(code, function_type)
             .unwrap_or_else(|err| panic!("{err}"));
         let term = Term::top_alloc(code, 1);
-        term.set_type(Some(individual.clone()));
+        term.set_type(Some(type_.clone()));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never)
             .unwrap_or_else(|err| panic!("{err}"))
@@ -939,6 +944,156 @@ mod tests {
             user_order(&order, &[axiom_code, conj_code]),
             vec![axiom_code, conj_code]
         );
+    }
+
+    fn assert_instrumented_c_fol_precedence_orders() {
+        let mut bank = term_bank();
+        let individual = individual(&bank);
+        let a = typed_const(&mut bank, "a", &individual);
+        let fa = typed_unary(&mut bank, "f", &a);
+        let b = typed_const(&mut bank, "b", &individual);
+        let ga = typed_unary(&mut bank, "g", &a);
+        let [a_code, f_code, b_code, g_code] = [a.f_code(), fa.f_code(), b.f_code(), ga.f_code()];
+        let symbols = [a_code, f_code, b_code, g_code];
+        let mut axiom = clause(vec![literal(&mut bank, &fa, &b)]);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut conjecture = clause(vec![literal(&mut bank, &ga, &b)]);
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let axioms = ClauseSet::from_clauses([axiom, conjecture]);
+
+        let low_b_a_f_g = [b_code, a_code, f_code, g_code];
+        let low_f_g_b_a = [f_code, g_code, b_code, a_code];
+        let low_f_b_a_g = [f_code, b_code, a_code, g_code];
+        let low_b_a_g_f = [b_code, a_code, g_code, f_code];
+        let cases: [(TOPrecGenMethod, [FunCode; 4]); 13] = [
+            (TOPrecGenMethod::UnaryFirst, low_b_a_f_g),
+            (TOPrecGenMethod::UnaryFirstFreq, low_b_a_f_g),
+            (TOPrecGenMethod::Arity, low_b_a_f_g),
+            (TOPrecGenMethod::InvArity, low_f_g_b_a),
+            (TOPrecGenMethod::ConstMax, low_f_g_b_a),
+            (TOPrecGenMethod::InvArConstMin, low_b_a_f_g),
+            (TOPrecGenMethod::ByFrequency, low_f_g_b_a),
+            (TOPrecGenMethod::ByInvFrequency, low_b_a_f_g),
+            (TOPrecGenMethod::ByInvConjFrequency, low_f_b_a_g),
+            (TOPrecGenMethod::ByInvFreqConjMax, low_f_b_a_g),
+            (TOPrecGenMethod::ByInvFreqConjMin, low_b_a_g_f),
+            (TOPrecGenMethod::ByInvFreqConstMin, low_b_a_f_g),
+            (TOPrecGenMethod::ByInvFreqHack, low_b_a_f_g),
+        ];
+        for (method, expected) in cases {
+            let order = generate_precedence_order(
+                bank.signature_mut(),
+                &axioms,
+                &OrderParmsCell {
+                    to_prec_gen: method,
+                    ..OrderParmsCell::default()
+                },
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+            assert_eq!(
+                user_order(&order, &symbols),
+                expected,
+                "instrumented C FOL precedence for {method:?}"
+            );
+        }
+    }
+
+    fn assert_instrumented_c_typed_precedence_orders() {
+        let mut bank = term_bank();
+        let animal_code = bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("animal")
+            .unwrap_or_else(|err| panic!("{err}"));
+        let animal = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(animal_code));
+        let individual = individual(&bank);
+        let cat = typed_const(&mut bank, "cat", &animal);
+        let dog = typed_const(&mut bank, "dog", &animal);
+        let ordinary = typed_const(&mut bank, "a", &individual);
+        let fcat = typed_unary_with_type(&mut bank, "f", &cat, &animal);
+        let ga = typed_unary(&mut bank, "g", &ordinary);
+        let [cat_code, dog_code, a_code, f_code, g_code] = [
+            cat.f_code(),
+            dog.f_code(),
+            ordinary.f_code(),
+            fcat.f_code(),
+            ga.f_code(),
+        ];
+        let symbols = [cat_code, dog_code, a_code, f_code, g_code];
+        let axioms = ClauseSet::from_clauses([
+            clause(vec![literal(&mut bank, &fcat, &dog)]),
+            clause(vec![literal(&mut bank, &fcat, &cat)]),
+            clause(vec![literal(&mut bank, &ga, &ordinary)]),
+        ]);
+        let cases = [
+            (
+                TOPrecGenMethod::ByTypeFreq,
+                [g_code, f_code, a_code, dog_code, cat_code],
+            ),
+            (
+                TOPrecGenMethod::ByInvTypeFreq,
+                [dog_code, cat_code, f_code, a_code, g_code],
+            ),
+            (
+                TOPrecGenMethod::ByCombFreq,
+                [g_code, dog_code, f_code, a_code, cat_code],
+            ),
+            (
+                TOPrecGenMethod::ByInvCombFreq,
+                [cat_code, dog_code, f_code, a_code, g_code],
+            ),
+        ];
+        for (method, expected) in cases {
+            let order = generate_precedence_order(
+                bank.signature_mut(),
+                &axioms,
+                &OrderParmsCell {
+                    to_prec_gen: method,
+                    ..OrderParmsCell::default()
+                },
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+            assert_eq!(
+                user_order(&order, &symbols),
+                expected,
+                "instrumented C LFHO precedence for {method:?}"
+            );
+        }
+    }
+
+    fn assert_instrumented_c_arrayopt_precedence_order() {
+        let mut signature = signature();
+        let symbols = [
+            typed_symbol(&mut signature, "i_slot", 0),
+            typed_symbol(&mut signature, "idx", 0),
+            typed_symbol(&mut signature, "e_slot", 0),
+            typed_symbol(&mut signature, "elem", 0),
+            typed_symbol(&mut signature, "a_slot", 0),
+            typed_symbol(&mut signature, "arr", 0),
+            typed_symbol(&mut signature, "sk", 0),
+            typed_symbol(&mut signature, "select", 0),
+            typed_symbol(&mut signature, "store", 0),
+        ];
+        let order = generate_precedence_order(
+            &mut signature,
+            &ClauseSet::new(),
+            &OrderParmsCell {
+                to_prec_gen: TOPrecGenMethod::ArrayOpt,
+                ..OrderParmsCell::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(user_order(&order, &symbols), symbols);
+    }
+
+    #[test]
+    fn instrumented_c_reference_precedence_orders_match() {
+        assert_instrumented_c_fol_precedence_orders();
+        assert_instrumented_c_typed_precedence_orders();
+        assert_instrumented_c_arrayopt_precedence_order();
     }
 
     #[test]

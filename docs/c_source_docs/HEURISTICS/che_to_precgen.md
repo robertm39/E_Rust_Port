@@ -135,6 +135,7 @@ Source files reviewed: `HEURISTICS/che_to_precgen.h`, `HEURISTICS/che_to_precgen
 - `generate_invfreq_conjmin_precedence` has comments describing conjecture symbols as larger, but the implemented key puts conjecture symbols in the lower sorted class than non-conjecture symbols. Preserve the implementation before changing names or comments.
 - The LFHO type-frequency methods allocate the type-count array from the current type-bank size before collecting type distribution, so callers rely on type traversal not introducing out-of-range type ids.
 - `ENABLE_LFHO` inserts `typefreq`, `invtypefreq`, `combfreq`, and `invcombfreq` into the middle of `TOPrecGenNames`; a non-LFHO executable rejects those names and omits them from diagnostics. Rust intentionally exposes the union in one executable, and the complete method/diagnostic surface is reference-tested against matching FOL and higher-order C builds.
+- An isolated `-DPRINT_PRECEDENCE` build of the unchanged C source exposes each generated user-symbol order. Eighteen retained snapshots cover all implemented ordinary methods, the four LFHO type/combined-frequency variants, and every ArrayOpt name class; the paired permanent Rust regression matches each reversed low-to-high order exactly. Rank-backed and tuple-matrix OCB installation remain pinned independently. The instrumentation and results are recorded in [`experiments/2026-07-17-072-precgen-state/FINDINGS.md`](../../../experiments/2026-07-17-072-precgen-state/FINDINGS.md).
 
 ### Porting Focus
 
