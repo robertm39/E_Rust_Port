@@ -1,0 +1,944 @@
+{
+  "all_exact": true,
+  "all_stderr_empty": true,
+  "behaviors": [
+    {
+      "selectors": [
+        "NoGeneration"
+      ],
+      "sha256": "b1083155ad0719b0f2580834992a9d44b5c206fdbf067abca58997a16993852d",
+      "summary": {
+        "counters": {
+          "Current number of unprocessed clauses": 0,
+          "Equation resolutions": 0,
+          "Factorizations": 0,
+          "Generated clauses": 0,
+          "Paramodulations": 0,
+          "Processed clauses": 1
+        },
+        "exit_code": 10,
+        "generated": [],
+        "given": "[++p(f(a)),--equal(g(b),f(a)),--equal(h(X1),k(X2)),--equal(X1,X2),--r(f(X1)),--q(c)]",
+        "status": "GaveUp",
+        "stderr": ""
+      }
+    },
+    {
+      "selectors": [
+        "NoSelection",
+        "SelectNegativeLiterals",
+        "PSelectNegativeLiterals",
+        "PSelectPureVarNegLiterals",
+        "SelectLargestNegLit",
+        "PSelectLargestNegLit",
+        "SelectLargestOrientable",
+        "PSelectLargestOrientable",
+        "MSelectLargestOrientable",
+        "SelectSmallestOrientable",
+        "PSelectSmallestOrientable",
+        "MSelectSmallestOrientable",
+        "SelectDiffNegLit",
+        "PSelectDiffNegLit",
+        "SelectGroundNegLit",
+        "PSelectGroundNegLit",
+        "SelectOptimalLit",
+        "PSelectOptimalLit",
+        "SelectMinOptimalLit",
+        "PSelectMinOptimalLit",
+        "SelectMinOptimalNoTypePred",
+        "PSelectMinOptimalNoTypePred",
+        "SelectMinOptimalNoXTypePred",
+        "PSelectMinOptimalNoXTypePred",
+        "SelectMinOptimalNoRXTypePred",
+        "PSelectMinOptimalNoRXTypePred",
+        "SelectCondOptimalLit",
+        "PSelectCondOptimalLit",
+        "SelectAllCondOptimalLit",
+        "PSelectAllCondOptimalLit",
+        "SelectOptimalRestrDepth2",
+        "PSelectOptimalRestrDepth2",
+        "SelectOptimalRestrPDepth2",
+        "PSelectOptimalRestrPDepth2",
+        "SelectOptimalRestrNDepth2",
+        "PSelectOptimalRestrNDepth2",
+        "SelectNonRROptimalLit",
+        "PSelectNonRROptimalLit",
+        "SelectNonStrongRROptimalLit",
+        "PSelectNonStrongRROptimalLit",
+        "SelectAntiRROptimalLit",
+        "PSelectAntiRROptimalLit",
+        "SelectNonAntiRROptimalLit",
+        "PSelectNonAntiRROptimalLit",
+        "SelectStrongRRNonRROptimalLit",
+        "PSelectStrongRRNonRROptimalLit",
+        "SelectUnlessUniqMax",
+        "PSelectUnlessUniqMax",
+        "SelectUnlessPosMax",
+        "PSelectUnlessPosMax",
+        "SelectUnlessUniqPosMax",
+        "PSelectUnlessUniqPosMax",
+        "SelectUnlessUniqMaxPos",
+        "PSelectUnlessUniqMaxPos",
+        "SelectMaxLComplex",
+        "PSelectMaxLComplex",
+        "SelectMaxLComplexNoTypePred",
+        "PSelectMaxLComplexNoTypePred",
+        "SelectMaxLComplexNoXTypePred",
+        "PSelectMaxLComplexNoXTypePred",
+        "SelectComplexPreferNEQ",
+        "PSelectComplexPreferNEQ",
+        "SelectComplexPreferEQ",
+        "PSelectComplexPreferEQ",
+        "SelectNewComplex",
+        "PSelectNewComplex",
+        "SelectNewComplexExceptUniqMaxHorn",
+        "PSelectNewComplexExceptUniqMaxHorn",
+        "SelectMin2Infpos",
+        "PSelectMin2Infpos",
+        "SelectUnlessUniqMaxSmallestOrientable",
+        "PSelectUnlessUniqMaxSmallestOrientable",
+        "SelectDivLits",
+        "SelectDivPreferIntoLits",
+        "SelectMaxLComplexG",
+        "SelectMaxLComplexAvoidPosPred",
+        "SelectMaxLComplexAPPNTNp",
+        "SelectMaxLComplexAPPNoType",
+        "SelectMaxLComplexAvoidPosUPred",
+        "SelectNewComplexAHP",
+        "PSelectNewComplexAHP",
+        "SelectNewComplexAHPExceptRRHorn",
+        "PSelectNewComplexAHPExceptRRHorn",
+        "SelectNewComplexAHPExceptUniqMaxHorn",
+        "PSelectNewComplexAHPExceptUniqMaxHorn",
+        "SelectNewComplexAHPNS",
+        "SelectCQArEqLast",
+        "SelectCQIArEqLast",
+        "SelectCQIAr",
+        "SelectGrCQArEqFirst",
+        "SelectCQGrArEqFirst",
+        "SelectCQIArNTNp",
+        "SelectCQIArNT",
+        "SelectCQIArNp",
+        "SelectCQIPrecW",
+        "SelectCQIPrecWNTNp",
+        "SelectMaxLComplexAvoidAppVar",
+        "SelectMaxLComplexStronglyAvoidAppVar",
+        "SelectMaxLComplexPreferAppVar"
+      ],
+      "sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3",
+      "summary": {
+        "counters": {
+          "Current number of unprocessed clauses": 0,
+          "Equation resolutions": 0,
+          "Factorizations": 0,
+          "Generated clauses": 0,
+          "Paramodulations": 0,
+          "Processed clauses": 1
+        },
+        "exit_code": 1,
+        "generated": [],
+        "given": "[++p(f(a)),--equal(g(b),f(a)),--equal(h(X1),k(X2)),--equal(X1,X2),--r(f(X1)),--q(c)]",
+        "status": "Satisfiable",
+        "stderr": ""
+      }
+    },
+    {
+      "selectors": [
+        "SelectPureVarNegLiterals",
+        "SelectSmallestNegLit",
+        "PSelectSmallestNegLit",
+        "SelectComplex",
+        "PSelectComplex",
+        "SelectComplexExceptRRHorn",
+        "PSelectComplexExceptRRHorn",
+        "SelectLComplex",
+        "PSelectLComplex",
+        "SelectComplexExceptUniqMaxHorn",
+        "PSelectComplexExceptUniqMaxHorn",
+        "MSelectComplexExceptUniqMaxHorn",
+        "SelectMinInfpos",
+        "PSelectMinInfpos",
+        "HSelectMinInfpos",
+        "GSelectMinInfpos",
+        "SelectMinInfposNoTypePred",
+        "PSelectMinInfposNoTypePred",
+        "SelectComplexExceptUniqMaxPosHorn",
+        "PSelectComplexExceptUniqMaxPosHorn",
+        "SelectComplexG",
+        "SelectComplexAHP",
+        "PSelectComplexAHP",
+        "SelectComplexAHPExceptRRHorn",
+        "PSelectComplexAHPExceptRRHorn",
+        "SelectVGNonCR",
+        "SelectCQArEqFirst",
+        "SelectCQIArEqFirst",
+        "SelectCQAr",
+        "SelectCQArNpEqFirst",
+        "SelectCQIArNpEqFirst",
+        "SelectCQArNTEqFirst",
+        "SelectCQIArNTEqFirst",
+        "SelectCQArNTNpEqFirst",
+        "SelectCQIArNTNpEqFirst",
+        "SelectCQArNXTEqFirst",
+        "SelectCQIArNXTEqFirst",
+        "SelectCQArNTNp",
+        "SelectCQArNT",
+        "SelectCQArNp",
+        "SelectCQArNpEqFirstUnlessPDom",
+        "SelectCQArNTEqFirstUnlessPDom",
+        "SelectCQPrecW",
+        "SelectCQPrecWNTNp"
+      ],
+      "sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0",
+      "summary": {
+        "counters": {
+          "Current number of unprocessed clauses": 1,
+          "Equation resolutions": 1,
+          "Factorizations": 0,
+          "Generated clauses": 1,
+          "Paramodulations": 0,
+          "Processed clauses": 1
+        },
+        "exit_code": 9,
+        "generated": [
+          {
+            "clause": "[++p(f(a)),--equal(g(b),f(a)),--equal(h(X1),k(X1)),--r(f(X1)),--q(c)]",
+            "kind": "er"
+          }
+        ],
+        "given": "[++p(f(a)),--equal(g(b),f(a)),--equal(h(X1),k(X2)),--equal(X1,X2),--r(f(X1)),--q(c)]",
+        "status": "ResourceOut",
+        "stderr": ""
+      }
+    }
+  ],
+  "distinct_behavior_count": 3,
+  "exact_count": 144,
+  "mismatches": {},
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1,
+  "selector_count": 144,
+  "selectors": [
+    {
+      "exact": true,
+      "name": "NoSelection",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "NoGeneration",
+      "summary_sha256": "b1083155ad0719b0f2580834992a9d44b5c206fdbf067abca58997a16993852d"
+    },
+    {
+      "exact": true,
+      "name": "SelectNegativeLiterals",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNegativeLiterals",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectPureVarNegLiterals",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectPureVarNegLiterals",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectLargestNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectLargestNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectSmallestNegLit",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectSmallestNegLit",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectLargestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectLargestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "MSelectLargestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectSmallestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectSmallestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "MSelectSmallestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectDiffNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectDiffNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectGroundNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectGroundNegLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinOptimalNoTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinOptimalNoTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinOptimalNoXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinOptimalNoXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinOptimalNoRXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinOptimalNoRXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCondOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectCondOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectAllCondOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectAllCondOptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectOptimalRestrDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectOptimalRestrDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectOptimalRestrPDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectOptimalRestrPDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectOptimalRestrNDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectOptimalRestrNDepth2",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNonRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNonRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNonStrongRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNonStrongRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectAntiRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectAntiRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNonAntiRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNonAntiRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectStrongRRNonRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectStrongRRNonRROptimalLit",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectUnlessUniqMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectUnlessUniqMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectUnlessPosMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectUnlessPosMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectUnlessUniqPosMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectUnlessUniqPosMax",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectUnlessUniqMaxPos",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectUnlessUniqMaxPos",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplex",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplex",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexExceptRRHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexExceptRRHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectLComplex",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectLComplex",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplex",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMaxLComplex",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexNoTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMaxLComplexNoTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexNoXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMaxLComplexNoXTypePred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexPreferNEQ",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexPreferNEQ",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexPreferEQ",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexPreferEQ",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexExceptUniqMaxHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexExceptUniqMaxHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "MSelectComplexExceptUniqMaxHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplex",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNewComplex",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplexExceptUniqMaxHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNewComplexExceptUniqMaxHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinInfpos",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinInfpos",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "HSelectMinInfpos",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "GSelectMinInfpos",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectMinInfposNoTypePred",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMinInfposNoTypePred",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectMin2Infpos",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectMin2Infpos",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexExceptUniqMaxPosHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexExceptUniqMaxPosHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectUnlessUniqMaxSmallestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectUnlessUniqMaxSmallestOrientable",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectDivLits",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectDivPreferIntoLits",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexG",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexAvoidPosPred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexAPPNTNp",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexAPPNoType",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexAvoidPosUPred",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexG",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexAHP",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexAHP",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplexAHP",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNewComplexAHP",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectComplexAHPExceptRRHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "PSelectComplexAHPExceptRRHorn",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplexAHPExceptRRHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNewComplexAHPExceptRRHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplexAHPExceptUniqMaxHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "PSelectNewComplexAHPExceptUniqMaxHorn",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectNewComplexAHPNS",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectVGNonCR",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArEqLast",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArEqLast",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQAr",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIAr",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNpEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNpEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectGrCQArEqFirst",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQGrArEqFirst",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNTEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNTEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNTNpEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNTNpEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNXTEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNXTEqFirst",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNTNp",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNTNp",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNT",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNT",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNp",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIArNp",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNpEqFirstUnlessPDom",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQArNTEqFirstUnlessPDom",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQPrecW",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIPrecW",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQPrecWNTNp",
+      "summary_sha256": "4156ab70f96aba1e717397691735bc0b5a8aaa196c8dbf5bb37496d9c755d4b0"
+    },
+    {
+      "exact": true,
+      "name": "SelectCQIPrecWNTNp",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexAvoidAppVar",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexStronglyAvoidAppVar",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    },
+    {
+      "exact": true,
+      "name": "SelectMaxLComplexPreferAppVar",
+      "summary_sha256": "27fe36c0640dd4280495b95a60a642542d7f3394e6be02e48d7ce1a77621abb3"
+    }
+  ],
+  "table_order_exact": true
+}

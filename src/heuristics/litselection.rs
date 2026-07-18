@@ -9,6 +9,7 @@ use crate::clauses::eqn_props::{
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_standard_weight, term_weight};
+use crate::terms::termtypes::{DEFAULT_FWEIGHT, DEFAULT_VWEIGHT};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 #[cfg(test)]
@@ -5087,7 +5088,15 @@ fn select_min_infpos_impl(
     positive_policy: MinInfposPositivePolicy,
     no_type_pred: bool,
 ) {
-    select_min_infpos_weighted_impl(ocb, bank, clause, positive_policy, no_type_pred, 1, 1);
+    select_min_infpos_weighted_impl(
+        ocb,
+        bank,
+        clause,
+        positive_policy,
+        no_type_pred,
+        DEFAULT_VWEIGHT,
+        DEFAULT_FWEIGHT,
+    );
 }
 
 fn select_min_infpos_impl_with_bank(
@@ -5103,8 +5112,8 @@ fn select_min_infpos_impl_with_bank(
         clause,
         positive_policy,
         no_type_pred,
-        1,
-        1,
+        DEFAULT_VWEIGHT,
+        DEFAULT_FWEIGHT,
     )
 }
 
@@ -5364,7 +5373,9 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+    use crate::clauses::eqn_props::{
+        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED,
+    };
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -6125,6 +6136,24 @@ mod tests {
             predicate_literal(bank, &pos, true),
             literal(bank, &g_f_a, &a, false),
             literal(bank, &b, &c, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn min_infpos_standard_weight_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min_infpos_standard_pos");
+        let c = shared_const(bank, "min_infpos_standard_c");
+        let predicate = weighted_predicate_unary_atom(bank, "min_infpos_standard_predicate", &c, 4);
+        let x = typed_var(bank, -361);
+        let y = typed_var(bank, -362);
+        let mut negative_predicate = predicate_literal(bank, &predicate, false);
+        negative_predicate.set_prop(EP_IS_ORIENTED);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            negative_predicate,
+            literal(bank, &x, &y, false),
         ]));
         clause.set_prop(CP_IS_ORIENTED);
         clause
@@ -7432,6 +7461,62 @@ mod tests {
 
         super::p_select_min_infpos(&mut ocb, &bank, &mut positive_variant);
         assert_eq!(selected_indices(&positive_variant), vec![0, 2]);
+    }
+
+    #[test]
+    fn min_infpos_uses_standard_function_weight_two() {
+        let cases = [
+            (super::SELECT_MIN_INFPOS, vec![2]),
+            (super::P_SELECT_MIN_INFPOS, vec![0, 2]),
+            (super::H_SELECT_MIN_INFPOS, vec![0, 2]),
+            (super::G_SELECT_MIN_INFPOS, vec![2]),
+            (super::SELECT_MIN_INFPOS_NO_TYPE_PRED, vec![2]),
+            (super::P_SELECT_MIN_INFPOS_NO_TYPE_PRED, vec![0, 2]),
+        ];
+
+        for (name, expected) in cases {
+            let mut bank = test_bank();
+            let mut clause = min_infpos_standard_weight_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+            assert_eq!(selected_indices(&clause), expected, "selector {name}");
+        }
+    }
+
+    #[test]
+    fn mutable_bank_min_infpos_uses_standard_function_weight_two() {
+        for name in [
+            super::SELECT_MIN_INFPOS,
+            super::P_SELECT_MIN_INFPOS,
+            super::H_SELECT_MIN_INFPOS,
+            super::G_SELECT_MIN_INFPOS,
+            super::SELECT_MIN_INFPOS_NO_TYPE_PRED,
+            super::P_SELECT_MIN_INFPOS_NO_TYPE_PRED,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = min_infpos_standard_weight_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_mut_bank(
+                name,
+                Some(&mut ocb),
+                Some(&mut bank),
+                &mut clause,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+            assert!(
+                clause.literals().as_slice()[2].query_prop(EP_IS_SELECTED),
+                "selector {name}"
+            );
+            assert!(
+                !clause.literals().as_slice()[1].query_prop(EP_IS_SELECTED),
+                "selector {name}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,30 @@
+{
+  "all_passed": true,
+  "contracts": {
+    "all_mutable_bank_selectors_regression": true,
+    "assumed_incompleteness_status_regression": true,
+    "c_standard_min_infpos_uses_term_standard_weight": true,
+    "cli_heuristic_completeness_regression": true,
+    "cli_inference_splitting_regression": true,
+    "cli_literal_selection_regression": true,
+    "config_bridge_preserves_disequality_controls": true,
+    "config_bridge_preserves_equality_factoring": true,
+    "config_bridge_preserves_paramodulation_mode": true,
+    "config_bridge_preserves_raw_split_classes": true,
+    "config_bridge_preserves_selection_strategy": true,
+    "incompleteness_reaches_proof_state": true,
+    "proof_control_bridge_regression": true,
+    "proof_generation_consumes_disequality_controls": true,
+    "proof_generation_consumes_equality_factoring": true,
+    "proof_generation_consumes_paramodulation_mode": true,
+    "proof_processing_consumes_split_controls": true,
+    "rust_min2_infpos_retains_two_one_weights": true,
+    "rust_standard_min_infpos_uses_default_weights": true,
+    "selector_table_count_regression": true,
+    "standard_weight_direct_regression": true,
+    "standard_weight_mutable_bank_regression": true
+  },
+  "passed": 22,
+  "schema_version": 1,
+  "total": 22
+}
