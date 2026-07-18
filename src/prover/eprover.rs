@@ -9420,7 +9420,10 @@ fn write_saturated_final_result(
     {
         write_comment_line_after_blank(output, "Clause set saturated up to interpreted theories!")?;
         write_tstp_status(output, "GaveUp")?;
-    } else if state.state_is_complete() && inference_system_complete {
+    } else if problem_type() != ProblemType::HigherOrder
+        && state.state_is_complete()
+        && inference_system_complete
+    {
         write_comment_line_after_blank(output, "No proof found!")?;
         let saturated_status = if config.flags.contains(EProverFlag::FormulaConjectureSeen) {
             "CounterSatisfiable"
@@ -9777,7 +9780,8 @@ fn saturate_outcome_exit_status(
         SaturateOutcome::Stopped {
             reason: SaturateStopReason::Saturated,
             ..
-        } if inference_system_complete
+        } if problem_type() != ProblemType::HigherOrder
+            && inference_system_complete
             && state.state_is_complete()
             && !state.has_interpreted_symbols() =>
         {
@@ -28061,6 +28065,46 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_proof_search_reports_exhausted_higher_order_axioms_as_gave_up() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-ho-exhausted");
+        std::fs::write(
+            &path,
+            "% Higher-order rewrite matching exhausts both axioms.\n\
+             thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(c_type, type, c: $i).\n\
+             thf(h_type, type, h: $i > $i).\n\
+             thf(wrap_type, type, wrap: $i > $i).\n\
+             thf(rewrite_rule, axiom,\n\
+                 ! [F: $i > $i] : ((wrap @ (F @ a)) = (F @ b))).\n\
+             thf(rewrite_target, axiom,\n\
+                 ((wrap @ (h @ a)) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--processed-clauses-limit=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(
+            printed.ends_with("\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n"),
+            "{printed}"
+        );
+        assert!(!printed.contains("% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_saturated_fof_conjecture_as_counter_satisfiable() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-counter-satisfiable");
@@ -29236,13 +29280,14 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
-        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert!(!printed.contains("% BCE start:"));
         assert!(!printed.contains("% PE start:"));
         assert!(printed.contains("% Parsed axioms                        : 6\n"));
         assert!(printed.contains("% Initial clauses                      : 6\n"));
         assert!(printed.contains("% Removed in clause preprocessing      : 4\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
+        assert!(printed.contains("\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

@@ -87,9 +87,9 @@ After producing the identical rewritten clause and counters in the new
 axioms-only match fixture, C exhausts the unprocessed set as `GaveUp`/exit 10,
 whereas Rust reports `Satisfiable`/exit 1. The comparison therefore projects
 that case onto its matching outputs and does not claim terminal-status parity.
-The newly exposed incompatibility is tracked as bug
-`E_Rust_Port-j76.2.140`; the branching CSU and direct-MGU cases continue to
-compare their exit codes exactly.
+The newly exposed incompatibility was tracked as bug
+`E_Rust_Port-j76.2.140` and is now resolved by the exact terminal-status matrix
+in [`experiments/2026-07-18-097-exhausted-higher-order-status`](../2026-07-18-097-exhausted-higher-order-status/FINDINGS.md); the branching CSU and direct-MGU cases continue to compare their exit codes exactly.
 
 ## Validation
 
