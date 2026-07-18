@@ -18695,6 +18695,84 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_installs_dag_weights_with_exact_owner_split() {
+        let mut bank = test_bank();
+        let left_base = typed_const(&mut bank, "pc_dag_left");
+        let right_base = typed_const(&mut bank, "pc_dag_right");
+        let left = typed_unary(&mut bank, "pc_dag_f", &left_base);
+        let right = typed_unary(&mut bank, "pc_dag_g", &right_base);
+        let mut first_clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &left, &right, true,
+        )]));
+        let mut second_clause = first_clause.clone();
+        let mut axioms = ClauseSet::new();
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "DagOwnerSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec![
+            "rdag=RDAGweight(ConstPrio,10,3,1,5.0,2.0,7.0,4.0)".to_owned(),
+            "dag=DAGweight(ConstPrio,2,1,3.0,1,true,false,false,true,false,false,false)".to_owned(),
+            "rdag2=RDAGweight2(ConstPrio,10,3,1,4.0,2.0)".to_owned(),
+            "rdag3=RDAGweight3(ConstPrio,2,1,13,17,1,3.0,5.0,7.0,11.0)".to_owned(),
+        ];
+        let mut hcb_defs = vec!["DagOwnerSearch=(1*rdag,1*dag,1*rdag2,1*rdag3)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!first_clause.query_prop(CP_IS_ORIENTED));
+        assert!(!second_clause.query_prop(CP_IS_ORIENTED));
+        let active_hcb_handle = control.active_hcb.expect("DAG HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("DAG HCB should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut first_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut second_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        for clause in [&first_clause, &second_clause] {
+            assert!(clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.literals().as_slice()[0].is_maximal());
+            assert_eq!(
+                clause
+                    .evaluations()
+                    .expect("HCB should attach all four DAG evaluations")
+                    .eval_no(),
+                4
+            );
+        }
+        let first_evaluations = first_clause
+            .evaluations()
+            .expect("first clause should retain evaluations");
+        let second_evaluations = second_clause
+            .evaluations()
+            .expect("second clause should retain evaluations");
+        for index in 0..4 {
+            assert_eq!(
+                first_evaluations.eval(index).heuristic().to_bits(),
+                second_evaluations.eval(index).heuristic().to_bits()
+            );
+        }
+    }
+
+    #[test]
     fn proof_control_installs_tsm_with_shared_proof_state_bank() {
         let kb_dir = proof_control_tsm_kb_dir();
         write_proof_control_tsm_kb(&kb_dir);
