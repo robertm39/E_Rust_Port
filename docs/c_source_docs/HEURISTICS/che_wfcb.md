@@ -93,6 +93,7 @@ Source files reviewed: `HEURISTICS/che_wfcb.h`, `HEURISTICS/che_wfcb.c`.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - `ClauseAddEvaluation` itself is generic, but C WFCB data may carry an `OCB` pointer and evaluation callbacks may mutate clause orientation/maximality while scoring. Rust keeps the immutable callback path for stateless low-level callers and adds an explicit banked WFCB callback path for callers that supply the active `OCB`, owner `TermBank`, and mutable clause. All proof-control evaluation sites now use the banked HCB path, and every represented scorer that performs conditional maximal marking registers a banked callback; the banked dispatcher falls back to the immutable callback only for WFCBs that do not register ordering-dependent mutation.
 - Passing the bank explicitly is a completed Rust ownership decision. It replaces C's `eq->bank` back-pointer with a borrow from the actual proof-state owner, avoiding stale/self-referential pointers when Rust owners move without adding allocation or traversal work. The call-graph and regression evidence is recorded in [`experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md`](../../../experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md).
+- A follow-up production-source audit covers all 283 Rust source modules before their test sections: no direct immutable WFCB evaluation escapes the explicit WFCB/HCB adapter modules, no immutable proof-control reweight call escapes its compatibility module, and eight banked proof-control call sites cover initialization, reset, contraction, cleanup, and eval-store scoring. The remaining immutable APIs are completed low-level/test adapters rather than pending lifecycle work; exact records are in [`experiments/2026-07-17-060-banked-wfcb-production-audit/FINDINGS.md`](../../../experiments/2026-07-17-060-banked-wfcb-production-audit/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
@@ -104,6 +105,6 @@ Source files reviewed: `HEURISTICS/che_wfcb.h`, `HEURISTICS/che_wfcb.c`.
 
 ### Change Later
 
-- Production proof-control evaluation is routed through the banked WFCB path. After compatibility, consider collapsing the remaining immutable/banked low-level API split if that simplifies callers; this is API cleanup only, and must retain the immutable fallback for stateless WFCBs or migrate those registrations atomically.
+- Production proof-control evaluation is routed through the banked WFCB path, and the source audit confirms no immutable production escape. After compatibility, consider collapsing the remaining immutable/banked low-level API split if that simplifies callers; this is API cleanup only, and must retain the immutable fallback for stateless WFCBs or migrate those registrations atomically.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

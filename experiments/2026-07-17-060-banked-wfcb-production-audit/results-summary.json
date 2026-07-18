@@ -1,0 +1,65 @@
+{
+  "rust_source_files": 283,
+  "forbidden_immutable_call_count": 0,
+  "forbidden_immutable_calls": {
+    "direct_compute_eval_outside_wfcb_adapter": [],
+    "immutable_add_evaluation_outside_wfcb_hcb_adapters": [],
+    "immutable_hcb_clause_evaluate_outside_hcb_adapter": [],
+    "immutable_hcb_set_reweight_outside_hcb_proofcontrol_adapters": [],
+    "immutable_proof_control_reweight_outside_its_adapter_module": []
+  },
+  "proof_control_banked_call_count": 8,
+  "proof_control_banked_calls": {
+    "hcb_clause_evaluate_with_bank": [
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 1153,
+        "source": "hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, state.terms_mut(), &mut new)?;"
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 1872,
+        "source": "hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, bank, clause)"
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 9250,
+        "source": "let evaluation = hcb_clause_evaluate_with_bank("
+      }
+    ],
+    "hcb_clause_set_reweight_with_bank": [
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 1106,
+        "source": "hcb_clause_set_reweight_with_bank(uniq_hcb, wfcbs, ocb, terms, axioms)?;"
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 2925,
+        "source": "hcb_clause_set_reweight_with_bank(active_hcb, wfcbs, ocb, terms, set)"
+      }
+    ],
+    "proof_control_clause_set_reweight_with_bank": [
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 2902,
+        "source": "pub fn proof_control_clause_set_reweight_with_bank("
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 2953,
+        "source": "proof_control_clause_set_reweight_with_bank(control, state.terms_mut(), set)?;"
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 2986,
+        "source": "proof_control_clause_set_reweight_with_bank(control, terms, set)"
+      },
+      {
+        "file": "src/heuristics/proofcontrol.rs",
+        "line": 3227,
+        "source": "let reweight_result = proof_control_clause_set_reweight_with_bank("
+      }
+    ]
+  }
+}
