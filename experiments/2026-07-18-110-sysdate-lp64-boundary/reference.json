@@ -1,0 +1,62 @@
+{
+  "abi": {
+    "exact": true,
+    "expected": {
+      "abi.long_bits": "64",
+      "abi.long_bytes": "8",
+      "abi.long_max": "9223372036854775807",
+      "abi.ulong_max": "18446744073709551615"
+    },
+    "observed": {
+      "abi.long_bits": "64",
+      "abi.long_bytes": "8",
+      "abi.long_max": "9223372036854775807",
+      "abi.ulong_max": "18446744073709551615"
+    }
+  },
+  "all_exact": true,
+  "cases": [
+    {
+      "c_output": "    0",
+      "exact": true,
+      "name": "creation",
+      "raw": 0,
+      "rust_model_output": "    0"
+    },
+    {
+      "c_output": "   42",
+      "exact": true,
+      "name": "ordinary",
+      "raw": 42,
+      "rust_model_output": "   42"
+    },
+    {
+      "c_output": "18446744073709551615",
+      "exact": true,
+      "name": "invalid",
+      "raw": -1,
+      "rust_model_output": "18446744073709551615"
+    },
+    {
+      "c_output": "9223372036854775807",
+      "exact": true,
+      "name": "maximum",
+      "raw": 9223372036854775807,
+      "rust_model_output": "9223372036854775807"
+    }
+  ],
+  "reference": {
+    "clb_sysdate_c_sha256": "879ab056074659a7d164f04bdf22a41efa0813f0598de85160341ecb696ff31e",
+    "clb_sysdate_h_sha256": "a0fb8156ec8afee3287abb4e48627b672cc7c28608769e1011953d4a9d8de3d5",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "data_model": "LP64",
+    "platform": "Linux under WSL 2"
+  },
+  "rust_contract": {
+    "host_independent": true,
+    "raw_bytes": 8,
+    "raw_type": "i64"
+  },
+  "schema_version": 1,
+  "unexpected_probe_keys": []
+}

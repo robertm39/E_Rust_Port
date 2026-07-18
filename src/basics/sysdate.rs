@@ -1,5 +1,9 @@
 use std::fmt;
 
+/// Raw date shape used by the normative LP64 Linux C reference.
+///
+/// This is deliberately independent of the Rust host ABI: the native Windows
+/// executable must match the WSL/Linux C build, not Windows' 32-bit `long`.
 pub type SysDateRaw = i64;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -97,6 +101,7 @@ impl SysDate {
     }
 
     #[must_use]
+    /// Reinterpret the LP64 reference bits for C's `%lu` print shape.
     pub fn unsigned_c_long_bits(self) -> u64 {
         u64::from_ne_bytes(self.0.to_ne_bytes())
     }
@@ -125,7 +130,13 @@ impl From<SysDate> for SysDateRaw {
 
 #[cfg(test)]
 mod tests {
-    use super::{SysDate, SysDateIncrement};
+    use super::{SysDate, SysDateIncrement, SysDateRaw};
+
+    #[test]
+    fn raw_width_is_normative_lp64_reference_width_on_every_rust_host() {
+        assert_eq!(std::mem::size_of::<SysDateRaw>(), 8);
+        assert_eq!(std::mem::size_of::<SysDate>(), 8);
+    }
 
     #[test]
     fn sentinel_values_and_comparisons_match_c_macros() {
