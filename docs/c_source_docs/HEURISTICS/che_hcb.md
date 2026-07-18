@@ -136,7 +136,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for selection-time parent liveness on 2026-07-13.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for selection-time parent liveness on 2026-07-13 and executable missing-field warnings on 2026-07-17.
 
 Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 
@@ -168,6 +168,7 @@ Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 - `HCBClauseSetDelProp` appears to use `PDArrayElementInt(hcb->select_switch, j)` as the inner-loop bound while `j` is also the loop variable. Rust preserves that compiled loop-bound shape for delete-bad/filtering compatibility; it may be an accidental loop-index bug worth cleaning up later.
 - `SplitClassType` is used as a bitmask despite being declared as an enum. Values such as `SplitHorn | SplitNonHorn` are accepted by the executable option handler and by `HeuristicParmsParseInto`, so Rust preserves raw C-width bit patterns rather than rejecting combinations as invalid enum discriminants.
 - `SplitAll` is the numeric mask `7`, so it does not include `SplitPositive` (`8`) or `SplitMixed` (`16`) despite the name. Keep that value until clause-splitting callers prove whether this is intentional legacy behavior or a cleanup candidate.
+- `HeuristicParmsParseInto(..., true)` emits its own missing-field warnings and forwards `OrderParmsParseInto` warnings in parse order. Rust's report-backed parser now feeds the executable warning owner before selected-strategy lookup; exact normal-search and later-error output, including C's doubled newline, is retained in [`experiments/2026-07-17-074-strategy-warning-output/FINDINGS.md`](../../../experiments/2026-07-17-074-strategy-warning-output/FINDINGS.md).
 
 ### Change Later
 

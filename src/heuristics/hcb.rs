@@ -2182,7 +2182,7 @@ fn note_missing(report: &mut HeuristicParmsParseReport, name: &'static str, warn
     if warn_missing {
         report.warnings.push(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
-            format!("Config misses {name}"),
+            format!("Config misses {name}\n"),
         ));
     }
 }

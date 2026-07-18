@@ -762,7 +762,7 @@ fn note_missing(report: &mut OrderParmsParseReport, name: &'static str, warn_mis
     if warn_missing {
         report.warnings.push(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
-            format!("Config misses {name}"),
+            format!("Config misses {name}\n"),
         ));
     }
 }

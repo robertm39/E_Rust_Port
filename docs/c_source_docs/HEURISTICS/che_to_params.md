@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for executable missing-field warnings on 2026-07-17.
 
 Source files reviewed: `HEURISTICS/che_to_params.h`, `HEURISTICS/che_to_params.c`.
 
@@ -117,6 +117,10 @@ Source files reviewed: `HEURISTICS/che_to_params.h`, `HEURISTICS/che_to_params.c
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- `OrderParmsParseInto(..., true)` warns once for every absent field while preserving the existing value. Its `Warning("Config misses %s\n", name)` call embeds a newline before the common warning routine appends another, so the executable surface contains a blank line after each warning. Rust retains those warnings in its parse report and the strategy-file executable path now writes them before any later selected-strategy lookup. Normal search and later lookup failure are byte-exact against isolated C in [`experiments/2026-07-17-074-strategy-warning-output/FINDINGS.md`](../../../experiments/2026-07-17-074-strategy-warning-output/FINDINGS.md).
 
 ### Porting Focus
 

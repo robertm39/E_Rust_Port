@@ -106,7 +106,7 @@ use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
     spec_features_compute_with_choice_recognition, spec_type_string, SpecFeatureCell, SpecLimits,
 };
-use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
+use crate::heuristics::hcb::{self, heuristic_parms_parse_into_report, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
     get_default_schedule, get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
@@ -1754,27 +1754,56 @@ fn heuristic_parms_with_strategy_io(
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct StrategyIoDefinitions {
     heuristic_definitions: Vec<String>,
+    warnings: Vec<Diagnostic>,
 }
 
 fn apply_strategy_io_to_params(
     config: &EProverConfig,
     params: &mut HeuristicParmsCell,
 ) -> Result<StrategyIoDefinitions, Diagnostic> {
+    let definitions = parse_strategy_file_to_params(config, params)?;
+    apply_selected_strategy_to_params(config, params)?;
+    Ok(definitions)
+}
+
+fn apply_strategy_io_to_params_with_warning_output(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    stderr: &mut (impl Write + ?Sized),
+) -> Result<StrategyIoDefinitions, EProverError> {
+    let definitions = parse_strategy_file_to_params(config, params)?;
+    write_warnings(stderr, &definitions.warnings)?;
+    apply_selected_strategy_to_params(config, params)?;
+    Ok(definitions)
+}
+
+fn parse_strategy_file_to_params(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+) -> Result<StrategyIoDefinitions, Diagnostic> {
     let mut definitions = StrategyIoDefinitions::default();
     if let Some(path) = &config.parse_strategy_file {
         let mut scanner = Scanner::from_file(Path::new(path), true)?;
-        heuristic_parms_parse_into(&mut scanner, params, true)?;
+        let report = heuristic_parms_parse_into_report(&mut scanner, params, true)?;
         scanner.check_tok(TokenType::NO_TOKEN)?;
+        definitions.warnings = report.warnings;
         if let Some(heuristic_def) = &params.heuristic_def {
             definitions
                 .heuristic_definitions
                 .push(heuristic_def.clone());
         }
     }
+    Ok(definitions)
+}
+
+fn apply_selected_strategy_to_params(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+) -> Result<(), Diagnostic> {
     if let Some(name) = &config.select_strategy {
         get_heuristic_with_name(name, params)?;
     }
-    Ok(definitions)
+    Ok(())
 }
 
 fn overlay_explicit_heuristic_options(
@@ -3236,7 +3265,10 @@ fn write_config_warnings(
     write_warnings(stderr, &config.warnings)
 }
 
-fn write_warnings(stderr: &mut impl Write, warnings: &[Diagnostic]) -> Result<(), EProverError> {
+fn write_warnings(
+    stderr: &mut (impl Write + ?Sized),
+    warnings: &[Diagnostic],
+) -> Result<(), EProverError> {
     for warning in warnings {
         stderr.write_all(warning.render_warning(PROGRAM_NAME).as_bytes())?;
     }
@@ -5143,7 +5175,7 @@ fn run_config_action<W: Write + ?Sized>(
     runtime_config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     if config.print_strategy.is_some() {
-        run_print_strategy(output, config)?;
+        run_print_strategy(output, stderr, config)?;
         return finish_run_config(output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
@@ -5185,6 +5217,7 @@ fn finish_run_config(
 
 fn run_print_strategy<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
+    stderr: Option<&mut dyn Write>,
     config: &EProverConfig,
 ) -> Result<(), EProverError> {
     let Some(print_strategy) = config.print_strategy.as_deref() else {
@@ -5192,7 +5225,11 @@ fn run_print_strategy<W: Write + ?Sized>(
     };
     let mut params = heuristic_parms_from_config(config)?;
     write_preprocessing_params_debug_line(output, &params)?;
-    let _ = apply_strategy_io_to_params(config, &mut params)?;
+    if let Some(stderr) = stderr {
+        let _ = apply_strategy_io_to_params_with_warning_output(config, &mut params, stderr)?;
+    } else {
+        let _ = apply_strategy_io_to_params(config, &mut params)?;
+    }
     match print_strategy {
         ">all-strats<" => {
             output.write_all(strategies_print_predefined_string(false)?.as_bytes())?;
@@ -5632,7 +5669,15 @@ fn run_proof_search<W: Write + ?Sized>(
         AutoModeSearchSelection::Continue => {}
         AutoModeSearchSelection::ScheduledExit(status) => return Ok(status),
     }
-    let strategy_io_definitions = apply_strategy_io_to_params(config, &mut heuristic_params)?;
+    let strategy_io_definitions = if let Some(stderr) = &mut hard_timeout_stderr {
+        apply_strategy_io_to_params_with_warning_output(
+            config,
+            &mut heuristic_params,
+            &mut **stderr,
+        )?
+    } else {
+        apply_strategy_io_to_params(config, &mut heuristic_params)?
+    };
     if matches!(
         heuristic_params.order_params.ordertype,
         to_params::TermOrdering::Kbo | to_params::TermOrdering::Kbo6
@@ -15922,6 +15967,21 @@ mod tests {
         path
     }
 
+    fn write_temp_strategy_file_missing_order_fields(name: &str) -> std::path::PathBuf {
+        let path = temp_path(name);
+        let mut rendered =
+            hcb_params::heuristic_parms_print_string(&hcb_params::HeuristicParmsCell::default());
+        for line in [
+            "      ordertype:               KBO6\n",
+            "      db_w:                    10\n",
+        ] {
+            assert_eq!(rendered.matches(line).count(), 1, "missing {line:?}");
+            rendered = rendered.replacen(line, "", 1);
+        }
+        std::fs::write(&path, rendered).unwrap();
+        path
+    }
+
     fn assert_formula_owner_print(stdout: Vec<u8>, stderr: Vec<u8>, expected_fragments: &[&str]) {
         let printed = String::from_utf8(stdout).unwrap();
         let stderr = String::from_utf8(stderr).unwrap();
@@ -19723,6 +19783,76 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.starts_with(&format!("{}{{\n", default_preprocessing_debug_line())));
         assert!(output.contains("heuristic_name:                Default"));
         assert!(output.contains("selection_strategy:             NoSelection"));
+    }
+
+    #[test]
+    fn run_print_strategy_emits_parse_warnings_before_later_selection_errors() {
+        let _guard = global_state_lock();
+        let strategy_path = write_temp_strategy_file_missing_order_fields("strategy-warning-print");
+        let strategy_arg = format!("--parse-strategy={}", strategy_path.to_string_lossy());
+        let expected = concat!(
+            "eprover: Warning: Config misses ordertype\n\n",
+            "eprover: Warning: Config misses db_w\n\n"
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover".to_owned(),
+                strategy_arg,
+                "--select-strategy=Missing".to_owned(),
+                "--print-strategy".to_owned(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(
+            error.message(),
+            "Error: Configuration name Missing not found."
+        );
+        assert_eq!(String::from_utf8(stderr).unwrap(), expected);
+        std::fs::remove_file(strategy_path).unwrap();
+    }
+
+    #[test]
+    fn proof_search_emits_strategy_file_missing_order_warnings() {
+        let _guard = global_state_lock();
+        let strategy_path =
+            write_temp_strategy_file_missing_order_fields("strategy-warning-search");
+        let problem_path = temp_path("strategy-warning-search-problem");
+        std::fs::write(&problem_path, "p(a).\n").unwrap();
+        let strategy_arg = format!("--parse-strategy={}", strategy_path.to_string_lossy());
+        let problem_arg = problem_path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover".to_owned(),
+                "--output-level=0".to_owned(),
+                "--lop-in".to_owned(),
+                strategy_arg,
+                problem_arg,
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            concat!(
+                "eprover: Warning: Config misses ordertype\n\n",
+                "eprover: Warning: Config misses db_w\n\n"
+            )
+        );
+        std::fs::remove_file(strategy_path).unwrap();
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
