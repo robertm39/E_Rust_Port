@@ -69,7 +69,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for production-owner and pointer-order reconciliation on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_gd_transformation.h`, `CLAUSES/ccl_gd_transformation.c`.
 
@@ -86,14 +86,14 @@ Source files reviewed: `CLAUSES/ccl_gd_transformation.h`, `CLAUSES/ccl_gd_transf
 ### Rust Port Status Notes
 
 - `src/clauses/gd_transformation.rs` ports the clause-level goal-definition transform over the represented Rust `ClauseSet`, including conjecture-clause filtering, selected positive/negative literal collection, non-constant ground-term definition, recursive subterm definition mode, definition normal forms through already introduced definitions, fresh typed `edef` constant creation, positive unit equality clauses, and `DCIntroDef` derivation entries.
-- Supported executable prune/proof-search paths now apply `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning and BCE, and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. Represented FOF formula-origin conjectures reach the same path after formula-owner CNF emits conjecture clauses. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count can observe them.
-- Broader formula-owner preprocessing, exact C pointer-order term traversal, and stable proof-state handles remain pending integration points.
+- Supported executable proof search applies `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning, formula CNF, clausal preprocessing, BCE, and predicate elimination, and before initial clause documentation, proof-control initialization, or saturation. The `--prune` branch exits before this transformation, matching C. Represented FOF formula-origin conjectures reach the same clause-set path after formula-owner CNF emits conjecture clauses. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count observe them.
+- Rust's `BTreeMap<usize, Term>` ground-term collector is keyed by `term_identity_id`, which is the live `Rc` allocation address. It therefore mirrors C's pointer-keyed `PTree` policy rather than imposing structural or term-entry order. A permanent runtime-order regression pins that owner boundary, and focused C/Rust traces are exact for all-sign, negative-only, recursive-subterm, and formula-origin cases in [`experiments/2026-07-17-077-goal-definition-order`](../../../experiments/2026-07-17-077-goal-definition-order/FINDINGS.md).
 
 ### Change Later
 
-- C traverses collected goal terms through a `PTree`, so generated definition names and insertion order can depend on raw pointer order. Rust reuses the existing deterministic `BTreeMap` keyed by term identity for ground-term collection, which is stable inside the Rust port but may differ from C definition order. Preserve this until reference traces decide whether exact pointer-order compatibility matters.
+- C traverses collected goal terms through a pointer-keyed `PTree`, so generated definition names and insertion order remain allocator-dependent. Rust deliberately traverses live term allocation addresses through its ordered map and matches the isolated normal reference on the retained cases. Do not replace this with structural, entry-number, or encounter order unless a cleaned mode explicitly abandons C's pointer-order policy.
 - C keys the definition table by term-bank `entry_no` and can define a normalized left-hand side that is already an introduced definition constant if an original compound term normalizes to it. Rust mirrors that entry-number map and the resulting behavior, even though a later cleaned transform might avoid constant-to-constant follow-up definitions.
-- `ClauseSetGDTransform` mutates the same clause set that it scans, but only after collecting all candidate terms. Rust keeps the same two-phase shape to avoid borrowing aliases; a future proof-state owner with stable clause handles should keep that mutation boundary explicit.
+- `ClauseSetGDTransform` mutates the same clause set that it scans, but only after collecting all candidate terms. Rust keeps the same two-phase shape, with cloned shared-term handles surviving later clause insertion. Stable clause arenas could simplify the owner API, but they are not required for the represented production behavior.
 
 ### Porting Focus
 

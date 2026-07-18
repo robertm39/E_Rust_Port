@@ -1,0 +1,267 @@
+{
+  "all_exact": true,
+  "cases": {
+    "all-signs": {
+      "args": [
+        "--output-level=2",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--goal-defs=All",
+        "$FIXTURE"
+      ],
+      "c": {
+        "counters": {
+          "Initial clauses in saturation": 5,
+          "Processed clauses": 5,
+          "Total rewrite steps": 4
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "f(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "g(b)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "h(c)=edef3_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(d)=edef4_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef2_0=edef1_0|edef4_0!=edef3_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      },
+      "exact": true,
+      "fixture": "multi-goal.p",
+      "rust": {
+        "counters": {
+          "Initial clauses in saturation": 5,
+          "Processed clauses": 5,
+          "Total rewrite steps": 4
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "f(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "g(b)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "h(c)=edef3_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(d)=edef4_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef2_0=edef1_0|edef4_0!=edef3_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      }
+    },
+    "formula-origin": {
+      "args": [
+        "--output-level=2",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--goal-defs=All",
+        "$FIXTURE"
+      ],
+      "c": {
+        "counters": {
+          "Initial clauses in saturation": 3,
+          "Processed clauses": 3,
+          "Total rewrite steps": 2
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "f(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "g(b)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef2_0!=edef1_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      },
+      "exact": true,
+      "fixture": "fof-goal.p",
+      "rust": {
+        "counters": {
+          "Initial clauses in saturation": 3,
+          "Processed clauses": 3,
+          "Total rewrite steps": 2
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "f(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "g(b)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef2_0!=edef1_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      }
+    },
+    "negative-only": {
+      "args": [
+        "--output-level=2",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--goal-defs=Neg",
+        "$FIXTURE"
+      ],
+      "c": {
+        "counters": {
+          "Initial clauses in saturation": 3,
+          "Processed clauses": 3,
+          "Total rewrite steps": 2
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "h(c)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(d)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "f(a)=g(b)|edef2_0!=edef1_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      },
+      "exact": true,
+      "fixture": "multi-goal.p",
+      "rust": {
+        "counters": {
+          "Initial clauses in saturation": 3,
+          "Processed clauses": 3,
+          "Total rewrite steps": 2
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "h(c)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(d)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "f(a)=g(b)|edef2_0!=edef1_0",
+            "role": "negated_conjecture"
+          }
+        ]
+      }
+    },
+    "recursive-subterms": {
+      "args": [
+        "--output-level=2",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--goal-defs=All",
+        "--goal-subterm-defs",
+        "$FIXTURE"
+      ],
+      "c": {
+        "counters": {
+          "Initial clauses in saturation": 5,
+          "Processed clauses": 6,
+          "Total rewrite steps": 5
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "g(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "f(edef1_0)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(b)=edef3_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef4_0=edef2_0",
+            "role": "negated_conjecture"
+          },
+          {
+            "clause": "h(edef3_0)=edef2_0",
+            "role": "plain"
+          }
+        ]
+      },
+      "exact": true,
+      "fixture": "nested-goal.p",
+      "rust": {
+        "counters": {
+          "Initial clauses in saturation": 5,
+          "Processed clauses": 6,
+          "Total rewrite steps": 5
+        },
+        "exit_code": 10,
+        "stderr": "",
+        "trace": [
+          {
+            "clause": "g(a)=edef1_0",
+            "role": "plain"
+          },
+          {
+            "clause": "f(edef1_0)=edef2_0",
+            "role": "plain"
+          },
+          {
+            "clause": "k(b)=edef3_0",
+            "role": "plain"
+          },
+          {
+            "clause": "edef4_0=edef2_0",
+            "role": "negated_conjecture"
+          },
+          {
+            "clause": "h(edef3_0)=edef2_0",
+            "role": "plain"
+          }
+        ]
+      }
+    }
+  },
+  "schema_version": 1
+}

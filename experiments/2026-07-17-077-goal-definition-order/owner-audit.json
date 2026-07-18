@@ -1,0 +1,22 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_goal_terms_use_pointer_tree": true,
+    "c_ground_collector_filters_predicates_and_constants": true,
+    "c_proof_owner_runs_after_bce_and_predicate_elimination": true,
+    "c_recursive_subterms_are_defined_child_first": true,
+    "permanent_formula_executable_regression": true,
+    "permanent_live_pointer_order_regression": true,
+    "permanent_low_level_sign_regression": true,
+    "permanent_low_level_subterm_regression": true,
+    "permanent_prune_boundary_regression": true,
+    "rust_formula_cnf_precedes_goal_definition_owner": true,
+    "rust_goal_owner_precedes_initial_documentation": true,
+    "rust_goal_owner_runs_after_bce_and_predicate_elimination": true,
+    "rust_goal_terms_use_live_pointer_identity": true,
+    "rust_recursive_subterms_are_defined_child_first": true
+  },
+  "passed": 14,
+  "schema_version": 1,
+  "total": 14
+}

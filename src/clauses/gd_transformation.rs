@@ -153,7 +153,7 @@ mod tests {
     use crate::clauses::derivation::{derivation_entries, DerivationEntry};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
-    use crate::terms::termtypes::DerefType;
+    use crate::terms::termtypes::{term_identity_id, DerefType};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -272,5 +272,29 @@ mod tests {
         assert_eq!(added, 2);
         assert_eq!(clauses.members(), 3);
         assert_eq!(generated_def_count(&bank), 2);
+    }
+
+    #[test]
+    fn gd_transform_assigns_definitions_in_live_term_identity_order() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "gd_order_a");
+        let b = object_const(&mut bank, "gd_order_b");
+        let f_a = object_unary(&mut bank, "gd_order_f", &a);
+        let g_b = object_unary(&mut bank, "gd_order_g", &b);
+        let mut expected = vec![f_a.clone(), g_b.clone()];
+        expected.sort_by_key(term_identity_id);
+        let mut clauses = ClauseSet::from_clauses([conjecture_clause(equation_literal(
+            &mut bank, &f_a, &g_b, true,
+        ))]);
+
+        let added = clause_set_gd_transform(&mut bank, &mut clauses, true, false, false).unwrap();
+
+        assert_eq!(added, 2);
+        let actual = clauses
+            .iter()
+            .skip(1)
+            .map(|clause| clause.literals().as_slice()[0].left().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 }
