@@ -941,4 +941,21 @@ mod tests {
         assert!(stats.contains("% Paramod-into index        :"));
         assert!(stats.contains("% Paramod-neg-atom index    :"));
     }
+
+    #[cfg(feature = "print-index-stats")]
+    #[test]
+    fn index_statistics_string_prints_c_null_distribution_for_disabled_indexes() {
+        let mut bank = test_bank();
+        let (mut clause, _, _) = maximal_unit_clause(&mut bank, "gidx_null_stats", 71);
+        let mut indices = GlobalIndices::new("FP1", "FP1", "NoIndex", 0);
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        let stats = indices.index_statistics_string(&bank);
+        assert!(stats.contains("graph pm_from_index{\n"));
+        assert!(stats.ends_with(
+            "% Paramod-into index        :     0 nodes,     0 leaves,   0.00+/-0.000 terms/leaf\n\
+             % Paramod-neg-atom index    :     0 nodes,     0 leaves,   0.00+/-0.000 terms/leaf\n"
+        ));
+    }
 }
