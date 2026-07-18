@@ -1,0 +1,34 @@
+{
+  "c": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "% Preprocessing class: FSSSSMSSSSSNFFN.\n% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Auto)\n% No SInE strategy applied\n% Search class: FUHPF-FFSF00-SFFFFFNN\n% Configuration: SAT001_MinMin_p005000_rr_RG\n% Presaturation interreduction done\n\n% Proof found!\n% SZS status Theorem\n% SZS output start CNFRefutation\ntff(decl_sort1, type, animal: $tType).\ntff(decl_23, type, p: (animal * animal * animal) > $o).\ntff(decl_24, type, a: animal).\ntff(decl_25, type, b: animal).\ntff(decl_26, type, c: animal).\ntff(variable_goal, conjecture, p(a,b,c), file('<stdin>', variable_goal)).\ntff(variable_order, axiom, ![X1:animal, X2:animal, X3:animal]:(p(X1,X2,X3)), file('<stdin>', variable_order)).\ntff(c_0_2, negated_conjecture, ~p(a,b,c), inference(fof_simplification,[status(thm)],[inference(assume_negation,[status(cth)],[variable_goal])])).\ntff(c_0_3, negated_conjecture, ~p(a,b,c), inference(fof_nnf,[status(thm)],[c_0_2])).\ntff(c_0_4, plain, ![X4:animal, X5:animal, X6:animal]:(p(X4,X5,X6)), inference(variable_rename,[status(thm)],[variable_order])).\ntcf(c_0_5, negated_conjecture, ~p(a,b,c), inference(split_conjunct,[status(thm)],[c_0_3])).\ntcf(c_0_6, plain, ![X1:animal, X2:animal, X3:animal]:(p(X1,X2,X3)), inference(split_conjunct,[status(thm)],[c_0_4])).\ncnf(c_0_7, negated_conjecture, ($false), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_5, c_0_6])]), ['proof']).\n% SZS output end CNFRefutation\n"
+  },
+  "exact": true,
+  "reference": {
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "executable_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+    "platform": "Linux under WSL 2"
+  },
+  "rust": {
+    "executable_sha256": "b534d677215b4548b382a627202a911c7b3f26e5816a0514a7a4508799b4d6de",
+    "platform": "native Windows"
+  },
+  "rust_result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "% Preprocessing class: FSSSSMSSSSSNFFN.\n% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Auto)\n% No SInE strategy applied\n% Search class: FUHPF-FFSF00-SFFFFFNN\n% Configuration: SAT001_MinMin_p005000_rr_RG\n% Presaturation interreduction done\n\n% Proof found!\n% SZS status Theorem\n% SZS output start CNFRefutation\ntff(decl_sort1, type, animal: $tType).\ntff(decl_23, type, p: (animal * animal * animal) > $o).\ntff(decl_24, type, a: animal).\ntff(decl_25, type, b: animal).\ntff(decl_26, type, c: animal).\ntff(variable_goal, conjecture, p(a,b,c), file('<stdin>', variable_goal)).\ntff(variable_order, axiom, ![X1:animal, X2:animal, X3:animal]:(p(X1,X2,X3)), file('<stdin>', variable_order)).\ntff(c_0_2, negated_conjecture, ~p(a,b,c), inference(fof_simplification,[status(thm)],[inference(assume_negation,[status(cth)],[variable_goal])])).\ntff(c_0_3, negated_conjecture, ~p(a,b,c), inference(fof_nnf,[status(thm)],[c_0_2])).\ntff(c_0_4, plain, ![X4:animal, X5:animal, X6:animal]:(p(X4,X5,X6)), inference(variable_rename,[status(thm)],[variable_order])).\ntcf(c_0_5, negated_conjecture, ~p(a,b,c), inference(split_conjunct,[status(thm)],[c_0_3])).\ntcf(c_0_6, plain, ![X1:animal, X2:animal, X3:animal]:(p(X1,X2,X3)), inference(split_conjunct,[status(thm)],[c_0_4])).\ncnf(c_0_7, negated_conjecture, ($false), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_5, c_0_6])]), ['proof']).\n% SZS output end CNFRefutation\n"
+  },
+  "schema_version": 1,
+  "workload": {
+    "fixture": "inputs/typed-variables.p",
+    "fixture_sha256": "8cf70541ef113cee0d16fc5b87d8f1aca444c7ad59b34b3e554263c41cb4c575",
+    "input_transport": "stdin",
+    "options": [
+      "--auto",
+      "--tstp-out",
+      "--proof-object=1",
+      "--silent"
+    ]
+  }
+}

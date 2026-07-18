@@ -85,20 +85,19 @@ where
         }
     }
 
-    #[must_use]
-    pub fn find(&self, key: &K) -> Option<&K> {
-        self.find_index(key).map(|index| &self.node(index).key)
-    }
-
-    pub fn find_splayed(&mut self, key: &K) -> Option<&K> {
+    pub fn find(&mut self, key: &K) -> Option<&K> {
         let root = self.splay(self.root?, key);
         self.root = Some(root);
         (self.node(root).key.cmp(key) == Ordering::Equal).then(|| &self.node(root).key)
     }
 
+    pub fn find_splayed(&mut self, key: &K) -> Option<&K> {
+        self.find(key)
+    }
+
     #[must_use]
     pub fn find_binary(&self, key: &K) -> Option<&K> {
-        self.find(key)
+        self.find_index(key).map(|index| &self.node(index).key)
     }
 
     /// # Panics
@@ -454,10 +453,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::PTree;
+    use std::fmt::Write as _;
 
     fn tree(values: &[i32]) -> PTree<i32> {
         let (tree, _inserted) = PTree::from_stack(values.iter().copied());
         tree
+    }
+
+    fn shape(tree: &PTree<i32>) -> String {
+        fn write_node(tree: &PTree<i32>, current: Option<usize>, output: &mut String) {
+            let Some(current) = current else {
+                output.push('.');
+                return;
+            };
+            let node = tree.node(current);
+            write!(output, "[{}](", node.key).unwrap();
+            write_node(tree, node.left, output);
+            output.push(',');
+            write_node(tree, node.right, output);
+            output.push(')');
+        }
+
+        let mut output = String::new();
+        write_node(tree, tree.root, &mut output);
+        output
     }
 
     #[test]
@@ -477,10 +496,55 @@ mod tests {
         let mut tree = tree(&[1, 2, 3]);
         assert_eq!(tree.root_key(), Some(&3));
 
-        assert_eq!(tree.find_splayed(&1), Some(&1));
+        assert_eq!(tree.find(&1), Some(&1));
         assert_eq!(tree.root_key(), Some(&1));
-        assert_eq!(tree.find_splayed(&99), None);
+        assert_eq!(tree.find(&99), None);
         assert_eq!(tree.root_key(), Some(&3));
+    }
+
+    #[test]
+    fn binary_find_does_not_reorganize_the_tree() {
+        let tree = tree(&[4, 2, 6, 3]);
+        let root = tree.root_key().copied();
+
+        assert_eq!(tree.find_binary(&2), Some(&2));
+        assert_eq!(tree.find_binary(&5), None);
+        assert_eq!(tree.root_key().copied(), root);
+    }
+
+    #[test]
+    fn operation_trace_matches_unchanged_c_splay_topology() {
+        let mut tree = PTree::new();
+
+        assert_eq!(shape(&tree), ".");
+        assert!(tree.store(4));
+        assert_eq!(shape(&tree), "[4](.,.)");
+        assert!(tree.store(2));
+        assert_eq!(shape(&tree), "[2](.,[4](.,.))");
+        assert!(tree.store(6));
+        assert_eq!(shape(&tree), "[6]([4]([2](.,.),.),.)");
+        assert!(tree.store(3));
+        assert_eq!(shape(&tree), "[3]([2](.,.),[4](.,[6](.,.)))");
+        assert!(!tree.store(4));
+        assert_eq!(shape(&tree), "[4]([3]([2](.,.),.),[6](.,.))");
+
+        assert_eq!(tree.find(&2), Some(&2));
+        assert_eq!(shape(&tree), "[2](.,[3](.,[4](.,[6](.,.))))");
+        assert_eq!(tree.find_binary(&6), Some(&6));
+        assert_eq!(shape(&tree), "[2](.,[3](.,[4](.,[6](.,.))))");
+        assert_eq!(tree.find(&1), None);
+        assert_eq!(shape(&tree), "[2](.,[3](.,[4](.,[6](.,.))))");
+        assert_eq!(tree.find(&9), None);
+        assert_eq!(shape(&tree), "[6]([3]([2](.,.),[4](.,.)),.)");
+        assert_eq!(tree.find(&4), Some(&4));
+        assert_eq!(shape(&tree), "[4]([3]([2](.,.),.),[6](.,.))");
+
+        assert_eq!(tree.extract_key(&5), None);
+        assert_eq!(shape(&tree), "[6]([4]([3]([2](.,.),.),.),.)");
+        assert_eq!(tree.extract_key(&3), Some(3));
+        assert_eq!(shape(&tree), "[2](.,[4](.,[6](.,.)))");
+        assert!(tree.delete_entry(&6));
+        assert_eq!(shape(&tree), "[4]([2](.,.),.)");
     }
 
     #[test]

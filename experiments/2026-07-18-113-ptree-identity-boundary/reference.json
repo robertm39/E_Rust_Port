@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_ptrees_c_sha256": "e098412a8efbc9a1edff24c6e8e5e742ab1884acac034aa9c1d35c878a998a3a",
+    "clb_ptrees_h_sha256": "df3f5daccc7cbd81b14f650c4fcb1af0b0be70c428028b52c0b46b7899f84ae5",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "8269d33f414209dc9b19b0271d98409b0d69c89f6f03c02037ad0a88ca90e999"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "initial=.\nstore-a.inserted=1\nstore-a=[4](.,.)\nstore-b.inserted=1\nstore-b=[2](.,[4](.,.))\nstore-c.inserted=1\nstore-c=[6]([4]([2](.,.),.),.)\nstore-d.inserted=1\nstore-d=[3]([2](.,.),[4](.,[6](.,.)))\nduplicate-a.inserted=0\nduplicate-a=[4]([3]([2](.,.),.),[6](.,.))\nfind-b.found=2\nfind-b=[2](.,[3](.,[4](.,[6](.,.))))\nbinary-c.found=6\nbinary-c=[2](.,[3](.,[4](.,[6](.,.))))\nmiss-low.found=0\nmiss-low=[2](.,[3](.,[4](.,[6](.,.))))\nmiss-high.found=0\nmiss-high=[6]([3]([2](.,.),[4](.,.)),.)\nfind-a.found=4\nfind-a=[4]([3]([2](.,.),.),[6](.,.))\nextract-middle.found=0\nextract-middle=[6]([4]([3]([2](.,.),.),.),.)\nextract-d.found=3\nextract-d=[2](.,[4](.,[6](.,.)))\ndelete-c.deleted=1\ndelete-c=[4]([2](.,.),.)\n"
+  },
+  "schema_version": 1
+}
