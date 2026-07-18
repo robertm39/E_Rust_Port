@@ -97,6 +97,7 @@ Source files reviewed: `HEURISTICS/che_termweights.h`, `HEURISTICS/che_termweigh
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Rust's production owners preserve all four `RelatedTermSet` values through the relative-term, prefix, TF-IDF, Levenshtein, tree-distance, and structural-distance consumers. The active-HCB regression and 24-case executable matrix are recorded in [`experiments/2026-07-17-081-related-term-set-matrix/FINDINGS.md`](../../../experiments/2026-07-17-081-related-term-set-matrix/FINDINGS.md).
 
 ### Porting Focus
 

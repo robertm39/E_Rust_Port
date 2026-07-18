@@ -1,0 +1,11 @@
+diff --git a/HEURISTICS/che_tfidfweight.c b/HEURISTICS/che_tfidfweight.c
+index e8b1dca4..3d7acbdc 100644
+--- a/HEURISTICS/che_tfidfweight.c
++++ b/HEURISTICS/che_tfidfweight.c
+@@ -340,5 +340,6 @@ WFCB_p ConjectureTermTfIdfWeightInit(
+    data->rel_terms   = rel_terms;
+    data->update_docs = update_docs;
++   data->tf_fact     = tf_fact;
+    data->eval_freqs  = NULL;
+    data->twe = TermWeightExtensionAlloc(
+       max_term_multiplier,

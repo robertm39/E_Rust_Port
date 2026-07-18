@@ -18601,8 +18601,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn proof_control_installs_conjecture_term_weights_with_active_owner_context() {
+    fn assert_conjecture_term_weights_with_active_owner_context(rel_terms: i32) {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "pc_termweight_a");
         let b = typed_const(&mut bank, "pc_termweight_b");
@@ -18629,14 +18628,24 @@ mod tests {
             ..HeuristicParmsCell::default()
         };
         let wfcb_defs = vec![
-            "relative=ConjectureRelativeTermWeight(ConstPrio,0,0,2.0,10,3,20,1,0,1.0,1.0,1.0)"
-                .to_owned(),
-            "prefix=ConjectureTermPrefixWeight(ConstPrio,0,0,0.5,5.0,0,1.0,1.0,1.0)".to_owned(),
-            "tfidf=ConjectureTermTfIdfWeight(ConstPrio,0,0,0,1.0,0,1.0,1.0,1.0)".to_owned(),
-            "lev=ConjectureLevDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0)".to_owned(),
-            "tree=ConjectureTreeDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0)".to_owned(),
-            "struc=ConjectureStrucDistanceWeight(ConstPrio,0,0,5.0,10.0,2.0,3.0,0,1.0,1.0,1.0)"
-                .to_owned(),
+            format!(
+                "relative=ConjectureRelativeTermWeight(ConstPrio,0,{rel_terms},2.0,10,3,20,1,0,1.0,1.0,1.0)"
+            ),
+            format!(
+                "prefix=ConjectureTermPrefixWeight(ConstPrio,0,{rel_terms},0.5,5.0,0,1.0,1.0,1.0)"
+            ),
+            format!(
+                "tfidf=ConjectureTermTfIdfWeight(ConstPrio,0,{rel_terms},0,1.0,0,1.0,1.0,1.0)"
+            ),
+            format!(
+                "lev=ConjectureLevDistanceWeight(ConstPrio,0,{rel_terms},1,1,5,0,1.0,1.0,1.0)"
+            ),
+            format!(
+                "tree=ConjectureTreeDistanceWeight(ConstPrio,0,{rel_terms},1,1,5,0,1.0,1.0,1.0)"
+            ),
+            format!(
+                "struc=ConjectureStrucDistanceWeight(ConstPrio,0,{rel_terms},5.0,10.0,2.0,3.0,0,1.0,1.0,1.0)"
+            ),
         ];
         let mut hcb_defs =
             vec!["TermOwnerSearch=(1*relative,1*prefix,1*tfidf,1*lev,1*tree,1*struc)".to_owned()];
@@ -18694,6 +18703,98 @@ mod tests {
                 second_evaluations.eval(index).heuristic().to_bits()
             );
         }
+    }
+
+    #[test]
+    fn proof_control_installs_conjecture_term_weights_with_active_owner_context() {
+        assert_conjecture_term_weights_with_active_owner_context(0);
+    }
+
+    #[test]
+    fn proof_control_installs_all_related_conjecture_term_sets() {
+        for rel_terms in 1..=3 {
+            assert_conjecture_term_weights_with_active_owner_context(rel_terms);
+        }
+    }
+
+    #[test]
+    fn tfidf_problem_scores_use_the_parsed_frequency_factor() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "tfidf_a");
+        let b = typed_const(&mut bank, "tfidf_b");
+        let c = typed_const(&mut bank, "tfidf_c");
+        let g_b = typed_unary(&mut bank, "tfidf_g", &b);
+        let g_c = typed_unary(&mut bank, "tfidf_g", &c);
+        let f_code = typed_binary_code(&mut bank, "tfidf_f");
+        let f_a_g_b = typed_binary_with_code(&mut bank, f_code, &a, &g_b);
+        let f_a_g_c = typed_binary_with_code(&mut bank, f_code, &a, &g_c);
+        let h_c = typed_unary(&mut bank, "tfidf_h", &c);
+        let q_code = unary_predicate_code(&mut bank, "tfidf_q");
+        let r_code = unary_predicate_code(&mut bank, "tfidf_r");
+        let p_code = unary_predicate_code(&mut bank, "tfidf_p");
+        let nested_atom = unary_predicate(&mut bank, q_code, &f_a_g_b);
+        let flat_atom = unary_predicate(&mut bank, r_code, &h_c);
+        let goal_atom = unary_predicate(&mut bank, p_code, &f_a_g_c);
+        let truth = bank.true_term().clone();
+        let nested = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank,
+            &nested_atom,
+            &truth,
+            true,
+        )]));
+        let flat = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &flat_atom, &truth, true,
+        )]));
+        let mut goal = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &goal_atom, &truth, false,
+        )]));
+        goal.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let mut axioms = ClauseSet::from_clauses([nested.clone(), flat.clone(), goal.clone()]);
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "TfIdfParsedFactor".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs =
+            vec!["tfidf=ConjectureTermTfIdfWeight(ConstPrio,0,0,0,1.0,0,1.0,1.0,1.0)".to_owned()];
+        let mut hcb_defs = vec!["TfIdfParsedFactor=(1*tfidf)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let active_hcb_handle = control.active_hcb.expect("TF-IDF HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("TF-IDF HCB should exist");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+        let mut clauses = [nested, flat, goal];
+        for clause in &mut clauses {
+            hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, clause)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        let scores = clauses.map(|clause| {
+            clause
+                .evaluations()
+                .expect("TF-IDF should attach an evaluation")
+                .eval(0)
+                .heuristic()
+        });
+        assert_eq!(
+            scores.map(f32::to_bits),
+            [0x3F_B7_AB_66, 0x3F_B7_AB_66, 0x3F_3A_AE_08]
+        );
     }
 
     #[test]
