@@ -307,7 +307,7 @@ mod tests {
     use crate::clauses::clause::clause_parse;
     use crate::clauses::clause_props::{CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
     use crate::clauses::formulasets::{formula_set_definition_statistics, WrappedFormula};
-    use crate::clauses::proofstate::ProofState;
+    use crate::clauses::proofstate::{ProofState, RawFormulaFeatures};
     use crate::heuristics::clausesetfeatures::SpecLimits;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::signature::{FP_IGNORE_PROPS, SIG_PHONY_APP_CODE};
@@ -464,6 +464,43 @@ mod tests {
         assert_eq!(features.num_lambdas, 0);
         assert!(!features.app_var_lits);
         assert!(features.class.is_empty());
+    }
+
+    #[test]
+    fn compute_replaces_bridge_lowered_clauses_with_original_formula_features() {
+        let mut state = ProofState::new(FP_IGNORE_PROPS).unwrap();
+        insert_tstp_clause(&mut state, "cnf(lowered_ax, axiom, (p(f(a)))).");
+        insert_tstp_clause(
+            &mut state,
+            "cnf(lowered_goal, negated_conjecture, (~q(a))).",
+        );
+        let lowered_clause_term_size = state.axioms().standard_weight();
+        state.add_raw_formula_features(RawFormulaFeatures {
+            has_formula_input: true,
+            sentence_no: 1,
+            term_size: 23,
+            lowered_clause_no: 2,
+            lowered_clause_term_size,
+            conjecture_count: 1,
+            lowered_conjecture_count: 1,
+            order: 3,
+            conj_order: 3,
+            num_lambdas: 2,
+            app_var_lits: true,
+            ..RawFormulaFeatures::default()
+        });
+        let mut features = RawSpecFeatureCell::default();
+
+        raw_spec_features_compute(&mut features, &state);
+
+        assert_eq!(features.sentence_no, 1);
+        assert_eq!(features.term_size, 23);
+        assert_eq!(features.conjecture_count, 1);
+        assert_eq!(features.hypothesis_count, 0);
+        assert_eq!(features.order, 3);
+        assert_eq!(features.conj_order, 3);
+        assert_eq!(features.num_lambdas, 2);
+        assert!(features.app_var_lits);
     }
 
     #[test]
