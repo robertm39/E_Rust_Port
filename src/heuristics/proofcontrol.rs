@@ -11500,13 +11500,19 @@ mod tests {
             let target = literal(terms, &g_f_a, &c, true);
             let mut clause = Clause::alloc(EqnList::from_vec(vec![rule, target]));
             clause.set_ident(4_082);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
             (clause, g_a, c)
         };
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
         control.heuristic_parms_mut().local_rw = true;
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
 
-        let trivial = proof_state_forward_modify_clause(
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
             &mut state,
             &mut control,
             &mut clause,
@@ -11523,6 +11529,9 @@ mod tests {
                 && literal.right() == &rewritten_right
         }));
         assert!(derivation_contains_operation(&clause, DC_LOCAL_REWRITE));
+        assert_eq!(clause.ident(), 4_082);
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert!(rendered.is_empty());
     }
 
     #[test]
@@ -11846,24 +11855,29 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{err}"));
             let first_rhs = typed_const(terms, "pc_ho_prune_first_rhs");
             let second_rhs = typed_const(terms, "pc_ho_prune_second_rhs");
-            let clause = Clause::alloc(EqnList::from_vec(vec![
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
                 literal(terms, &first, &first_rhs, true),
                 literal(terms, &second, &second_rhs, true),
             ]));
+            clause.set_ident(4_083);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
             (clause, function, x, y)
         };
         let mut control = proof_control_alloc();
         control.set_ocb(empty_ocb(state.terms()));
         control.heuristic_parms_mut().prune_args = true;
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::HigherOrder);
+        let mut rendered = String::new();
 
-        let trivial = proof_state_forward_modify_clause_impl::<String>(
+        let trivial = proof_state_forward_modify_clause_impl(
             &mut state,
             &mut control,
             &mut clause,
             false,
             RewriteLevel::RuleRewrite,
             ProblemType::HigherOrder,
-            None,
+            Some((&mut rendered, &mut session)),
         )
         .unwrap_or_else(|err| panic!("{err}"));
 
@@ -11878,6 +11892,9 @@ mod tests {
         assert_eq!(first_left.argument(1).as_ref(), Some(&x));
         assert_eq!(second_left.argument(1).as_ref(), Some(&y));
         assert!(derivation_contains_operation(&clause, DC_PRUNE_ARG));
+        assert_eq!(clause.ident(), 4_083);
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert!(rendered.is_empty());
     }
 
     #[test]
