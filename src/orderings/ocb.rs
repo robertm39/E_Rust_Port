@@ -710,7 +710,7 @@ mod tests {
     };
     use crate::terms::simpletypes::{alloc_simple_sort, Type};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::Term;
+    use crate::terms::termtypes::{term_identity_id, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn signature() -> Signature {
@@ -786,6 +786,44 @@ mod tests {
         assert!(empty.weights.is_none());
         assert!(empty.precedence.is_none());
         assert!(empty.prec_weights.is_none());
+    }
+
+    #[test]
+    fn higher_order_variable_map_uses_term_identity_and_c_reset_boundary() {
+        let signature = signature();
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            &signature,
+            HoOrderKind::LambdaOrder,
+        );
+        ocb.var_weight = 3;
+        let first = Term::const_cell_alloc(-2);
+        let first_alias = first.clone();
+        let same_code_distinct_owner = Term::const_cell_alloc(-2);
+
+        ocb.inc_ho_var_balance(&first);
+        ocb.inc_ho_var_balance(&first_alias);
+        ocb.dec_ho_var_balance(&first_alias);
+        ocb.dec_ho_var_balance(&same_code_distinct_owner);
+
+        assert_ne!(
+            term_identity_id(&first),
+            term_identity_id(&same_code_distinct_owner)
+        );
+        assert_eq!(ocb.ho_vb.len(), 2);
+        assert_eq!(ocb.ho_vb[&term_identity_id(&first)], 1);
+        assert_eq!(ocb.ho_vb[&term_identity_id(&same_code_distinct_owner)], -1);
+        assert_eq!(ocb.pos_bal, 1);
+        assert_eq!(ocb.neg_bal, 1);
+        assert_eq!(ocb.wb, 0);
+
+        ocb.reset_ho_var_map();
+
+        assert!(ocb.ho_vb.is_empty());
+        assert_eq!(ocb.pos_bal, 1);
+        assert_eq!(ocb.neg_bal, 1);
+        assert_eq!(ocb.wb, 0);
     }
 
     #[test]

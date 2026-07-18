@@ -18936,6 +18936,42 @@ mod tests {
         assert!(control.wfcbs().find_wfcb_handle("weight21_ugg").is_some());
     }
 
+    #[test]
+    fn proof_control_init_owns_higher_order_lambda_ocb_like_c() {
+        let mut control = proof_control_alloc();
+        let mut bank = test_bank();
+        typed_const(&mut bank, "pc_lambda_order_a");
+        let expected_sig_size = bank.signature().f_count();
+        let mut axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell::default();
+        params.order_params.ordertype = TermOrdering::Kbo6;
+        params.order_params.ho_order_kind = HoOrderKind::LambdaOrder;
+        params.order_params.lam_w = 30;
+        params.order_params.db_w = 12;
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+            true,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ocb = control.ocb().expect("proof control should own an OCB");
+        assert_eq!(ocb.ordering_type, TermOrdering::Kbo6);
+        assert_eq!(ocb.ho_order_kind, HoOrderKind::LambdaOrder);
+        assert_eq!(ocb.sig_size, expected_sig_size);
+        assert_eq!(ocb.vb_size, 1);
+        assert!(ocb.ho_vb.is_empty());
+        assert_eq!(ocb.lam_weight, 30);
+        assert_eq!(ocb.db_weight, 12);
+    }
+
     fn proof_control_tsm_kb_dir() -> std::path::PathBuf {
         std::path::PathBuf::from("target")
             .join("e-rust-port-tests")
