@@ -47,6 +47,7 @@ pub struct TypeBank {
     rational_type: Type,
     real_type: Type,
     default_type: Type,
+    verbose_events: Option<Vec<String>>,
 }
 
 impl Default for TypeBank {
@@ -58,6 +59,18 @@ impl Default for TypeBank {
 impl TypeBank {
     #[must_use]
     pub fn new() -> Self {
+        Self::new_internal(false)
+    }
+
+    /// Allocates a type bank that records C level-two type progress events.
+    ///
+    /// Callers consume the buffered text with [`Self::take_verbose_events`].
+    #[must_use]
+    pub fn new_with_verbose_events() -> Self {
+        Self::new_internal(true)
+    }
+
+    fn new_internal(record_verbose_events: bool) -> Self {
         let constructor_defs = [
             (ARROW_TYPE_CONS, "$>_type"),
             (ST_BOOL, "$o"),
@@ -92,6 +105,7 @@ impl TypeBank {
             rational_type: placeholder.clone(),
             real_type: placeholder.clone(),
             default_type: placeholder,
+            verbose_events: record_verbose_events.then(Vec::new),
         };
 
         bank.bool_type = bank.insert_type_shared(alloc_simple_sort(ST_BOOL));
@@ -103,6 +117,33 @@ impl TypeBank {
         bank.default_type = bank.i_type.clone();
         bank.max_predefined_count = bank.types_count;
         bank
+    }
+
+    /// Takes all buffered C level-two type progress events in insertion order.
+    #[must_use]
+    pub fn take_verbose_events(&mut self) -> Vec<String> {
+        self.verbose_events
+            .as_mut()
+            .map_or_else(Vec::new, std::mem::take)
+    }
+
+    pub(crate) const fn records_verbose_events(&self) -> bool {
+        self.verbose_events.is_some()
+    }
+
+    pub(crate) fn record_type_declaration(&mut self, name: &str, type_: &Type, redeclared: bool) {
+        let Some(mut events) = self.verbose_events.take() else {
+            return;
+        };
+        if let Some(rendered) = self.verbose_type_string(type_) {
+            let kind = if redeclared {
+                "type re-declaration"
+            } else {
+                "type declaration"
+            };
+            events.push(format!("% {kind} {name}: {rendered}\n"));
+        }
+        self.verbose_events = Some(events);
     }
 
     #[must_use]
@@ -246,8 +287,25 @@ impl TypeBank {
 
         self.types_count += 1;
         shared_arg_type.set_type_uid(self.types_count);
+        if let Some(mut events) = self.verbose_events.take() {
+            if let Some(rendered) = self.verbose_type_string(&shared_arg_type) {
+                events.push(format!("% Type {rendered} is inserted.\n"));
+            }
+            self.verbose_events = Some(events);
+        }
         self.shared_types.insert(key, shared_arg_type.clone());
         shared_arg_type
+    }
+
+    fn verbose_type_string(&self, type_: &Type) -> Option<String> {
+        let mut rendered = Vec::new();
+        let output_problem_type = match problem_type() {
+            ProblemType::NotInitialized => ProblemType::HigherOrder,
+            initialized => initialized,
+        };
+        self.print_tstp(&mut rendered, type_, output_problem_type)
+            .ok()?;
+        String::from_utf8(rendered).ok()
     }
 
     pub fn parse_type_from_current_problem(
@@ -736,6 +794,26 @@ mod tests {
         assert_eq!(bank.rational_type().type_uid(), 5);
         assert_eq!(bank.real_type().type_uid(), 6);
         assert_eq!(bank.default_type(), bank.i_type());
+    }
+
+    #[test]
+    fn verbose_event_allocation_records_c_predefined_type_lines_only_when_requested() {
+        let mut quiet = TypeBank::new();
+        assert!(quiet.take_verbose_events().is_empty());
+
+        let mut verbose = TypeBank::new_with_verbose_events();
+        assert_eq!(
+            verbose.take_verbose_events(),
+            [
+                "% Type $o is inserted.\n",
+                "% Type $i is inserted.\n",
+                "% Type $tType is inserted.\n",
+                "% Type $int is inserted.\n",
+                "% Type $rat is inserted.\n",
+                "% Type $real is inserted.\n",
+            ]
+        );
+        assert!(verbose.take_verbose_events().is_empty());
     }
 
     #[test]

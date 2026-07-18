@@ -483,17 +483,20 @@ impl Signature {
 
     pub fn declare_type(&mut self, f_code: FunCode, type_: Type) -> Result<(), Diagnostic> {
         let is_fixed = self.is_fixed_type(f_code);
-        let fun = self.func_mut(f_code);
-        if let Some(existing) = &fun.type_ {
-            if existing != &type_ {
-                if is_fixed {
-                    return Err(Diagnostic::new(ErrorCode::TYPE_ERROR, "type error"));
-                }
-                fun.type_ = Some(type_);
-            }
-        } else {
-            fun.type_ = Some(type_);
+        let redeclared = match self.get_type(f_code) {
+            Some(existing) if existing == &type_ => return Ok(()),
+            Some(_) => true,
+            None => false,
+        };
+        if redeclared && is_fixed {
+            return Err(Diagnostic::new(ErrorCode::TYPE_ERROR, "type error"));
         }
+        if self.type_bank.records_verbose_events() {
+            let name = self.find_name(f_code).unwrap_or("").to_owned();
+            self.type_bank
+                .record_type_declaration(&name, &type_, redeclared);
+        }
+        self.func_mut(f_code).type_ = Some(type_);
         Ok(())
     }
 
@@ -1667,6 +1670,10 @@ impl Signature {
     }
 
     fn set_type_direct(&mut self, f_code: FunCode, type_: Type) {
+        if self.type_bank.records_verbose_events() {
+            let name = self.find_name(f_code).unwrap_or("").to_owned();
+            self.type_bank.record_type_declaration(&name, &type_, false);
+        }
         self.func_mut(f_code).type_ = Some(type_);
     }
 

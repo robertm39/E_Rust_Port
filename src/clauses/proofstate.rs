@@ -811,7 +811,25 @@ impl ProofState {
     ///
     /// Returns a diagnostic if internal signature or term-bank setup fails.
     pub fn new(free_symbol_props: FunctionProperties) -> Result<Self, Diagnostic> {
-        let mut signature = Signature::new(TypeBank::new());
+        Self::new_with_type_bank(free_symbol_props, TypeBank::new())
+    }
+
+    /// Allocates a proof state whose type bank records C level-two progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if internal signature or term-bank setup fails.
+    pub fn new_with_verbose_type_events(
+        free_symbol_props: FunctionProperties,
+    ) -> Result<Self, Diagnostic> {
+        Self::new_with_type_bank(free_symbol_props, TypeBank::new_with_verbose_events())
+    }
+
+    fn new_with_type_bank(
+        free_symbol_props: FunctionProperties,
+        type_bank: TypeBank,
+    ) -> Result<Self, Diagnostic> {
+        let mut signature = Signature::new(type_bank);
         signature.insert_internal_codes()?;
         signature.remove_distinct_props(free_symbol_props);
         let mut terms = TermBank::new(signature)?;
@@ -2987,6 +3005,17 @@ fn generated_literal_statistics_count(
 
 pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofState, Diagnostic> {
     ProofState::new(free_symbol_props)
+}
+
+/// Allocates a proof state with buffered C level-two type progress events.
+///
+/// # Errors
+///
+/// Returns a diagnostic if internal signature or term-bank setup fails.
+pub fn proof_state_alloc_with_verbose_type_events(
+    free_symbol_props: FunctionProperties,
+) -> Result<ProofState, Diagnostic> {
+    ProofState::new_with_verbose_type_events(free_symbol_props)
 }
 
 fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {

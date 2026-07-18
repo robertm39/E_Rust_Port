@@ -880,6 +880,43 @@ pub fn select_axioms_clause_formula_sets<'a>(
     res_clauses: &mut PStack<&'a Clause>,
     res_formulas: &mut PStack<&'a WrappedFormula>,
 ) -> i64 {
+    select_axioms_clause_formula_sets_with_stats(
+        generality,
+        signature,
+        sets,
+        seed_start,
+        params,
+        res_clauses,
+        res_formulas,
+    )
+    .selected_count
+}
+
+/// Selection counts produced by C `SelectAxiomsFromClauseSetArray`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SineSelectionStats {
+    /// Number of clause and formula axioms selected into the result stacks.
+    pub selected_count: i64,
+    /// Number of conjecture/hypothesis seeds discovered before selection.
+    pub seed_count: i64,
+}
+
+/// Selects mixed clause/formula axioms and preserves C's seed statistic.
+///
+/// This is the reporting variant of [`select_axioms_clause_formula_sets`].
+///
+/// # Panics
+///
+/// Panics when the clause and formula set stacks have different lengths.
+pub fn select_axioms_clause_formula_sets_with_stats<'a>(
+    generality: &mut GenDistrib,
+    signature: &Signature,
+    sets: SineSetStacks<'a, '_>,
+    seed_start: usize,
+    params: ClauseSineParams,
+    res_clauses: &mut PStack<&'a Clause>,
+    res_formulas: &mut PStack<&'a WrappedFormula>,
+) -> SineSelectionStats {
     assert_eq!(
         sets.clauses.len(),
         sets.formulas.len(),
@@ -916,7 +953,10 @@ pub fn select_axioms_clause_formula_sets<'a>(
         );
     }
     if seeds == 0 {
-        return 0;
+        return SineSelectionStats {
+            selected_count: 0,
+            seed_count: 0,
+        };
     }
 
     let ax_cardinality = clause_set_ref_stack_cardinality(sets.clauses)
@@ -936,7 +976,7 @@ pub fn select_axioms_clause_formula_sets<'a>(
         selected_count = usize_to_i64(res_clauses.len().saturating_add(res_formulas.len()));
     }
 
-    selected_count
+    let selected_count = selected_count
         + select_defining_axioms_clause_formula_sets(
             &mut drel,
             signature,
@@ -950,7 +990,11 @@ pub fn select_axioms_clause_formula_sets<'a>(
             &mut selq,
             res_clauses,
             res_formulas,
-        )
+        );
+    SineSelectionStats {
+        selected_count,
+        seed_count: seeds,
+    }
 }
 
 /// Writes the C `PStackClausePrintTSTP` shape.

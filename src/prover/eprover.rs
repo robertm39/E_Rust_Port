@@ -32,7 +32,9 @@ use crate::basics::simple_stuff::{
     problem_type, reset_problem_type, set_problem_type, ProblemType,
 };
 use crate::basics::stringtrees::StrTree;
-use crate::basics::verbose::set_verbose_level;
+use crate::basics::verbose::{
+    set_verbose_level, verbose2_enabled, verbose_enabled, verbout, verbout2,
+};
 use crate::clauses::bce::eliminate_blocked_clauses_with_output;
 use crate::clauses::clause::{
     clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
@@ -83,15 +85,15 @@ use crate::clauses::pred_elim::{
 };
 use crate::clauses::proofstate::{
     derived_dot_node_colour, derived_dot_node_colour_for_proof_member, derived_in_proof,
-    derived_is_eval_gc, proof_state_alloc, DerivedView, ProofObjectAnalysis, ProofObjectGraph,
-    ProofObjectGraphMixedEdge, ProofObjectGraphNode, ProofState, RawFormulaFeatures,
-    WatchlistSource as ProofStateWatchlistSource,
+    derived_is_eval_gc, proof_state_alloc, proof_state_alloc_with_verbose_type_events, DerivedView,
+    ProofObjectAnalysis, ProofObjectGraph, ProofObjectGraphMixedEdge, ProofObjectGraphNode,
+    ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
-    select_axioms_clause_formula_sets, select_threshold_clause_formula_sets, ClauseSineParams,
-    SineSetStacks,
+    select_axioms_clause_formula_sets_with_stats, select_threshold_clause_formula_sets,
+    ClauseSineParams, SineSetStacks,
 };
 use crate::clauses::unfold_defs::{
     clause_set_preprocess, clause_set_unfold_eq_def_normalize,
@@ -117,15 +119,15 @@ use crate::heuristics::new_autoschedule::{
     ScheduleCell, DEFAULT_MASK, DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
-    preinstantiate_induction, proof_control_init_with_formula_axioms,
+    preinstantiate_induction, proof_control_init_with_formula_axioms_and_events,
     proof_state_filter_unprocessed, proof_state_filter_unprocessed_with_docs,
     proof_state_init_global_indices, proof_state_init_watchlist_global_indices,
     proof_state_init_with_docs_and_output, proof_state_init_with_output,
     proof_state_insert_watchlist_global_indices, proof_state_reset_processed_with_global_indices,
     proof_state_reset_processed_with_global_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_docs,
-    proof_state_saturate_with_global_and_watchlist_indices_and_output, ProofControl,
-    SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+    proof_state_saturate_with_global_and_watchlist_indices_and_output, HeuristicAdminEvent,
+    ProofControl, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::rawspecfeatures::{
     raw_spec_features_classify, raw_spec_features_compute, RawSpecFeatureCell, RAW_DEFAULT_MASK,
@@ -3291,6 +3293,195 @@ fn write_option_stderr(
     Ok(())
 }
 
+fn write_verbose_progress(
+    stderr: &mut Option<&mut dyn Write>,
+    message: &str,
+) -> Result<(), EProverError> {
+    if let Some(output) = stderr.as_mut() {
+        let _written = verbout(output, PROGRAM_NAME, message)?;
+    }
+    Ok(())
+}
+
+fn write_verbose2_progress(
+    stderr: &mut Option<&mut dyn Write>,
+    message: &str,
+) -> Result<(), EProverError> {
+    if let Some(output) = stderr.as_mut() {
+        let _written = verbout2(output, PROGRAM_NAME, message)?;
+    }
+    Ok(())
+}
+
+fn write_verbose_raw(
+    stderr: &mut Option<&mut dyn Write>,
+    message: &str,
+) -> Result<(), EProverError> {
+    if verbose_enabled() {
+        if let Some(output) = stderr.as_mut() {
+            output.write_all(message.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_verbose_output_open(
+    stderr: &mut Option<&mut dyn Write>,
+    output_file: Option<&str>,
+) -> Result<(), EProverError> {
+    match output_file {
+        Some(name) if name != "-" => {
+            write_verbose_progress(stderr, &format!("Output file is {name}\n"))
+        }
+        _ => write_verbose_progress(stderr, "Output is going to <stdout>\n"),
+    }
+}
+
+fn write_verbose_input_open_start(
+    stderr: &mut Option<&mut dyn Write>,
+    file: &str,
+) -> Result<(), EProverError> {
+    if file != "-" {
+        write_verbose2_progress(stderr, &format!("Trying file {file}\n"))?;
+    }
+    Ok(())
+}
+
+fn write_verbose_input_opened(
+    stderr: &mut Option<&mut dyn Write>,
+    file: &str,
+) -> Result<(), EProverError> {
+    let source = if file == "-" { "<stdin>" } else { file };
+    if file != "-" {
+        write_verbose_progress(stderr, &format!("Input file is {file}\n"))?;
+    }
+    write_verbose_progress(stderr, &format!("Opened {source}\n"))
+}
+
+fn write_verbose_input_closed(
+    stderr: &mut Option<&mut dyn Write>,
+    file: &str,
+) -> Result<(), EProverError> {
+    let source = if file == "-" { "<stdin>" } else { file };
+    write_verbose_progress(stderr, &format!("Closing {source}\n"))
+}
+
+fn write_verbose_ordering_generation(
+    stderr: &mut Option<&mut dyn Write>,
+    params: &OrderParmsCell,
+) -> Result<(), EProverError> {
+    if params.ordertype == to_params::TermOrdering::Optimize {
+        write_verbose_progress(stderr, "Starting search for optimal term ordering.\n")?;
+        return Ok(());
+    }
+
+    let precedence = params.to_prec_gen.name().unwrap_or("");
+    write_verbose_progress(
+        stderr,
+        &format!("Generating ordering precedence with {precedence}\n"),
+    )?;
+    if params.to_prec_gen == to_params::TOPrecGenMethod::NoMethod && params.to_pre_prec.is_none() {
+        write_verbose_progress(stderr, "Fall-through to unary_first\n")?;
+    }
+
+    let ordering = if params.ordertype == to_params::TermOrdering::NoOrdering {
+        to_params::TermOrdering::Kbo
+    } else {
+        params.ordertype
+    };
+    if matches!(
+        ordering,
+        to_params::TermOrdering::Kbo | to_params::TermOrdering::Kbo6
+    ) {
+        let weight = params.to_weight_gen.name().unwrap_or("");
+        write_verbose_progress(
+            stderr,
+            &format!("Generating ordering weight with {weight}\n"),
+        )?;
+    }
+    Ok(())
+}
+
+fn write_pending_type_verbose_events(
+    stderr: &mut Option<&mut dyn Write>,
+    bank: &mut TermBank,
+) -> Result<(), EProverError> {
+    let events = bank.signature_mut().type_bank_mut().take_verbose_events();
+    if verbose2_enabled() {
+        if let Some(output) = stderr.as_mut() {
+            for event in events {
+                output.write_all(event.as_bytes())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum VerboseParseEvent {
+    Progress(String),
+    Progress2(String),
+    Raw(String),
+}
+
+fn record_pending_type_verbose_events(events: &mut Vec<VerboseParseEvent>, bank: &mut TermBank) {
+    events.extend(
+        bank.signature_mut()
+            .type_bank_mut()
+            .take_verbose_events()
+            .into_iter()
+            .map(VerboseParseEvent::Raw),
+    );
+}
+
+fn record_verbose_include_open(events: &mut Vec<VerboseParseEvent>, scanner: &Scanner) {
+    if !verbose_enabled() {
+        return;
+    }
+    let source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    if verbose2_enabled() {
+        events.push(VerboseParseEvent::Progress2(format!(
+            "Trying file {source}\n"
+        )));
+    }
+    events.push(VerboseParseEvent::Progress(format!(
+        "Input file is {source}\n"
+    )));
+    events.push(VerboseParseEvent::Progress(format!("Opened {source}\n")));
+}
+
+fn record_verbose_include_close(events: &mut Vec<VerboseParseEvent>, scanner: &Scanner) {
+    if !verbose_enabled() {
+        return;
+    }
+    let source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    events.push(VerboseParseEvent::Progress(format!("Closing {source}\n")));
+}
+
+fn write_verbose_parse_events(
+    stderr: &mut Option<&mut dyn Write>,
+    events: Vec<VerboseParseEvent>,
+) -> Result<(), EProverError> {
+    for event in events {
+        match event {
+            VerboseParseEvent::Progress(message) => write_verbose_progress(stderr, &message)?,
+            VerboseParseEvent::Progress2(message) => write_verbose2_progress(stderr, &message)?,
+            VerboseParseEvent::Raw(message) => write_verbose_raw(stderr, &message)?,
+        }
+    }
+    Ok(())
+}
+
+fn alloc_executable_proof_state(
+    free_symbol_properties: FunctionProperties,
+) -> Result<ProofState, Diagnostic> {
+    if verbose2_enabled() {
+        proof_state_alloc_with_verbose_type_events(free_symbol_properties)
+    } else {
+        proof_state_alloc(free_symbol_properties)
+    }
+}
+
 fn write_warnings(
     stderr: &mut (impl Write + ?Sized),
     warnings: &[Diagnostic],
@@ -5173,7 +5364,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 
 fn run_config_with_stderr(
     stdout: &mut impl Write,
-    stderr: Option<&mut dyn Write>,
+    mut stderr: Option<&mut dyn Write>,
     config: &EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut runtime_config = config.clone();
@@ -5189,6 +5380,7 @@ fn run_config_with_stderr(
     apply_ordering_state(config);
     apply_eta_normalization_state(config);
     let _pdt_constraint_guard = PdtConstraintRunGuard::new(config);
+    write_verbose_output_open(&mut stderr, config.output_file.as_deref())?;
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -5199,7 +5391,7 @@ fn run_config_with_stderr(
     }
     output.flush()?;
 
-    let result = run_config_action(&mut output, stderr, config, &mut runtime_config);
+    let result = run_config_action(&mut output, &mut stderr, config, &mut runtime_config);
     if matches!(result, Err(EProverError::EmptyInput)) {
         writeln!(output, "{DEFAULT_COMCHAR_RAW} Error: {EMPTY_INPUT_MESSAGE}")?;
         write_tstp_status(&mut output, "InputError")?;
@@ -5210,39 +5402,40 @@ fn run_config_with_stderr(
 
 fn run_config_action<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    stderr: Option<&mut dyn Write>,
+    stderr: &mut Option<&mut dyn Write>,
     config: &EProverConfig,
     runtime_config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     if config.print_strategy.is_some() {
         run_print_strategy(output, stderr, config)?;
-        return finish_run_config(output, config, ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(output, stderr, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.flags.contains(EProverFlag::SyntaxOnly) {
-        run_syntax_only(output, runtime_config)?;
+        run_syntax_only(output, stderr, runtime_config)?;
         if !runtime_config.flags.contains(EProverFlag::PrintFormulas) {
             write_syntax_only_success(output)?;
         }
-        return finish_run_config(output, config, ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(output, stderr, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.encoding.app_encode {
-        let status = run_app_encode(output, runtime_config)?;
-        return finish_run_config(output, config, status);
+        let status = run_app_encode(output, stderr, runtime_config)?;
+        return finish_run_config(output, stderr, config, status);
     }
 
     if config.flags.contains(EProverFlag::PruneOnly) {
-        let status = run_prune_only(output, runtime_config)?;
-        return finish_run_config(output, config, status);
+        let status = run_prune_only(output, stderr, runtime_config)?;
+        return finish_run_config(output, stderr, config, status);
     }
 
     let status = run_proof_search(output, stderr, runtime_config)?;
-    finish_run_config(output, config, status)
+    finish_run_config(output, stderr, config, status)
 }
 
 fn finish_run_config(
     output: &mut impl Write,
+    stderr: &mut Option<&mut dyn Write>,
     config: &EProverConfig,
     status: u8,
 ) -> Result<u8, EProverError> {
@@ -5251,6 +5444,7 @@ fn finish_run_config(
     {
         output.write_all(format_resource_usage(current_resource_usage()).as_bytes())?;
     }
+    write_verbose_progress(stderr, "Closing output\n")?;
     output.flush().map_err(|_error| {
         EProverError::Diagnostic(Diagnostic::new(ErrorCode::FILE_ERROR, OUTPUT_CLOSE_ERROR))
     })?;
@@ -5266,7 +5460,7 @@ fn schedule_worker_suppresses_resource_footer(config: &EProverConfig) -> bool {
 
 fn run_print_strategy<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    stderr: Option<&mut dyn Write>,
+    stderr: &mut Option<&mut dyn Write>,
     config: &EProverConfig,
 ) -> Result<(), EProverError> {
     let Some(print_strategy) = config.print_strategy.as_deref() else {
@@ -5280,8 +5474,8 @@ fn run_print_strategy<W: Write + ?Sized>(
     if params.pred_elim {
         output.write_stdout_side_channel(b"% PE start: 0\n% PE eliminated: 0\n")?;
     }
-    if let Some(stderr) = stderr {
-        let _ = apply_strategy_io_to_params_with_warning_output(config, &mut params, stderr)?;
+    if let Some(stderr) = stderr.as_mut() {
+        let _ = apply_strategy_io_to_params_with_warning_output(config, &mut params, *stderr)?;
     } else {
         let _ = apply_strategy_io_to_params(config, &mut params)?;
     }
@@ -5304,23 +5498,27 @@ fn run_print_strategy<W: Write + ?Sized>(
 
 fn run_syntax_only(
     output: &mut impl Write,
+    stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     if config.flags.contains(EProverFlag::PrintFormulas) {
-        return run_syntax_only_print_formulas(output, config);
+        return run_syntax_only_print_formulas(output, stderr, config);
     }
 
-    let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    write_pending_type_verbose_events(stderr, state.terms_mut())?;
+    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state, stderr)?;
     Ok(())
 }
 
 fn run_syntax_only_print_formulas(
     output: &mut impl Write,
+    stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let print_problem_type = parse_input_files_into_formula_owners(config, &mut state)?;
+    let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    write_pending_type_verbose_events(stderr, state.terms_mut())?;
+    let print_problem_type = parse_input_files_into_formula_owners(config, &mut state, stderr)?;
 
     let rendered = {
         let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
@@ -5349,9 +5547,11 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
 
 fn run_app_encode<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
+    stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
-    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    write_pending_type_verbose_events(stderr, state.terms_mut())?;
     let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
     let mut app_encode_problem_type = ProblemType::FirstOrder;
@@ -5361,17 +5561,18 @@ fn run_app_encode<W: Write + ?Sized>(
         let mut include_echoes = String::new();
         let parsed_file = {
             let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
-            match parse_app_encode_file(
+            match parse_app_encode_file_with_verbose_output(
                 file,
                 config.parse_format,
                 bank,
                 formulas,
                 &mut include_echoes,
+                stderr,
             ) {
                 Ok(parsed_file) => parsed_file,
                 Err(error) => {
                     output.write_stdout_side_channel(include_echoes.as_bytes())?;
-                    return Err(error.into());
+                    return Err(error);
                 }
             }
         };
@@ -5383,7 +5584,9 @@ fn run_app_encode<W: Write + ?Sized>(
             combine_problem_types(app_encode_problem_type, parsed_file.problem_type);
     }
 
+    write_verbose2_progress(stderr, "Specification read\n")?;
     state.process_distinct()?;
+    write_verbose2_progress(stderr, "$distinct directives processed\n")?;
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
         return Err(EProverError::EmptyInput);
@@ -5396,7 +5599,7 @@ fn run_app_encode<W: Write + ?Sized>(
     }
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
     let _sine_pruned =
-        apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
+        apply_proof_state_sine(output, stderr, heuristic_params.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
     write_app_encoded_formula_set(
         output,
@@ -5624,10 +5827,12 @@ fn simple_fof_app_encoded_formula_binary_operator(
 
 fn run_prune_only<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
+    stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
-    let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    write_pending_type_verbose_events(stderr, state.terms_mut())?;
+    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state, stderr)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
     match apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)? {
         AutoModePreprocessingSelection::Continue(_) => {}
@@ -5635,7 +5840,7 @@ fn run_prune_only<W: Write + ?Sized>(
     }
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
     let _sine_pruned =
-        apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
+        apply_proof_state_sine(output, stderr, heuristic_params.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
     let next_doc_ident = write_initial_formula_docs(output, config, &mut state, 1)?;
     let _next_doc_ident = write_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
@@ -5650,11 +5855,12 @@ fn run_prune_only<W: Write + ?Sized>(
 )]
 fn run_proof_search<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    mut hard_timeout_stderr: Option<&mut dyn Write>,
+    hard_timeout_stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
-    let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
+    let parsed_ax_no = parse_input_files_into_axioms(config, &mut state, hard_timeout_stderr)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
     let auto_context = match apply_auto_mode_preprocessing_selection(
         output,
@@ -5667,13 +5873,41 @@ fn run_proof_search<W: Write + ?Sized>(
     };
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
     load_configured_watchlist_source(config, &mut state)?;
-    let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
-    let relevancy_pruned = sine_pruned + apply_relevance_pruning(config, &mut state);
-    if relevancy_pruned != 0 || config.search.completeness.incomplete {
+    let sine_pruned = apply_proof_state_sine(
+        output,
+        hard_timeout_stderr,
+        heuristic_params.sine.as_deref(),
+        &mut state,
+    )?;
+    if config.preprocessing.relevance_prune_level != 0 {
+        write_verbose_progress(hard_timeout_stderr, "Relevance extraction started.\n")?;
+    }
+    let relevance_pruned = apply_relevance_pruning(config, &mut state);
+    if config.preprocessing.relevance_prune_level != 0 {
+        write_verbose_progress(hard_timeout_stderr, "Relevance extraction done.\n")?;
+    }
+    let total_pruned = sine_pruned + relevance_pruned;
+    if total_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
+    if state.f_axioms().split_conjectures().0 != 0 {
+        write_verbose_progress(hard_timeout_stderr, "Negated conjectures.\n")?;
+    }
+    write_verbose_progress(hard_timeout_stderr, "Clausification started.\n")?;
     let formula_cnf_result =
         clausify_formula_axioms_with_docs(output, config, &mut state, &heuristic_params, 1)?;
+    write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
+    for recovered in &formula_cnf_result.term_gc_recoveries {
+        write_verbose_progress(hard_timeout_stderr, "Garbage collection started.\n")?;
+        write_verbose_raw(
+            hard_timeout_stderr,
+            &format!("Garbage collection reclaimed {recovered} unused term cells.\n"),
+        )?;
+    }
+    write_verbose_progress(hard_timeout_stderr, "Clausification done.\n")?;
+    if formula_cnf_result.clauses_generated != 0 {
+        write_verbose_progress(hard_timeout_stderr, "CNFization done\n")?;
+    }
     let initial_docs_next_ident = write_watchlist_initial_clause_docs(
         output,
         config,
@@ -5682,6 +5916,9 @@ fn run_proof_search<W: Write + ?Sized>(
     )?;
     let raw_clause_no = state.axioms().members();
     debug_assert!(raw_clause_no >= formula_cnf_result.clauses_generated);
+    if !heuristic_params.no_preproc {
+        write_verbose_progress(hard_timeout_stderr, "Clausal preprocessing started.\n")?;
+    }
     let preproc_result = apply_clause_set_preprocessing_with_docs(
         output,
         config,
@@ -5694,6 +5931,10 @@ fn run_proof_search<W: Write + ?Sized>(
             start_ident: initial_docs_next_ident,
         },
     )?;
+    write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
+    if !heuristic_params.no_preproc {
+        write_verbose_progress(hard_timeout_stderr, "Clausal preprocessing complete.\n")?;
+    }
     let preproc_removed = preproc_result.removed;
     let _choice_axioms =
         apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
@@ -5738,12 +5979,8 @@ fn run_proof_search<W: Write + ?Sized>(
         AutoModeSearchSelection::Continue => {}
         AutoModeSearchSelection::ScheduledExit(status) => return Ok(status),
     }
-    let strategy_io_definitions = if let Some(stderr) = &mut hard_timeout_stderr {
-        apply_strategy_io_to_params_with_warning_output(
-            config,
-            &mut heuristic_params,
-            &mut **stderr,
-        )?
+    let strategy_io_definitions = if let Some(stderr) = hard_timeout_stderr.as_mut() {
+        apply_strategy_io_to_params_with_warning_output(config, &mut heuristic_params, *stderr)?
     } else {
         apply_strategy_io_to_params(config, &mut heuristic_params)?
     };
@@ -5752,7 +5989,7 @@ fn run_proof_search<W: Write + ?Sized>(
         to_params::TermOrdering::Kbo | to_params::TermOrdering::Kbo6
     ) && heuristic_params.order_params.to_pre_weights.is_some()
     {
-        if let Some(stderr) = hard_timeout_stderr.as_deref_mut() {
+        if let Some(stderr) = hard_timeout_stderr.as_mut() {
             stderr.write_all(b"setting user weights\n")?;
         }
     }
@@ -5762,9 +5999,10 @@ fn run_proof_search<W: Write + ?Sized>(
     let wfcb_defs = &config.search.heuristic.weight_function_definitions;
     let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();
     hcb_defs.extend(strategy_io_definitions.heuristic_definitions);
-    {
+    write_verbose_ordering_generation(hard_timeout_stderr, &params.order_params)?;
+    let heuristic_admin_events = {
         let (bank, axioms, formula_axioms) = state.terms_axioms_f_axioms_mut();
-        proof_control_init_with_formula_axioms(
+        proof_control_init_with_formula_axioms_and_events(
             &mut control,
             bank,
             axioms,
@@ -5774,7 +6012,20 @@ fn run_proof_search<W: Write + ?Sized>(
             wfcb_defs,
             &mut hcb_defs,
             problem_type() == ProblemType::HigherOrder,
-        )?;
+        )?
+    };
+    write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
+    for event in heuristic_admin_events {
+        match event {
+            HeuristicAdminEvent::WeightFunction(name) => write_verbose2_progress(
+                hard_timeout_stderr,
+                &format!("Adding weight function '{name}'.\n"),
+            )?,
+            HeuristicAdminEvent::Heuristic(name) => write_verbose2_progress(
+                hard_timeout_stderr,
+                &format!("Adding heuristic '{name}'.\n"),
+            )?,
+        }
     }
     if config.output_level >= 6 {
         let mut session = clause_proof_doc_session(config, next_doc_ident)?;
@@ -5792,6 +6043,7 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
     }
+    write_verbose2_progress(hard_timeout_stderr, "Prover state initialized\n")?;
     proof_state_init_global_indices(&mut state, &control, problem_type());
     proof_state_init_watchlist_global_indices(&mut state, &control, problem_type());
     let _watchlist_indexed = proof_state_insert_watchlist_global_indices(
@@ -5809,7 +6061,7 @@ fn run_proof_search<W: Write + ?Sized>(
             None,
             ProofStatisticsInput {
                 parsed_ax_no,
-                relevancy_pruned,
+                relevancy_pruned: total_pruned,
                 raw_clause_no,
                 preproc_removed,
             },
@@ -5881,7 +6133,7 @@ fn run_proof_search<W: Write + ?Sized>(
             Some(global_indices),
             ProofStatisticsInput {
                 parsed_ax_no,
-                relevancy_pruned,
+                relevancy_pruned: total_pruned,
                 raw_clause_no,
                 preproc_removed,
             },
@@ -5907,7 +6159,7 @@ fn hard_time_limit_expired_in_saturation(outcome: &SaturateOutcome) -> bool {
 
 fn finalize_hard_time_limit_stop<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    stderr: Option<&mut dyn Write>,
+    stderr: &mut Option<&mut dyn Write>,
 ) -> Result<u8, EProverError> {
     let silent = silent_time_out();
     let diagnostic = (!silent).then(hard_time_limit_diagnostic);
@@ -5919,7 +6171,7 @@ fn finalize_hard_time_limit_stop<W: Write + ?Sized>(
     let status = finalize_cpu_limit_outcome(&mut direct_output, &outcome)?
         .expect("hard CPU-limit signal outcomes always finalize");
     output.write_direct_global_out(&direct_output)?;
-    if let (Some(stderr), Some(diagnostic)) = (stderr, diagnostic) {
+    if let (Some(stderr), Some(diagnostic)) = (stderr.as_mut(), diagnostic) {
         stderr.write_all(diagnostic.render_error(PROGRAM_NAME).as_bytes())?;
     }
     Ok(status)
@@ -6924,6 +7176,7 @@ fn filter_saturated_unprocessed<W: Write + ?Sized>(
 fn parse_input_files_into_axioms(
     config: &mut EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
+    stderr: &mut Option<&mut dyn Write>,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
     let mut input_owner_seen = false;
@@ -6934,13 +7187,14 @@ fn parse_input_files_into_axioms(
         let before = state.axiom_count();
         let mut parsed_watchlist = ClauseSet::new();
         let mut parsed_formulas = FormulaSet::new();
-        let parsed_file = parse_clause_formula_file(
+        let parsed_file = parse_clause_formula_file_with_verbose_output(
             file,
             config.parse_format,
             FormulaPreprocessing::parse_only_from_config(config),
             state.terms_mut(),
             &mut parsed_formulas,
             &mut parsed_watchlist,
+            stderr,
         )?;
         let parsed_count = parsed_formulas.cardinality();
         state.f_axioms_mut().insert_set(&mut parsed_formulas);
@@ -6964,10 +7218,12 @@ fn parse_input_files_into_axioms(
         debug_assert_eq!(state.axiom_count(), before.saturating_add(parsed_count));
     }
 
+    write_verbose2_progress(stderr, "Specification read\n")?;
     reset_problem_type();
     set_problem_type(parsed_problem_type)?;
 
     state.process_distinct()?;
+    write_verbose2_progress(stderr, "$distinct directives processed\n")?;
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
         return Err(EProverError::EmptyInput);
@@ -6979,6 +7235,7 @@ fn parse_input_files_into_axioms(
 fn parse_input_files_into_formula_owners(
     config: &mut EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
+    stderr: &mut Option<&mut dyn Write>,
 ) -> Result<ProblemType, EProverError> {
     let mut input_owner_seen = false;
     let mut parsed_problem_type = ProblemType::FirstOrder;
@@ -6988,13 +7245,14 @@ fn parse_input_files_into_formula_owners(
         let mut parsed_watchlist = ClauseSet::new();
         let parsed_file = {
             let (bank, formulas, _watchlist) = state.terms_f_axioms_watchlist_mut();
-            parse_formula_file(
+            parse_formula_file_with_verbose_output(
                 file,
                 config.parse_format,
                 FormulaPreprocessing::parse_only_from_config(config),
                 bank,
                 formulas,
                 &mut parsed_watchlist,
+                stderr,
             )?
         };
         if parsed_file.formula_conjecture_seen {
@@ -7005,10 +7263,12 @@ fn parse_input_files_into_formula_owners(
         parsed_problem_type = combine_problem_types(parsed_problem_type, parsed_file.problem_type);
     }
 
+    write_verbose2_progress(stderr, "Specification read\n")?;
     reset_problem_type();
     set_problem_type(parsed_problem_type)?;
 
     state.process_distinct()?;
+    write_verbose2_progress(stderr, "$distinct directives processed\n")?;
 
     if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
         return Err(EProverError::EmptyInput);
@@ -7049,6 +7309,7 @@ fn preprocessing_params_debug_line(params: &HeuristicParmsCell) -> String {
 
 fn apply_proof_state_sine<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
+    stderr: &mut Option<&mut dyn Write>,
     configured_filter: Option<&str>,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
@@ -7067,7 +7328,14 @@ fn apply_proof_state_sine<W: Write + ?Sized>(
         output,
         "{DEFAULT_COMCHAR_RAW} SinE strategy is {filter_name}"
     )?;
-    Ok(apply_proof_state_sine_filter(filter_name, state)?)
+    let outcome = apply_proof_state_sine_filter(filter_name, state)?;
+    if let Some(seed_count) = outcome.seed_count {
+        write_verbose_raw(
+            stderr,
+            &format!("{DEFAULT_COMCHAR_RAW} Found {seed_count} seed clauses/formulas\n"),
+        )?;
+    }
+    Ok(outcome.removed)
 }
 
 pub(crate) fn apply_proof_state_sine_silent(
@@ -7077,7 +7345,7 @@ pub(crate) fn apply_proof_state_sine_silent(
     let Some(filter_name) = proof_state_sine_filter_name(configured_filter, state) else {
         return Ok(0);
     };
-    apply_proof_state_sine_filter(filter_name, state)
+    apply_proof_state_sine_filter(filter_name, state).map(|outcome| outcome.removed)
 }
 
 fn proof_state_sine_filter_name<'a>(
@@ -7097,19 +7365,35 @@ fn proof_state_sine_filter_name<'a>(
 fn apply_proof_state_sine_filter(
     filter_name: &str,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<i64, Diagnostic> {
+) -> Result<SineFilterOutcome, Diagnostic> {
     let resolution = sine_get_filter(filter_name)?;
     match resolution.filter().type_ {
-        AxFilterType::Threshold => Ok(apply_threshold_sine_filter(
-            state,
-            resolution.filter().threshold,
+        AxFilterType::Threshold => Ok(SineFilterOutcome::without_seed_count(
+            apply_threshold_sine_filter(state, resolution.filter().threshold),
         )),
         AxFilterType::GSinE => Ok(apply_gsine_clause_filter(state, resolution.filter())),
-        AxFilterType::LambdaDefines => Ok(apply_lambda_defines_filter(state)),
+        AxFilterType::LambdaDefines => Ok(SineFilterOutcome::without_seed_count(
+            apply_lambda_defines_filter(state),
+        )),
         AxFilterType::NoFilter => Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "resolved SInE filter has no concrete type",
         )),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SineFilterOutcome {
+    removed: i64,
+    seed_count: Option<i64>,
+}
+
+impl SineFilterOutcome {
+    const fn without_seed_count(removed: i64) -> Self {
+        Self {
+            removed,
+            seed_count: None,
+        }
     }
 }
 
@@ -7146,9 +7430,9 @@ fn apply_threshold_sine_filter(
 fn apply_gsine_clause_filter(
     state: &mut crate::clauses::proofstate::ProofState,
     filter: &AxFilter,
-) -> i64 {
+) -> SineFilterOutcome {
     let original_axioms = state.axiom_count();
-    let (selected_clause_ids, selected_formula_ids) = {
+    let (selected_clause_ids, selected_formula_ids, seed_count) = {
         let mut clause_sets = PStack::new();
         let mut formula_sets = PStack::new();
         clause_sets.push(state.axioms());
@@ -7172,7 +7456,7 @@ fn apply_gsine_clause_filter(
             },
             add_no_symbol_axioms: filter.add_no_symbol_axioms,
         };
-        select_axioms_clause_formula_sets(
+        let selection_stats = select_axioms_clause_formula_sets_with_stats(
             &mut generality,
             state.terms().signature(),
             SineSetStacks {
@@ -7195,15 +7479,20 @@ fn apply_gsine_clause_filter(
                 .iter()
                 .map(|formula| formula.entry_id())
                 .collect::<Vec<_>>(),
+            selection_stats.seed_count,
         )
     };
 
-    replace_axiom_owners_with_selected_ids(
+    let removed = replace_axiom_owners_with_selected_ids(
         state,
         original_axioms,
         &selected_clause_ids,
         &selected_formula_ids,
-    )
+    );
+    SineFilterOutcome {
+        removed,
+        seed_count: Some(seed_count),
+    }
 }
 
 fn apply_lambda_defines_filter(state: &mut crate::clauses::proofstate::ProofState) -> i64 {
@@ -7394,10 +7683,11 @@ struct ClausePreprocessingDocConfig {
     start_ident: i64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct FormulaCnfPreparationResult {
     clauses_generated: i64,
     next_doc_ident: i64,
+    term_gc_recoveries: Vec<i64>,
 }
 
 #[cfg(test)]
@@ -7444,6 +7734,7 @@ fn clausify_formula_axioms_with_docs<W: Write + ?Sized>(
         Ok(FormulaCnfPreparationResult {
             clauses_generated: 0,
             next_doc_ident: start_ident,
+            term_gc_recoveries: Vec::new(),
         })
     } else {
         clausify_formula_axioms_silent(state, config, options, start_ident)
@@ -7484,11 +7775,12 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
         return Ok(FormulaCnfPreparationResult {
             clauses_generated: 0,
             next_doc_ident: session.id_source.current_ident().saturating_add(1),
+            term_gc_recoveries: Vec::new(),
         });
     }
 
     rendered.clear();
-    let clauses_generated = {
+    let (clauses_generated, term_gc_recoveries) = {
         let fresh_vars = state.fresh_vars().clone();
         let (bank, clauses, formulas, archive, gc_context) =
             state.terms_axioms_formula_sets_cnf_with_gc_mut();
@@ -7515,12 +7807,13 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
             options,
             &gc_context,
         )?;
-        cnf.cnf.clauses_generated
+        (cnf.cnf.clauses_generated, cnf.cnf.term_gc_recoveries)
     };
     output.write_all(rendered.as_bytes())?;
     Ok(FormulaCnfPreparationResult {
         clauses_generated,
         next_doc_ident: session.id_source.current_ident().saturating_add(1),
+        term_gc_recoveries,
     })
 }
 
@@ -7531,7 +7824,7 @@ fn clausify_formula_axioms_silent(
     start_ident: i64,
 ) -> Result<FormulaCnfPreparationResult, EProverError> {
     let fresh_vars = state.fresh_vars().clone();
-    let clauses_generated = {
+    let (clauses_generated, term_gc_recoveries) = {
         let (bank, clauses, formulas, archive, gc_context) =
             state.terms_axioms_formula_sets_cnf_with_gc_mut();
         let _archived = formulas.archive_into(archive);
@@ -7540,13 +7833,20 @@ fn clausify_formula_axioms_silent(
             config.answer_limit > 0,
             config.flags.contains(EProverFlag::ConjecturesAreQuestions),
         )?;
-        formulas
-            .cnf2_into_with_gc_context(archive, clauses, bank, &fresh_vars, options, &gc_context)?
-            .clauses_generated
+        let cnf = formulas.cnf2_into_with_gc_context(
+            archive,
+            clauses,
+            bank,
+            &fresh_vars,
+            options,
+            &gc_context,
+        )?;
+        (cnf.clauses_generated, cnf.term_gc_recoveries)
     };
     Ok(FormulaCnfPreparationResult {
         clauses_generated,
         next_doc_ident: start_ident,
+        term_gc_recoveries,
     })
 }
 
@@ -10098,15 +10398,19 @@ fn proof_search_inference_system_complete(
         && heuristic.enable_neg_unit_paramod
 }
 
-fn parse_formula_file(
+fn parse_formula_file_with_verbose_output(
     file: &str,
     parse_format: IoFormat,
     formula_preprocessing: FormulaPreprocessing,
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
-) -> Result<ParsedClauseFile, Diagnostic> {
+    stderr: &mut Option<&mut dyn Write>,
+) -> Result<ParsedClauseFile, EProverError> {
+    write_verbose_input_open_start(stderr, file)?;
     let mut scanner = problem_input_scanner(file, false)?;
+    write_verbose_input_opened(stderr, file)?;
+    let mut verbose_events = Vec::new();
     let parsed = parse_clause_scanner_into_formula_print_set_with_options(
         &mut scanner,
         parse_format,
@@ -10115,8 +10419,12 @@ fn parse_formula_file(
         bank,
         formulas,
         watchlist,
+        &mut verbose_events,
     )?;
+    write_verbose_parse_events(stderr, verbose_events)?;
+    write_pending_type_verbose_events(stderr, bank)?;
     scanner.check_tok(TokenType::NO_TOKEN)?;
+    write_verbose_input_closed(stderr, file)?;
     Ok(parsed)
 }
 
@@ -10186,16 +10494,20 @@ fn problem_input_scanner_with_stdin(
     }
 }
 
-fn parse_clause_formula_file(
+fn parse_clause_formula_file_with_verbose_output(
     file: &str,
     parse_format: IoFormat,
     formula_preprocessing: FormulaPreprocessing,
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
-) -> Result<ParsedClauseFile, Diagnostic> {
+    stderr: &mut Option<&mut dyn Write>,
+) -> Result<ParsedClauseFile, EProverError> {
+    write_verbose_input_open_start(stderr, file)?;
     let mut scanner = problem_input_scanner(file, false)?;
+    write_verbose_input_opened(stderr, file)?;
     let mut destination = InputOwnerDestination::FormulasForCnf(formulas);
+    let mut verbose_events = Vec::new();
     let parsed = parse_clause_scanner_into_destination_with_options(
         &mut scanner,
         parse_format,
@@ -10204,8 +10516,12 @@ fn parse_clause_formula_file(
         bank,
         &mut destination,
         watchlist,
+        Some(&mut verbose_events),
     )?;
+    write_verbose_parse_events(stderr, verbose_events)?;
+    write_pending_type_verbose_events(stderr, bank)?;
     scanner.check_tok(TokenType::NO_TOKEN)?;
+    write_verbose_input_closed(stderr, file)?;
     Ok(parsed)
 }
 
@@ -10228,9 +10544,14 @@ fn parse_clause_scanner_into_sets_with_options(
         bank,
         &mut destination,
         watchlist,
+        None,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the parser bridge keeps C scanner, destination, and option owners explicit"
+)]
 fn parse_clause_scanner_into_formula_print_set_with_options(
     scanner: &mut Scanner,
     parse_format: IoFormat,
@@ -10239,6 +10560,7 @@ fn parse_clause_scanner_into_formula_print_set_with_options(
     bank: &mut TermBank,
     formulas: &mut FormulaSet,
     watchlist: &mut ClauseSet,
+    verbose_events: &mut Vec<VerboseParseEvent>,
 ) -> Result<ParsedClauseFile, Diagnostic> {
     let mut destination = InputOwnerDestination::FormulasForPrint(formulas);
     parse_clause_scanner_into_destination_with_options(
@@ -10249,6 +10571,7 @@ fn parse_clause_scanner_into_formula_print_set_with_options(
         bank,
         &mut destination,
         watchlist,
+        Some(verbose_events),
     )
 }
 
@@ -10270,6 +10593,7 @@ pub(crate) fn parse_clause_scanner_into_formula_set_with_options(
         bank,
         &mut destination,
         watchlist,
+        None,
     )
 }
 
@@ -10381,6 +10705,10 @@ impl InputOwnerDestination<'_> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the parser bridge keeps C scanner, destination, and option owners explicit"
+)]
 fn parse_clause_scanner_into_destination_with_options(
     scanner: &mut Scanner,
     parse_format: IoFormat,
@@ -10389,6 +10717,7 @@ fn parse_clause_scanner_into_destination_with_options(
     bank: &mut TermBank,
     destination: &mut InputOwnerDestination<'_>,
     watchlist: &mut ClauseSet,
+    verbose_events: Option<&mut Vec<VerboseParseEvent>>,
 ) -> Result<ParsedClauseFile, Diagnostic> {
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
@@ -10397,6 +10726,8 @@ fn parse_clause_scanner_into_destination_with_options(
     let mut raw_formula_features = RawFormulaFeatures::default();
     let input_owner_seen;
     let result_problem_type;
+    let mut ignored_verbose_events = Vec::new();
+    let verbose_events = verbose_events.unwrap_or(&mut ignored_verbose_events);
     match detected_format {
         IoFormat::Tstp => {
             let mut include_selector_stack = Vec::new();
@@ -10408,6 +10739,7 @@ fn parse_clause_scanner_into_destination_with_options(
                 &mut include_selector_stack,
                 formula_preprocessing,
                 clause_parse_options,
+                verbose_events,
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
@@ -10424,6 +10756,7 @@ fn parse_clause_scanner_into_destination_with_options(
                 &mut include_selector_stack,
                 formula_preprocessing,
                 clause_parse_options,
+                verbose_events,
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
@@ -10454,6 +10787,7 @@ fn parse_clause_scanner_into_destination_with_options(
     })
 }
 
+#[cfg(test)]
 fn parse_app_encode_file(
     file: &str,
     parse_format: IoFormat,
@@ -10487,6 +10821,53 @@ fn parse_app_encode_file(
         }
     };
     scanner.check_tok(TokenType::NO_TOKEN)?;
+    Ok(ParsedAppEncodeFile {
+        detected_format,
+        saw_input_owner: parsed_entries.saw_input_owner,
+        saw_formula_owner: parsed_entries.saw_formula_owner,
+        problem_type: parsed_entries.problem_type,
+    })
+}
+
+fn parse_app_encode_file_with_verbose_output(
+    file: &str,
+    parse_format: IoFormat,
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    include_echoes: &mut String,
+    stderr: &mut Option<&mut dyn Write>,
+) -> Result<ParsedAppEncodeFile, EProverError> {
+    write_verbose_input_open_start(stderr, file)?;
+    let mut scanner = if file == "-" {
+        Scanner::from_file_content("-", read_standard_input_for_run()?, false)?
+    } else {
+        Scanner::from_file(Path::new(file), false)?
+    };
+    write_verbose_input_opened(stderr, file)?;
+    scanner.set_format(parse_format);
+    let detected_format = scanner.format();
+    let parsed_entries = match detected_format {
+        IoFormat::Tstp => {
+            parse_tstp_app_encode_entry_list(&mut scanner, bank, formulas, None, include_echoes)?
+        }
+        IoFormat::Tptp => {
+            parse_tptp_app_encode_entry_list(&mut scanner, bank, formulas, None, include_echoes)?
+        }
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): --app-encode currently supports TPTP/TSTP formula input",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            )
+            .into());
+        }
+    };
+    write_pending_type_verbose_events(stderr, bank)?;
+    scanner.check_tok(TokenType::NO_TOKEN)?;
+    write_verbose_input_closed(stderr, file)?;
     Ok(ParsedAppEncodeFile {
         detected_format,
         saw_input_owner: parsed_entries.saw_input_owner,
@@ -10805,6 +11186,7 @@ fn parse_old_tptp_clause_record(
 }
 
 #[expect(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the linear dispatch preserves C parser precedence and include-stack unwinding"
 )]
@@ -10816,6 +11198,7 @@ fn parse_tptp_entry_list(
     include_selector_stack: &mut Vec<StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
     clause_parse_options: ClauseParseOptions,
+    verbose_events: &mut Vec<VerboseParseEvent>,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
     while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
@@ -10898,6 +11281,8 @@ fn parse_tptp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
+                record_pending_type_verbose_events(verbose_events, bank);
+                record_verbose_include_open(verbose_events, &included);
                 include_selector_stack.push(include_selectors);
                 let included_result = parse_tptp_entry_list(
                     &mut included,
@@ -10907,12 +11292,15 @@ fn parse_tptp_entry_list(
                     include_selector_stack,
                     formula_preprocessing,
                     clause_parse_options,
+                    verbose_events,
                 );
                 let popped_selectors = include_selector_stack.pop();
                 debug_assert!(
                     popped_selectors.is_some(),
                     "recursive TPTP include must own one selector frame"
                 );
+                record_pending_type_verbose_events(verbose_events, bank);
+                record_verbose_include_close(verbose_events, &included);
                 result.add(included_result?);
             }
         }
@@ -10924,6 +11312,7 @@ fn parse_tptp_entry_list(
 }
 
 #[expect(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the linear dispatch preserves C parser precedence and include-stack unwinding"
 )]
@@ -10935,6 +11324,7 @@ fn parse_tstp_entry_list(
     include_selector_stack: &mut Vec<StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
     clause_parse_options: ClauseParseOptions,
+    verbose_events: &mut Vec<VerboseParseEvent>,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
     while scanner.test_id("input_formula|input_clause|fof|cnf|tff|thf|tcf|include") {
@@ -11020,6 +11410,8 @@ fn parse_tstp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
+                record_pending_type_verbose_events(verbose_events, bank);
+                record_verbose_include_open(verbose_events, &included);
                 include_selector_stack.push(include_selectors);
                 let included_result = parse_tstp_entry_list(
                     &mut included,
@@ -11029,12 +11421,15 @@ fn parse_tstp_entry_list(
                     include_selector_stack,
                     formula_preprocessing,
                     clause_parse_options,
+                    verbose_events,
                 );
                 let popped_selectors = include_selector_stack.pop();
                 debug_assert!(
                     popped_selectors.is_some(),
                     "recursive TSTP include must own one selector frame"
                 );
+                record_pending_type_verbose_events(verbose_events, bank);
+                record_verbose_include_close(verbose_events, &included);
                 result.add(included_result?);
             }
         }
@@ -22842,6 +23237,159 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_verbose_level_one_preserves_c_pipeline_progress_order() {
+        let _guard = global_state_lock();
+        set_verbose_level(0);
+        let path = temp_path("verbose-pipeline-progress");
+        std::fs::write(
+            &path,
+            "fof(ax, axiom, p(a)).\nfof(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--verbose=1",
+                "--silent",
+                "--cnf",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!(
+                "eprover: Output is going to <stdout>\n\
+                 eprover: Input file is {path_arg}\n\
+                 eprover: Opened {path_arg}\n\
+                 eprover: Closing {path_arg}\n\
+                 eprover: Negated conjectures.\n\
+                 eprover: Clausification started.\n\
+                 eprover: Garbage collection started.\n\
+                 Garbage collection reclaimed 1 unused term cells.\n\
+                 eprover: Garbage collection started.\n\
+                 Garbage collection reclaimed 1 unused term cells.\n\
+                 eprover: Clausification done.\n\
+                 eprover: CNFization done\n\
+                 eprover: Clausal preprocessing started.\n\
+                 eprover: Clausal preprocessing complete.\n\
+                 eprover: Generating ordering precedence with none\n\
+                 eprover: Fall-through to unary_first\n\
+                 eprover: Generating ordering weight with none\n\
+                 eprover: Closing output\n"
+            )
+        );
+
+        set_verbose_level(0);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_verbose_recursive_include_preserves_c_open_close_order() {
+        let _guard = global_state_lock();
+        set_verbose_level(0);
+        let include_path = temp_path("verbose-progress-include-child");
+        let main_path = temp_path("verbose-progress-include-main");
+        std::fs::write(&include_path, "fof(included, axiom, p(a)).\n").unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &main_path,
+            format!("include('{include_arg}').\nfof(goal, conjecture, p(a)).\n"),
+        )
+        .unwrap();
+        let main_arg = main_path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--verbose=2",
+                "--silent",
+                "--cnf",
+                "--tstp-in",
+                main_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let stderr = String::from_utf8(stderr).unwrap();
+        let markers = [
+            format!("eprover: Opened {main_arg}\n"),
+            format!("eprover: Trying file {include_arg}\n"),
+            format!("eprover: Input file is {include_arg}\n"),
+            format!("eprover: Opened {include_arg}\n"),
+            format!("eprover: Closing {include_arg}\n"),
+            format!("eprover: Closing {main_arg}\n"),
+        ];
+        let positions = markers
+            .iter()
+            .map(|marker| {
+                stderr
+                    .find(marker)
+                    .unwrap_or_else(|| panic!("missing verbose marker {marker:?}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        set_verbose_level(0);
+        std::fs::remove_file(&main_path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_verbose_gsine_reports_c_seed_count_before_clausification() {
+        let _guard = global_state_lock();
+        set_verbose_level(0);
+        let path = temp_path("verbose-progress-sine-seeds");
+        std::fs::write(
+            &path,
+            "fof(ax, axiom, p(a)).\nfof(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--verbose=1",
+                "--silent",
+                "--cnf",
+                "--tstp-in",
+                "--sine=gf500_gu_R04_F100_L20000",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains(&format!(
+            "eprover: Closing {path_arg}\n% Found 1 seed clauses/formulas\n\
+             eprover: Negated conjectures.\n"
+        )));
+
+        set_verbose_level(0);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_rejects_verbose_values_outside_c_int_range() {
         let _guard = global_state_lock();
         set_verbose_level(0);
@@ -24007,7 +24555,8 @@ input_clause(c2,axiom,[++q(X)]).
         };
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
 
-        let problem_type = parse_input_files_into_formula_owners(&mut config, &mut state).unwrap();
+        let problem_type =
+            parse_input_files_into_formula_owners(&mut config, &mut state, &mut None).unwrap();
 
         assert_eq!(problem_type, ProblemType::FirstOrder);
         assert_eq!(state.axioms().members(), 0);

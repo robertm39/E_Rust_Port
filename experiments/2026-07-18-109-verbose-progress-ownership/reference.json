@@ -1,0 +1,473 @@
+{
+  "all_exact": true,
+  "c_executable_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+  "case_count": 9,
+  "cases": [
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=1",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 647,
+          "lines": 18,
+          "sha256": "c934d6515df304d4303ea605d69c78ad70bdf593bf4c78999b30c186c70e509e"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      },
+      "configured_output": false,
+      "name": "verbose_level_one",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 647,
+          "lines": 18,
+          "sha256": "c934d6515df304d4303ea605d69c78ad70bdf593bf4c78999b30c186c70e509e"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=2",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3511,
+          "lines": 91,
+          "sha256": "1bb17cd0a53fe3780e51a9d51cbc4f4f52e2972eefb91e18feb8b4fd38f851f9"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      },
+      "configured_output": false,
+      "name": "verbose_level_two",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3511,
+          "lines": 91,
+          "sha256": "1bb17cd0a53fe3780e51a9d51cbc4f4f52e2972eefb91e18feb8b4fd38f851f9"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=-1",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 647,
+          "lines": 18,
+          "sha256": "c934d6515df304d4303ea605d69c78ad70bdf593bf4c78999b30c186c70e509e"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      },
+      "configured_output": false,
+      "name": "verbose_negative",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 647,
+          "lines": 18,
+          "sha256": "c934d6515df304d4303ea605d69c78ad70bdf593bf4c78999b30c186c70e509e"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=1",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "--sine=gf500_gu_R04_F100_L20000",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 679,
+          "lines": 19,
+          "sha256": "095485a6a574836c0f6756b02e83063be21c4a4b29ff6199a28f7a298ac82df5"
+        },
+        "stdout": {
+          "bytes": 424,
+          "lines": 20,
+          "sha256": "45b05966a3c00723e6124de48004d1264e60b525e1fa37b90d4b3aafdcddc3c5"
+        }
+      },
+      "configured_output": false,
+      "name": "gsine_seed_count",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 679,
+          "lines": 19,
+          "sha256": "095485a6a574836c0f6756b02e83063be21c4a4b29ff6199a28f7a298ac82df5"
+        },
+        "stdout": {
+          "bytes": 424,
+          "lines": 20,
+          "sha256": "45b05966a3c00723e6124de48004d1264e60b525e1fa37b90d4b3aafdcddc3c5"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=2",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3628,
+          "lines": 95,
+          "sha256": "f47c82c7527f74ee9cce7d955f46d7454c0c1efe98615ac371468247f610a26a"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      },
+      "configured_output": false,
+      "name": "recursive_include",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3628,
+          "lines": 95,
+          "sha256": "f47c82c7527f74ee9cce7d955f46d7454c0c1efe98615ac371468247f610a26a"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=1",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "--term-ordering=LPO",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 601,
+          "lines": 17,
+          "sha256": "bef67705e585c3a453acbfc1f08b4d173b34675de622cc68572c74646a7ce4ed"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      },
+      "configured_output": false,
+      "name": "manual_lpo",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 601,
+          "lines": 17,
+          "sha256": "bef67705e585c3a453acbfc1f08b4d173b34675de622cc68572c74646a7ce4ed"
+        },
+        "stdout": {
+          "bytes": 362,
+          "lines": 19,
+          "sha256": "0a5ee8f1b6f03f26033bbe30d9c787182caba0be32546cb7a2c8f644f8831d25"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=1",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "--rel-pruning-level=1",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 722,
+          "lines": 20,
+          "sha256": "25e6ee620ca8b5f9d7fee2f4537fa488abdce6e17e2fb53aec28aa684045a5de"
+        },
+        "stdout": {
+          "bytes": 352,
+          "lines": 18,
+          "sha256": "f58b716530b311ec7241de3bb297c4fe21c42b5a966618135234fe406d5c2fbe"
+        }
+      },
+      "configured_output": false,
+      "name": "relevance_pruning",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 722,
+          "lines": 20,
+          "sha256": "25e6ee620ca8b5f9d7fee2f4537fa488abdce6e17e2fb53aec28aa684045a5de"
+        },
+        "stdout": {
+          "bytes": 352,
+          "lines": 18,
+          "sha256": "f58b716530b311ec7241de3bb297c4fe21c42b5a966618135234fe406d5c2fbe"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=2",
+        "--silent",
+        "--syntax-only",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 1029,
+          "lines": 33,
+          "sha256": "6279aae9477ea7e9d3bc5c159054122e7cf4e5dc71a2778cd8b6379ef4a6379b"
+        },
+        "stdout": {
+          "bytes": 44,
+          "lines": 3,
+          "sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf"
+        }
+      },
+      "configured_output": false,
+      "name": "syntax_only",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 0,
+          "lines": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured_output_created": false,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 1029,
+          "lines": 33,
+          "sha256": "6279aae9477ea7e9d3bc5c159054122e7cf4e5dc71a2778cd8b6379ef4a6379b"
+        },
+        "stdout": {
+          "bytes": 44,
+          "lines": 3,
+          "sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf"
+        }
+      }
+    },
+    {
+      "all_exact": true,
+      "args": [
+        "--verbose=2",
+        "--silent",
+        "--cnf",
+        "--tstp-in",
+        "$INPUT"
+      ],
+      "c": {
+        "configured_output": {
+          "bytes": 279,
+          "lines": 18,
+          "sha256": "40647bf445d65d7c68a6e1ae6ad9e30fe44036f26977796f830443b47be411c1"
+        },
+        "configured_output_created": true,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3507,
+          "lines": 91,
+          "sha256": "9309e35d9cf5c28f5b3b5d5da769774c898feacc3e9390482cf2dfc5d2e066b1"
+        },
+        "stdout": {
+          "bytes": 83,
+          "lines": 1,
+          "sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+        }
+      },
+      "configured_output": true,
+      "name": "configured_output",
+      "normalization": "input, recursive-include, and configured-output path spelling only",
+      "rust": {
+        "configured_output": {
+          "bytes": 279,
+          "lines": 18,
+          "sha256": "40647bf445d65d7c68a6e1ae6ad9e30fe44036f26977796f830443b47be411c1"
+        },
+        "configured_output_created": true,
+        "exit_code": 0,
+        "stderr": {
+          "bytes": 3507,
+          "lines": 91,
+          "sha256": "9309e35d9cf5c28f5b3b5d5da769774c898feacc3e9390482cf2dfc5d2e066b1"
+        },
+        "stdout": {
+          "bytes": 83,
+          "lines": 1,
+          "sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+        }
+      }
+    }
+  ],
+  "matching_cases": 9,
+  "rust_executable_sha256": "31cf617fac3f74a8ed3019ee6c987cb6d77a3791dc8dc0f2b5e0ad82e30fef5d",
+  "schema_version": 1,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

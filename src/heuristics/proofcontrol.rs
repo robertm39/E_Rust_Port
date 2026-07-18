@@ -448,6 +448,15 @@ pub struct ProofControl {
     strong_unit_forward_subsumption: bool,
 }
 
+/// A C level-two proof-control administration event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HeuristicAdminEvent {
+    /// A weight function was added under this name.
+    WeightFunction(String),
+    /// A heuristic was added under this name.
+    Heuristic(String),
+}
+
 impl ProofControl {
     #[must_use]
     pub fn new() -> Self {
@@ -645,10 +654,16 @@ pub fn proof_control_init(
     control.ocb = Some(ocb);
     let context = WeightParseContext::new_with_signature(axioms, bank.signature());
     proof_control_init_heuristics_with_context(
-        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+        control, params, fvi_params, wfcb_defs, hcb_defs, context, None,
     )
 }
 
+/// Initializes proof control with a formula-aware axiom context.
+///
+/// # Errors
+///
+/// Returns diagnostics from ordering selection, built-in or user-supplied
+/// weight/heuristic definition parsing, or active heuristic lookup.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible ProofControlInit bridge keeps the original inputs visible"
@@ -675,8 +690,52 @@ pub fn proof_control_init_with_formula_axioms(
         bank.signature(),
     );
     proof_control_init_heuristics_with_context(
-        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+        control, params, fvi_params, wfcb_defs, hcb_defs, context, None,
     )
+}
+
+/// Initializes formula-aware proof control and returns administration events in C order.
+///
+/// # Errors
+///
+/// Returns diagnostics from ordering selection, built-in or user-supplied
+/// weight/heuristic definition parsing, or active heuristic lookup.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible ProofControlInit bridge keeps the original inputs visible"
+)]
+pub fn proof_control_init_with_formula_axioms_and_events(
+    control: &mut ProofControl,
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+    formula_axioms: &FormulaSet,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+    higher_order_problem: bool,
+) -> Result<Vec<HeuristicAdminEvent>, Diagnostic> {
+    debug_assert!(control.ocb.is_none());
+    debug_assert!(control.active_hcb.is_none());
+
+    let ocb = to_select_ordering(bank, axioms, params, higher_order_problem)?;
+    control.ocb = Some(ocb);
+    let context = WeightParseContext::new_with_formulas_and_signature(
+        axioms,
+        formula_axioms,
+        bank.signature(),
+    );
+    let mut events = Vec::new();
+    proof_control_init_heuristics_with_context(
+        control,
+        params,
+        fvi_params,
+        wfcb_defs,
+        hcb_defs,
+        context,
+        Some(&mut events),
+    )?;
+    Ok(events)
 }
 
 /// Installs the heuristic definition state handled by C `ProofControlInit`.
@@ -701,7 +760,7 @@ pub fn proof_control_init_heuristics(
 
     let context = WeightParseContext::new(axioms);
     proof_control_init_heuristics_with_context(
-        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+        control, params, fvi_params, wfcb_defs, hcb_defs, context, None,
     )
 }
 
@@ -718,7 +777,7 @@ pub fn proof_control_init_heuristics_with_formula_axioms(
 
     let context = WeightParseContext::new_with_formulas(axioms, formula_axioms);
     proof_control_init_heuristics_with_context(
-        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+        control, params, fvi_params, wfcb_defs, hcb_defs, context, None,
     )
 }
 
@@ -729,29 +788,33 @@ fn proof_control_init_heuristics_with_context(
     wfcb_defs: &[String],
     hcb_defs: &mut Vec<String>,
     context: WeightParseContext<'_>,
+    mut events: Option<&mut Vec<HeuristicAdminEvent>>,
 ) -> Result<(), Diagnostic> {
-    install_default_weight_functions(control, context)?;
+    install_default_weight_functions(control, context, events.as_deref_mut())?;
     for definition in wfcb_defs {
-        install_option_weight_functions(control, definition, context)?;
+        install_option_weight_functions(control, definition, context, events.as_deref_mut())?;
     }
 
-    install_default_heuristics(control, context)?;
+    install_default_heuristics(control, context, events.as_deref_mut())?;
     if let Some(heuristic_def) = params.heuristic_def.clone() {
         hcb_defs.push(heuristic_def);
     } else if let Some(heuristic_def) = hcb_defs.last() {
         params.heuristic_def = Some(heuristic_def.clone());
     }
     for definition in hcb_defs.iter() {
-        install_option_heuristics(control, definition, context)?;
+        install_option_heuristics(control, definition, context, events.as_deref_mut())?;
     }
 
     control.heuristic_parms = params.clone();
+    let weight_start = control.wfcbs.len();
+    let heuristic_start = control.hcbs.len();
     control.active_hcb = Some(get_heuristic_handle_with_context(
         &params.heuristic_name,
         &mut control.hcbs,
         &mut control.wfcbs,
         context,
     )?);
+    record_admin_additions(control, weight_start, heuristic_start, events);
     control.fvi_parms = fvi_params.clone();
     if control.heuristic_parms.split_clauses == SplitClassType::NONE {
         control.fvi_parms.set_symbol_slack(0);
@@ -9708,11 +9771,10 @@ fn unknown_heuristic_handle(name: &str) -> Diagnostic {
 fn install_default_weight_functions(
     control: &mut ProofControl,
     context: WeightParseContext<'_>,
+    events: Option<&mut Vec<HeuristicAdminEvent>>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = Scanner::from_internal_string(DEFAULT_WEIGHT_FUNCTIONS, true)?;
-    control
-        .wfcbs
-        .weight_fun_def_list_parse_with_context(&mut scanner, context)?;
+    parse_weight_function_definitions(control, &mut scanner, context, events)?;
     scanner.check_tok(TokenType::NO_TOKEN)
 }
 
@@ -9720,24 +9782,20 @@ fn install_option_weight_functions(
     control: &mut ProofControl,
     definition: &str,
     context: WeightParseContext<'_>,
+    events: Option<&mut Vec<HeuristicAdminEvent>>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = Scanner::from_option_string(definition, true)?;
-    control
-        .wfcbs
-        .weight_fun_def_list_parse_with_context(&mut scanner, context)?;
+    parse_weight_function_definitions(control, &mut scanner, context, events)?;
     scanner.check_tok(TokenType::NO_TOKEN)
 }
 
 fn install_default_heuristics(
     control: &mut ProofControl,
     context: WeightParseContext<'_>,
+    events: Option<&mut Vec<HeuristicAdminEvent>>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = Scanner::from_internal_string(DEFAULT_HEURISTICS, true)?;
-    control.hcbs.heuristic_def_list_parse_with_context(
-        &mut scanner,
-        &mut control.wfcbs,
-        context,
-    )?;
+    parse_heuristic_definitions(control, &mut scanner, context, events)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
     scanner.check_tok(TokenType::NO_TOKEN)
 }
@@ -9746,14 +9804,82 @@ fn install_option_heuristics(
     control: &mut ProofControl,
     definition: &str,
     context: WeightParseContext<'_>,
+    events: Option<&mut Vec<HeuristicAdminEvent>>,
 ) -> Result<(), Diagnostic> {
     let mut scanner = Scanner::from_option_string(definition, true)?;
-    control.hcbs.heuristic_def_list_parse_with_context(
-        &mut scanner,
-        &mut control.wfcbs,
-        context,
-    )?;
+    parse_heuristic_definitions(control, &mut scanner, context, events)?;
     scanner.check_tok(TokenType::NO_TOKEN)
+}
+
+fn parse_weight_function_definitions(
+    control: &mut ProofControl,
+    scanner: &mut Scanner,
+    context: WeightParseContext<'_>,
+    mut events: Option<&mut Vec<HeuristicAdminEvent>>,
+) -> Result<(), Diagnostic> {
+    while scanner.test_tok(TokenType::IDENTIFIER)
+        && scanner
+            .look_token(1)
+            .kind()
+            .intersects(TokenType::EQUAL_SIGN | TokenType::OPEN_BRACKET)
+    {
+        let name = control
+            .wfcbs
+            .weight_fun_def_parse_with_context(scanner, context)?;
+        if let Some(events) = events.as_deref_mut() {
+            events.push(HeuristicAdminEvent::WeightFunction(name));
+        }
+    }
+    Ok(())
+}
+
+fn parse_heuristic_definitions(
+    control: &mut ProofControl,
+    scanner: &mut Scanner,
+    context: WeightParseContext<'_>,
+    mut events: Option<&mut Vec<HeuristicAdminEvent>>,
+) -> Result<(), Diagnostic> {
+    while (scanner.test_tok(TokenType::IDENTIFIER)
+        && scanner
+            .look_token(1)
+            .kind()
+            .intersects(TokenType::EQUAL_SIGN))
+        || scanner.test_tok(TokenType::OPEN_BRACKET)
+    {
+        let weight_start = control.wfcbs.len();
+        let heuristic_start = control.hcbs.len();
+        control
+            .hcbs
+            .heuristic_def_parse_with_context(scanner, &mut control.wfcbs, context)?;
+        record_admin_additions(
+            control,
+            weight_start,
+            heuristic_start,
+            events.as_deref_mut(),
+        );
+    }
+    Ok(())
+}
+
+fn record_admin_additions(
+    control: &ProofControl,
+    weight_start: usize,
+    heuristic_start: usize,
+    events: Option<&mut Vec<HeuristicAdminEvent>>,
+) {
+    let Some(events) = events else {
+        return;
+    };
+    for index in weight_start..control.wfcbs.len() {
+        if let Some(name) = control.wfcbs.name(index) {
+            events.push(HeuristicAdminEvent::WeightFunction(name.to_owned()));
+        }
+    }
+    for index in heuristic_start..control.hcbs.len() {
+        if let Some(name) = control.hcbs.name(index) {
+            events.push(HeuristicAdminEvent::Heuristic(name.to_owned()));
+        }
+    }
 }
 
 #[must_use]

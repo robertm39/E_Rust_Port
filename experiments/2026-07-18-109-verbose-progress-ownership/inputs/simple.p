@@ -1,0 +1,2 @@
+fof(ax, axiom, p(a)).
+fof(goal, conjecture, p(a)).
