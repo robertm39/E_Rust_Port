@@ -1,0 +1,173 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "rust_baseline_commit": "1c637bc4",
+  "comparison_count": 2,
+  "matching_comparisons": 2,
+  "comparisons": [
+    {
+      "case": "TSMWeight",
+      "status_match": true,
+      "statistics_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "szs_status": "Unsatisfiable",
+        "statistics": {
+          "Parsed axioms": 4,
+          "Initial clauses": 4,
+          "Initial clauses in saturation": 4,
+          "Processed clauses": 2,
+          "Current number of processed clauses": 1,
+          "Current number of unprocessed clauses": 2
+        },
+        "stdout_bytes": 2624,
+        "stdout_sha256": "f92f30df7545536dcae069e9f672159a3158c4c0bb7d91fade6ed831e04cf8c3",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "szs_status": "Unsatisfiable",
+        "statistics": {
+          "Parsed axioms": 4,
+          "Initial clauses": 4,
+          "Initial clauses in saturation": 4,
+          "Processed clauses": 2,
+          "Current number of processed clauses": 1,
+          "Current number of unprocessed clauses": 2
+        },
+        "stdout_bytes": 2650,
+        "stdout_sha256": "4f00c600808b619ca32cca3fda59e00efa65bf0e41694b633a761e2e7dbe8275",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "case": "TSMRWeight",
+      "status_match": true,
+      "statistics_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "szs_status": "Unsatisfiable",
+        "statistics": {
+          "Parsed axioms": 4,
+          "Initial clauses": 4,
+          "Initial clauses in saturation": 4,
+          "Processed clauses": 3,
+          "Current number of processed clauses": 2,
+          "Current number of unprocessed clauses": 1
+        },
+        "stdout_bytes": 2639,
+        "stdout_sha256": "b720e4fb7c216209430a248838b2acbe73d57a7b239058de9173a2cb872a33b1",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "szs_status": "Unsatisfiable",
+        "statistics": {
+          "Parsed axioms": 4,
+          "Initial clauses": 4,
+          "Initial clauses in saturation": 4,
+          "Processed clauses": 3,
+          "Current number of processed clauses": 2,
+          "Current number of unprocessed clauses": 1
+        },
+        "stdout_bytes": 2665,
+        "stdout_sha256": "5a4a79737ea482672a192a08498f61fdf2f786a640a81ffb587cf3ccb5f9dc1f",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "benchmark_clause_count": 4000,
+  "benchmark_runs": 5,
+  "benchmarks": [
+    {
+      "name": "rust_shared_bank",
+      "warmup_exit_code": 9,
+      "exit_codes": [
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "stderr_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "runs_seconds": [
+        0.21296309999888763,
+        0.21841790000326,
+        0.24384200002532452,
+        0.24277799998526461,
+        0.24439589999383315
+      ],
+      "median_seconds": 0.24277799998526461,
+      "minimum_seconds": 0.21296309999888763
+    },
+    {
+      "name": "rust_private_bank_baseline",
+      "warmup_exit_code": 9,
+      "exit_codes": [
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "stderr_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "runs_seconds": [
+        0.24248360001365654,
+        0.276943900011247,
+        0.3526261000079103,
+        0.28468640000210144,
+        0.35578690000693314
+      ],
+      "median_seconds": 0.28468640000210144,
+      "minimum_seconds": 0.24248360001365654
+    },
+    {
+      "name": "c_reference",
+      "warmup_exit_code": 9,
+      "exit_codes": [
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "stderr_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "runs_seconds": [
+        0.1810131999955047,
+        0.19659210002282634,
+        0.2075792999821715,
+        0.19941010000184178,
+        0.20389679999789223
+      ],
+      "median_seconds": 0.19941010000184178,
+      "minimum_seconds": 0.1810131999955047
+    }
+  ],
+  "median_ratios": {
+    "shared_over_private_baseline": 0.8527910008468003,
+    "shared_over_c_reference": 1.217480960006651
+  }
+}

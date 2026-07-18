@@ -2,7 +2,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_filename, parse_float, parse_int};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::learn::annotations::ANNOTATION_DEFAULT_SIZE;
@@ -12,6 +12,7 @@ use crate::learn::numfeatures::{compute_clause_set_num_features, Features};
 use crate::learn::patterns::{pattern_clause_compute, PatternSubst};
 use crate::learn::tsm::{get_tsm_type, tsm_eval_term, TsmAdmin, TsmType};
 use crate::learn::tsmio::{tsm_from_kb, tsm_from_kb_with_target_features};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 
@@ -40,9 +41,15 @@ pub struct TsmParam {
 
 #[derive(Debug)]
 struct TsmEvalState {
-    bank: TermBank,
+    bank: TsmEvalBank,
     admin: TsmAdmin,
     pat_subst: PatternSubst,
+}
+
+#[derive(Debug)]
+enum TsmEvalBank {
+    ProofState,
+    Private(Box<TermBank>),
 }
 
 #[derive(Clone, Debug)]
@@ -222,55 +229,98 @@ impl TsmEvaluator {
     ///
     /// # Panics
     ///
-    /// Panics if lazy KB loading, private term-bank allocation, clause copying,
+    /// Panics if lazy KB loading, adapter-bank allocation, clause copying,
     /// representative pattern computation, clause-representation encoding, or
     /// TSM evaluation violates the same internal invariants that the C path
-    /// enforces with fatal errors or assertions.
+    /// enforces with fatal errors or assertions. Production proof search uses
+    /// [`Self::compute_with_bank`] and does not copy the clause.
     pub fn compute(&mut self, bank: &TermBank, clause: &Clause) -> f64 {
-        self.ensure_init(bank.signature());
+        self.ensure_private_init(bank.signature());
+        let param = &self.param;
         let state = self
             .eval
             .as_mut()
             .unwrap_or_else(|| panic!("TSM evaluator state must be initialized"));
-        let copied_clause = clause
-            .copy_to_bank(&mut state.bank)
-            .unwrap_or_else(|err| panic!("TSMWeight clause copy into eval bank: {err}"));
-        state.pat_subst.backtrack_to(0);
-        let pattern = pattern_clause_compute(&copied_clause, state.pat_subst.clone());
-        let raw_factor = if pattern.tries() != 0 {
-            let subst = pattern.subst().clone();
-            let clauserep = if self.param.flat_clauses {
-                flat_encode_clause_list_rep(&mut state.bank, pattern.listrep())
-            } else {
-                rec_encode_clause_list_rep(&mut state.bank, pattern.listrep())
+        let TsmEvalState {
+            bank: eval_bank,
+            admin,
+            pat_subst,
+        } = state;
+        match eval_bank {
+            TsmEvalBank::Private(eval_bank) => {
+                let copied_clause = copy_clause_for_tsm(clause, eval_bank);
+                compute_in_bank(param, admin, pat_subst, eval_bank, &copied_clause)
             }
-            .unwrap_or_else(|err| panic!("TSMWeight clause representation encoding: {err}"));
-            let factor = tsm_eval_term(&mut state.admin, &clauserep, &subst);
-            state.pat_subst = subst;
-            factor
-        } else {
-            state.admin.limit()
-        };
-        let factor = (raw_factor - self.param.eval_base) / self.param.eval_scale;
-        let base = copied_clause.literal_weight(
-            &state.bank,
-            self.param.max_term_multiplier,
-            self.param.max_literal_multiplier,
-            self.param.pos_multiplier,
-            self.param.vweight,
-            self.param.fweight,
-            1.0,
-            false,
-        );
-        ((self.param.learnweight * factor) + 1.0) * base
+            TsmEvalBank::ProofState => {
+                let mut adapter_bank = TermBank::new(bank.signature().clone())
+                    .unwrap_or_else(|err| panic!("TSMWeight adapter bank allocation: {err}"));
+                let copied_clause = copy_clause_for_tsm(clause, &mut adapter_bank);
+                compute_in_bank(param, admin, pat_subst, &mut adapter_bank, &copied_clause)
+            }
+        }
     }
 
-    fn ensure_init(&mut self, signature: &Signature) {
+    /// Computes through C's shared proof-state term-bank owner.
+    ///
+    /// KB signature declarations and clause representations are installed in
+    /// the active bank, matching `TSMWeightCompute`'s use of
+    /// `local->state->terms` and avoiding a clause copy on the hot path.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same fatal-error and internal-invariant conditions as
+    /// [`Self::compute`].
+    pub fn compute_with_bank(&mut self, bank: &mut TermBank, clause: &Clause) -> f64 {
+        self.ensure_proof_state_init(bank);
+        let param = &self.param;
+        let state = self
+            .eval
+            .as_mut()
+            .unwrap_or_else(|| panic!("TSM evaluator state must be initialized"));
+        let TsmEvalState {
+            bank: eval_bank,
+            admin,
+            pat_subst,
+        } = state;
+        match eval_bank {
+            TsmEvalBank::ProofState => compute_in_bank(param, admin, pat_subst, bank, clause),
+            TsmEvalBank::Private(eval_bank) => {
+                let copied_clause = copy_clause_for_tsm(clause, eval_bank);
+                compute_in_bank(param, admin, pat_subst, eval_bank, &copied_clause)
+            }
+        }
+    }
+
+    fn ensure_private_init(&mut self, signature: &Signature) {
         if self.eval.is_some() {
             return;
         }
 
         let mut kb_signature = signature.clone();
+        let (admin, pat_subst) = self.load_eval_parts(&mut kb_signature);
+        let bank = TermBank::new(kb_signature)
+            .unwrap_or_else(|err| panic!("TSMWeight eval bank allocation: {err}"));
+        self.eval = Some(TsmEvalState {
+            bank: TsmEvalBank::Private(Box::new(bank)),
+            admin,
+            pat_subst,
+        });
+    }
+
+    fn ensure_proof_state_init(&mut self, bank: &mut TermBank) {
+        if self.eval.is_some() {
+            return;
+        }
+
+        let (admin, pat_subst) = self.load_eval_parts(bank.signature_mut());
+        self.eval = Some(TsmEvalState {
+            bank: TsmEvalBank::ProofState,
+            admin,
+            pat_subst,
+        });
+    }
+
+    fn load_eval_parts(&mut self, signature: &mut Signature) -> (TsmAdmin, PatternSubst) {
         let target = self.target.as_ref().unwrap_or_else(|| {
             panic!("TSM evaluator requires a lazy target before initialization")
         });
@@ -279,7 +329,7 @@ impl TsmEvaluator {
                 self.param.flat_clauses,
                 &self.param.e_weights,
                 &self.param.kb,
-                &mut kb_signature,
+                signature,
                 axioms,
                 self.param.sel_no,
                 self.param.set_part,
@@ -292,7 +342,7 @@ impl TsmEvaluator {
                 self.param.flat_clauses,
                 &self.param.e_weights,
                 &self.param.kb,
-                &mut kb_signature,
+                signature,
                 target_features,
                 self.param.sel_no,
                 self.param.set_part,
@@ -303,16 +353,53 @@ impl TsmEvaluator {
             ),
         }
         .unwrap_or_else(|err| panic!("TSMWeight KB initialization: {err}"));
-        let pat_subst = PatternSubst::default_subst(&kb_signature);
-        let bank = TermBank::new(kb_signature)
-            .unwrap_or_else(|err| panic!("TSMWeight eval bank allocation: {err}"));
+        let pat_subst = PatternSubst::default_subst(signature);
         self.target = None;
-        self.eval = Some(TsmEvalState {
-            bank,
-            admin,
-            pat_subst,
-        });
+        (admin, pat_subst)
     }
+}
+
+fn copy_clause_for_tsm(clause: &Clause, bank: &mut TermBank) -> Clause {
+    clause
+        .copy_to_bank(bank)
+        .unwrap_or_else(|err| panic!("TSMWeight clause copy into eval bank: {err}"))
+}
+
+fn compute_in_bank(
+    param: &TsmParam,
+    admin: &mut TsmAdmin,
+    pat_subst: &mut PatternSubst,
+    bank: &mut TermBank,
+    clause: &Clause,
+) -> f64 {
+    pat_subst.backtrack_to(0);
+    let pattern = pattern_clause_compute(clause, pat_subst.clone());
+    let raw_factor = if pattern.tries() != 0 {
+        let subst = pattern.subst().clone();
+        let clauserep = if param.flat_clauses {
+            flat_encode_clause_list_rep(bank, pattern.listrep())
+        } else {
+            rec_encode_clause_list_rep(bank, pattern.listrep())
+        }
+        .unwrap_or_else(|err| panic!("TSMWeight clause representation encoding: {err}"));
+        let factor = tsm_eval_term(admin, &clauserep, &subst);
+        *pat_subst = subst;
+        factor
+    } else {
+        admin.limit()
+    };
+    let factor = (raw_factor - param.eval_base) / param.eval_scale;
+    let base = clause.literal_weight(
+        bank,
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.fweight,
+        1.0,
+        false,
+    );
+    ((param.learnweight * factor) + 1.0) * base
 }
 
 #[must_use]
@@ -321,8 +408,9 @@ pub fn tsm_weight_init(
     param: TsmParam,
     axioms: &ClauseSet,
 ) -> Wfcb<TsmEvaluator> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         tsm_weight_wfcb_compute,
+        tsm_weight_wfcb_compute_with_bank,
         prio_fun,
         tsm_weight_exit,
         Some(TsmEvaluator::new(param, axioms.clone())),
@@ -338,8 +426,9 @@ pub fn tsm_weight_init_with_signature(
 ) -> Wfcb<TsmEvaluator> {
     let mut target_features = Features::new();
     compute_clause_set_num_features(&mut target_features, axioms, signature);
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         tsm_weight_wfcb_compute,
+        tsm_weight_wfcb_compute_with_bank,
         prio_fun,
         tsm_weight_exit,
         Some(TsmEvaluator::new_with_target_features(
@@ -610,26 +699,44 @@ fn tsm_weight_wfcb_compute(
         .compute(bank, clause)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "banked WFCB callbacks share the diagnostic-returning contract"
+)]
+fn tsm_weight_wfcb_compute_with_bank(
+    data: Option<&mut TsmEvaluator>,
+    _ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    Ok(data
+        .unwrap_or_else(|| panic!("TSMWeight WFCB requires initialized parameters"))
+        .compute_with_bank(bank, clause))
+}
+
 fn tsm_weight_exit(_data: TsmEvaluator) {}
 
 #[cfg(test)]
 mod tests {
     use super::{
         tsm_weight_init, tsm_weight_parse, tsm_weight_parse_params,
-        tsm_weight_parse_with_signature, tsmr_weight_parse, tsmr_weight_parse_params, TsmEvaluator,
-        TsmTargetSource, ANNOTATION_DEFAULT_SIZE,
+        tsm_weight_parse_with_signature, tsmr_weight_parse, tsmr_weight_parse_params, TsmEvalBank,
+        TsmEvaluator, TsmTargetSource, ANNOTATION_DEFAULT_SIZE,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::heuristics::wfcb::ClausePrioFun;
     use crate::inout::scanner::Scanner;
     use crate::learn::indexfunctions::IndexType;
     use crate::learn::numfeatures::FEATURE_NUMBER;
     use crate::learn::tsm::TsmType;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
@@ -750,6 +857,52 @@ mod tests {
         ));
         assert_close(wfcb.compute_eval(&bank, &clause), expected_base);
         assert!(wfcb.data().expect("TSM evaluator data").target.is_none());
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        remove_dir_if_present(&kb_dir);
+    }
+
+    #[test]
+    fn tsm_weight_banked_compute_uses_proof_state_term_bank() {
+        let kb_dir = temp_kb_dir("tsm-weight-proof-state-bank");
+        write_tiny_kb(&kb_dir);
+        let mut bank = term_bank();
+        let mut clause = unit_equality(&mut bank, "target");
+        let expected_base = clause.literal_weight(&bank, 1.0, 1.0, 1.0, 3, 2, 1.0, false);
+        let axioms = ClauseSet::from_clauses([clause.clone()]);
+        let mut scanner = Scanner::from_user_string(
+            &format!(
+                "(ConstPrio,2,3,0.5,rec,{},1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
+                kb_arg(&kb_dir)
+            ),
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = tsm_weight_parse_with_signature(&mut scanner, &axioms, bank.signature())
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Empty,
+            false,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+
+        assert_eq!(bank.signature().find_f_code("pattern_sym"), 0);
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected_base);
+        assert_ne!(bank.signature().find_f_code("pattern_sym"), 0);
+        assert!(matches!(
+            wfcb.data()
+                .expect("TSM evaluator data")
+                .eval
+                .as_ref()
+                .expect("lazy TSM state")
+                .bank,
+            TsmEvalBank::ProofState
+        ));
         assert_eq!(scanner.current_token().literal(), "tail");
 
         remove_dir_if_present(&kb_dir);

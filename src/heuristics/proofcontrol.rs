@@ -9767,9 +9767,9 @@ mod tests {
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::heuristics::hcb::{
-        AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell,
-        ParamodulationType as HcbParamodulationType, PrimEnumMode, SplitClassType, SplitType,
-        HCB_DEFAULT_HEURISTIC,
+        hcb_clause_evaluate_with_bank, AcHandling, ExtInferenceType, GroundingStrategy,
+        HeuristicParmsCell, ParamodulationType as HcbParamodulationType, PrimEnumMode,
+        SplitClassType, SplitType, HCB_DEFAULT_HEURISTIC,
     };
     use crate::heuristics::litselection::{
         NO_GENERATION, SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX,
@@ -9777,6 +9777,7 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
+    use crate::learn::numfeatures::FEATURE_NUMBER;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_DEF_PRED, FP_IGNORE_PROPS,
@@ -18379,6 +18380,59 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_installs_tsm_with_shared_proof_state_bank() {
+        let kb_dir = proof_control_tsm_kb_dir();
+        write_proof_control_tsm_kb(&kb_dir);
+        let kb_arg = kb_dir.to_string_lossy().replace('\\', "/");
+        let mut bank = test_bank();
+        let target = typed_const(&mut bank, "pc_tsm_target");
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &target, &target, true,
+        )]));
+        let mut axioms = ClauseSet::from_clauses([clause.clone()]);
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "LearnedSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec![format!(
+            "learned=TSMWeight(ConstPrio,2,3,0.5,rec,{kb_arg},1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0)"
+        )];
+        let mut hcb_defs = vec!["LearnedSearch=(1*learned)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(bank.signature().find_f_code("pc_tsm_pattern_sym"), 0);
+        let active_hcb_handle = control
+            .active_hcb
+            .expect("learned heuristic should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("learned heuristic should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(clause.evaluations().is_some());
+        assert_ne!(bank.signature().find_f_code("pc_tsm_pattern_sym"), 0);
+
+        std::fs::remove_dir_all(&kb_dir).expect("remove proof-control TSM KB");
+    }
+
+    #[test]
     fn proof_control_weight_context_preserves_formula_relevance_levels() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "pc_formula_rel_a");
@@ -18487,6 +18541,33 @@ mod tests {
             control.hcbs().find_hcb_handle(HCB_DEFAULT_HEURISTIC)
         );
         assert!(control.wfcbs().find_wfcb_handle("weight21_ugg").is_some());
+    }
+
+    fn proof_control_tsm_kb_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from("target")
+            .join("e-rust-port-tests")
+            .join(format!("proof-control-tsm-{}", std::process::id()))
+    }
+
+    fn write_proof_control_tsm_kb(kb_dir: &Path) {
+        if kb_dir.exists() {
+            std::fs::remove_dir_all(kb_dir).expect("remove stale proof-control TSM KB");
+        }
+        std::fs::create_dir_all(kb_dir).expect("create proof-control TSM KB");
+        std::fs::write(
+            kb_dir.join("clausepatterns"),
+            "pc_tsm_pattern_sym : 1:(1,1,0,0,0,0,0).",
+        )
+        .expect("write proof-control TSM clause patterns");
+        std::fs::write(kb_dir.join("signature"), "pc_tsm_pattern_sym:0")
+            .expect("write proof-control TSM signature");
+        let mut features = String::from("PA: () FA: () (0");
+        for _ in 1..FEATURE_NUMBER {
+            features.push_str(", 0");
+        }
+        features.push(')');
+        std::fs::write(kb_dir.join("problems"), format!("1: \"only\" {features}"))
+            .expect("write proof-control TSM problems");
     }
 
     #[test]

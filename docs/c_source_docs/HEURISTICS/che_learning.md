@@ -104,7 +104,7 @@ Source files reviewed: `HEURISTICS/che_learning.h`, `HEURISTICS/che_learning.c`.
 ### Compatibility Notes
 
 - `TSMWeightCompute` and `TSMRWeightCompute` lazily construct the expensive TSM on first clause evaluation, not during parsing. Rust preserves that lazy boundary; callers should not rely on KB files being opened before the WFCB is actually scored.
-- The C evaluator stores `ProofState_p` and reuses `state->terms` both for `TSMFromKB` signature mutation and for per-clause flat/recursive representations. Rust currently owns a private cloned evaluation bank and copies each scored clause into it before pattern encoding. Revisit this once proof-state term banks are shared session owners.
+- The C evaluator stores `ProofState_p` and reuses `state->terms` both for `TSMFromKB` signature mutation and for per-clause flat/recursive representations. Production Rust now reaches the same owner through the banked HCB callback: lazy KB loading mutates the active proof-state signature and candidate representations are encoded without copying the clause. The immutable WFCB entry point retains a private-bank adapter for low-level callers. Option-defined `TSMWeight`/`TSMRWeight` proof search matches C in 2/2 cases, while the fixed-vocabulary benchmark is 14.7% faster than the private-bank parent and `1.217x` C wall time; evidence is recorded in [`experiments/2026-07-17-059-shared-tsm-proof-state-bank/FINDINGS.md`](../../../experiments/2026-07-17-059-shared-tsm-proof-state-bank/FINDINGS.md).
 - `TSMWeightExit` frees `local->tsmadmin->subst` and `local->pat_subst` only after the lazy TSM was created. Rust models this with owned evaluator state; cleanup remains tied to WFCB drop rather than a public manual free.
 
 ### Porting Focus
