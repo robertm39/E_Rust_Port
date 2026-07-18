@@ -7,6 +7,10 @@ decision with permanent executable and comparison coverage. This host has no
 installed WSL distribution, so the newly registered full-file cases could not
 be run against a fresh C executable in this session.
 
+The later current-reference rerun in
+[`experiments/2026-07-18-098-axfilter-owner-closure/FINDINGS.md`](../2026-07-18-098-axfilter-owner-closure/FINDINGS.md)
+routes the THF case through the HO build and confirms the complete matrix 9/9.
+
 ## Question
 
 Does the current owner model still require a temporary formula bridge before

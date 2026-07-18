@@ -7,6 +7,10 @@ decision with permanent exact-output cases. This host has no installed WSL
 distribution, so the new cases could not be executed against a fresh C binary
 in this session.
 
+The later current-reference rerun in
+[`experiments/2026-07-18-098-axfilter-owner-closure/FINDINGS.md`](../2026-07-18-098-axfilter-owner-closure/FINDINGS.md)
+corrects FOL/HO reference routing and confirms all nine cases exactly.
+
 ## Existing live reference evidence
 
 The archived WSL report at

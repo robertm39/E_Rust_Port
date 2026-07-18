@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
@@ -927,6 +927,15 @@ fn load_filters(filter_file: Option<&Path>) -> Result<AxFilterSet, Diagnostic> {
     let Some(path) = filter_file else {
         return AxFilterSet::default_set();
     };
+    let metadata = fs::metadata(path).map_err(|error| {
+        e_axfilter_sys_error_diagnostic(format!("Cannot stat file {}", path.display()), &error)
+    })?;
+    if !metadata.is_file() {
+        return Err(io_diagnostic(format!(
+            "{} it is not a regular file",
+            path.display()
+        )));
+    }
     let mut scanner = Scanner::from_file(path, true).map_err(e_axfilter_scanner_open_diagnostic)?;
     let mut filters = AxFilterSet::new();
     filters.parse(&mut scanner)?;
@@ -1068,7 +1077,7 @@ fn e_axfilter_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
     if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
         return error;
     }
-    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+    let Some((prefix, source_error)) = error.message().rsplit_once(": ") else {
         return error;
     };
     Diagnostic::new(
@@ -1510,13 +1519,44 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_filter.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_filter.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn filter_file_directory_uses_c_regular_file_diagnostic() {
+        let _guard = global_state_lock();
+        let filter_directory = temp_path("filter-directory");
+        _ = std::fs::remove_dir(&filter_directory);
+        std::fs::create_dir(&filter_directory).expect("filter fixture directory is created");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-f",
+                filter_directory.to_str().expect("path is utf8"),
+                "problem.p",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(
+            error.message(),
+            format!("{} it is not a regular file", filter_directory.display())
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        std::fs::remove_dir(filter_directory).expect("filter fixture directory is removed");
     }
 
     #[test]

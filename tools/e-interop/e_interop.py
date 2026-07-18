@@ -100,6 +100,7 @@ TOOL_CASE_METADATA_KEYS = frozenset(
         "output_directories",
         "normalize_legacy_classify_feature_suffix",
         "expected_mismatches",
+        "reference_mode",
     }
 )
 TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
@@ -725,8 +726,8 @@ TOOL_FUNCTIONAL_CASES = {
                         "thf(p_type, type, p: person > $o).\n"
                         "thf(q_type, type, q: person > $o).\n"
                         "thf(r_type, type, r: person > $o).\n"
-                        "thf(lambda_def1, definition, p = (^[X: person]: q @ X)).\n"
-                        "thf(lambda_def2, definition, q = (^[X: person]: r @ X)).\n"
+                        "thf(lambda_def1, definition, p = (^[X: person]: (q @ X))).\n"
+                        "thf(lambda_def2, definition, q = (^[X: person]: (r @ X))).\n"
                         "thf(goal, conjecture, p @ a).\n"
                         "thf(hyp, hypothesis, q @ a).\n"
                         "thf(question, question, r @ a).\n"
@@ -734,6 +735,7 @@ TOOL_FUNCTIONAL_CASES = {
                     ),
                 },
                 "output_files": ("global.out", "problem_defs.p"),
+                "reference_mode": "ho",
             },
         ),
         (
@@ -2672,6 +2674,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             "output_directories": [],
             "normalize_legacy_classify_feature_suffix": False,
             "expected_mismatches": [],
+            "reference_mode": "fol",
         }
     if len(fixture_tail) != 1:
         raise InteropError("Functional support-tool cases accept at most one metadata argument")
@@ -2697,6 +2700,9 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             "normalize_legacy_classify_feature_suffix", False
         )
         expected_mismatches = tail.get("expected_mismatches", ())
+        reference_mode = tail.get("reference_mode", "fol")
+        if reference_mode not in {"fol", "ho"}:
+            raise InteropError("Functional support-tool reference_mode must be 'fol' or 'ho'")
         if isinstance(expected_mismatches, (str, bytes)):
             raise InteropError(
                 "Functional support-tool expected_mismatches must be a sequence"
@@ -2719,6 +2725,7 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
         output_directories = ()
         normalize_legacy_classify_feature_suffix = False
         expected_mismatches = ()
+        reference_mode = "fol"
 
     return {
         "fixture_files": dict(fixture_files),
@@ -2732,7 +2739,26 @@ def tool_functional_case_metadata(fixture_tail: Sequence[Any]) -> dict[str, Any]
             normalize_legacy_classify_feature_suffix
         ),
         "expected_mismatches": list(expected_mismatches),
+        "reference_mode": reference_mode,
     }
+
+
+def reference_tool_binary(
+    manifest: dict[str, Any], reference_tools: dict[str, str], tool: str, mode: str
+) -> Path:
+    if mode == "fol":
+        return Path(reference_tools[tool])
+    build = manifest["builds"].get(mode)
+    relative = REFERENCE_TOOL_BINARIES.get(tool)
+    if build is None or relative is None:
+        raise InteropError(f"No {mode} reference build is available for tool {tool}")
+    binary = Path(build["build_source"]) / relative
+    if not binary.is_file():
+        raise InteropError(
+            f"Expected {mode} reference tool was not built: {binary}. "
+            "Run build-reference again."
+        )
+    return binary
 
 
 def validate_tool_relative_name(name: str, kind: str) -> Path:
@@ -2987,7 +3013,10 @@ def compare_tools(args: argparse.Namespace) -> None:
     for index, case in enumerate(cases, 1):
         tool = case["tool"]
         print(f"[{index}/{len(cases)}] {case['name']}", flush=True)
-        reference_binary = Path(reference_tools[tool])
+        reference_mode = case.get("reference_mode", "fol")
+        reference_binary = reference_tool_binary(
+            manifest, reference_tools, tool, reference_mode
+        )
         uses_case_workdir = bool(
             case.get("isolated_workdir")
             or case.get("workdir_files")
@@ -3203,6 +3232,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             {
                 "name": case["name"],
                 "tool": tool,
+                "reference_mode": reference_mode,
                 "scenario": case["scenario"],
                 "arguments": case["arguments"],
                 "stdin": case["stdin"] is not None,

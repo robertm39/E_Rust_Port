@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-07-18T14:15:53.699228+00:00",
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "source_report_sha256": "dc2eefb12f708598f8455a75835dcd4213d817232b352936ef10ca669804de9d",
+  "reference_binaries": {
+    "fol_e_axfilter_sha256": "6ec987b8ad4e549ab3b2cb348a1d0daeca2aa55d625177701bc6fa0dc0dd9ea0",
+    "ho_e_axfilter_sha256": "cdc1fd2df1d70e45ece11eae74ba43d95c522dd2ba1fe70dce83b041a8f30519"
+  },
+  "candidate_binary": {
+    "rust_windows_e_axfilter_sha256": "e9ce756a587d7e764938d57340e5b0cf3a40f10d898b812aef0c260a9f4c87cd"
+  },
+  "case_count": 9,
+  "mismatch_count": 0,
+  "expected_difference_count": 0,
+  "cases": [
+    {"name": "e_axfilter/help", "reference_mode": "fol", "exit_code": 0},
+    {"name": "e_axfilter/version", "reference_mode": "fol", "exit_code": 0},
+    {"name": "e_axfilter/dump-filter-stdout", "reference_mode": "fol", "exit_code": 5},
+    {"name": "e_axfilter/tstp-threshold-file", "reference_mode": "fol", "exit_code": 0, "output_files": ["global.out", "problem_tiny.p"]},
+    {"name": "e_axfilter/tstp-gsine-formulas", "reference_mode": "fol", "exit_code": 0, "output_files": ["global.out", "problem_formulas.p"]},
+    {"name": "e_axfilter/tstp-lambda-def-formulas", "reference_mode": "ho", "exit_code": 0, "output_files": ["global.out", "problem_defs.p"]},
+    {"name": "e_axfilter/tstp-seeded-all-methods", "reference_mode": "fol", "exit_code": 0, "output_files": ["global.out", "problem_SA_P1_24_seed.p", "problem_SL_P1_24_seed.p", "problem_SD_P1_24_seed.p"]},
+    {"name": "e_axfilter/output-open-missing-parent", "reference_mode": "fol", "exit_code": 6},
+    {"name": "e_axfilter/filter-open-missing", "reference_mode": "fol", "exit_code": 6}
+  ]
+}

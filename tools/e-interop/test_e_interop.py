@@ -1269,9 +1269,10 @@ class ComparisonTests(unittest.TestCase):
         )
         e_axfilter_lambda_case = cases_by_name["e_axfilter/tstp-lambda-def-formulas"]
         self.assertIn(
-            "thf(lambda_def1, definition",
+            "thf(lambda_def1, definition, p = (^[X: person]: (q @ X)))",
             e_axfilter_lambda_case["workdir_files"]["problem.p"],
         )
+        self.assertEqual(e_axfilter_lambda_case["reference_mode"], "ho")
         self.assertEqual(
             e_axfilter_lambda_case["output_files"],
             ["global.out", "problem_defs.p"],

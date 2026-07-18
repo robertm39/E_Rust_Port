@@ -15846,19 +15846,20 @@ mod tests {
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_command_args,
         schedule_worker_run_args, search_schedule_worker_command_args,
-        simple_fof_bool_term_to_formulas, take_selected_formula_entry_ids,
-        temporary_executable_term_bank, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        ConfiguredOutput, DocOutputFormat, EProverAction, EProverConfig, EProverFlag,
-        EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType,
-        GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison, ParamodulationType,
-        ParsedAppEncodeFormula, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
-        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
-        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
-        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
-        PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        simple_fof_bool_term_to_formulas, take_selected_clause_ids,
+        take_selected_formula_entry_ids, temporary_executable_term_bank, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, ConfiguredOutput, DocOutputFormat, EProverAction,
+        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
+        FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode,
+        LiteralComparison, ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
+        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE,
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -23763,6 +23764,36 @@ input_clause(c2,axiom,[++q(X)]).
                 .iter()
                 .map(WrappedFormula::entry_id)
                 .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn bulk_sine_clause_owner_move_preserves_last_selection_order() {
+        let mut source = ClauseSet::new();
+        let clause_ids = (0..2_048)
+            .map(|_| {
+                let clause = Clause::alloc(EqnList::new());
+                let ident = clause.ident();
+                source.insert(clause);
+                ident
+            })
+            .collect::<Vec<_>>();
+        let mut selected_ids = clause_ids.iter().rev().copied().collect::<Vec<_>>();
+        selected_ids.push(clause_ids[2_047]);
+
+        let selected = take_selected_clause_ids(&mut source, &selected_ids);
+
+        assert_eq!(source.members(), 0);
+        let expected = clause_ids
+            .iter()
+            .rev()
+            .skip(1)
+            .copied()
+            .chain(std::iter::once(clause_ids[2_047]))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected.iter().map(Clause::ident).collect::<Vec<_>>(),
             expected
         );
     }

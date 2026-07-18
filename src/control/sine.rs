@@ -451,6 +451,47 @@ mod tests {
     }
 
     #[test]
+    fn get_problem_selections_borrow_without_moving_owned_axioms() {
+        let mut bank = test_bank();
+        let mut spec = StructFofSpec::new(bank.signature());
+        let clauses = clause_set_with_clause(&mut bank, "borrowed_clause", 30, CP_TYPE_AXIOM);
+        let mut formulas = FormulaSet::new();
+        let formula = wrapped_formula(&mut bank, "borrowed_formula", CP_TYPE_AXIOM);
+        let formula_id = formula.entry_id();
+        formulas.insert(formula);
+        spec.add_problem(bank.signature(), clauses, formulas, false);
+
+        for _ in 0..2 {
+            let selection = spec
+                .get_problem(bank.signature(), &AxFilter::threshold(2))
+                .unwrap();
+            assert_eq!(selection.selected_count, 2);
+            assert_eq!(
+                selection
+                    .clauses
+                    .as_slice()
+                    .iter()
+                    .map(|clause| clause.ident())
+                    .collect::<Vec<_>>(),
+                [30]
+            );
+            assert_eq!(
+                selection
+                    .formulas
+                    .as_slice()
+                    .iter()
+                    .map(|formula| formula.entry_id())
+                    .collect::<Vec<_>>(),
+                [formula_id]
+            );
+        }
+
+        assert_eq!(spec.clause_set_count(), 1);
+        assert_eq!(spec.formula_set_count(), 1);
+        assert!(spec.formula_by_entry_id(formula_id).is_some());
+    }
+
+    #[test]
     fn gsine_get_problem_starts_seed_scan_after_shared_axioms() {
         let mut bank = test_bank();
         let mut spec = StructFofSpec::new(bank.signature());
