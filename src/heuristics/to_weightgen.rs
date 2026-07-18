@@ -1094,15 +1094,20 @@ mod tests {
 
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
         let individual = individual(bank);
+        typed_unary_with_type(bank, name, arg, &individual)
+    }
+
+    fn typed_unary_with_type(bank: &mut TermBank, name: &str, arg: &Term, type_: &Type) -> Term {
         let code = bank.signature_mut().insert_id(name, 1, false);
+        let function_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone()]));
         bank.signature_mut()
-            .declare_final_type(
-                code,
-                alloc_arrow_type(vec![individual.clone(), individual.clone()]),
-            )
+            .declare_final_type(code, function_type)
             .unwrap_or_else(|err| panic!("{err}"));
         let term = Term::top_alloc(code, 1);
-        term.set_type(Some(individual.clone()));
+        term.set_type(Some(type_.clone()));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never)
             .unwrap_or_else(|err| panic!("{err}"))
@@ -1153,6 +1158,24 @@ mod tests {
         result
             .weight(symbol)
             .unwrap_or_else(|| panic!("missing weight for {symbol}"))
+    }
+
+    fn raw_method_weights(
+        signature: &mut Signature,
+        axioms: &ClauseSet,
+        params: &OrderParmsCell,
+        context: WeightGenerationContext<'_>,
+    ) -> GeneratedWeights {
+        let mut generated = GeneratedWeights {
+            weights: vec![0; super::weights_size(signature.f_count())],
+            var_weight: W_DEFAULT_WEIGHT,
+            lam_weight: params.lam_w,
+            db_weight: params.db_w,
+        };
+        super::set_symbol_weight(&mut generated.weights, SIG_TRUE_CODE, W_DEFAULT_WEIGHT);
+        super::apply_weight_method(signature, axioms, params, context, &mut generated)
+            .unwrap_or_else(|err| panic!("{err}"));
+        generated
     }
 
     fn params(method: TOWeightGenMethod) -> OrderParmsCell {
@@ -1676,6 +1699,196 @@ mod tests {
 
         assert!(weight(&counts, animal_symbol) > weight(&counts, ordinary_symbol));
         assert!(weight(&inverse, animal_symbol) < weight(&inverse, ordinary_symbol));
+    }
+
+    fn assert_instrumented_c_fol_method_weights() {
+        let mut fol_bank = term_bank();
+        let fol_individual = individual(&fol_bank);
+        let a = typed_const(&mut fol_bank, "a", &fol_individual);
+        let fa = typed_unary(&mut fol_bank, "f", &a);
+        let b = typed_const(&mut fol_bank, "b", &fol_individual);
+        let ga = typed_unary(&mut fol_bank, "g", &a);
+        let a_code = a.f_code();
+        let f_code = fa.f_code();
+        let b_code = b.f_code();
+        let g_code = ga.f_code();
+        // C preprocessing removes the parsed `g(a)=g(a)` tautology before
+        // ordering creation but retains `g` in the signature.
+        let fol_axioms = ClauseSet::from_clauses([
+            clause(vec![literal(&mut fol_bank, &fa, &b)]),
+            clause(vec![literal(&mut fol_bank, &fa, &b)]),
+        ]);
+        let mut partial = OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            false,
+            fol_bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+        partial.precedence_add_tuple(fol_bank.signature(), f_code, g_code, CompareResult::Greater);
+
+        let fol_cases = [
+            (
+                TOWeightGenMethod::Precedence,
+                [1, 2, 1, 1],
+                WeightGenerationContext {
+                    precedence_ocb: Some(&partial),
+                    ..WeightGenerationContext::default()
+                },
+            ),
+            (
+                TOWeightGenMethod::PrecedenceInv,
+                [1, 1, 1, 2],
+                WeightGenerationContext {
+                    precedence_ocb: Some(&partial),
+                    ..WeightGenerationContext::default()
+                },
+            ),
+            (
+                TOWeightGenMethod::PrecRank5,
+                [5, 5, 5, 5],
+                WeightGenerationContext {
+                    precedence_ocb: Some(&partial),
+                    ..WeightGenerationContext::default()
+                },
+            ),
+            (
+                TOWeightGenMethod::InvConjFrequencyRank,
+                [1, 1, 1, 2],
+                WeightGenerationContext::default(),
+            ),
+            (
+                TOWeightGenMethod::FrequencyRankSq,
+                [1, 1, 1, 0],
+                WeightGenerationContext::default(),
+            ),
+            (
+                TOWeightGenMethod::InvModFreqRank,
+                [1, 1, 1, 4],
+                WeightGenerationContext::default(),
+            ),
+        ];
+        for (method, expected, context) in fol_cases {
+            let result = raw_method_weights(
+                fol_bank.signature_mut(),
+                &fol_axioms,
+                &OrderParmsCell {
+                    to_weight_gen: method,
+                    to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+                    ..OrderParmsCell::default()
+                },
+                context,
+            );
+            assert_eq!(
+                [
+                    weight(&result, a_code),
+                    weight(&result, f_code),
+                    weight(&result, b_code),
+                    weight(&result, g_code),
+                ],
+                expected,
+                "instrumented C FOL snapshot for {method:?}"
+            );
+        }
+    }
+
+    fn assert_instrumented_c_late_override() {
+        let mut fol_bank = term_bank();
+        let fol_individual = individual(&fol_bank);
+        let a = typed_const(&mut fol_bank, "a", &fol_individual);
+        let fa = typed_unary(&mut fol_bank, "f", &a);
+        let b = typed_const(&mut fol_bank, "b", &fol_individual);
+        let ga = typed_unary(&mut fol_bank, "g", &a);
+        let overridden = generate_weights(
+            fol_bank.signature_mut(),
+            &ClauseSet::new(),
+            &OrderParmsCell {
+                to_weight_gen: TOWeightGenMethod::ArityWeight,
+                to_const_weight: 3,
+                ..OrderParmsCell::default()
+            },
+            WeightGenerationContext {
+                pre_weights: Some("a:9"),
+                ..WeightGenerationContext::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            [
+                weight(&overridden, a.f_code()),
+                weight(&overridden, fa.f_code()),
+                weight(&overridden, b.f_code()),
+                weight(&overridden, ga.f_code()),
+            ],
+            [9, 2, 3, 2]
+        );
+    }
+
+    fn assert_instrumented_c_typed_weight_arrays() {
+        let mut typed_bank = term_bank();
+        let animal_code = typed_bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("animal")
+            .unwrap_or_else(|err| panic!("{err}"));
+        let animal = typed_bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(animal_code));
+        let individual = individual(&typed_bank);
+        let cat = typed_const(&mut typed_bank, "cat", &animal);
+        let dog = typed_const(&mut typed_bank, "dog", &animal);
+        let ordinary = typed_const(&mut typed_bank, "a", &individual);
+        let fcat = typed_unary_with_type(&mut typed_bank, "f", &cat, &animal);
+        let ga = typed_unary(&mut typed_bank, "g", &ordinary);
+        let typed_codes = [
+            cat.f_code(),
+            dog.f_code(),
+            ordinary.f_code(),
+            fcat.f_code(),
+            ga.f_code(),
+        ];
+        let typed_axioms = ClauseSet::from_clauses([
+            clause(vec![literal(&mut typed_bank, &fcat, &dog)]),
+            clause(vec![literal(&mut typed_bank, &fcat, &cat)]),
+            clause(vec![literal(&mut typed_bank, &ga, &ordinary)]),
+        ]);
+        let typed_cases = [
+            (TOWeightGenMethod::TypeFrequencyRank, [4, 4, 3, 3, 2]),
+            (TOWeightGenMethod::TypeFrequencyCount, [4, 4, 2, 2, 1]),
+            (TOWeightGenMethod::InvTypeFrequencyRank, [1, 1, 2, 2, 3]),
+            (TOWeightGenMethod::InvTypeFrequencyCount, [1, 1, 3, 3, 4]),
+            (TOWeightGenMethod::CombFrequencyRank, [4, 3, 3, 3, 2]),
+            (TOWeightGenMethod::CombFrequencyCount, [10, 6, 6, 6, 3]),
+            (TOWeightGenMethod::InvCombFrequencyRank, [1, 2, 2, 2, 3]),
+            (TOWeightGenMethod::InvCombFrequencyCount, [1, 5, 5, 5, 8]),
+        ];
+        for (method, expected) in typed_cases {
+            let result = raw_method_weights(
+                typed_bank.signature_mut(),
+                &typed_axioms,
+                &OrderParmsCell {
+                    to_weight_gen: method,
+                    to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+                    ..OrderParmsCell::default()
+                },
+                WeightGenerationContext {
+                    higher_order_problem: true,
+                    ..WeightGenerationContext::default()
+                },
+            );
+            assert_eq!(
+                typed_codes.map(|code| weight(&result, code)),
+                expected,
+                "instrumented C LFHO snapshot for {method:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn instrumented_c_reference_weight_arrays_match() {
+        assert_instrumented_c_fol_method_weights();
+        assert_instrumented_c_late_override();
+        assert_instrumented_c_typed_weight_arrays();
     }
 
     #[test]
