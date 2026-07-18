@@ -98,7 +98,7 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
-- `ConjectureTermTfIdfWeightCompute` lazily initializes TF-IDF data, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, scores through `ClauseTermExtWeight`, and only then appends generated-clause document terms when `update_docs` is set; the Rust port preserves that ordering with an OCB-backed helper and a banked WFCB callback for callers that can pass the owner bank.
+- `ConjectureTermTfIdfWeightCompute` lazily initializes TF-IDF data, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, scores through `ClauseTermExtWeight`, and only then appends generated-clause document terms when `update_docs` is set; the Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. The shared six-family owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md).
 - The Rust document-frequency path now uses the shared `src/clauses/pdtrees.rs` `TermLRTraverseNext` key extraction and trie ref-counts, matching C's use of `PDTreeMatchPrefix(...)->ref_count` for IDF.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
@@ -110,6 +110,6 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 
 ### Change Later
 
-- Once all heuristic evaluation sites can pass the active `OCB`, mutable owner bank, and mutable clause, remove any remaining immutable TF-IDF scoring fallbacks without changing the lazy-init, mark, score, then optional-document-update sequence.
+- All production heuristic evaluation sites now use the banked lazy-init/mark/score/optional-document-update path. Removing immutable already-marked-clause adapters is optional public-API simplification, not missing proof-search ownership behavior.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

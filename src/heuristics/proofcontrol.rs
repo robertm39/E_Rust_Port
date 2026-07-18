@@ -9741,7 +9741,8 @@ mod tests {
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
         CP_IS_PROCESSED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
-        CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
+        CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+        CP_TYPE_NEG_CONJECTURE, CP_WATCH_ONLY,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -18511,6 +18512,101 @@ mod tests {
             .evaluations()
             .expect("second clause should retain evaluations");
         for index in 0..2 {
+            assert_eq!(
+                first_evaluations.eval(index).heuristic().to_bits(),
+                second_evaluations.eval(index).heuristic().to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn proof_control_installs_conjecture_term_weights_with_active_owner_context() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "pc_termweight_a");
+        let b = typed_const(&mut bank, "pc_termweight_b");
+        let conjecture_term = typed_unary(&mut bank, "pc_termweight_f", &a);
+        let target_term = typed_unary(&mut bank, "pc_termweight_g", &a);
+        let mut conjecture = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank,
+            &conjecture_term,
+            &a,
+            false,
+        )]));
+        conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let mut first_clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank,
+            &target_term,
+            &b,
+            true,
+        )]));
+        let mut second_clause = first_clause.clone();
+        let mut axioms = ClauseSet::from_clauses([conjecture]);
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "TermOwnerSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec![
+            "relative=ConjectureRelativeTermWeight(ConstPrio,0,0,2.0,10,3,20,1,0,1.0,1.0,1.0)"
+                .to_owned(),
+            "prefix=ConjectureTermPrefixWeight(ConstPrio,0,0,0.5,5.0,0,1.0,1.0,1.0)".to_owned(),
+            "tfidf=ConjectureTermTfIdfWeight(ConstPrio,0,0,0,1.0,0,1.0,1.0,1.0)".to_owned(),
+            "lev=ConjectureLevDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0)".to_owned(),
+            "tree=ConjectureTreeDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0)".to_owned(),
+            "struc=ConjectureStrucDistanceWeight(ConstPrio,0,0,5.0,10.0,2.0,3.0,0,1.0,1.0,1.0)"
+                .to_owned(),
+        ];
+        let mut hcb_defs =
+            vec!["TermOwnerSearch=(1*relative,1*prefix,1*tfidf,1*lev,1*tree,1*struc)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!first_clause.query_prop(CP_IS_ORIENTED));
+        assert!(!second_clause.query_prop(CP_IS_ORIENTED));
+        let active_hcb_handle = control
+            .active_hcb
+            .expect("conjecture-term HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("conjecture-term HCB should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut first_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut second_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        for clause in [&first_clause, &second_clause] {
+            assert!(clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.literals().as_slice()[0].is_maximal());
+            assert_eq!(
+                clause
+                    .evaluations()
+                    .expect("HCB should attach all six term-weight evaluations")
+                    .eval_no(),
+                6
+            );
+        }
+        let first_evaluations = first_clause
+            .evaluations()
+            .expect("first clause should retain evaluations");
+        let second_evaluations = second_clause
+            .evaluations()
+            .expect("second clause should retain evaluations");
+        for index in 0..6 {
             assert_eq!(
                 first_evaluations.eval(index).heuristic().to_bits(),
                 second_evaluations.eval(index).heuristic().to_bits()

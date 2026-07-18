@@ -104,7 +104,7 @@ Source files reviewed: `HEURISTICS/che_treeweight.h`, `HEURISTICS/che_treeweight
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
-- `ConjectureTreeDistanceWeightCompute` lazily initializes conjecture terms, then calls `ClauseCondMarkMaximalTerms` before `ClauseTermExtWeight`. Rust preserves this through an OCB-backed compute helper and a banked WFCB callback for callers that can pass the owner bank.
+- `ConjectureTreeDistanceWeightCompute` lazily initializes conjecture terms, then calls `ClauseCondMarkMaximalTerms` before `ClauseTermExtWeight`. The Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. The shared six-family owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md).
 
 ### Porting Focus
 
@@ -114,6 +114,6 @@ Source files reviewed: `HEURISTICS/che_treeweight.h`, `HEURISTICS/che_treeweight
 
 ### Change Later
 
-- Once all heuristic evaluation sites can pass the active `OCB`, mutable owner bank, and mutable clause, remove any remaining immutable tree-distance scoring fallbacks without changing the lazy-init, mark, then score sequence.
+- All production heuristic evaluation sites now use the banked lazy-init/mark/score path. Removing immutable already-marked-clause adapters is optional public-API simplification, not missing proof-search ownership behavior.
 
 <!-- END MANUAL REVIEW: c_source_docs -->
