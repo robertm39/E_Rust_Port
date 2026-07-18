@@ -1,0 +1,31 @@
+{
+  "case_count": 18,
+  "cases": [
+    "eta-wrapper/KBO",
+    "eta-wrapper/KBO6",
+    "eta-wrapper/LPO",
+    "eta-wrapper/LPOCopy",
+    "eta-wrapper/LPO4",
+    "eta-wrapper/LPO4Copy",
+    "flex-flex/KBO",
+    "flex-flex/KBO6",
+    "flex-flex/LPO",
+    "flex-flex/LPOCopy",
+    "flex-flex/LPO4",
+    "flex-flex/LPO4Copy",
+    "rigid-prefix/KBO",
+    "rigid-prefix/KBO6",
+    "rigid-prefix/LPO",
+    "rigid-prefix/LPOCopy",
+    "rigid-prefix/LPO4",
+    "rigid-prefix/LPO4Copy"
+  ],
+  "combined": {
+    "bytes": 34941,
+    "sha256": "3E6ED2315AF642D4C4D8FFA5D5CDB65963D053FF6A734D86331BC256DF1988D6"
+  },
+  "exact_count": 18,
+  "failures": [],
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}

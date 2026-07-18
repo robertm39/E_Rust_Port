@@ -1,0 +1,16 @@
+{
+  "contract_count": 9,
+  "contracts": {
+    "c_has_four_ho_normalization_hooks": true,
+    "c_hook_and_prune_order": true,
+    "rust_admits_all_six_release_orderings": true,
+    "rust_covers_lfho_and_lambda_surfaces": true,
+    "rust_has_four_ho_normalization_hooks": true,
+    "rust_hook_and_prune_order": true,
+    "rust_normalizes_real_encoded_equality": true,
+    "rust_prunes_real_constant_argument": true,
+    "rust_uses_owner_bank_for_orientation": true
+  },
+  "pass_count": 9,
+  "schema_version": 1
+}

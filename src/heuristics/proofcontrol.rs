@@ -9767,7 +9767,7 @@ mod tests {
         DC_AC_RES, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
         DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
         DC_EXT_SUP, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LOCAL_REWRITE, DC_NEG_EXT, DC_NORMALIZE,
-        DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR, DC_TRIGGER,
+        DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_PRUNE_ARG, DC_SR, DC_TRIGGER,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -11701,13 +11701,30 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_prune_args_runs_without_candidates() {
+    fn proof_state_forward_modify_clause_higher_order_prunes_constant_argument() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let mut clause = {
+        let (mut clause, function, x, y) = {
             let terms = state.terms_mut();
-            let left = typed_const(terms, "pc_ho_prune_a");
-            let right = typed_const(terms, "pc_ho_prune_b");
-            Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]))
+            let type_ = terms.signature().type_bank().default_type();
+            let arrow = terms
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone(), type_]));
+            let function = terms.vars().var_assert_alloc(-4_094, &arrow);
+            let constant = typed_const(terms, "pc_ho_prune_constant");
+            let x = typed_var(terms, -4_096);
+            let y = typed_var(terms, -4_098);
+            let first = apply_terms(terms, &function, &[constant.clone(), x.clone()])
+                .unwrap_or_else(|err| panic!("{err}"));
+            let second = apply_terms(terms, &function, &[constant, y.clone()])
+                .unwrap_or_else(|err| panic!("{err}"));
+            let first_rhs = typed_const(terms, "pc_ho_prune_first_rhs");
+            let second_rhs = typed_const(terms, "pc_ho_prune_second_rhs");
+            let clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &first, &first_rhs, true),
+                literal(terms, &second, &second_rhs, true),
+            ]));
+            (clause, function, x, y)
         };
         let mut control = proof_control_alloc();
         control.set_ocb(empty_ocb(state.terms()));
@@ -11725,6 +11742,16 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
 
         assert!(!trivial);
+        let first_left = clause.literals().as_slice()[0].left();
+        let second_left = clause.literals().as_slice()[1].left();
+        assert!(first_left.is_applied_free_var());
+        assert!(second_left.is_applied_free_var());
+        assert_eq!(first_left.arity(), 2);
+        assert_eq!(second_left.arity(), 2);
+        assert_ne!(first_left.argument(0).as_ref(), Some(&function));
+        assert_eq!(first_left.argument(1).as_ref(), Some(&x));
+        assert_eq!(second_left.argument(1).as_ref(), Some(&y));
+        assert!(derivation_contains_operation(&clause, DC_PRUNE_ARG));
     }
 
     #[test]
