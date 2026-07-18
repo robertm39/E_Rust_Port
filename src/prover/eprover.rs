@@ -29361,6 +29361,67 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_cnf_only_preinstantiates_induction_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-thf-induction-preinstantiation");
+        std::fs::write(
+            &path,
+            "thf(a_type, type, a: $i).\n\
+             thf(b_type, type, b: $i).\n\
+             thf(f_type, type, f: $i > $i).\n\
+             thf(g_type, type, g: $i > $i).\n\
+             thf(source, conjecture, (g @ a) = (g @ (f @ a))).\n\
+             thf(target, axiom, ![P: $i > $o]: (P @ b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+
+        let mut disabled_stdout = Vec::new();
+        let mut disabled_stderr = Vec::new();
+        let disabled_status = run(
+            [
+                "eprover",
+                "--cnf",
+                "--output-level=2",
+                "--print-statistics",
+                "--preinstantiate-induction=false",
+                path_arg.as_str(),
+            ],
+            &mut disabled_stdout,
+            &mut disabled_stderr,
+        )
+        .unwrap();
+
+        let mut enabled_stdout = Vec::new();
+        let mut enabled_stderr = Vec::new();
+        let enabled_status = run(
+            [
+                "eprover",
+                "--cnf",
+                "--output-level=2",
+                "--print-statistics",
+                "--preinstantiate-induction=true",
+                path_arg.as_str(),
+            ],
+            &mut enabled_stdout,
+            &mut enabled_stderr,
+        )
+        .unwrap();
+
+        let disabled = String::from_utf8(disabled_stdout).unwrap();
+        let enabled = String::from_utf8(enabled_stdout).unwrap();
+        assert_eq!(disabled_status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(enabled_status, ErrorCode::NO_ERROR.exit_status());
+        assert!(!disabled.contains("((g @ (f @ b))=(g @ b))"));
+        assert!(enabled.contains("((g @ (f @ b))=(g @ b))"));
+        assert!(disabled.contains("% Initial clauses in saturation        : 2\n"));
+        assert!(enabled.contains("% Initial clauses in saturation        : 3\n"));
+        assert!(disabled_stderr.is_empty());
+        assert!(enabled_stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_applies_selected_pred_elim_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-pred-elim");

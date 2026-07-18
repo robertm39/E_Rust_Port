@@ -1,0 +1,91 @@
+{
+  "all_exact": true,
+  "c": {
+    "disabled": {
+      "clauses": [
+        "thf(c_0_N, plain, ![X1:$i > $o]:((X1 @ b))).",
+        "thf(c_0_N, negated_conjecture, ((g @ (f @ a))!=(g @ a)))."
+      ],
+      "exit_code": 0,
+      "induction_instance_present": false,
+      "statistics": {
+        "...number of literals in the above": 2,
+        "Current number of unprocessed clauses": 2,
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "enabled": {
+      "clauses": [
+        "thf(c_0_N, plain, ((g @ (f @ b))=(g @ b))).",
+        "thf(c_0_N, plain, ![X1:$i > $o]:((X1 @ b))).",
+        "thf(c_0_N, negated_conjecture, ((g @ (f @ a))!=(g @ a)))."
+      ],
+      "exit_code": 0,
+      "induction_instance_present": true,
+      "statistics": {
+        "...number of literals in the above": 3,
+        "Current number of unprocessed clauses": 3,
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 3,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "case_count": 2,
+  "display_args": [
+    "--cnf",
+    "--output-level=2",
+    "--print-statistics",
+    "--preinstantiate-induction=$BOOL",
+    "$FIXTURE"
+  ],
+  "effect_observed": true,
+  "rust": {
+    "disabled": {
+      "clauses": [
+        "thf(c_0_N, plain, ![X1:$i > $o]:((X1 @ b))).",
+        "thf(c_0_N, negated_conjecture, ((g @ (f @ a))!=(g @ a)))."
+      ],
+      "exit_code": 0,
+      "induction_instance_present": false,
+      "statistics": {
+        "...number of literals in the above": 2,
+        "Current number of unprocessed clauses": 2,
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "enabled": {
+      "clauses": [
+        "thf(c_0_N, plain, ((g @ (f @ b))=(g @ b))).",
+        "thf(c_0_N, plain, ![X1:$i > $o]:((X1 @ b))).",
+        "thf(c_0_N, negated_conjecture, ((g @ (f @ a))!=(g @ a)))."
+      ],
+      "exit_code": 0,
+      "induction_instance_present": true,
+      "statistics": {
+        "...number of literals in the above": 3,
+        "Current number of unprocessed clauses": 3,
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 3,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "schema_version": 1
+}
