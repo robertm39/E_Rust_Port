@@ -1353,6 +1353,7 @@ pub struct SearchControlConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
     pub warnings: Vec<Diagnostic>,
+    pub option_stderr: Vec<String>,
     pub explicit_options: Vec<EProverOption>,
     pub invocation_args: Vec<String>,
     pub internal_schedule_worker: Option<InternalScheduleWorkerConfig>,
@@ -1470,6 +1471,7 @@ impl Default for EProverConfig {
     fn default() -> Self {
         Self {
             warnings: Vec::new(),
+            option_stderr: Vec::new(),
             explicit_options: Vec::new(),
             invocation_args: Vec::new(),
             internal_schedule_worker: None,
@@ -2903,19 +2905,19 @@ fn auto_memory_limit_from_system_mb(system_memory_mb: i64) -> Result<(u64, i64),
 
 struct ProcessedOptions {
     action: EProverAction,
-    warnings: Vec<Diagnostic>,
+    option_stderr: Vec<String>,
 }
 
 struct OptionProcessingError {
     diagnostic: Diagnostic,
-    warnings: Vec<Diagnostic>,
+    option_stderr: Vec<String>,
 }
 
 impl OptionProcessingError {
-    fn new(diagnostic: Diagnostic, warnings: Vec<Diagnostic>) -> Self {
+    fn new(diagnostic: Diagnostic, option_stderr: Vec<String>) -> Self {
         Self {
             diagnostic,
-            warnings,
+            option_stderr,
         }
     }
 
@@ -2946,24 +2948,24 @@ where
     let processed_options = match process_options_for_run(argv) {
         Ok(processed_options) => processed_options,
         Err(error) => {
-            write_warnings(stderr, &error.warnings)?;
+            write_option_stderr(stderr, &error.option_stderr)?;
             return Err(error.into_diagnostic().into());
         }
     };
     match processed_options.action {
         EProverAction::Help => {
-            write_warnings(stderr, &processed_options.warnings)?;
+            write_option_stderr(stderr, &processed_options.option_stderr)?;
             stdout.write_all(print_help().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
         EProverAction::Version => {
-            write_warnings(stderr, &processed_options.warnings)?;
+            write_option_stderr(stderr, &processed_options.option_stderr)?;
             stdout.write_all(version::version_line().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
         EProverAction::Run(config) => {
             let mut config = *config;
-            write_config_warnings(stderr, &config)?;
+            write_config_option_stderr(stderr, &config)?;
             write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
             let _owned_snapshot = prepare_schedule_stdin_snapshot(&mut config)?;
             let _snapshot_guard =
@@ -2997,18 +2999,18 @@ fn run_schedule_worker_from_args(
     let processed_options = match process_options_for_run(child_argv) {
         Ok(processed_options) => processed_options,
         Err(error) => {
-            write_warnings(stderr, &error.warnings)?;
+            write_option_stderr(stderr, &error.option_stderr)?;
             return Err(error.into_diagnostic().into());
         }
     };
     match processed_options.action {
         EProverAction::Help => {
-            write_warnings(stderr, &processed_options.warnings)?;
+            write_option_stderr(stderr, &processed_options.option_stderr)?;
             stdout.write_all(print_help().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
         EProverAction::Version => {
-            write_warnings(stderr, &processed_options.warnings)?;
+            write_option_stderr(stderr, &processed_options.option_stderr)?;
             stdout.write_all(version::version_line().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
@@ -3021,7 +3023,7 @@ fn run_schedule_worker_from_args(
             let cpu_limit = i64_from_u64_saturating(worker.worker_cpu_limit());
             config.cpu_limit = Some(cpu_limit);
             config.schedule_time_limit = Some(cpu_limit);
-            write_config_warnings(stderr, &config)?;
+            write_config_option_stderr(stderr, &config)?;
             write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
             let _snapshot_guard =
                 ScheduleStdinSnapshotGuard::install(config.schedule_stdin_snapshot.as_deref());
@@ -3272,11 +3274,21 @@ fn schedule_worker_should_drop_original_arg(arg: &str) -> bool {
         || (arg.starts_with("-o") && arg.len() > 2)
 }
 
-fn write_config_warnings(
+fn write_config_option_stderr(
     stderr: &mut impl Write,
     config: &EProverConfig,
 ) -> Result<(), EProverError> {
-    write_warnings(stderr, &config.warnings)
+    write_option_stderr(stderr, &config.option_stderr)
+}
+
+fn write_option_stderr(
+    stderr: &mut (impl Write + ?Sized),
+    messages: &[String],
+) -> Result<(), EProverError> {
+    for message in messages {
+        stderr.write_all(message.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn write_warnings(
@@ -3324,19 +3336,19 @@ where
     while let Some(parsed) = match state.next_opt(EPROVER_OPTIONS) {
         Ok(parsed) => parsed,
         Err(diagnostic) => {
-            return Err(OptionProcessingError::new(diagnostic, config.warnings));
+            return Err(OptionProcessingError::new(diagnostic, config.option_stderr));
         }
     } {
         match apply_parsed_option(&mut config, &parsed) {
             Ok(Some(action)) => {
                 return Ok(ProcessedOptions {
                     action,
-                    warnings: std::mem::take(&mut config.warnings),
+                    option_stderr: std::mem::take(&mut config.option_stderr),
                 });
             }
             Ok(None) => {}
             Err(diagnostic) => {
-                return Err(OptionProcessingError::new(diagnostic, config.warnings));
+                return Err(OptionProcessingError::new(diagnostic, config.option_stderr));
             }
         }
     }
@@ -3347,7 +3359,7 @@ where
     }
     Ok(ProcessedOptions {
         action: EProverAction::Run(Box::new(config)),
-        warnings: Vec::new(),
+        option_stderr: Vec::new(),
     })
 }
 
@@ -3907,14 +3919,27 @@ fn apply_resource_option(
         }
         EProverOption::MemoryLimit => {
             let arg = parsed.arg().unwrap_or("");
-            if arg == "Auto" {
+            let display_memory_mb = if arg == "Auto" {
+                let system_memory_mb = get_system_phys_memory();
                 let (memory_limit, delete_bad_limit) =
-                    auto_memory_limit_from_system_mb(get_system_phys_memory())?;
+                    auto_memory_limit_from_system_mb(system_memory_mb)?;
                 config.memory_limit = memory_limit;
                 config.delete_bad_limit = delete_bad_limit;
+                if config.verbose != 0 {
+                    config.option_stderr.push(format!(
+                        "Physical memory determined as {system_memory_mb} MB\n"
+                    ));
+                }
+                i64::try_from(memory_limit / MEGA).unwrap_or(i64::MAX)
             } else {
                 let memory_mb = get_int_arg(parsed.option(), arg)?;
                 config.memory_limit = memory_limit_bytes_from_mb(memory_mb);
+                memory_mb
+            };
+            if config.verbose != 0 {
+                config
+                    .option_stderr
+                    .push(format!("Memory limit set to {display_memory_mb} MB\n"));
             }
         }
         _ => unreachable!("non-resource option routed to resource handler"),
@@ -4115,10 +4140,11 @@ fn apply_term_ordering_option(
             config.search.ordering.lpo_recursion_limit = recursion_limit;
             config.search.ordering.lpo_recursion_limit_changed = true;
             if recursion_limit > LPO_RECURSION_WARNING_LIMIT {
-                config.warnings.push(Diagnostic::new(
-                    ErrorCode::NO_ERROR,
-                    LPO_RECURSION_LIMIT_WARNING,
-                ));
+                let warning = Diagnostic::new(ErrorCode::NO_ERROR, LPO_RECURSION_LIMIT_WARNING);
+                config
+                    .option_stderr
+                    .push(warning.render_warning(PROGRAM_NAME));
+                config.warnings.push(warning);
             }
             config.search.ordering.literal_comparison = LiteralComparison::None;
         }
@@ -17805,12 +17831,26 @@ input_clause(c2,axiom,[++q(X)]).
         };
         assert_eq!(config.memory_limit, 128 * MEGA);
         assert_eq!(config.delete_bad_limit, i64::MAX);
+        assert!(config.option_stderr.is_empty());
 
         let action = process_options(["eprover", "--memory-limit=-1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.memory_limit, u64::MAX.wrapping_mul(MEGA));
+        assert!(config.option_stderr.is_empty());
+
+        let action = process_options(["eprover", "--verbose=1", "--memory-limit=-1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.option_stderr, ["Memory limit set to -1 MB\n"]);
+
+        let action = process_options(["eprover", "--memory-limit=64", "--verbose=1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.option_stderr.is_empty());
     }
 
     #[test]
@@ -19844,6 +19884,10 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert_eq!(config.warnings.len(), 1);
         assert_eq!(config.warnings[0].message(), LPO_RECURSION_LIMIT_WARNING);
+        assert_eq!(
+            config.option_stderr,
+            [format!("eprover: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")]
+        );
 
         let action = process_options(["eprover", "--restrict-literal-comparisons"]).unwrap();
         let EProverAction::Run(config) = action else {
@@ -20001,6 +20045,52 @@ input_clause(c2,axiom,[++q(X)]).
             "E 3.3.5 Countess Grey (facc36eaf92d70896d830140efc4382df9e8dcdb)\n"
         );
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn run_preserves_memory_verbose_output_before_early_actions_and_errors() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--verbose=1", "--memory-limit=0", "--version"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "E 3.3.5 Countess Grey (facc36eaf92d70896d830140efc4382df9e8dcdb)\n"
+        );
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "Memory limit set to 0 MB\n"
+        );
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            [
+                "eprover",
+                "--verbose=1",
+                "--memory-limit=0",
+                "--cpu-limit=1",
+                "--soft-cpu-limit=1",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "Memory limit set to 0 MB\n"
+        );
     }
 
     #[test]
