@@ -20,12 +20,13 @@ fn auto_schedule_runs_worker_process_and_replays_winner() {
         stdout
             .matches("% Scheduled 1 strats onto 1 cores with ")
             .count()
-            >= 2,
+            == 1,
         "{stdout}"
     );
     assert!(stdout.contains("% Starting G-E--_302_C18_F1_URBAN_RG_S04BN"));
     assert!(stdout.contains("% Result found by G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
     assert!(stdout.contains("% Search class: FUHPF-FFSF00-SFFFFFNN\n"));
+    assert!(stdout.contains("% Scheduled 6 strats onto 1 cores with 300 seconds (300 total)\n"));
     assert!(stdout.contains("% Starting SAT001_MinMin_p005000_rr_RG"));
     assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
     assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
@@ -60,7 +61,7 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
         .match_indices("% User time                : ")
         .map(|(position, _)| position)
         .collect::<Vec<_>>();
-    assert_eq!(resource_positions.len(), 3, "{stdout}");
+    assert_eq!(resource_positions.len(), 2, "{stdout}");
     assert!(
         resource_positions
             .iter()
@@ -76,9 +77,37 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
                 .ok()
         })
         .collect::<Vec<_>>();
-    assert_eq!(total_times.len(), 3, "{stdout}");
+    assert_eq!(total_times.len(), 2, "{stdout}");
     assert!(total_times[1] >= total_times[0], "{stdout}");
-    assert!(total_times[2] >= total_times[1], "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn auto_schedule_cnf_allows_nested_search_preprocessing_proof() {
+    let path = write_false_problem("auto-schedule-cnf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        .arg("--auto-schedule=1")
+        .arg("--resources-info")
+        .arg("--cnf")
+        .arg("--tstp-in")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("% Scheduled 6 strats onto 1 cores with 300 seconds (300 total)\n"));
+    assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
+    assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+    assert_eq!(
+        stdout.matches("% User time                : ").count(),
+        2,
+        "{stdout}"
+    );
     assert!(stderr.is_empty(), "{stderr}");
 
     std::fs::remove_file(path).unwrap();

@@ -39,9 +39,12 @@ preprocessing worker, and outer parent resource summaries in that order.
   process times for every waited child. Generic schedule workers also propagate
   the aggregate resource footer reported by a nested child, avoiding loss of
   grandchild CPU at the next parent boundary.
-- A real-binary resource regression requires exactly three nested resource
-  summaries after the proof and requires their total CPU values to be
-  nondecreasing.
+- The original real-binary resource regression required three nested resource
+  summaries after the proof. A later direct C comparison showed that the search
+  leaf must suppress its ordinary footer through `SilentTimeOut`, leaving the
+  nested and outer coordinator summaries only. The corrected two-footer
+  contract and nondecreasing totals are retained in
+  [`experiments/2026-07-18-102-auto-schedule-duplicate-closure/FINDINGS.md`](../2026-07-18-102-auto-schedule-duplicate-closure/FINDINGS.md).
 - An input containing `-` is read once by the scheduling parent into a
   registered temporary file in the native temporary directory. The snapshot
   path is part of the private worker protocol, and each exec worker reads it as

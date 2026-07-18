@@ -1404,6 +1404,7 @@ pub struct InternalScheduleWorkerConfig {
     pub preprocessing_strategy: String,
     pub preprocessing_ordering: to_params::TermOrdering,
     pub preprocessing_cpu_limit: u64,
+    pub preprocessing_cores: i32,
     pub mode: InternalScheduleWorkerMode,
 }
 
@@ -3049,6 +3050,7 @@ struct ScheduleWorkerArgs {
     preprocessing_strategy: String,
     preprocessing_ordering: to_params::TermOrdering,
     preprocessing_cpu_limit: u64,
+    preprocessing_cores: i32,
     mode: InternalScheduleWorkerMode,
     stdin_snapshot: Option<String>,
     original_args: Vec<String>,
@@ -3061,6 +3063,7 @@ impl ScheduleWorkerArgs {
             preprocessing_strategy: self.preprocessing_strategy.clone(),
             preprocessing_ordering: self.preprocessing_ordering,
             preprocessing_cpu_limit: self.preprocessing_cpu_limit,
+            preprocessing_cores: self.preprocessing_cores,
             mode: self.mode.clone(),
         }
     }
@@ -3084,15 +3087,16 @@ fn parse_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Dia
 fn parse_preprocessing_schedule_worker_args(
     argv: &[String],
 ) -> Result<ScheduleWorkerArgs, Diagnostic> {
-    if argv.len() < 9 || argv.get(7).map(String::as_str) != Some("--") {
+    if argv.len() < 10 || argv.get(8).map(String::as_str) != Some("--") {
         return Err(schedule_worker_usage_error());
     }
     let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
     let preprocessing_strategy = schedule_worker_required_string(argv, 3)?;
     let preprocessing_ordering = schedule_worker_required_ordering(argv, 4)?;
     let preprocessing_cpu_limit = schedule_worker_required_u64(argv, 5)?;
-    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 6)?;
-    let original_args = argv[8..].to_vec();
+    let preprocessing_cores = schedule_worker_required_i32(argv, 6)?;
+    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 7)?;
+    let original_args = argv[9..].to_vec();
     if original_args.is_empty() {
         return Err(schedule_worker_usage_error());
     }
@@ -3101,6 +3105,7 @@ fn parse_preprocessing_schedule_worker_args(
         preprocessing_strategy,
         preprocessing_ordering,
         preprocessing_cpu_limit,
+        preprocessing_cores,
         mode: InternalScheduleWorkerMode::Preprocessing,
         stdin_snapshot,
         original_args,
@@ -3108,19 +3113,20 @@ fn parse_preprocessing_schedule_worker_args(
 }
 
 fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerArgs, Diagnostic> {
-    if argv.len() < 13 || argv.get(11).map(String::as_str) != Some("--") {
+    if argv.len() < 14 || argv.get(12).map(String::as_str) != Some("--") {
         return Err(schedule_worker_usage_error());
     }
     let preprocessing_index = schedule_worker_required_usize(argv, 2)?;
     let preprocessing_strategy = schedule_worker_required_string(argv, 3)?;
     let preprocessing_ordering = schedule_worker_required_ordering(argv, 4)?;
     let preprocessing_cpu_limit = schedule_worker_required_u64(argv, 5)?;
-    let search_index = schedule_worker_required_usize(argv, 6)?;
-    let search_strategy = schedule_worker_required_string(argv, 7)?;
-    let search_ordering = schedule_worker_required_ordering(argv, 8)?;
-    let search_cpu_limit = schedule_worker_required_u64(argv, 9)?;
-    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 10)?;
-    let original_args = argv[12..].to_vec();
+    let preprocessing_cores = schedule_worker_required_i32(argv, 6)?;
+    let search_index = schedule_worker_required_usize(argv, 7)?;
+    let search_strategy = schedule_worker_required_string(argv, 8)?;
+    let search_ordering = schedule_worker_required_ordering(argv, 9)?;
+    let search_cpu_limit = schedule_worker_required_u64(argv, 10)?;
+    let stdin_snapshot = schedule_worker_stdin_snapshot(argv, 11)?;
+    let original_args = argv[13..].to_vec();
     if original_args.is_empty() {
         return Err(schedule_worker_usage_error());
     }
@@ -3129,6 +3135,7 @@ fn parse_search_schedule_worker_args(argv: &[String]) -> Result<ScheduleWorkerAr
         preprocessing_strategy,
         preprocessing_ordering,
         preprocessing_cpu_limit,
+        preprocessing_cores,
         mode: InternalScheduleWorkerMode::Search {
             index: search_index,
             strategy: search_strategy,
@@ -3161,6 +3168,12 @@ fn schedule_worker_required_u64(argv: &[String], index: usize) -> Result<u64, Di
         .ok_or_else(schedule_worker_usage_error)
 }
 
+fn schedule_worker_required_i32(argv: &[String], index: usize) -> Result<i32, Diagnostic> {
+    schedule_worker_required_string(argv, index)?
+        .parse::<i32>()
+        .map_err(|_| schedule_worker_usage_error())
+}
+
 fn schedule_worker_required_usize(argv: &[String], index: usize) -> Result<usize, Diagnostic> {
     argv.get(index)
         .and_then(|value| value.parse::<usize>().ok())
@@ -3181,7 +3194,7 @@ fn schedule_worker_usage_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::USAGE_ERROR,
         format!(
-            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>"
+            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> <cores> <stdin-snapshot-or-> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <preprocessing-cores> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>"
         ),
     )
 }
@@ -5205,13 +5218,22 @@ fn finish_run_config(
     config: &EProverConfig,
     status: u8,
 ) -> Result<u8, EProverError> {
-    if config.flags.contains(EProverFlag::ResourceInfo) {
+    if config.flags.contains(EProverFlag::ResourceInfo)
+        && !schedule_worker_suppresses_resource_footer(config)
+    {
         output.write_all(format_resource_usage(current_resource_usage()).as_bytes())?;
     }
     output.flush().map_err(|_error| {
         EProverError::Diagnostic(Diagnostic::new(ErrorCode::FILE_ERROR, OUTPUT_CLOSE_ERROR))
     })?;
     Ok(status)
+}
+
+fn schedule_worker_suppresses_resource_footer(config: &EProverConfig) -> bool {
+    let Some(worker) = config.internal_schedule_worker.as_ref() else {
+        return false;
+    };
+    matches!(worker.mode, InternalScheduleWorkerMode::Search { .. })
 }
 
 fn run_print_strategy<W: Write + ?Sized>(
@@ -5735,7 +5757,7 @@ fn run_proof_search<W: Write + ?Sized>(
         control.heuristic_parms().lambda_demod,
     );
     write_preprocessing_time(output, config)?;
-    if config.flags.contains(EProverFlag::CnfOnly) {
+    if config.flags.contains(EProverFlag::CnfOnly) && internal_search_selection(config).is_none() {
         write_cnf_only_success(output)?;
         write_saturated_output(output, config, &state, None)?;
         write_proof_statistics(
@@ -6041,6 +6063,13 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     } else {
         0
     };
+    if let Some(worker) = internal_worker {
+        let selected = preprocessing_schedule
+            .get_mut(selected_preprocessing_index)
+            .expect("validated schedule worker index must remain present");
+        selected.time_absolute = worker.preprocessing_cpu_limit;
+        selected.cores = worker.preprocessing_cores.max(1);
+    }
     let preproc_selection =
         schedule_heuristic_selection(&preprocessing_schedule, selected_preprocessing_index)?;
     if config.strategy_scheduling || internal_worker.is_some() {
@@ -6102,7 +6131,7 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     let Some(auto_context) = auto_context else {
         return Ok(AutoModeSearchSelection::Continue);
     };
-    if config.flags.contains(EProverFlag::CnfOnly) {
+    if config.flags.contains(EProverFlag::CnfOnly) && config.internal_schedule_worker.is_none() {
         return Ok(AutoModeSearchSelection::Continue);
     }
 
@@ -6290,6 +6319,7 @@ fn schedule_worker_command_args(
         cell.heuristic_name.clone(),
         cell.ordering.c_value().to_string(),
         cell.time_absolute.to_string(),
+        cell.cores.to_string(),
         config
             .schedule_stdin_snapshot
             .as_deref()
@@ -6390,6 +6420,7 @@ fn search_schedule_worker_command_args(
         preprocessing_cell.heuristic_name.clone(),
         preprocessing_cell.ordering.c_value().to_string(),
         preprocessing_cell.time_absolute.to_string(),
+        preprocessing_cell.cores.to_string(),
         index.to_string(),
         cell.heuristic_name.clone(),
         cell.ordering.c_value().to_string(),
@@ -17868,6 +17899,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "PreprocCell",
                 "3",
                 "300",
+                "2",
                 "stdin.snapshot",
                 "--",
                 "eprover",
@@ -17884,6 +17916,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "PreprocCell",
                 "3",
                 "300",
+                "2",
                 "4",
                 "SearchCell",
                 "7",
@@ -17968,6 +18001,7 @@ input_clause(c2,axiom,[++q(X)]).
             "ScheduledCell",
             "7",
             "17",
+            "3",
             "stdin.snapshot",
             "--",
             "eprover",
@@ -17985,6 +18019,7 @@ input_clause(c2,axiom,[++q(X)]).
             to_params::TermOrdering::Lpo4Copy
         );
         assert_eq!(parsed.preprocessing_cpu_limit, 17);
+        assert_eq!(parsed.preprocessing_cores, 3);
         assert_eq!(parsed.mode, InternalScheduleWorkerMode::Preprocessing);
         assert_eq!(parsed.stdin_snapshot.as_deref(), Some("stdin.snapshot"));
         assert_eq!(
@@ -18002,6 +18037,7 @@ input_clause(c2,axiom,[++q(X)]).
             "PreprocCell",
             "3",
             "300",
+            "2",
             "4",
             "SearchCell",
             "7",
@@ -18020,6 +18056,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(parsed.preprocessing_strategy, "PreprocCell");
         assert_eq!(parsed.preprocessing_ordering, to_params::TermOrdering::Kbo6);
         assert_eq!(parsed.preprocessing_cpu_limit, 300);
+        assert_eq!(parsed.preprocessing_cores, 2);
         assert_eq!(
             parsed.mode,
             InternalScheduleWorkerMode::Search {

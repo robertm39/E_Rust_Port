@@ -1,0 +1,27 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_child_inherits_selected_schedule_state": true,
+    "c_nested_search_uses_parent_cell_budget_and_cores": true,
+    "c_retry_uses_descendant_then_self_cpu_clocks": true,
+    "c_schedule_leaf_suppresses_final_resource_footer": true,
+    "c_schedule_parent_prints_resource_footer": true,
+    "fresh_reference_projection_is_exact": true,
+    "integration_pins_cnf_nested_preprocessing_proof": true,
+    "integration_pins_full_search_schedule_budget": true,
+    "integration_pins_snapshotted_stdin": true,
+    "integration_pins_two_resource_footers": true,
+    "prior_duplicate_owner_is_closed": true,
+    "prior_safe_exec_state_transfer_decision_retained": true,
+    "rust_nested_search_uses_rehydrated_budget_and_cores": true,
+    "rust_parent_request_is_explicit": true,
+    "rust_private_protocol_transfers_preprocessing_budget": true,
+    "rust_rehydrates_parent_assigned_schedule_cell": true,
+    "rust_retry_preserves_two_cpu_clocks": true,
+    "rust_search_leaf_suppresses_resource_footer": true,
+    "rust_snapshots_stdin_once_for_exec_workers": true
+  },
+  "passed": 19,
+  "schema_version": 1,
+  "total": 19
+}
