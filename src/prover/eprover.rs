@@ -19524,6 +19524,13 @@ input_clause(c2,axiom,[++q(X)]).
             "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
         );
 
+        let error = process_options(["eprover", "-t", "Optimize"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
+        );
+
         let error = process_options(["eprover", "--term-ordering=RPO"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(

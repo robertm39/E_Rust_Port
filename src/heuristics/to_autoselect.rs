@@ -1363,6 +1363,55 @@ mod tests {
     }
 
     #[test]
+    fn instrumented_c_reference_ordering_search_state_matches() {
+        use std::fmt::Write as _;
+
+        let mask = OrderParmsCell {
+            ordertype: TermOrdering::NoOrdering,
+            to_weight_gen: TOWeightGenMethod::NoMethod,
+            to_prec_gen: TOPrecGenMethod::NoMethod,
+            to_const_weight: W_CONST_NO_WEIGHT,
+            ..OrderParmsCell::default()
+        };
+        let mut ordering = OrderParmsCell {
+            ordertype: TermOrdering::Kbo,
+            to_weight_gen: TOWeightGenMethod::SelectMaximal,
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            to_const_weight: 1,
+            ..OrderParmsCell::default()
+        };
+        let mut index = 0_u64;
+        let mut snapshot = String::new();
+        loop {
+            writeln!(
+                snapshot,
+                "SEQ,{index},{},{},{},{}",
+                ordering.ordertype.c_value(),
+                ordering.to_weight_gen.c_value(),
+                ordering.to_prec_gen.c_value(),
+                ordering.to_const_weight
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+            if !order_next_ordering(&mut ordering, &mask) {
+                break;
+            }
+            index += 1;
+        }
+
+        let digest = snapshot
+            .bytes()
+            .fold(0xCBF2_9CE4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3)
+            });
+        assert_eq!(index + 1, 1_972);
+        assert_eq!(digest, 0x8C88_4832_231F_E663);
+        assert_eq!(ordering.ordertype, TermOrdering::Kbo);
+        assert_eq!(ordering.to_weight_gen, TOWeightGenMethod::SelectMaximal);
+        assert_eq!(ordering.to_prec_gen, TOPrecGenMethod::UnaryFirst);
+        assert_eq!(ordering.to_const_weight, 1);
+    }
+
+    #[test]
     fn helper_strings_cover_auto_ordering_debug_output() {
         let mut params = OrderParmsCell::default();
         init_oparms(&mut params);
