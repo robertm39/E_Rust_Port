@@ -1,0 +1,35 @@
+{
+  "checks": {
+    "c_orphan_check_uses_raw_parent_pointer": true,
+    "stable_ref_has_generation": true,
+    "stable_ref_equality_uses_generation": true,
+    "stable_ref_hash_uses_generation": true,
+    "clause_conversion_captures_generation": true,
+    "cleanup_snapshot_uses_stable_ref_set": true,
+    "selection_compares_exact_stable_ref": true,
+    "selection_uses_processed_id_index": true,
+    "selection_excludes_waiting_child_owners": true,
+    "selection_detaches_unprocessed_owner": true,
+    "hcb_standard_accepts_orphan_predicate": true,
+    "same_id_snapshot_regression_present": true,
+    "same_id_selection_regression_present": true,
+    "end_to_end_orphan_selection_regression_present": true
+  },
+  "expected": {
+    "c_orphan_check_uses_raw_parent_pointer": true,
+    "stable_ref_has_generation": true,
+    "stable_ref_equality_uses_generation": true,
+    "stable_ref_hash_uses_generation": true,
+    "clause_conversion_captures_generation": true,
+    "cleanup_snapshot_uses_stable_ref_set": true,
+    "selection_compares_exact_stable_ref": true,
+    "selection_uses_processed_id_index": true,
+    "selection_excludes_waiting_child_owners": true,
+    "selection_detaches_unprocessed_owner": true,
+    "hcb_standard_accepts_orphan_predicate": true,
+    "same_id_snapshot_regression_present": true,
+    "same_id_selection_regression_present": true,
+    "end_to_end_orphan_selection_regression_present": true
+  },
+  "passed": true
+}

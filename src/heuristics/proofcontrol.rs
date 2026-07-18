@@ -12770,17 +12770,14 @@ mod tests {
     }
 
     #[test]
-    fn compact_parent_liveness_keeps_live_duplicate_ref() {
-        let parent = ClauseDerivationRef::new(4_117, 0);
+    fn compact_parent_liveness_distinguishes_same_id_generations() {
+        let parent = ClauseDerivationRef::new_with_generation(4_117, 0, 41);
+        let stale_alias = ClauseDerivationRef::new_with_generation(4_117, 0, 42);
         let mut snapshot = ParentLivenessSnapshot::default();
         snapshot.live.insert(parent);
 
         assert!(!snapshot.parent_is_dead(DerivationParentRef::Clause(parent)));
-        assert!(
-            snapshot.parent_is_dead(DerivationParentRef::Clause(ClauseDerivationRef::new(
-                4_118, 0
-            )))
-        );
+        assert!(snapshot.parent_is_dead(DerivationParentRef::Clause(stale_alias)));
     }
 
     #[test]
@@ -12797,6 +12794,7 @@ mod tests {
 
         let mut dead_parent = Clause::empty();
         dead_parent.set_ident(4_121);
+        dead_parent.refresh_derivation_generation();
         dead_parent.set_prop(CP_IS_DEAD);
         let dead_ref = ClauseDerivationRef::from(&dead_parent);
         state.archive_mut().insert(dead_parent);
@@ -12816,10 +12814,17 @@ mod tests {
         ));
         let mut live_alias = Clause::empty();
         live_alias.set_ident(4_121);
+        live_alias.refresh_derivation_generation();
+        let live_alias_ref = ClauseDerivationRef::from(&live_alias);
+        assert_ne!(dead_ref, live_alias_ref);
         state.processed_pos_eqns_mut().insert(live_alias);
-        assert!(!selection_parent_is_dead(
+        assert!(selection_parent_is_dead(
             &state,
             DerivationParentRef::Clause(dead_ref)
+        ));
+        assert!(!selection_parent_is_dead(
+            &state,
+            DerivationParentRef::Clause(live_alias_ref)
         ));
         assert!(selection_parent_is_dead(
             &state,
