@@ -1,0 +1,108 @@
+{
+  "all_exact": true,
+  "c": {
+    "ac.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is AC",
+        "% AC handling enabled"
+      ],
+      "statistics": {
+        "Initial clauses": 2,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 2,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "associative.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is associative"
+      ],
+      "statistics": {
+        "Initial clauses": 1,
+        "Initial clauses in saturation": 1,
+        "Parsed axioms": 1,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "commutative.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is commutative",
+        "% AC handling enabled"
+      ],
+      "statistics": {
+        "Initial clauses": 1,
+        "Initial clauses in saturation": 1,
+        "Parsed axioms": 1,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "display_args": [
+    "--lop-in",
+    "--cnf",
+    "--output-level=2",
+    "$FIXTURE"
+  ],
+  "rust": {
+    "ac.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is AC",
+        "% AC handling enabled"
+      ],
+      "statistics": {
+        "Initial clauses": 2,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 2,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "associative.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is associative"
+      ],
+      "statistics": {
+        "Initial clauses": 1,
+        "Initial clauses in saturation": 1,
+        "Parsed axioms": 1,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    },
+    "commutative.p": {
+      "exit_code": 0,
+      "scan_lines": [
+        "% Scanning for AC axioms",
+        "% f is commutative",
+        "% AC handling enabled"
+      ],
+      "statistics": {
+        "Initial clauses": 1,
+        "Initial clauses in saturation": 1,
+        "Parsed axioms": 1,
+        "Processed clauses": 0
+      },
+      "status": "% SZS status Unknown",
+      "stderr": ""
+    }
+  },
+  "schema_version": 1
+}

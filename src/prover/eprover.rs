@@ -24841,6 +24841,67 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_proof_search_reports_associativity_without_ac_activation() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-associativity-status");
+        std::fs::write(&path, "f(f(X,Y),Z)=f(X,f(Y,Z)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let scan_status = "% Scanning for AC axioms\n% f is associative\n";
+        assert!(printed.contains(scan_status));
+        assert!(!printed.contains("% AC handling enabled\n"));
+        assert!(
+            printed.find(scan_status).unwrap()
+                < printed.find("\n% CNFization successful!").unwrap()
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_combined_ac_status() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-combined-ac-status");
+        std::fs::write(
+            &path,
+            "f(f(X,Y),Z)=f(X,f(Y,Z)).\n\
+             f(X,Y)=f(Y,X).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let ac_status = "% Scanning for AC axioms\n% f is AC\n% AC handling enabled\n";
+        assert!(printed.contains(ac_status));
+        assert!(
+            printed.find(ac_status).unwrap() < printed.find("\n% CNFization successful!").unwrap()
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_prints_sat_check_unsat_comment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-sat-check-comment");

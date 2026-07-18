@@ -91,6 +91,7 @@ Source files reviewed: `HEURISTICS/che_axiomscan.h`, `HEURISTICS/che_axiomscan.c
 ### Rust Port Status Notes
 
 - `src/heuristics/axiomscan.rs` ports commutativity and associativity detection over represented unit positive equations, including C's left-weight associativity check shape, signature property mutation, compact `sig->ac_axioms` parent-ref recording on first property transition, and `ClauseSetScanAC` set-order scanning.
+- Compact parents are generation-qualified `ClauseDerivationRef` values. Fresh associative and commutative clauses with the same visible ID remain distinct, are recorded in scan order, and are not duplicated on a repeated scan. Executable associative-only, commutative-only, and combined-AC status/activation fixtures are exact against unchanged C.
 
 ### Change Later
 

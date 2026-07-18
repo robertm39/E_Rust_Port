@@ -350,4 +350,37 @@ mod tests {
         assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
         assert_eq!(bank.signature().ac_axioms(), &[axiom_ref]);
     }
+
+    #[test]
+    fn clause_set_scan_records_distinct_property_parents_in_scan_order() {
+        let (mut bank, f_code) = bank_with_binary_symbol();
+        let x = variable(&bank, -2);
+        let y = variable(&bank, -4);
+        let z = variable(&bank, -6);
+        let xy = binary(&mut bank, f_code, &x, &y);
+        let yz = binary(&mut bank, f_code, &y, &z);
+        let left_assoc = binary(&mut bank, f_code, &xy, &z);
+        let right_assoc = binary(&mut bank, f_code, &x, &yz);
+        let swapped = binary(&mut bank, f_code, &y, &x);
+        let mut assoc = unit_clause(literal(&mut bank, &left_assoc, &right_assoc, true));
+        let mut comm = unit_clause(literal(&mut bank, &xy, &swapped, true));
+        assoc.set_ident(51);
+        comm.set_ident(51);
+        let mut set = ClauseSet::from_clauses([assoc, comm]);
+
+        assert!(clause_set_scan_ac(bank.signature_mut(), &mut set));
+
+        assert!(bank.signature().query_prop(f_code, FP_ASSOCIATIVE));
+        assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
+        let parent_refs = set
+            .iter()
+            .map(ClauseDerivationRef::from)
+            .collect::<Vec<_>>();
+        assert!(parent_refs.iter().all(|parent| parent.generation() != 0));
+        assert_ne!(parent_refs[0], parent_refs[1]);
+        assert_eq!(bank.signature().ac_axioms(), parent_refs);
+
+        assert!(clause_set_scan_ac(bank.signature_mut(), &mut set));
+        assert_eq!(bank.signature().ac_axioms(), parent_refs);
+    }
 }
