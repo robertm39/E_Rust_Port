@@ -29026,6 +29026,42 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_proof_search_applies_equational_bce_across_scratch_bank() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-equational-predicate-bce");
+        std::fs::write(
+            &path,
+            "cnf(equality, axiom, a=b).\n\
+             cnf(positive, axiom, (p(a)|q(a))).\n\
+             cnf(negative, axiom, (~p(a)|~q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--bce=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% BCE start: 3\n% BCE eliminated: 2.\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
+        assert!(printed.contains("(a=b)"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_applies_bce_to_fof_formula_origin_clauses() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-bce");
@@ -29058,6 +29094,48 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
         assert!(printed.contains("% Initial clauses                      : 2\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 0\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_bce_after_first_order_shaped_thf_cnf() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-thf-bce");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(left, axiom, ((p @ a) | (q @ a))).\n\
+             thf(right, axiom, (~(p @ a) | (q @ a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--bce=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        assert!(printed.contains("% Parsed axioms                        : 6\n"));
+        assert!(printed.contains("% Initial clauses                      : 6\n"));
+        assert!(printed.contains("% Removed in clause preprocessing      : 4\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 0\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

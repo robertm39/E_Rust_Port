@@ -2,6 +2,7 @@ use crate::basics::error::Diagnostic;
 use crate::basics::min_heap::MinHeap;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::tautologies::clause_is_tautology_real;
@@ -14,8 +15,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-type ClauseId = i64;
-type SymbolMap = BTreeMap<FunCode, Vec<ClauseId>>;
+type SymbolMap = BTreeMap<FunCode, Vec<ClauseDerivationRef>>;
 type BceTaskCmp = fn(&BceTask, &BceTask) -> Ordering;
 type BceTaskQueue = MinHeap<BceTask, BceTaskCmp>;
 
@@ -27,10 +27,10 @@ pub struct BceEliminationResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BceTask {
-    orig_id: ClauseId,
+    orig_ref: ClauseDerivationRef,
     parent_index: usize,
     lit_index: usize,
-    candidates: Option<Vec<ClauseId>>,
+    candidates: Option<Vec<ClauseDerivationRef>>,
     processed_cands: usize,
 }
 
@@ -130,8 +130,9 @@ fn make_sym_map(
                 result.entry(-f_code).or_default().clear();
             } else {
                 let clauses = result.entry(f_code).or_default();
-                if clauses.last().copied() != Some(clause.ident()) {
-                    clauses.push(clause.ident());
+                let clause_ref = ClauseDerivationRef::from(clause);
+                if clauses.last().copied() != Some(clause_ref) {
+                    clauses.push(clause_ref);
                 }
             }
         }
@@ -166,7 +167,7 @@ fn make_bce_queue(
                 continue;
             }
             task_queue.add_ptr(BceTask {
-                orig_id: clause.ident(),
+                orig_ref: ClauseDerivationRef::from(clause),
                 parent_index,
                 lit_index,
                 candidates: candidates.cloned(),
@@ -187,12 +188,14 @@ fn do_eliminate_clauses(
     bank: &mut TermBank,
     tmp_bank: &mut TermBank,
 ) -> Result<i64, Diagnostic> {
-    let mut blocker_map: BTreeMap<ClauseId, Vec<BceTask>> = BTreeMap::new();
+    let mut blocker_map: BTreeMap<ClauseDerivationRef, Vec<BceTask>> = BTreeMap::new();
     let mut archived = BTreeSet::new();
     let mut eliminated = 0;
 
     while let Some(mut min_task) = task_queue.pop_min() {
-        if archived.contains(&min_task.orig_id) || passive.find_by_id(min_task.orig_id).is_none() {
+        if archived.contains(&min_task.orig_ref)
+            || passive.find_by_derivation_ref(min_task.orig_ref).is_none()
+        {
             continue;
         }
 
@@ -210,12 +213,12 @@ fn do_eliminate_clauses(
             .as_ref()
             .is_none_or(|candidates| min_task.processed_cands == candidates.len())
         {
-            if let Some(clause) = passive.extract_by_id(min_task.orig_id) {
-                archived.insert(min_task.orig_id);
+            if let Some(clause) = passive.extract_by_derivation_ref(min_task.orig_ref) {
+                archived.insert(min_task.orig_ref);
                 archive.insert(clause);
                 eliminated += 1;
             }
-            if let Some(blocked) = blocker_map.remove(&min_task.orig_id) {
+            if let Some(blocked) = blocker_map.remove(&min_task.orig_ref) {
                 for mut task in blocked.into_iter().rev() {
                     task.processed_cands += 1;
                     task_queue.add_ptr(task);
@@ -233,7 +236,7 @@ fn do_eliminate_clauses(
 fn check_candidates(
     task: &mut BceTask,
     passive: &ClauseSet,
-    archived: &BTreeSet<ClauseId>,
+    archived: &BTreeSet<ClauseDerivationRef>,
     fresh_clauses: &[Clause],
     has_eq: bool,
     bank: &mut TermBank,
@@ -244,14 +247,15 @@ fn check_candidates(
     };
 
     while task.processed_cands < candidates.len() {
-        let candidate_id = candidates[task.processed_cands];
-        let candidate_blocks = if candidate_id == task.orig_id || archived.contains(&candidate_id) {
-            false
-        } else if let Some(candidate) = passive.find_by_id(candidate_id) {
-            !check_blockedness(task, candidate, fresh_clauses, has_eq, bank, tmp_bank)?
-        } else {
-            false
-        };
+        let candidate_ref = candidates[task.processed_cands];
+        let candidate_blocks =
+            if candidate_ref == task.orig_ref || archived.contains(&candidate_ref) {
+                false
+            } else if let Some(candidate) = passive.find_by_derivation_ref(candidate_ref) {
+                !check_blockedness(task, candidate, fresh_clauses, has_eq, bank, tmp_bank)?
+            } else {
+                false
+            };
 
         if candidate_blocks {
             break;
@@ -493,11 +497,11 @@ fn signed_pred_code(literal: &Eqn) -> FunCode {
     literal.left().f_code() * if literal.is_positive() { 1 } else { -1 }
 }
 
-fn is_blocked_stack(stack: Option<&Vec<ClauseId>>) -> bool {
+fn is_blocked_stack(stack: Option<&Vec<ClauseDerivationRef>>) -> bool {
     stack.is_some_and(Vec::is_empty)
 }
 
-fn occ_count(stack: Option<&Vec<ClauseId>>) -> usize {
+fn occ_count(stack: Option<&Vec<ClauseDerivationRef>>) -> usize {
     stack.map_or(0, Vec::len)
 }
 
@@ -517,6 +521,7 @@ mod tests {
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::ClauseDerivationRef;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::lambda::apply_terms;
@@ -605,6 +610,10 @@ mod tests {
         set.iter().map(Clause::ident).collect()
     }
 
+    fn refs(set: &ClauseSet) -> Vec<ClauseDerivationRef> {
+        set.iter().map(ClauseDerivationRef::from).collect()
+    }
+
     #[test]
     fn bce_moves_clause_with_no_opposite_candidates() {
         let mut bank = test_bank();
@@ -648,6 +657,32 @@ mod tests {
 
         assert_eq!(result.eliminated_count, 0);
         assert_eq!(ids(&passive), vec![positive_id, negative_id]);
+        assert!(archive.is_empty());
+    }
+
+    #[test]
+    fn bce_distinguishes_same_id_clause_generations() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "bce_same_id_a");
+        let p_a = predicate_atom(&mut bank, "bce_same_id_p", &[a]);
+        let mut positive = clause(vec![predicate_literal(&mut bank, &p_a, true)]);
+        let mut negative = clause(vec![predicate_literal(&mut bank, &p_a, false)]);
+        positive.set_ident(41);
+        positive.refresh_derivation_generation();
+        negative.set_ident(41);
+        negative.refresh_derivation_generation();
+        let positive_ref = ClauseDerivationRef::from(&positive);
+        let negative_ref = ClauseDerivationRef::from(&negative);
+        let mut passive = ClauseSet::from_clauses([positive, negative]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+
+        let result =
+            eliminate_blocked_clauses(&mut passive, &mut archive, -1, &mut bank, &mut tmp).unwrap();
+
+        assert_eq!(result.eliminated_count, 0);
+        assert!(refs(&passive).contains(&positive_ref));
+        assert!(refs(&passive).contains(&negative_ref));
         assert!(archive.is_empty());
     }
 
@@ -775,5 +810,33 @@ mod tests {
         assert!(passive.is_empty());
         assert_eq!(archive.len(), 2);
         assert_eq!(output, "% BCE start: 2\n% BCE eliminated: 2.\n");
+    }
+
+    #[test]
+    fn bce_equational_checker_rehomes_predicate_truth_terms() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "bce_eq_pred_a");
+        let b = object_const(&mut bank, "bce_eq_pred_b");
+        let p_a = predicate_atom(&mut bank, "bce_eq_pred_p", std::slice::from_ref(&a));
+        let q_a = predicate_atom(&mut bank, "bce_eq_pred_q", std::slice::from_ref(&a));
+        let equality = clause(vec![equation_literal(&mut bank, &a, &b, true)]);
+        let positive = clause(vec![
+            predicate_literal(&mut bank, &p_a, true),
+            predicate_literal(&mut bank, &q_a, true),
+        ]);
+        let negative = clause(vec![
+            predicate_literal(&mut bank, &p_a, false),
+            predicate_literal(&mut bank, &q_a, false),
+        ]);
+        let mut passive = ClauseSet::from_clauses([equality, positive, negative]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+
+        let result =
+            eliminate_blocked_clauses(&mut passive, &mut archive, -1, &mut bank, &mut tmp).unwrap();
+
+        assert_eq!(result.eliminated_count, 2);
+        assert_eq!(passive.members(), 1);
+        assert_eq!(archive.members(), 2);
     }
 }
