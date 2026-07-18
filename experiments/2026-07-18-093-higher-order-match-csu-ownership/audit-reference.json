@@ -1,0 +1,42 @@
+{
+  "c_csu_call_sites": {
+    "eprover/CLAUSES/ccl_eqnresolution.c": 1,
+    "eprover/CLAUSES/ccl_factor.c": 1,
+    "eprover/CONTROL/cco_paramodulation.c": 2
+  },
+  "checks": {
+    "c_csu_call_sites_exact": true,
+    "owner_cache_work_remains_separately_tracked": true,
+    "rust_csu_call_sites_exact": true,
+    "src/clauses/eqn.rs:subsume_term_pair_directed_with_bank": true,
+    "src/clauses/eqn.rs:unify_term_pair_directed_with_bank": true,
+    "src/clauses/eqnresolution.rs:mutable_bank_iteration": true,
+    "src/clauses/factor.rs:mutable_bank_iteration": true,
+    "src/clauses/paramodulation.rs:mutable_bank_iteration": true,
+    "src/clauses/subsumption.rs:eqn_topsubsumes_termpair_with_bank": true,
+    "src/clauses/subsumption.rs:literal_matches_directed_with_subst_with_bank": true,
+    "src/clauses/unit_simplify.rs:unit_literal_side_matches_top_pair_with_bank": true,
+    "unbanked_match_confined": true,
+    "unbanked_mgu_confined": true,
+    "unfold_defs_unbanked_is_fo_only": true
+  },
+  "owner_cache_beads": {
+    "E_Rust_Port-j76.3.643": "open",
+    "E_Rust_Port-j76.4.1313": "open"
+  },
+  "rust_csu_call_sites": {
+    "src/clauses/eqnresolution.rs": 1,
+    "src/clauses/factor.rs": 1,
+    "src/clauses/paramodulation.rs": 2
+  },
+  "sha256": "d5208301e10f70dc40d210b817a3f106e863f407baab6f61b3f43a38f525b66e",
+  "unbanked_match_call_sites": {
+    "src/clauses/eqn.rs": 2,
+    "src/clauses/subsumption.rs": 6,
+    "src/clauses/unfold_defs.rs": 1,
+    "src/clauses/unit_simplify.rs": 2
+  },
+  "unbanked_mgu_call_sites": {
+    "src/clauses/eqn.rs": 2
+  }
+}
