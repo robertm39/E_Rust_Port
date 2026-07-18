@@ -1,0 +1,94 @@
+{
+  "case_count": 16,
+  "cases": {
+    "app_encode": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n%-- $i > $o.\ntff(typedeclN, type, type_9: $tType).\n%-- $o > $o.\ntff(typedeclN, type, type_7: $tType).\n%-- ($o * $o) > $o.\ntff(typedeclN, type, type_8: $tType).\n%-- (person * person) > person.\ntff(typedeclN, type, type_11: $tType).\n%-- person > person.\ntff(typedeclN, type, type_12: $tType).\n%-- person.\ntff(typedeclN, type, type_10: $tType).\ntff(symboltypedecl2, type, a: type_10).\ntff(symboltypedecl3, type, b: type_10).\ntff(symboltypedecl4, type, c: type_10).\ntff(symboltypedecl5, type, h: type_11).\ntff(symboltypedecl6, type, app_12_10_10: (type_12 * type_10) > type_10).\ntff(symboltypedecl7, type, app_11_10_12: (type_11 * type_10) > type_12).\ntff(encoded, axiom, app_12_10_10(app_11_10_12(h,a),b)=c).\n"
+    },
+    "custom_heuristic": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n% Proof found!\n% SZS status Unsatisfiable\n"
+    },
+    "fool_unroll_disabled": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\nf((p(a)&q(a)))=c <- .\n\n% Unprocessed negative unit clauses:\n\n% Unprocessed non-unit clauses:\n\n\n"
+    },
+    "fool_unroll_enabled": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\n\n% Unprocessed negative unit clauses:\n\n% Unprocessed non-unit clauses:\nf($false)=c; p(a) <- .\nf($false)=c; q(a) <- .\nf($true)=c <- p(a), q(a).\n\n\n"
+    },
+    "free_number_allowed": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "\n% Parsing successful!\n% SZS status Unknown\n"
+    },
+    "free_number_rejected": {
+      "exit": 3,
+      "stderr": "eprover: <repo>/experiments/2026-07-18-096-definition-encoding-option-effects/free-number.lop:1:(Column 3):(just read '('): Number cannot have argument list (consider --free-numbers)\n",
+      "stdout": ""
+    },
+    "free_object_allowed": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "\n% Parsing successful!\n% SZS status Unknown\n"
+    },
+    "free_object_rejected": {
+      "exit": 3,
+      "stderr": "eprover: <repo>/experiments/2026-07-18-096-definition-encoding-option-effects/free-object.lop:1:(Column 6):(just read '('): Object cannot have argument list (consider --free-objects)\n",
+      "stdout": ""
+    },
+    "invalid_arg_cong": {
+      "exit": 0,
+      "stderr": "eprover: neg-ext excepts either all, max or off\n",
+      "stdout": ""
+    },
+    "invalid_definitional_cnf": {
+      "exit": 5,
+      "stderr": "eprover: Option --definitional-cnf expects integer argument from {0...9223372036854775807} but got -1\n",
+      "stdout": ""
+    },
+    "invalid_fool_unroll": {
+      "exit": 5,
+      "stderr": "eprover: --fool-unroll expects 'true' or 'false' instead of 'maybe'\n",
+      "stdout": ""
+    },
+    "invalid_miniscope_limit": {
+      "exit": 5,
+      "stderr": "eprover: Option --miniscope-limit expects integer argument from {0...9223372036854775807} but got -1\n",
+      "stdout": ""
+    },
+    "invalid_neg_ext": {
+      "exit": 0,
+      "stderr": "eprover: neg-ext excepts either all or max\n",
+      "stdout": ""
+    },
+    "invalid_pos_ext": {
+      "exit": 0,
+      "stderr": "eprover: pos-ext excepts either all or max\n",
+      "stdout": ""
+    },
+    "strategy_overrides": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n{\n   {\n      ordertype:               KBO6\n      to_weight_gen:           none\n      to_prec_gen:             none\n      rewrite_strong_rhs_inst: false\n      to_pre_prec:             \"\"\n      conj_only_mod:           0\n      conj_axiom_mod:          0\n      axiom_only_mod:          0\n      skolem_mod:              0\n      defpred_mod:             0\n      force_kbo_var_weight:    false\n      to_pre_weights:          \"\"\n      to_const_weight:         0\n      to_defs_min:             false\n      lit_cmp:                 1\n      lam_w:                   20\n      db_w:                    10\n      ho_order_kind:           lfho\n   }\n   no_preproc:                     false\n   eqdef_maxclauses:               20000\n   eqdef_incrlimit:                20\n   formula_def_limit:              31\n   miniscope_limit:                17\n   sine:                           \"None\"\n   add_goal_defs_pos:             false\n   add_goal_defs_neg:             false\n   add_goal_defs_subterms:        false\n   heuristic_name:                Default\n   heuristic_def:                 \"\"\n   prefer_initial_clauses:         false\n   selection_strategy:             NoSelection\n   pos_lit_sel_min:                0\n   pos_lit_sel_max:                9223372036854775807\n   neg_lit_sel_min:                0\n   neg_lit_sel_max:                9223372036854775807\n   all_lit_sel_min:                0\n   all_lit_sel_max:                9223372036854775807\n   weight_sel_min:                 0\n   select_on_proc_only:            false\n   inherit_paramod_lit:            false\n   inherit_goal_pm_lit:            false\n   inherit_conj_pm_lit:            false\n   enable_eq_factoring:            true\n   enable_neg_unit_paramod:        true\n   enable_given_forward_simpl:     true\n   pm_type:                        ParamodPlain\n   ac_handling:                    1\n   ac_res_aggressive:              true\n   forward_context_sr:             false\n   forward_context_sr_aggressive:  false\n   backward_context_sr:            false\n   forward_subsumption_aggressive: false\n   forward_demod:                  2\n   prefer_general:                 false\n   condensing:                     false\n   condensing_aggressive:          false\n   er_varlit_destructive:          false\n   er_strong_destructive:          false\n   er_aggressive:                  false\n   split_clauses:                  0\n   split_method:                   0\n   split_aggressive:               false\n   split_fresh_defs:               true\n   diseq_decomposition:            0\n   diseq_decomp_maxarity:          9223372036854775807\n   rw_bw_index_type:               FP7\n   pm_from_index_type:             FP7\n   pm_into_index_type:             FP7\n   sat_check_grounding:            NoGrounding\n   sat_check_step_limit:           9223372036854775807\n   sat_check_size_limit:           9223372036854775807\n   sat_check_ttinsert_limit:       9223372036854775807\n   sat_check_normconst:            false\n   sat_check_normalize:            false\n   sat_check_decision_limit:       10000\n   filter_orphans_limit:           9223372036854775807\n   forward_contract_limit:         9223372036854775807\n   delete_bad_limit:               9223372036854775807\n   mem_limit:                      0\n   watchlist_simplify:             true\n   watchlist_is_static:            false\n   use_tptp_sos:                   false\n   presat_interreduction:          false\n   detsort_bw_rw:                  false\n   detsort_tmpset:                 false\n   arg_cong:                       max\n   neg_ext:                        all\n   pos_ext:                        off\n   ext_rules_max_depth:            -1\n   inverse_recognition:            false\n   replace_inj_defs:               false\n   lift_lambdas:                  true\n   lambda_to_forall:              true\n   unroll_only_formulas:          true\n   elim_leibniz_max_depth:        -1\n   prim_enum_mode:                pragmatic\n   prim_enum_max_depth:           -1\n   inst_choice_max_depth:         -1\n   local_rw:                      false\n   prune_args:                    false\n   preinstantiate_induction:      false\n   fool_unroll:                   false\n   func_proj_limit:               0\n   imit_limit:                    0\n   ident_limit:                   0\n   elim_limit:                    0\n   unif_mode:                     single\n   pattern_oracle:                true\n   fixpoint_oracle:               true\n   max_unifiers:                  4\n   max_unif_steps:                256\n}\n"
+    },
+    "typed_clause_output": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n\n% CNFization successful!\n% SZS status Unknown\n% Processed positive unit clauses:\n\n% Processed negative unit clauses:\n\n% Processed non-unit clauses:\n\n% Unprocessed positive unit clauses:\nf(a:$i):$i=b:$i <- .\n\n% Unprocessed negative unit clauses:\n <- f(a:$i):$i=b:$i.\n\n% Unprocessed non-unit clauses:\n\n\n"
+    }
+  },
+  "effects": {
+    "app_encode_symbols": true,
+    "fool_unroll_changes_cnf": true,
+    "free_number_gate": true,
+    "free_object_gate": true,
+    "typed_clause_annotations": true
+  },
+  "mismatches": [],
+  "sha256": "44adc26c995379a7d4d0802e7a6de9bb55db44883b08b0a4119e22d08250c196"
+}

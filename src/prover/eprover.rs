@@ -4600,7 +4600,7 @@ fn parse_ext_inference_mode(
         "max" => Ok(ExtInferenceType::MaxLits),
         "off" => Ok(ExtInferenceType::NoLits),
         _ => Err(Diagnostic::new(
-            ErrorCode::USAGE_ERROR,
+            ErrorCode::NO_ERROR,
             ext_inference_error_message(option),
         )),
     }
@@ -19129,15 +19129,15 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
         let error = process_options(["eprover", "--arg-cong=bad"]).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "neg-ext excepts either all, max or off");
 
         let error = process_options(["eprover", "--neg-ext=bad"]).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "neg-ext excepts either all or max");
 
         let error = process_options(["eprover", "--pos-ext=bad"]).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "pos-ext excepts either all or max");
 
         let error = process_options(["eprover", "--satcheck-proc-interval=0"]).unwrap_err();
@@ -22932,7 +22932,12 @@ input_clause(c2,axiom,[++q(X)]).
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("Number cannot have argument list"));
+        assert_eq!(
+            error.message(),
+            format!(
+                "{path_arg}:1:(Column 3):(just read '('): Number cannot have argument list (consider --free-numbers)"
+            )
+        );
         assert!(rejected_stdout.is_empty());
         assert!(rejected_stderr.is_empty());
 

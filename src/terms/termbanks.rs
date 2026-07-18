@@ -2024,7 +2024,7 @@ impl TermBank {
         }
 
         if scanner.test_tok(TokenType::OPEN_BRACKET) && check_symbol_properties {
-            reject_term_bank_distinct_argument_list(&self.sig, id_type)?;
+            reject_term_bank_distinct_argument_list(scanner, &self.sig, id_type)?;
         }
         let existing_code = self.sig.find_f_code(name.as_ref());
         let symbol_type = if existing_code == 0 {
@@ -2080,7 +2080,7 @@ impl TermBank {
         }
 
         if scanner.test_tok(TokenType::OPEN_BRACKET) && check_distinct_argument_lists {
-            reject_term_bank_distinct_argument_list(&self.sig, id_type)?;
+            reject_term_bank_distinct_argument_list(scanner, &self.sig, id_type)?;
         }
         let args = self.parse_simple_arg_list_opt(scanner, check_distinct_argument_lists)?;
         let arity = i32::try_from(args.len()).map_err(|_| {
@@ -4992,7 +4992,10 @@ mod tests {
             .parse_term_with_distinct_checks(&mut number)
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("Number cannot have argument list"));
+        assert_eq!(
+            error.message(),
+            "Parsing a user provided string: \"12(a)\":1:(Column 3):(just read '('): Number cannot have argument list (consider --free-numbers)"
+        );
 
         let mut rational_bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let mut rational = Scanner::from_user_string("3/4(a)", false).unwrap();
@@ -5023,7 +5026,10 @@ mod tests {
             .parse_term_with_distinct_checks(&mut object)
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("Object cannot have argument list"));
+        assert_eq!(
+            error.message(),
+            "Parsing a user provided string: \"\"obj\"(a)\":1:(Column 6):(just read '('): Object cannot have argument list (consider --free-objects)"
+        );
     }
 
     #[test]
