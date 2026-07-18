@@ -1,0 +1,22 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_combines_sine_and_relevance_removals": true,
+    "c_moves_clause_and_formula_owners": true,
+    "c_replaces_both_proof_state_owners": true,
+    "c_reports_combined_owner_delta": true,
+    "c_sine_then_relevance_then_formula_cnf": true,
+    "permanent_proof_search_statistics_regression": true,
+    "permanent_proof_state_formula_regression": true,
+    "permanent_relevance_data_formula_regression": true,
+    "retained_order_reference_matches": true,
+    "retained_owner_reference_matches": true,
+    "rust_combines_sine_and_relevance_removals": true,
+    "rust_prunes_clause_and_formula_owners_together": true,
+    "rust_sine_then_relevance_then_formula_cnf": true,
+    "rust_threads_combined_count_to_statistics": true
+  },
+  "passed": 14,
+  "schema_version": 1,
+  "total": 14
+}
