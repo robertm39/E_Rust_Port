@@ -116,10 +116,10 @@ use crate::heuristics::new_autoschedule::{
 };
 use crate::heuristics::proofcontrol::{
     preinstantiate_induction, proof_control_init_with_formula_axioms,
-    proof_state_filter_unprocessed, proof_state_init_global_indices,
-    proof_state_init_watchlist_global_indices, proof_state_init_with_docs_and_output,
-    proof_state_init_with_output, proof_state_insert_watchlist_global_indices,
-    proof_state_reset_processed_with_global_indices,
+    proof_state_filter_unprocessed, proof_state_filter_unprocessed_with_docs,
+    proof_state_init_global_indices, proof_state_init_watchlist_global_indices,
+    proof_state_init_with_docs_and_output, proof_state_init_with_output,
+    proof_state_insert_watchlist_global_indices, proof_state_reset_processed_with_global_indices,
     proof_state_reset_processed_with_global_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_docs,
     proof_state_saturate_with_global_and_watchlist_indices_and_output, ProofControl,
@@ -5769,7 +5769,10 @@ fn run_proof_search<W: Write + ?Sized>(
     if hard_time_limit_expired_in_saturation(&outcome) {
         return finalize_hard_time_limit_stop(output, hard_timeout_stderr);
     }
-    if let Some(filtered_empty) = filter_saturated_unprocessed(config, &mut state, &mut control)? {
+    let (filtered_empty, filtered_next_doc_ident) =
+        filter_saturated_unprocessed(output, config, next_doc_ident, &mut state, &mut control)?;
+    next_doc_ident = filtered_next_doc_ident;
+    if let Some(filtered_empty) = filtered_empty {
         outcome = SaturateOutcome::Returned {
             clause: Box::new(filtered_empty),
             reason: SaturateReturnReason::Filter,
@@ -6806,16 +6809,35 @@ fn run_presaturation_interreduction_with_indices<W: Write + ?Sized>(
     }
 }
 
-fn filter_saturated_unprocessed(
+fn filter_saturated_unprocessed<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
+    start_doc_ident: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
-) -> Result<Option<crate::clauses::clause::Clause>, EProverError> {
+) -> Result<(Option<crate::clauses::clause::Clause>, i64), EProverError> {
     if !config.flags.contains(EProverFlag::FilterSaturated) {
-        return Ok(None);
+        return Ok((None, start_doc_ident));
     }
-    proof_state_filter_unprocessed(state, control, &config.filter_saturated_descriptor)
-        .map_err(Into::into)
+    if config.output_level >= 2 {
+        let mut session = clause_proof_doc_session(config, start_doc_ident)?;
+        let empty = {
+            let mut fmt_output = ConfiguredFmtOutput { output };
+            proof_state_filter_unprocessed_with_docs(
+                &mut fmt_output,
+                &mut session,
+                state,
+                control,
+                &config.filter_saturated_descriptor,
+            )?
+        };
+        let next_doc_ident = session.id_source.current_ident().saturating_add(1);
+        Ok((empty, next_doc_ident))
+    } else {
+        let empty =
+            proof_state_filter_unprocessed(state, control, &config.filter_saturated_descriptor)?;
+        Ok((empty, start_doc_ident))
+    }
 }
 
 fn parse_input_files_into_axioms(
@@ -32339,6 +32361,51 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
                 default_proof_search_prefix()
             )
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_config_filter_saturated_continues_proof_doc_session() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-filter-saturated-docs");
+        std::fs::write(
+            &path,
+            "cnf(rewrite, axiom, (h(f(X))=h(X))).\n\
+             cnf(target, axiom, (p(h(f(b)))|p(h(b)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let EProverAction::Run(mut config) = process_options([
+            "eprover",
+            "--no-preprocessing",
+            "--no-generation",
+            "--processed-clauses-limit=1",
+            "--output-level=2",
+            "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+            path_arg.as_str(),
+        ])
+        .unwrap() else {
+            panic!("proof-search options should produce a run action");
+        };
+        config.filter_saturated_descriptor = "F".to_owned();
+        config.flags.set(EProverFlag::FilterSaturated);
+        let mut stdout = Vec::new();
+
+        let status = run_config(&mut stdout, &config).unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status(), "{printed}");
+        let minimize = printed
+            .lines()
+            .find(|line| line.contains("inference(cn"))
+            .expect("post-filter minimization proof step should be rendered");
+        assert!(minimize.starts_with("cnf(c_0_5,"), "{printed}");
+        let survivor = printed
+            .lines()
+            .find(|line| line.contains("p(h(b))") && line.contains("['exists']"))
+            .expect("filtered survivor should be quoted for the saturated output");
+        assert!(survivor.starts_with("cnf(c_0_7,"), "{printed}");
+        assert!(survivor.contains("c_0_5"), "{printed}");
         std::fs::remove_file(&path).unwrap();
     }
 

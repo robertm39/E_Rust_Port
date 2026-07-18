@@ -2823,6 +2823,64 @@ pub fn proof_state_forward_contract_set(
     count_eliminated: &mut u64,
     terminate_on_empty: bool,
 ) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_forward_contract_set_impl::<String>(
+        state,
+        control,
+        set,
+        non_unit_subsumption,
+        level,
+        count_eliminated,
+        terminate_on_empty,
+        None,
+    )
+}
+
+/// Applies C `ForwardContractSet` while emitting represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`proof_state_forward_contract_keep_with_docs`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible set contraction keeps the proof-documentation session explicit"
+)]
+pub fn proof_state_forward_contract_set_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+    count_eliminated: &mut u64,
+    terminate_on_empty: bool,
+) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_forward_contract_set_impl(
+        state,
+        control,
+        set,
+        non_unit_subsumption,
+        level,
+        count_eliminated,
+        terminate_on_empty,
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible set contraction keeps control flags and optional docs together"
+)]
+fn proof_state_forward_contract_set_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+    count_eliminated: &mut u64,
+    terminate_on_empty: bool,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<Option<Clause>, Diagnostic> {
     let mut rebuilt = ClauseSet::new();
     while let Some(mut clause) = set.extract_first() {
         let mut counts = ForwardContractCounts::default();
@@ -2832,13 +2890,21 @@ pub fn proof_state_forward_contract_set(
             condense_clause: false,
             level,
         };
-        let contracted = match proof_state_forward_contract_keep(
-            state,
-            control,
-            &mut clause,
-            &mut counts,
-            options,
-        ) {
+        let contracted_result = match doc_context.as_mut() {
+            Some((output, session)) => proof_state_forward_contract_keep_with_docs(
+                output,
+                session,
+                state,
+                control,
+                &mut clause,
+                &mut counts,
+                options,
+            ),
+            None => {
+                proof_state_forward_contract_keep(state, control, &mut clause, &mut counts, options)
+            }
+        };
+        let contracted = match contracted_result {
             Ok(contracted) => contracted,
             Err(err) => {
                 rebuilt.insert(clause);
@@ -3310,8 +3376,38 @@ pub fn proof_state_filter_unprocessed(
     control: &mut ProofControl,
     desc: &str,
 ) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_filter_unprocessed_impl::<String>(state, control, desc, None)
+}
+
+/// Applies C `ProofStateFilterUnprocessed` while emitting represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from documenting forward contraction.
+pub fn proof_state_filter_unprocessed_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    desc: &str,
+) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_filter_unprocessed_impl(state, control, desc, Some((output, session)))
+}
+
+fn proof_state_filter_unprocessed_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    desc: &str,
+    doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<Option<Clause>, Diagnostic> {
     let mut unprocessed = std::mem::take(state.unprocessed_mut());
-    let result = proof_state_filter_unprocessed_set(state, control, &mut unprocessed, desc);
+    let result = proof_state_filter_unprocessed_set_impl(
+        state,
+        control,
+        &mut unprocessed,
+        desc,
+        doc_context,
+    );
     *state.unprocessed_mut() = unprocessed;
     result
 }
@@ -3326,6 +3422,16 @@ pub fn proof_state_filter_unprocessed_set(
     control: &mut ProofControl,
     set: &mut ClauseSet,
     desc: &str,
+) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_filter_unprocessed_set_impl::<String>(state, control, set, desc, None)
+}
+
+fn proof_state_filter_unprocessed_set_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    desc: &str,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<Option<Clause>, Diagnostic> {
     for op in desc.bytes() {
         let empty = match op {
@@ -3345,6 +3451,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 false,
                 RewriteLevel::NoRewrite,
+                &mut doc_context,
             )?,
             b'N' => proof_state_filter_contract_step(
                 state,
@@ -3352,6 +3459,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 true,
                 RewriteLevel::NoRewrite,
+                &mut doc_context,
             )?,
             b'r' => proof_state_filter_contract_step(
                 state,
@@ -3359,6 +3467,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 false,
                 RewriteLevel::RuleRewrite,
+                &mut doc_context,
             )?,
             b'R' => proof_state_filter_contract_step(
                 state,
@@ -3366,6 +3475,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 true,
                 RewriteLevel::RuleRewrite,
+                &mut doc_context,
             )?,
             b'f' => proof_state_filter_contract_step(
                 state,
@@ -3373,6 +3483,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 false,
                 RewriteLevel::FullRewrite,
+                &mut doc_context,
             )?,
             b'F' => proof_state_filter_contract_step(
                 state,
@@ -3380,6 +3491,7 @@ pub fn proof_state_filter_unprocessed_set(
                 set,
                 true,
                 RewriteLevel::FullRewrite,
+                &mut doc_context,
             )?,
             _ => None,
         };
@@ -3390,23 +3502,37 @@ pub fn proof_state_filter_unprocessed_set(
     Ok(None)
 }
 
-fn proof_state_filter_contract_step(
+fn proof_state_filter_contract_step<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     set: &mut ClauseSet,
     non_unit_subsumption: bool,
     level: RewriteLevel,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<Option<Clause>, Diagnostic> {
     let mut count = 0;
-    let empty = proof_state_forward_contract_set(
-        state,
-        control,
-        set,
-        non_unit_subsumption,
-        level,
-        &mut count,
-        true,
-    )?;
+    let empty = match doc_context.as_mut() {
+        Some((output, session)) => proof_state_forward_contract_set_with_docs(
+            output,
+            session,
+            state,
+            control,
+            set,
+            non_unit_subsumption,
+            level,
+            &mut count,
+            true,
+        )?,
+        None => proof_state_forward_contract_set(
+            state,
+            control,
+            set,
+            non_unit_subsumption,
+            level,
+            &mut count,
+            true,
+        )?,
+    };
     state.statistics_mut().proc_trivial_count += count;
     Ok(empty)
 }
@@ -9712,11 +9838,11 @@ mod tests {
         proof_state_eval_clause_set, proof_state_filter_unprocessed,
         proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_bank, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
-        proof_state_generate_new_clauses_with_docs,
+        proof_state_forward_contract_set_with_docs, proof_state_forward_modify_clause,
+        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_bank,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs,
         proof_state_immediate_clausification, proof_state_immediate_clausification_with_docs,
@@ -12597,6 +12723,52 @@ mod tests {
             set.iter().map(Clause::ident).collect::<Vec<_>>(),
             vec![4_091]
         );
+    }
+
+    #[test]
+    fn proof_state_forward_contract_set_with_docs_emits_modification_step() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let first = typed_const(terms, "pc_forward_set_doc_a");
+            let second = typed_const(terms, "pc_forward_set_doc_b");
+            let positive = literal(terms, &first, &second, true);
+            let duplicate = literal(terms, &second, &first, true);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![positive, duplicate]));
+            clause.set_ident(4_092);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            clause
+        };
+        let mut set = ClauseSet::new();
+        set.insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+        let mut eliminated = 0;
+
+        let empty = proof_state_forward_contract_set_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut set,
+            false,
+            RewriteLevel::RuleRewrite,
+            &mut eliminated,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(eliminated, 0);
+        assert_eq!(set.members(), 1);
+        let survivor = set.iter().next().expect("contracted clause should survive");
+        assert_eq!(survivor.ident(), 1);
+        assert_eq!(survivor.literal_number(), 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("cn(4092)"));
     }
 
     #[test]
