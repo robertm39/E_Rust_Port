@@ -264,9 +264,10 @@ fn hcb_admin_error(scanner: &Scanner, message: &str) -> Diagnostic {
 mod tests {
     use super::{
         hcb_admin_add_hcb, hcb_admin_alloc, hcb_admin_find_hcb, heuristic_def_list_parse,
-        heuristic_def_parse, heuristic_parse, HcbAdmin,
+        heuristic_def_parse, heuristic_parse, heuristic_parse_with_context, HcbAdmin,
     };
-    use crate::heuristics::wfcbadmin::{weight_fun_parse, WfcbAdmin};
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::heuristics::wfcbadmin::{weight_fun_parse, WeightParseContext, WfcbAdmin};
     use crate::inout::scanner::Scanner;
 
     fn scanner(source: &str) -> Scanner {
@@ -358,6 +359,29 @@ mod tests {
         assert_eq!(hcb.select_switch(1), Some(3));
         assert_eq!(hcb.select_switch(2), Some(6));
         assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn heuristic_parse_threads_proof_state_context_to_inline_weight_defs() {
+        let axioms = ClauseSet::new();
+        let context = WeightParseContext::new(&axioms);
+        let mut wfcbs = WfcbAdmin::new();
+        let mut input = scanner("(1*StaggeredWeight(ConstPrio,1.0)) tail");
+
+        let hcb = heuristic_parse_with_context(&mut input, &mut wfcbs, context)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(wfcbs.len(), 1);
+        assert_eq!(wfcbs.name(0), Some("~$000000000"));
+        assert_eq!(hcb.wfcb_handle(0), Some(0));
+        assert_eq!(hcb.select_switch(0), Some(1));
+        assert_eq!(input.current_token().literal(), "tail");
+
+        let mut missing_context = scanner("(1*StaggeredWeight(ConstPrio,1.0))");
+        let Err(error) = heuristic_parse(&mut missing_context, &mut WfcbAdmin::new()) else {
+            panic!("context-backed inline WFCB should reject an empty context");
+        };
+        assert!(error.to_string().contains("requires proof-state axioms"));
     }
 
     #[test]
