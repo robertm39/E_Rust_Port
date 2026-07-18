@@ -18615,6 +18615,86 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_installs_diversity_and_orient_weights_with_active_owner_context() {
+        let mut bank = test_bank();
+        let left_base = typed_const(&mut bank, "pc_diversity_left");
+        let right_base = typed_const(&mut bank, "pc_diversity_right");
+        let left = typed_unary(&mut bank, "pc_diversity_f", &left_base);
+        let right = typed_unary(&mut bank, "pc_diversity_g", &right_base);
+        let mut first_clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &left, &right, true,
+        )]));
+        let mut second_clause = first_clause.clone();
+        let mut axioms = ClauseSet::new();
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "DiversityOrientOwnerSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec![
+            "diversity=Diversityweight(ConstPrio,2,3,1.0,1.0,1.0,10.0,1.0,20.0,2.0)".to_owned(),
+            "orient=Orientweight(ConstPrio,2,1,7.0,5.0,3.0)".to_owned(),
+            "lmax=OrientLMaxWeight(ConstPrio,2,1,7.0,5.0,3.0)".to_owned(),
+        ];
+        let mut hcb_defs =
+            vec!["DiversityOrientOwnerSearch=(1*diversity,1*orient,1*lmax)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!first_clause.query_prop(CP_IS_ORIENTED));
+        assert!(!second_clause.query_prop(CP_IS_ORIENTED));
+        let active_hcb_handle = control
+            .active_hcb
+            .expect("diversity/orient HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("diversity/orient HCB should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut first_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut second_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        for clause in [&first_clause, &second_clause] {
+            assert!(clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.literals().as_slice()[0].is_maximal());
+            assert_eq!(
+                clause
+                    .evaluations()
+                    .expect("HCB should attach all three diversity/orient evaluations")
+                    .eval_no(),
+                3
+            );
+        }
+        let first_evaluations = first_clause
+            .evaluations()
+            .expect("first clause should retain evaluations");
+        let second_evaluations = second_clause
+            .evaluations()
+            .expect("second clause should retain evaluations");
+        for index in 0..3 {
+            assert_eq!(
+                first_evaluations.eval(index).heuristic().to_bits(),
+                second_evaluations.eval(index).heuristic().to_bits()
+            );
+        }
+    }
+
+    #[test]
     fn proof_control_installs_tsm_with_shared_proof_state_bank() {
         let kb_dir = proof_control_tsm_kb_dir();
         write_proof_control_tsm_kb(&kb_dir);
