@@ -83,8 +83,11 @@ pub fn clause_is_tautology(work_bank: &mut TermBank, clause: &Clause) -> Result<
 
 /// Checks whether a clause is tautological using E's `ClauseIsTautologyReal` path.
 ///
-/// When `copy_clause` is true, terms are copied into `work_bank`. When it is
-/// false, Rust uses a shallow work clone so the caller's clause is not mutated.
+/// Rust always copies terms into `work_bank` before normalization. C can consume
+/// the caller-owned temporary clause when `copy_clause` is false because its
+/// scratch bank shares canonical truth terms with the source bank. Rust term
+/// banks own distinct canonical handles, so a bank-local work copy is required
+/// to preserve C's pointer-equality test without mutating the caller.
 ///
 /// # Errors
 ///
@@ -93,7 +96,7 @@ pub fn clause_is_tautology(work_bank: &mut TermBank, clause: &Clause) -> Result<
 pub fn clause_is_tautology_real(
     work_bank: &mut TermBank,
     clause: &Clause,
-    copy_clause: bool,
+    _copy_clause: bool,
 ) -> Result<bool, Diagnostic> {
     if clause.literals().find_true(work_bank).is_some() {
         return Ok(true);
@@ -105,11 +108,7 @@ pub fn clause_is_tautology_real(
         return Ok(clause.is_trivial(work_bank));
     }
 
-    let mut work_copy = if copy_clause {
-        clause.copy_to_bank(work_bank)?
-    } else {
-        clause.clone()
-    };
+    let mut work_copy = clause.copy_to_bank(work_bank)?;
     let mut rw_system = work_copy
         .literals_mut()
         .extract_by_props(EP_IS_POSITIVE, true)
@@ -281,6 +280,25 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn predicate_atom(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let argument_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            let final_type = bank
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![argument_type, bool_type.clone()]));
+            bank.signature_mut()
+                .declare_final_type(f_code, final_type)
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
@@ -369,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn tautology_real_no_copy_path_uses_existing_terms_without_mutating_source() {
+    fn tautology_real_no_copy_path_does_not_mutate_source() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
         let b = typed_const(&mut bank, "b");
@@ -387,6 +405,21 @@ mod tests {
             clause.literals().as_slice()[0].left(),
             &original_positive_left
         );
+    }
+
+    #[test]
+    fn tautology_real_no_copy_path_rehomes_predicate_truth_term() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "predicate_tautology_a");
+        let p_a = predicate_atom(&mut bank, "predicate_tautology_p", &a);
+        let true_term = bank.true_term().clone();
+        let clause = clause(vec![
+            literal(&mut bank, &p_a, &true_term, true),
+            literal(&mut bank, &p_a, &true_term, false),
+        ]);
+        let mut work_bank = TermBank::new(bank.signature().clone()).unwrap();
+
+        assert!(clause_is_tautology_real(&mut work_bank, &clause, false).unwrap());
     }
 
     #[test]

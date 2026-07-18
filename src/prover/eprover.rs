@@ -29100,6 +29100,45 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
+    fn run_proof_search_recognizes_predicate_gate_across_scratch_bank() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-pred-elim-gate");
+        std::fs::write(
+            &path,
+            "cnf(positive_gate, axiom, (p(X) | ~q(X))).\n\
+             cnf(negative_gate, axiom, (~p(X) | q(X))).\n\
+             cnf(p_offending, axiom, (p(a) | ~p(b))).\n\
+             cnf(q_offending, axiom, (q(c) | q(d))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--pred-elim=true",
+                "--pred-elim-recognize-gates=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% PE start: 4\n% PE eliminated: 2\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
+        assert!(printed.contains("(q(a)|~q(b))"));
+        assert!(printed.contains("(q(c)|q(d))"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_applies_pred_elim_to_fof_formula_origin_clauses() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-pred-elim");

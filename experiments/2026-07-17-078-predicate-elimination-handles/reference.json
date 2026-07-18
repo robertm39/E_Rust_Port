@@ -1,0 +1,72 @@
+{
+  "all_exact": true,
+  "display_args": [
+    "--pred-elim=true",
+    "--pred-elim-recognize-gates=true",
+    "--print-statistics",
+    "$FIXTURE"
+  ],
+  "results": {
+    "c": {
+      "clauses_after_preprocessing": [
+        "(q(a)|~q(b))",
+        "(q(c)|q(d))"
+      ],
+      "exit_code": 1,
+      "pe_lines": [
+        "% PE start: 4",
+        "% PE eliminated: 2"
+      ],
+      "statistics": {
+        "Current number of archived clauses": 4,
+        "Initial clauses": 4,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 4,
+        "Processed clauses": 2
+      },
+      "status": "% SZS status Satisfiable",
+      "stderr": ""
+    },
+    "rust_internal": {
+      "clauses_after_preprocessing": [
+        "(q(a)|~q(b))",
+        "(q(c)|q(d))"
+      ],
+      "exit_code": 1,
+      "pe_lines": [
+        "% PE start: 4",
+        "% PE eliminated: 2"
+      ],
+      "statistics": {
+        "Current number of archived clauses": 4,
+        "Initial clauses": 4,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 4,
+        "Processed clauses": 2
+      },
+      "status": "% SZS status Satisfiable",
+      "stderr": ""
+    },
+    "rust_runtime_picosat": {
+      "clauses_after_preprocessing": [
+        "(q(a)|~q(b))",
+        "(q(c)|q(d))"
+      ],
+      "exit_code": 1,
+      "pe_lines": [
+        "% PE start: 4",
+        "% PE eliminated: 2"
+      ],
+      "statistics": {
+        "Current number of archived clauses": 4,
+        "Initial clauses": 4,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 4,
+        "Processed clauses": 2
+      },
+      "status": "% SZS status Satisfiable",
+      "stderr": ""
+    }
+  },
+  "schema_version": 1
+}

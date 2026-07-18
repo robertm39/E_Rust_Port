@@ -3,7 +3,7 @@ use crate::basics::min_heap::MinHeap;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{clause_push_derivation, DC_PE_RESOLVE};
+use crate::clauses::derivation::{clause_push_derivation, ClauseDerivationRef, DC_PE_RESOLVE};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::picosat::PicoSat;
@@ -19,7 +19,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-type ClauseId = i64;
 type PredicateTaskCmp = fn(&PredicateEliminationTask, &PredicateEliminationTask) -> Ordering;
 type PredicateTaskQueue = MinHeap<PredicateEliminationTask, PredicateTaskCmp>;
 
@@ -60,11 +59,11 @@ struct LastCheck {
 #[derive(Clone, Debug, PartialEq)]
 struct PredicateEliminationTask {
     sym: FunCode,
-    positive_singular: BTreeSet<ClauseId>,
-    negative_singular: BTreeSet<ClauseId>,
-    offending_cls: BTreeSet<ClauseId>,
-    positive_gates: BTreeSet<ClauseId>,
-    negative_gates: BTreeSet<ClauseId>,
+    positive_singular: BTreeSet<ClauseDerivationRef>,
+    negative_singular: BTreeSet<ClauseDerivationRef>,
+    offending_cls: BTreeSet<ClauseDerivationRef>,
+    positive_gates: BTreeSet<ClauseDerivationRef>,
+    negative_gates: BTreeSet<ClauseDerivationRef>,
     gate_status: GateStatus,
     num_lit: i64,
     sq_vars: f64,
@@ -565,22 +564,26 @@ fn scan_clause_for_predicates(
         }
 
         let inserted = if clause_has_other_predicate_literal(clause, bank, literal_index, sym) {
-            task.offending_cls.insert(clause.ident())
+            task.offending_cls.insert(ClauseDerivationRef::from(clause))
         } else {
             let mut clause_inserted = false;
             if config.recognize_gates
                 && is_potential_gate_clause(clause, bank, literal_index, literal)
             {
                 clause_inserted = if literal.is_positive() {
-                    task.positive_gates.insert(clause.ident())
+                    task.positive_gates
+                        .insert(ClauseDerivationRef::from(clause))
                 } else {
-                    task.negative_gates.insert(clause.ident())
+                    task.negative_gates
+                        .insert(ClauseDerivationRef::from(clause))
                 };
             }
             let singular_inserted = if literal.is_positive() {
-                task.positive_singular.insert(clause.ident())
+                task.positive_singular
+                    .insert(ClauseDerivationRef::from(clause))
             } else {
-                task.negative_singular.insert(clause.ident())
+                task.negative_singular
+                    .insert(ClauseDerivationRef::from(clause))
             };
             singular_inserted || clause_inserted
         };
@@ -648,7 +651,7 @@ fn check_unsat_and_tauto(
         declare_not_gate(task);
         return Ok(());
     };
-    let Some(pivot) = passive.find_by_id(pivot_id) else {
+    let Some(pivot) = passive.find_by_derivation_ref(pivot_id) else {
         declare_not_gate(task);
         return Ok(());
     };
@@ -667,7 +670,7 @@ fn check_unsat_and_tauto(
 
     let mut subst = Substitution::new();
     for gate_id in gate_ids {
-        let Some(clause) = passive.find_by_id(gate_id) else {
+        let Some(clause) = passive.find_by_derivation_ref(gate_id) else {
             subst.delete();
             declare_not_gate(task);
             return Ok(());
@@ -762,14 +765,14 @@ fn check_gate_core_tautologies(
     if all_tautologies {
         task.gate_status = GateStatus::IsGate;
         for clause in positive {
-            let ident = clause.ident();
-            task.positive_gates.insert(ident);
-            task.positive_singular.remove(&ident);
+            let clause_ref = ClauseDerivationRef::from(&clause);
+            task.positive_gates.insert(clause_ref);
+            task.positive_singular.remove(&clause_ref);
         }
         for clause in negative {
-            let ident = clause.ident();
-            task.negative_gates.insert(ident);
-            task.negative_singular.remove(&ident);
+            let clause_ref = ClauseDerivationRef::from(&clause);
+            task.negative_gates.insert(clause_ref);
+            task.negative_singular.remove(&clause_ref);
         }
     }
     Ok(())
@@ -855,8 +858,8 @@ fn do_singular_elimination(
 }
 
 fn do_singular_elimination_for_sets(
-    positive_ids: &BTreeSet<ClauseId>,
-    negative_ids: &BTreeSet<ClauseId>,
+    positive_ids: &BTreeSet<ClauseDerivationRef>,
+    negative_ids: &BTreeSet<ClauseDerivationRef>,
     sym: FunCode,
     passive: &ClauseSet,
     bank: &mut TermBank,
@@ -865,11 +868,11 @@ fn do_singular_elimination_for_sets(
 ) -> Result<Vec<Clause>, Diagnostic> {
     let mut generated = Vec::new();
     for positive_id in positive_ids {
-        let Some(positive_clause) = passive.find_by_id(*positive_id) else {
+        let Some(positive_clause) = passive.find_by_derivation_ref(*positive_id) else {
             continue;
         };
         for negative_id in negative_ids {
-            let Some(negative_clause) = passive.find_by_id(*negative_id) else {
+            let Some(negative_clause) = passive.find_by_derivation_ref(*negative_id) else {
                 continue;
             };
             let resolvent = match resolver {
@@ -911,7 +914,7 @@ fn do_gates_against_offending(
     while let Some(work) = worklist.pop() {
         let (offending, original_id) = match work {
             WorkClause::Original(ident) => {
-                let Some(clause) = passive.find_by_id(ident) else {
+                let Some(clause) = passive.find_by_derivation_ref(ident) else {
                     continue;
                 };
                 (clause.clone(), Some(ident))
@@ -933,7 +936,7 @@ fn do_gates_against_offending(
             &task.positive_gates
         };
         for gate_id in gate_set {
-            let Some(gate_clause) = passive.find_by_id(*gate_id) else {
+            let Some(gate_clause) = passive.find_by_derivation_ref(*gate_id) else {
                 continue;
             };
             let resolvent = if positive {
@@ -958,7 +961,7 @@ fn do_gates_against_offending(
 
 #[derive(Debug)]
 enum WorkClause {
-    Original(ClauseId),
+    Original(ClauseDerivationRef),
     Intermediate(Box<Clause>),
 }
 
@@ -968,7 +971,7 @@ fn build_neq_resolvent(
     sym: FunCode,
     bank: &mut TermBank,
 ) -> Result<Option<Clause>, Diagnostic> {
-    debug_assert_ne!(positive_clause.ident(), negative_clause.ident());
+    debug_assert!(!std::ptr::eq(positive_clause, negative_clause));
 
     let positive_copy = positive_clause.copy_disjoint(bank)?;
     let Some((positive_literal, positive_rest)) =
@@ -1014,7 +1017,7 @@ fn build_eq_resolvent(
     sym: FunCode,
     bank: &mut TermBank,
 ) -> Result<Clause, Diagnostic> {
-    debug_assert_ne!(positive_clause.ident(), negative_clause.ident());
+    debug_assert!(!std::ptr::eq(positive_clause, negative_clause));
 
     let positive_copy = positive_clause.copy_disjoint(bank)?;
     let Some((positive_literal, positive_rest)) =
@@ -1201,8 +1204,8 @@ fn move_task_clauses_to_archive(
     ids.extend(&task.positive_gates);
     ids.extend(&task.negative_gates);
     ids.extend(&task.offending_cls);
-    for ident in ids {
-        if let Some(clause) = passive.extract_by_id(ident) {
+    for clause_ref in ids {
+        if let Some(clause) = passive.extract_by_derivation_ref(clause_ref) {
             archive.insert(clause);
         }
     }
@@ -1377,6 +1380,10 @@ mod tests {
         set.iter().map(Clause::ident).collect()
     }
 
+    fn refs(set: &ClauseSet) -> Vec<ClauseDerivationRef> {
+        set.iter().map(ClauseDerivationRef::from).collect()
+    }
+
     #[test]
     fn singular_elimination_replaces_opposite_predicate_pair_with_resolvent() {
         let mut bank = test_bank();
@@ -1438,6 +1445,70 @@ mod tests {
                 DerivationEntry::Operation(DC_PE_RESOLVE),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(positive_id, 0)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(negative_id, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn singular_elimination_distinguishes_same_id_clause_generations() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "pe_same_id_a");
+        let b = object_const(&mut bank, "pe_same_id_b");
+        let c = object_const(&mut bank, "pe_same_id_c");
+        let p_a = predicate_atom(&mut bank, "pe_same_id_p", std::slice::from_ref(&a));
+        let q_a = predicate_atom(&mut bank, "pe_same_id_q", std::slice::from_ref(&a));
+        let q_b = predicate_atom(&mut bank, "pe_same_id_q", std::slice::from_ref(&b));
+        let q_c = predicate_atom(&mut bank, "pe_same_id_q", std::slice::from_ref(&c));
+        let mut positive = clause(vec![predicate_literal(&mut bank, &p_a, true)]);
+        let mut negative = clause(vec![
+            predicate_literal(&mut bank, &q_a, true),
+            predicate_literal(&mut bank, &p_a, false),
+        ]);
+        positive.set_ident(17);
+        positive.refresh_derivation_generation();
+        negative.set_ident(17);
+        negative.refresh_derivation_generation();
+        let positive_ref = ClauseDerivationRef::from(&positive);
+        let negative_ref = ClauseDerivationRef::from(&negative);
+        let q_offending = clause(vec![
+            predicate_literal(&mut bank, &q_b, true),
+            predicate_literal(&mut bank, &q_c, true),
+        ]);
+        let mut passive = ClauseSet::from_clauses([positive, negative, q_offending]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+        let fresh = fresh_vars(&bank);
+
+        let result = eliminate_predicates_singular(
+            &mut passive,
+            &mut archive,
+            &mut bank,
+            &mut tmp,
+            &fresh,
+            PredicateEliminationConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            PredicateEliminationResult {
+                start_count: 3,
+                eliminated_count: 1,
+                generated_count: 1,
+            }
+        );
+        assert!(refs(&archive).contains(&positive_ref));
+        assert!(refs(&archive).contains(&negative_ref));
+        let resolvent = passive
+            .iter()
+            .find(|clause| clause.derivation().is_some())
+            .expect("same-ID parents still produce a resolvent");
+        assert_eq!(
+            resolvent.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PE_RESOLVE),
+                DerivationEntry::ClauseParent(positive_ref),
+                DerivationEntry::ClauseParent(negative_ref),
             ]
         );
     }
@@ -1711,6 +1782,60 @@ mod tests {
             .as_slice()
             .iter()
             .all(|literal| literal.is_equ_lit(&bank) || literal.left().f_code() != p_code)));
+    }
+
+    #[test]
+    fn recognized_predicate_gate_matches_executable_clause_shape() {
+        let mut bank = test_bank();
+        let variable = object_var(&bank, -2);
+        let first = object_const(&mut bank, "pe_exec_gate_a");
+        let second = object_const(&mut bank, "pe_exec_gate_b");
+        let third = object_const(&mut bank, "pe_exec_gate_c");
+        let fourth = object_const(&mut bank, "pe_exec_gate_d");
+        let p_x = predicate_atom(&mut bank, "pe_exec_gate_p", std::slice::from_ref(&variable));
+        let q_x = predicate_atom(&mut bank, "pe_exec_gate_q", std::slice::from_ref(&variable));
+        let p_a = predicate_atom(&mut bank, "pe_exec_gate_p", std::slice::from_ref(&first));
+        let p_b = predicate_atom(&mut bank, "pe_exec_gate_p", std::slice::from_ref(&second));
+        let q_c = predicate_atom(&mut bank, "pe_exec_gate_q", std::slice::from_ref(&third));
+        let q_d = predicate_atom(&mut bank, "pe_exec_gate_q", std::slice::from_ref(&fourth));
+        let positive_gate = clause(vec![
+            predicate_literal(&mut bank, &p_x, true),
+            predicate_literal(&mut bank, &q_x, false),
+        ]);
+        let negative_gate = clause(vec![
+            predicate_literal(&mut bank, &q_x, true),
+            predicate_literal(&mut bank, &p_x, false),
+        ]);
+        let p_offending = clause(vec![
+            predicate_literal(&mut bank, &p_a, true),
+            predicate_literal(&mut bank, &p_b, false),
+        ]);
+        let q_offending = clause(vec![
+            predicate_literal(&mut bank, &q_c, true),
+            predicate_literal(&mut bank, &q_d, true),
+        ]);
+        let mut passive =
+            ClauseSet::from_clauses([positive_gate, negative_gate, p_offending, q_offending]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+        let fresh = fresh_vars(&bank);
+
+        let result = eliminate_predicates_singular(
+            &mut passive,
+            &mut archive,
+            &mut bank,
+            &mut tmp,
+            &fresh,
+            PredicateEliminationConfig {
+                recognize_gates: true,
+                ..PredicateEliminationConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.eliminated_count, 2);
+        assert_eq!(passive.members(), 2);
+        assert_eq!(archive.members(), 4);
     }
 
     #[test]
