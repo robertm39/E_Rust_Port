@@ -152,7 +152,6 @@ use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
 };
-use crate::terms::match_mgu::term_has_higher_order_unification_surface;
 #[cfg(test)]
 use crate::terms::signature::Signature;
 use crate::terms::signature::{
@@ -4791,7 +4790,7 @@ fn parse_unification_mode(value: &str) -> Result<UnificationMode, Diagnostic> {
         "single" => Ok(UnificationMode::Single),
         "multi" => Ok(UnificationMode::Multi),
         _ => Err(Diagnostic::new(
-            ErrorCode::USAGE_ERROR,
+            ErrorCode::NO_ERROR,
             "values of unif mode are eiter single or multi",
         )),
     }
@@ -5225,6 +5224,12 @@ fn run_print_strategy<W: Write + ?Sized>(
     };
     let mut params = heuristic_parms_from_config(config)?;
     write_preprocessing_params_debug_line(output, &params)?;
+    if params.bce {
+        output.write_stdout_side_channel(b"% BCE start: 0\n% BCE eliminated: 0.\n")?;
+    }
+    if params.pred_elim {
+        output.write_stdout_side_channel(b"% PE start: 0\n% PE eliminated: 0\n")?;
+    }
     if let Some(stderr) = stderr {
         let _ = apply_strategy_io_to_params_with_warning_output(config, &mut params, stderr)?;
     } else {
@@ -7574,7 +7579,7 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
     max_occs: i32,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
-    if !enabled || !fo_only_clause_preprocessing_supported(state) {
+    if !enabled || problem_type() != ProblemType::FirstOrder {
         return Ok(0);
     }
 
@@ -7601,7 +7606,7 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     picosat_library: Option<&Path>,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
-    if !config.enabled || !fo_only_clause_preprocessing_supported(state) {
+    if !config.enabled || problem_type() != ProblemType::FirstOrder {
         return Ok(0);
     }
 
@@ -7642,21 +7647,6 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     );
     output.write_stdout_side_channel(pred_elim_output.as_bytes())?;
     Ok(result.eliminated_count)
-}
-
-fn fo_only_clause_preprocessing_supported(state: &crate::clauses::proofstate::ProofState) -> bool {
-    problem_type() == ProblemType::FirstOrder
-        || (state.f_axioms().is_empty()
-            && !clause_set_has_higher_order_unification_surface(state.axioms()))
-}
-
-fn clause_set_has_higher_order_unification_surface(clauses: &ClauseSet) -> bool {
-    clauses.iter().any(|clause| {
-        clause.literals().as_slice().iter().any(|literal| {
-            term_has_higher_order_unification_surface(literal.left())
-                || term_has_higher_order_unification_surface(literal.right())
-        })
-    })
 }
 
 fn apply_goal_definition_transformation(
@@ -18384,7 +18374,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
         let error = process_options(["eprover", "--unif-mode=bad"]).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(
             error.message(),
             "values of unif mode are eiter single or multi"
@@ -19805,6 +19795,33 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.starts_with(&format!("{}{{\n", default_preprocessing_debug_line())));
         assert!(output.contains("heuristic_name:                Default"));
         assert!(output.contains("selection_strategy:             NoSelection"));
+    }
+
+    #[test]
+    fn run_print_strategy_preserves_empty_fo_preprocessing_output() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-strategy",
+                "--bce=true",
+                "--pred-elim=true",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.starts_with(&format!(
+            "{}% BCE start: 0\n% BCE eliminated: 0.\n% PE start: 0\n% PE eliminated: 0\n{{\n",
+            default_preprocessing_debug_line()
+        )));
     }
 
     #[test]
@@ -29182,7 +29199,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
     }
 
     #[test]
-    fn run_proof_search_applies_bce_after_first_order_shaped_thf_cnf() {
+    fn run_proof_search_skips_fo_only_preprocessing_after_thf_cnf() {
         let _guard = global_state_lock();
         let path = temp_path("proof-thf-bce");
         std::fs::write(
@@ -29204,6 +29221,7 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
                 "eprover",
                 "--tstp-in",
                 "--bce=true",
+                "--pred-elim=true",
                 "--print-statistics",
                 path_arg.as_str(),
             ],
@@ -29214,11 +29232,12 @@ cnf(goal, negated_conjecture, (g=g), file('{path_arg}', goal)).\n\n\
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        assert!(!printed.contains("% BCE start:"));
+        assert!(!printed.contains("% PE start:"));
         assert!(printed.contains("% Parsed axioms                        : 6\n"));
         assert!(printed.contains("% Initial clauses                      : 6\n"));
         assert!(printed.contains("% Removed in clause preprocessing      : 4\n"));
-        assert!(printed.contains("% Initial clauses in saturation        : 0\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

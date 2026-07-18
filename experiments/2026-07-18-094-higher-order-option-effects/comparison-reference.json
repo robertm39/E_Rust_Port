@@ -1,0 +1,141 @@
+{
+  "case_count": 15,
+  "cases": {
+    "fo_bce": {
+      "counters": {
+        "Initial clauses": 2,
+        "Initial clauses in saturation": 0,
+        "Parsed axioms": 2,
+        "Removed in clause preprocessing": 0
+      },
+      "final_clauses": [],
+      "preprocessing_lines": [
+        "% BCE start: 2",
+        "% BCE eliminated: 2."
+      ],
+      "stderr": ""
+    },
+    "fo_pred_elim": {
+      "counters": {
+        "Initial clauses": 3,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 3,
+        "Removed in clause preprocessing": 0
+      },
+      "final_clauses": [
+        "cnf(c_0_N, plain, (s(a)), c_0_N,['final']).",
+        "cnf(c_0_N, plain, (s(b)|s(c)), c_0_N,['final'])."
+      ],
+      "preprocessing_lines": [
+        "% PE start: 3",
+        "% PE eliminated: 1"
+      ],
+      "stderr": ""
+    },
+    "invalid_eta": {
+      "exit": 5,
+      "stderr": "eprover: Option --eta-normalize requires 'reduce' or 'expand' as an argument\n",
+      "stdout": ""
+    },
+    "invalid_ext_depth": {
+      "exit": 5,
+      "stderr": "eprover: Option --ext-sup-max-depth expects integer argument from {-1...2147483647} but got -2\n",
+      "stdout": ""
+    },
+    "invalid_ho_order": {
+      "exit": 5,
+      "stderr": "eprover: Option --ho-order-kind requires 'lfho' or 'lambda' as an argument\n",
+      "stdout": ""
+    },
+    "invalid_prim_enum": {
+      "exit": 5,
+      "stderr": "eprover: Option --prim-enum-mode excepts neg, and, or, eq, pragmatic, full, or logsym\n",
+      "stdout": ""
+    },
+    "invalid_projection_limit": {
+      "exit": 5,
+      "stderr": "eprover: Option --func-proj-limit expects integer argument from {0...63} but got 64\n",
+      "stdout": ""
+    },
+    "invalid_unif_mode": {
+      "exit": 0,
+      "stderr": "eprover: values of unif mode are eiter single or multi\n",
+      "stdout": ""
+    },
+    "strategy_all_overrides": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 0,unroll_only_formulas = 0, sine = (null))\n% BCE start: 0\n% BCE eliminated: 0.\n% PE start: 0\n% PE eliminated: 0\n{\n   {\n      ordertype:               KBO6\n      to_weight_gen:           none\n      to_prec_gen:             none\n      rewrite_strong_rhs_inst: false\n      to_pre_prec:             \"\"\n      conj_only_mod:           0\n      conj_axiom_mod:          0\n      axiom_only_mod:          0\n      skolem_mod:              0\n      defpred_mod:             0\n      force_kbo_var_weight:    false\n      to_pre_weights:          \"\"\n      to_const_weight:         0\n      to_defs_min:             false\n      lit_cmp:                 1\n      lam_w:                   20\n      db_w:                    10\n      ho_order_kind:           lambda\n   }\n   no_preproc:                     false\n   eqdef_maxclauses:               20000\n   eqdef_incrlimit:                20\n   formula_def_limit:              24\n   miniscope_limit:                1048576\n   sine:                           \"None\"\n   add_goal_defs_pos:             false\n   add_goal_defs_neg:             false\n   add_goal_defs_subterms:        false\n   heuristic_name:                Default\n   heuristic_def:                 \"\"\n   prefer_initial_clauses:         false\n   selection_strategy:             NoSelection\n   pos_lit_sel_min:                0\n   pos_lit_sel_max:                9223372036854775807\n   neg_lit_sel_min:                0\n   neg_lit_sel_max:                9223372036854775807\n   all_lit_sel_min:                0\n   all_lit_sel_max:                9223372036854775807\n   weight_sel_min:                 0\n   select_on_proc_only:            false\n   inherit_paramod_lit:            false\n   inherit_goal_pm_lit:            false\n   inherit_conj_pm_lit:            false\n   enable_eq_factoring:            true\n   enable_neg_unit_paramod:        true\n   enable_given_forward_simpl:     true\n   pm_type:                        ParamodPlain\n   ac_handling:                    1\n   ac_res_aggressive:              true\n   forward_context_sr:             false\n   forward_context_sr_aggressive:  false\n   backward_context_sr:            false\n   forward_subsumption_aggressive: false\n   forward_demod:                  2\n   prefer_general:                 false\n   condensing:                     false\n   condensing_aggressive:          false\n   er_varlit_destructive:          false\n   er_strong_destructive:          false\n   er_aggressive:                  false\n   split_clauses:                  0\n   split_method:                   0\n   split_aggressive:               false\n   split_fresh_defs:               true\n   diseq_decomposition:            0\n   diseq_decomp_maxarity:          9223372036854775807\n   rw_bw_index_type:               FP7\n   pm_from_index_type:             FP7\n   pm_into_index_type:             FP7\n   sat_check_grounding:            NoGrounding\n   sat_check_step_limit:           9223372036854775807\n   sat_check_size_limit:           9223372036854775807\n   sat_check_ttinsert_limit:       9223372036854775807\n   sat_check_normconst:            false\n   sat_check_normalize:            false\n   sat_check_decision_limit:       10000\n   filter_orphans_limit:           9223372036854775807\n   forward_contract_limit:         9223372036854775807\n   delete_bad_limit:               9223372036854775807\n   mem_limit:                      0\n   watchlist_simplify:             true\n   watchlist_is_static:            false\n   use_tptp_sos:                   false\n   presat_interreduction:          false\n   detsort_bw_rw:                  false\n   detsort_tmpset:                 false\n   arg_cong:                       all\n   neg_ext:                        off\n   pos_ext:                        off\n   ext_rules_max_depth:            4\n   inverse_recognition:            true\n   replace_inj_defs:               true\n   lift_lambdas:                  true\n   lambda_to_forall:              false\n   unroll_only_formulas:          false\n   elim_leibniz_max_depth:        5\n   prim_enum_mode:                full\n   prim_enum_max_depth:           6\n   inst_choice_max_depth:         7\n   local_rw:                      true\n   prune_args:                    true\n   preinstantiate_induction:      true\n   fool_unroll:                   true\n   func_proj_limit:               1\n   imit_limit:                    0\n   ident_limit:                   0\n   elim_limit:                    0\n   unif_mode:                     multi\n   pattern_oracle:                false\n   fixpoint_oracle:               false\n   max_unifiers:                  8\n   max_unif_steps:                9\n}\n"
+    },
+    "strategy_bce": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% BCE start: 0\n% BCE eliminated: 0.\n{\n   {\n      ordertype:               KBO6\n      to_weight_gen:           none\n      to_prec_gen:             none\n      rewrite_strong_rhs_inst: false\n      to_pre_prec:             \"\"\n      conj_only_mod:           0\n      conj_axiom_mod:          0\n      axiom_only_mod:          0\n      skolem_mod:              0\n      defpred_mod:             0\n      force_kbo_var_weight:    false\n      to_pre_weights:          \"\"\n      to_const_weight:         0\n      to_defs_min:             false\n      lit_cmp:                 1\n      lam_w:                   20\n      db_w:                    10\n      ho_order_kind:           lfho\n   }\n   no_preproc:                     false\n   eqdef_maxclauses:               20000\n   eqdef_incrlimit:                20\n   formula_def_limit:              24\n   miniscope_limit:                1048576\n   sine:                           \"None\"\n   add_goal_defs_pos:             false\n   add_goal_defs_neg:             false\n   add_goal_defs_subterms:        false\n   heuristic_name:                Default\n   heuristic_def:                 \"\"\n   prefer_initial_clauses:         false\n   selection_strategy:             NoSelection\n   pos_lit_sel_min:                0\n   pos_lit_sel_max:                9223372036854775807\n   neg_lit_sel_min:                0\n   neg_lit_sel_max:                9223372036854775807\n   all_lit_sel_min:                0\n   all_lit_sel_max:                9223372036854775807\n   weight_sel_min:                 0\n   select_on_proc_only:            false\n   inherit_paramod_lit:            false\n   inherit_goal_pm_lit:            false\n   inherit_conj_pm_lit:            false\n   enable_eq_factoring:            true\n   enable_neg_unit_paramod:        true\n   enable_given_forward_simpl:     true\n   pm_type:                        ParamodPlain\n   ac_handling:                    1\n   ac_res_aggressive:              true\n   forward_context_sr:             false\n   forward_context_sr_aggressive:  false\n   backward_context_sr:            false\n   forward_subsumption_aggressive: false\n   forward_demod:                  2\n   prefer_general:                 false\n   condensing:                     false\n   condensing_aggressive:          false\n   er_varlit_destructive:          false\n   er_strong_destructive:          false\n   er_aggressive:                  false\n   split_clauses:                  0\n   split_method:                   0\n   split_aggressive:               false\n   split_fresh_defs:               true\n   diseq_decomposition:            0\n   diseq_decomp_maxarity:          9223372036854775807\n   rw_bw_index_type:               FP7\n   pm_from_index_type:             FP7\n   pm_into_index_type:             FP7\n   sat_check_grounding:            NoGrounding\n   sat_check_step_limit:           9223372036854775807\n   sat_check_size_limit:           9223372036854775807\n   sat_check_ttinsert_limit:       9223372036854775807\n   sat_check_normconst:            false\n   sat_check_normalize:            false\n   sat_check_decision_limit:       10000\n   filter_orphans_limit:           9223372036854775807\n   forward_contract_limit:         9223372036854775807\n   delete_bad_limit:               9223372036854775807\n   mem_limit:                      0\n   watchlist_simplify:             true\n   watchlist_is_static:            false\n   use_tptp_sos:                   false\n   presat_interreduction:          false\n   detsort_bw_rw:                  false\n   detsort_tmpset:                 false\n   arg_cong:                       all\n   neg_ext:                        off\n   pos_ext:                        off\n   ext_rules_max_depth:            -1\n   inverse_recognition:            false\n   replace_inj_defs:               false\n   lift_lambdas:                  true\n   lambda_to_forall:              true\n   unroll_only_formulas:          true\n   elim_leibniz_max_depth:        -1\n   prim_enum_mode:                pragmatic\n   prim_enum_max_depth:           -1\n   inst_choice_max_depth:         -1\n   local_rw:                      false\n   prune_args:                    false\n   preinstantiate_induction:      false\n   fool_unroll:                   true\n   func_proj_limit:               0\n   imit_limit:                    0\n   ident_limit:                   0\n   elim_limit:                    0\n   unif_mode:                     single\n   pattern_oracle:                true\n   fixpoint_oracle:               true\n   max_unifiers:                  4\n   max_unif_steps:                256\n}\n"
+    },
+    "strategy_pred_elim": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% PE start: 0\n% PE eliminated: 0\n{\n   {\n      ordertype:               KBO6\n      to_weight_gen:           none\n      to_prec_gen:             none\n      rewrite_strong_rhs_inst: false\n      to_pre_prec:             \"\"\n      conj_only_mod:           0\n      conj_axiom_mod:          0\n      axiom_only_mod:          0\n      skolem_mod:              0\n      defpred_mod:             0\n      force_kbo_var_weight:    false\n      to_pre_weights:          \"\"\n      to_const_weight:         0\n      to_defs_min:             false\n      lit_cmp:                 1\n      lam_w:                   20\n      db_w:                    10\n      ho_order_kind:           lfho\n   }\n   no_preproc:                     false\n   eqdef_maxclauses:               20000\n   eqdef_incrlimit:                20\n   formula_def_limit:              24\n   miniscope_limit:                1048576\n   sine:                           \"None\"\n   add_goal_defs_pos:             false\n   add_goal_defs_neg:             false\n   add_goal_defs_subterms:        false\n   heuristic_name:                Default\n   heuristic_def:                 \"\"\n   prefer_initial_clauses:         false\n   selection_strategy:             NoSelection\n   pos_lit_sel_min:                0\n   pos_lit_sel_max:                9223372036854775807\n   neg_lit_sel_min:                0\n   neg_lit_sel_max:                9223372036854775807\n   all_lit_sel_min:                0\n   all_lit_sel_max:                9223372036854775807\n   weight_sel_min:                 0\n   select_on_proc_only:            false\n   inherit_paramod_lit:            false\n   inherit_goal_pm_lit:            false\n   inherit_conj_pm_lit:            false\n   enable_eq_factoring:            true\n   enable_neg_unit_paramod:        true\n   enable_given_forward_simpl:     true\n   pm_type:                        ParamodPlain\n   ac_handling:                    1\n   ac_res_aggressive:              true\n   forward_context_sr:             false\n   forward_context_sr_aggressive:  false\n   backward_context_sr:            false\n   forward_subsumption_aggressive: false\n   forward_demod:                  2\n   prefer_general:                 false\n   condensing:                     false\n   condensing_aggressive:          false\n   er_varlit_destructive:          false\n   er_strong_destructive:          false\n   er_aggressive:                  false\n   split_clauses:                  0\n   split_method:                   0\n   split_aggressive:               false\n   split_fresh_defs:               true\n   diseq_decomposition:            0\n   diseq_decomp_maxarity:          9223372036854775807\n   rw_bw_index_type:               FP7\n   pm_from_index_type:             FP7\n   pm_into_index_type:             FP7\n   sat_check_grounding:            NoGrounding\n   sat_check_step_limit:           9223372036854775807\n   sat_check_size_limit:           9223372036854775807\n   sat_check_ttinsert_limit:       9223372036854775807\n   sat_check_normconst:            false\n   sat_check_normalize:            false\n   sat_check_decision_limit:       10000\n   filter_orphans_limit:           9223372036854775807\n   forward_contract_limit:         9223372036854775807\n   delete_bad_limit:               9223372036854775807\n   mem_limit:                      0\n   watchlist_simplify:             true\n   watchlist_is_static:            false\n   use_tptp_sos:                   false\n   presat_interreduction:          false\n   detsort_bw_rw:                  false\n   detsort_tmpset:                 false\n   arg_cong:                       all\n   neg_ext:                        off\n   pos_ext:                        off\n   ext_rules_max_depth:            -1\n   inverse_recognition:            false\n   replace_inj_defs:               false\n   lift_lambdas:                  true\n   lambda_to_forall:              true\n   unroll_only_formulas:          true\n   elim_leibniz_max_depth:        -1\n   prim_enum_mode:                pragmatic\n   prim_enum_max_depth:           -1\n   inst_choice_max_depth:         -1\n   local_rw:                      false\n   prune_args:                    false\n   preinstantiate_induction:      false\n   fool_unroll:                   true\n   func_proj_limit:               0\n   imit_limit:                    0\n   ident_limit:                   0\n   elim_limit:                    0\n   unif_mode:                     single\n   pattern_oracle:                true\n   fixpoint_oracle:               true\n   max_unifiers:                  4\n   max_unif_steps:                256\n}\n"
+    },
+    "thf_baseline": {
+      "counters": {
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "final_clauses": [
+        "thf(c_0_N, plain, ((q @ a)|~((p @ a))), c_0_N,['final']).",
+        "thf(c_0_N, plain, ((p @ a)|(q @ a)), c_0_N,['final'])."
+      ],
+      "preprocessing_lines": [],
+      "stderr": ""
+    },
+    "thf_bce": {
+      "counters": {
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "final_clauses": [
+        "thf(c_0_N, plain, ((q @ a)|~((p @ a))), c_0_N,['final']).",
+        "thf(c_0_N, plain, ((p @ a)|(q @ a)), c_0_N,['final'])."
+      ],
+      "preprocessing_lines": [],
+      "stderr": ""
+    },
+    "thf_bce_pred_elim": {
+      "counters": {
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "final_clauses": [
+        "thf(c_0_N, plain, ((q @ a)|~((p @ a))), c_0_N,['final']).",
+        "thf(c_0_N, plain, ((p @ a)|(q @ a)), c_0_N,['final'])."
+      ],
+      "preprocessing_lines": [],
+      "stderr": ""
+    },
+    "thf_pred_elim": {
+      "counters": {
+        "Initial clauses": 6,
+        "Initial clauses in saturation": 2,
+        "Parsed axioms": 6,
+        "Removed in clause preprocessing": 4
+      },
+      "final_clauses": [
+        "thf(c_0_N, plain, ((q @ a)|~((p @ a))), c_0_N,['final']).",
+        "thf(c_0_N, plain, ((p @ a)|(q @ a)), c_0_N,['final'])."
+      ],
+      "preprocessing_lines": [],
+      "stderr": ""
+    }
+  },
+  "fo_preprocessing_effects_observed": true,
+  "mismatches": [],
+  "sha256": "7ccc8251a6ff33206ca58707ec9e39fe98da6cdfd03a4ca431489add210d4b26",
+  "thf_fo_preprocessing_gate_exact": true
+}
