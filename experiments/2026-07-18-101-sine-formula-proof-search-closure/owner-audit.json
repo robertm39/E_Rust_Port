@@ -1,0 +1,24 @@
+{
+  "all_passed": true,
+  "checks": {
+    "c_combines_sine_and_relevance_statistics": true,
+    "c_counts_clause_and_formula_owners_before_selection": true,
+    "c_documents_proof_state_sine_as_destructive": true,
+    "c_replaces_and_moves_both_owner_sets": true,
+    "c_returns_combined_deleted_owner_count": true,
+    "c_selects_from_both_live_owner_sets": true,
+    "c_sine_then_relevance_then_formula_cnf": true,
+    "fresh_gsine_reference_exact": true,
+    "fresh_threshold_reference_exact": true,
+    "permanent_gsine_proof_search_regression": true,
+    "permanent_threshold_proof_search_regression": true,
+    "rust_combines_sine_and_relevance_statistics": true,
+    "rust_gsine_selects_both_owner_sets": true,
+    "rust_replaces_both_owner_sets_and_returns_delta": true,
+    "rust_sine_then_relevance_then_formula_cnf": true,
+    "rust_threshold_counts_and_clears_both_owner_sets": true
+  },
+  "passed": 16,
+  "schema_version": 1,
+  "total": 16
+}
