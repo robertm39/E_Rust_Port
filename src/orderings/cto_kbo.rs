@@ -502,6 +502,49 @@ mod tests {
     }
 
     #[test]
+    fn deref_once_reaches_bound_terms_before_classic_comparison() {
+        let mut signature = signature();
+        let f = symbol(&mut signature, "f", 1);
+        let a = symbol(&mut signature, "a", 0);
+        let ocb = ocb(&signature);
+        let a_term = Term::const_cell_alloc(a);
+        let f_a = app(f, std::slice::from_ref(&a_term));
+        let bound = Term::const_cell_alloc(-2);
+        bound.set_binding(Some(f_a));
+
+        assert_eq!(
+            kbo_compare(
+                &ocb,
+                &signature,
+                &bound,
+                &a_term,
+                DerefType::Once,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            kbo_compare(
+                &ocb,
+                &signature,
+                &a_term,
+                &bound,
+                DerefType::Never,
+                DerefType::Once
+            ),
+            CompareResult::Lesser
+        );
+        assert!(kbo_greater(
+            &ocb,
+            &signature,
+            &bound,
+            &a_term,
+            DerefType::Once,
+            DerefType::Never
+        ));
+    }
+
+    #[test]
     fn term_weight_uses_function_and_variable_weights() {
         let mut signature = signature();
         let f = symbol(&mut signature, "f", 2);

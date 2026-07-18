@@ -18972,6 +18972,37 @@ mod tests {
         assert_eq!(ocb.db_weight, 12);
     }
 
+    #[test]
+    fn proof_control_init_preserves_explicit_classic_kbo_for_higher_order_problem() {
+        let mut control = proof_control_alloc();
+        let mut bank = test_bank();
+        typed_const(&mut bank, "pc_classic_kbo_ho_a");
+        let mut axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell::default();
+        params.order_params.ordertype = TermOrdering::Kbo;
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+            true,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ocb = control
+            .ocb()
+            .expect("proof control should own the requested classic KBO");
+        assert_eq!(ocb.ordering_type, TermOrdering::Kbo);
+        assert!(ocb.weights.is_some());
+        assert!(ocb.prec_weights.is_some());
+        assert!(ocb.precedence.is_none());
+    }
+
     fn proof_control_tsm_kb_dir() -> std::path::PathBuf {
         std::path::PathBuf::from("target")
             .join("e-rust-port-tests")

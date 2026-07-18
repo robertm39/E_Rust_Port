@@ -123,6 +123,7 @@ Source files reviewed: `HEURISTICS/che_to_autoselect.h`, `HEURISTICS/che_to_auto
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `TOCreateOrdering` has an explicit `RPO not yet implemented!` assertion in upstream C, matching the two generic dispatcher assertions. Rust preserves that panic rather than inventing an ordering unavailable in the reference; the cross-unit audit is recorded in [`experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md`](../../../experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md).
 
 ### Porting Focus
 
