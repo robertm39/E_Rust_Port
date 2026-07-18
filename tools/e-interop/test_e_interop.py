@@ -533,7 +533,7 @@ class ComparisonTests(unittest.TestCase):
                     ["--tstp-format", "--merged-classification=2"],
                 ),
                 (
-                    "classify_problem/merged-zero-fallback",
+                    "classify_problem/merged-zero-fast-child",
                     ["--tstp-format", "--merged-classification=0"],
                 ),
                 (

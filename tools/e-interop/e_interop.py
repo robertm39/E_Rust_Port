@@ -610,7 +610,7 @@ TOOL_FUNCTIONAL_CASES = {
             ),
         ),
         (
-            "merged-zero-fallback",
+            "merged-zero-fast-child",
             ("--tstp-format", "--merged-classification=0"),
             "cnf(c1,axiom,p(a)).\n",
         ),

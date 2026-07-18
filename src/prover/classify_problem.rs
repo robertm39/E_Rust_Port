@@ -52,6 +52,7 @@ const DEFAULT_RAW_MASK: &str = "aaaaaaaaaa";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
 const MINISCOPE_LIMIT_DEFAULT: i64 = 1_000;
 const MERGED_CNF_MINISCOPE_LIMIT: i64 = 1_048_576;
+const ZERO_TIMEOUT_REEXEC_GRACE_MILLIS: u64 = 100;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 200;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const TFORM_RENAME_LIMIT_STR: &str = "24";
@@ -1051,10 +1052,6 @@ fn classify_current_cnf_state(
     problem_type: ProblemType,
     state: &mut ProofState,
 ) -> Result<String, Diagnostic> {
-    if cnf_timeout == 0 {
-        return Ok(cnf_timeout_fallback_class());
-    }
-
     if current_executable_can_run_cnf_child() {
         return classify_cnf_state_in_child(config, cnf_timeout, file, stdin_data);
     }
@@ -1170,7 +1167,15 @@ fn wait_for_cnf_child(child: &mut Child, timeout: Duration) -> Result<bool, Diag
 }
 
 fn timeout_duration(cnf_timeout: i64) -> Duration {
-    Duration::from_secs(u64::try_from(cnf_timeout).unwrap_or(u64::MAX))
+    if cnf_timeout == 0 {
+        // A POSIX zero CPU limit is delivered asynchronously, so a small forked
+        // child can write its class before the first accounting signal. Re-exec
+        // needs additional startup time but must retain a bounded zero-timeout
+        // race instead of bypassing the child or waiting without limit.
+        Duration::from_millis(ZERO_TIMEOUT_REEXEC_GRACE_MILLIS)
+    } else {
+        Duration::from_secs(u64::try_from(cnf_timeout).unwrap_or(u64::MAX))
+    }
 }
 
 fn class_from_child_output(output: &[u8]) -> String {
@@ -1830,6 +1835,7 @@ mod tests {
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     struct FlushFailWriter;
 
@@ -3143,7 +3149,7 @@ mod tests {
     }
 
     #[test]
-    fn merged_real_problem_zero_timeout_uses_c_hyphen_fallback_shape() {
+    fn merged_real_problem_zero_timeout_accepts_fast_child_class() {
         let _guard = global_state_lock();
         let input = "cnf(c1, axiom, (p(a))).\n";
 
@@ -3154,8 +3160,21 @@ mod tests {
         .expect("run succeeds");
 
         assert_eq!(status, 0);
-        assert!(stdout.trim_end().ends_with(&"-".repeat(21)));
+        let classes = stdout
+            .strip_prefix("- : (NULL) : ")
+            .expect("merged output prefix")
+            .trim_end();
+        assert_eq!(classes.len(), 36);
+        assert!(!classes.ends_with(&"-".repeat(super::SPEC_STRING_MEM - 1)));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn zero_timeout_has_bounded_reexec_grace() {
+        assert_eq!(
+            super::timeout_duration(0),
+            Duration::from_millis(super::ZERO_TIMEOUT_REEXEC_GRACE_MILLIS)
+        );
     }
 
     #[test]

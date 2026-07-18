@@ -1,0 +1,152 @@
+{
+  "case_count": 6,
+  "comparisons": [
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=10",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      },
+      "case": "completed_cnf",
+      "exact": true,
+      "fixture": "cnf.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=10",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "F30EA50E9A8B9719463DFFC4CAD2B4DDC67547E98897FEDC664F2D9DDF02A7B4"
+      },
+      "case": "completed_fof",
+      "exact": true,
+      "fixture": "fof.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "F30EA50E9A8B9719463DFFC4CAD2B4DDC67547E98897FEDC664F2D9DDF02A7B4"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=10",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "10D8D13F78C2C65BC358E4B664771ADFB77C3E33924B9B8331FAD0ADC6E7BCEC"
+      },
+      "case": "completed_thf",
+      "exact": true,
+      "fixture": "thf.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "10D8D13F78C2C65BC358E4B664771ADFB77C3E33924B9B8331FAD0ADC6E7BCEC"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=0",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      },
+      "case": "zero_timeout",
+      "exact": true,
+      "fixture": "cnf.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=-1",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 195,
+        "stdout_sha256": "7A9F3D670F30E02AD3F163B33F3A22F8CE584E4D2999FD3D20E41AB62BBF31A3"
+      },
+      "case": "disabled_minus_one",
+      "exact": true,
+      "fixture": "cnf.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 195,
+        "stdout_sha256": "7A9F3D670F30E02AD3F163B33F3A22F8CE584E4D2999FD3D20E41AB62BBF31A3"
+      }
+    },
+    {
+      "args": [
+        "--tstp-format",
+        "--merged-classification=-2",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      },
+      "case": "negative_unbounded",
+      "exact": true,
+      "fixture": "cnf.p",
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 50,
+        "stdout_sha256": "61596164905EC41EDBAAE0D6E99106069337276CCC506706DF97BEA9EE8120AD"
+      }
+    }
+  ],
+  "exact_count": 6,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}
