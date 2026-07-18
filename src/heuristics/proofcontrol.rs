@@ -18441,6 +18441,84 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_installs_funweights_with_active_owner_context() {
+        let mut bank = test_bank();
+        let left_base = typed_const(&mut bank, "pc_funweight_left");
+        let right_base = typed_const(&mut bank, "pc_funweight_right");
+        let left = typed_unary(&mut bank, "pc_funweight_f", &left_base);
+        let right = typed_unary(&mut bank, "pc_funweight_g", &right_base);
+        let mut first_clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &left, &right, true,
+        )]));
+        let mut second_clause = first_clause.clone();
+        let mut axioms = ClauseSet::new();
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "FunOwnerSearch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let wfcb_defs = vec![
+            "fun_owner=FunWeight(ConstPrio,2,1,3.0,5.0,7.0,pc_funweight_f:10,pc_funweight_left:20)"
+                .to_owned(),
+            "offset_owner=SymOffsetWeight(ConstPrio,2,1,3.0,5.0,7.0,pc_funweight_f:10,pc_funweight_left:-3)"
+                .to_owned(),
+        ];
+        let mut hcb_defs = vec!["FunOwnerSearch=(1*fun_owner,1*offset_owner)".to_owned()];
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!first_clause.query_prop(CP_IS_ORIENTED));
+        assert!(!second_clause.query_prop(CP_IS_ORIENTED));
+        let active_hcb_handle = control.active_hcb.expect("funweight HCB should be active");
+        let super::ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = &mut control;
+        let hcb = hcbs
+            .hcb(active_hcb_handle)
+            .expect("funweight HCB should be installed");
+        let ocb = ocb.as_mut().expect("proof ordering should be installed");
+
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut first_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+        hcb_clause_evaluate_with_bank(hcb, wfcbs, ocb, &mut bank, &mut second_clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        for clause in [&first_clause, &second_clause] {
+            assert!(clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.literals().as_slice()[0].is_maximal());
+            assert_eq!(
+                clause
+                    .evaluations()
+                    .expect("HCB should attach both funweight evaluations")
+                    .eval_no(),
+                2
+            );
+        }
+        let first_evaluations = first_clause
+            .evaluations()
+            .expect("first clause should retain evaluations");
+        let second_evaluations = second_clause
+            .evaluations()
+            .expect("second clause should retain evaluations");
+        for index in 0..2 {
+            assert_eq!(
+                first_evaluations.eval(index).heuristic().to_bits(),
+                second_evaluations.eval(index).heuristic().to_bits()
+            );
+        }
+    }
+
+    #[test]
     fn proof_control_installs_tsm_with_shared_proof_state_bank() {
         let kb_dir = proof_control_tsm_kb_dir();
         write_proof_control_tsm_kb(&kb_dir);
