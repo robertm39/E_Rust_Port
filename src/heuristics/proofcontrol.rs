@@ -9686,19 +9686,20 @@ mod tests {
         preinstantiate_induction, proof_control_alloc,
         proof_control_clause_set_filter_reweigth_with_bank,
         proof_control_clause_set_reweight_with_bank, proof_control_init,
-        proof_control_init_heuristics, proof_control_reset_sat_solver,
-        proof_state_archive_simplified_clause, proof_state_backward_simplify_with_global_indices,
-        proof_state_check_ac_status, proof_state_check_ac_status_with_output,
-        proof_state_check_watchlist_with_docs, proof_state_check_watchlist_with_global_indices,
-        proof_state_check_watchlist_with_output, proof_state_cleanup_unprocessed_clauses,
-        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_bank,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
+        proof_control_init_heuristics, proof_control_init_heuristics_with_formula_axioms,
+        proof_control_reset_sat_solver, proof_state_archive_simplified_clause,
+        proof_state_backward_simplify_with_global_indices, proof_state_check_ac_status,
+        proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
+        proof_state_check_watchlist_with_global_indices, proof_state_check_watchlist_with_output,
+        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_bank, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
+        proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs,
         proof_state_immediate_clausification, proof_state_immediate_clausification_with_docs,
@@ -9757,7 +9758,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
-    use crate::clauses::formulasets::WrappedFormula;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::GlobalIndices;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
@@ -18375,6 +18376,52 @@ mod tests {
         assert_eq!(control.active_hcb(), Some(alt_hcb));
         assert_eq!(params.heuristic_def.as_deref(), Some("Alt=(1*custom)"));
         assert_eq!(hcb_defs, ["Alt=(1*custom)"]);
+    }
+
+    #[test]
+    fn proof_control_weight_context_preserves_formula_relevance_levels() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "pc_formula_rel_a");
+        let b = typed_const(&mut bank, "pc_formula_rel_b");
+        let f_a = typed_unary(&mut bank, "pc_formula_rel_f", &a);
+        let g_b = typed_unary(&mut bank, "pc_formula_rel_g", &b);
+        let f_g_b = typed_unary(&mut bank, "pc_formula_rel_f", &g_b);
+        let mut conjecture = WrappedFormula::wt_formula_alloc(f_a.clone());
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut axiom = WrappedFormula::wt_formula_alloc(f_g_b);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut formulas = FormulaSet::new();
+        formulas.insert(conjecture);
+        formulas.insert(axiom);
+        let target = Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &f_a, &g_b, true,
+        )]));
+        let axioms = ClauseSet::new();
+        let mut control = proof_control_alloc();
+        let mut params = HeuristicParmsCell::default();
+        let wfcb_defs = vec![
+            "formula_rel=RelevanceLevelWeight(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0)"
+                .to_owned(),
+        ];
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init_heuristics_with_formula_axioms(
+            &mut control,
+            &axioms,
+            &formulas,
+            &mut params,
+            &FvIndexParams::default(),
+            &wfcb_defs,
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let actual = control
+            .wfcbs_mut()
+            .find_wfcb_mut("formula_rel")
+            .expect("formula relevance WFCB should be installed")
+            .compute_eval(&bank, &target);
+        assert_eq!(actual.to_bits(), 15.0_f64.to_bits());
     }
 
     #[test]
