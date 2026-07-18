@@ -1,0 +1,32 @@
+{
+  "c": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_6, plain, (q(f(X1))|~p(X1))).\n%\n%cnf(i_0_7, plain, (q(f(X1))|~r(g(X1)))).\n%\n%cnf(i_0_5, plain, (r(g(a))|p(a))).\n%\n%cnf(i_0_8, negated_conjecture, (~q(f(a)))).\n%\n%cnf(i_0_9, plain, (p(a))).\n%\n% Proof found!\n% SZS status Unsatisfiable\n"
+  },
+  "exact": true,
+  "fixture": {
+    "options": [
+      "--fvindex-featuretypes=BillPlus",
+      "--fvindex-maxfeatures=17",
+      "--processed-clauses-limit=1000"
+    ],
+    "path": "inputs/feature-scratch.p",
+    "sha256": "4ba134a8b80f2637ff2757b1078a286e461ee09db5bb1ea672d8123d349df43a"
+  },
+  "reference": {
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "executable_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+    "platform": "Linux under WSL 2"
+  },
+  "rust": {
+    "executable_sha256": "f4b1ce221266417db5d1ebd5b0b6d2ba7abfb2d9f5f23fff09c2c7207198a13e",
+    "platform": "native Windows"
+  },
+  "rust_result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n% Initializing proof state\n% Scanning for AC axioms\n%\n%cnf(i_0_6, plain, (q(f(X1))|~p(X1))).\n%\n%cnf(i_0_7, plain, (q(f(X1))|~r(g(X1)))).\n%\n%cnf(i_0_5, plain, (r(g(a))|p(a))).\n%\n%cnf(i_0_8, negated_conjecture, (~q(f(a)))).\n%\n%cnf(i_0_9, plain, (p(a))).\n%\n% Proof found!\n% SZS status Unsatisfiable\n"
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,133 @@
+{
+  "measurements": [
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 86313500,
+      "round": 0
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 6697300,
+      "round": 0
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 7508900,
+      "round": 1
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 81904200,
+      "round": 1
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 83383700,
+      "round": 2
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 6950500,
+      "round": 2
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 7581900,
+      "round": 3
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 80630800,
+      "round": 3
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 82279000,
+      "round": 4
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 7474400,
+      "round": 4
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 8328500,
+      "round": 5
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 101848400,
+      "round": 5
+    },
+    {
+      "checksum": 31200000,
+      "growths": 400000,
+      "mode": "fresh",
+      "nanoseconds": 99483100,
+      "round": 6
+    },
+    {
+      "checksum": 31200000,
+      "growths": 3,
+      "mode": "reused",
+      "nanoseconds": 11419700,
+      "round": 6
+    }
+  ],
+  "schema_version": 1,
+  "sources": {
+    "benchmark_sha256": "e807a9f7125a308de211dd090649e58c4c449852f21979f48e0fb258a8d29d4f",
+    "freqvectors_rs_sha256": "37d4b782c3c2ca38767cf077550a28cfd364a5b20bc6e032515f8a9ad85195b0",
+    "regmem_rs_sha256": "470e23e38d9e9be8aa96ae6099003ba3058ca8f34a710df94e852312e2ffc0a3"
+  },
+  "summary": {
+    "accepted": true,
+    "deterministic_checks_exact": true,
+    "fresh_allocations_per_round": 400000,
+    "fresh_median_nanoseconds": 83383700,
+    "median_speedup": 11.104649149675717,
+    "minimum_speedup": 1.1,
+    "reused_growths_per_round": 3,
+    "reused_median_nanoseconds": 7508900
+  },
+  "workload": {
+    "iterations_per_round": 400000,
+    "required_lengths": [
+      256,
+      1024,
+      4096,
+      512,
+      2048,
+      384,
+      1536,
+      768
+    ],
+    "rounds": 7,
+    "touched_slots_per_iteration": 12
+  }
+}

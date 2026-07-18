@@ -1,11 +1,13 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::fixdarrays::FixedDArray;
+use crate::basics::regmem::regmem_doubled_limit;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_print_format_string, clause_print_lop_format_string, Clause};
 use crate::inout::scanner::IoFormat;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -14,6 +16,32 @@ pub type PermVector = FixedDArray;
 pub const FVINDEX_MAX_FEATURES_DEFAULT: usize = 17;
 pub const FVINDEX_SYMBOL_SLACK_DEFAULT: usize = 0;
 pub const FV_CLAUSE_FEATURES: usize = 2;
+
+#[derive(Debug, Default)]
+struct FullFeatureScratch {
+    values: Vec<i64>,
+}
+
+impl FullFeatureScratch {
+    fn provide(&mut self, required_len: usize) -> &mut [i64] {
+        if self.values.len() < required_len {
+            let new_limit = regmem_doubled_limit(self.values.len(), required_len)
+                .unwrap_or_else(|_| panic!("full feature-vector scratch length overflowed"));
+            self.values.resize(new_limit, 0);
+        }
+        &mut self.values
+    }
+}
+
+thread_local! {
+    /// Typed, thread-safe ownership adapter for C's static `RegMemProvide` buffer.
+    static FULL_FEATURE_SCRATCH: RefCell<FullFeatureScratch> =
+        RefCell::new(FullFeatureScratch::default());
+}
+
+fn with_full_feature_scratch<R>(required_len: usize, visit: impl FnOnce(&mut [i64]) -> R) -> R {
+    FULL_FEATURE_SCRATCH.with(|scratch| visit(scratch.borrow_mut().provide(required_len)))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -612,18 +640,19 @@ pub fn fv_collect_freq_vector_compute(clause: &Clause, cspec: &FvCollect) -> Fre
             );
         }
 
-        let max_fun = max_clause_fun_code(clause);
-        let mut full_vec = vec![0; full_feature_len(max_fun)];
+        let required_len = full_feature_len(max_clause_fun_code(clause));
         let mut mod_stack = Vec::new();
-        clause.add_symbol_features(&mut mod_stack, &mut full_vec);
+        with_full_feature_scratch(required_len, |full_vec| {
+            clause.add_symbol_features(&mut mod_stack, full_vec);
 
-        while let Some(findex) = mod_stack.pop() {
-            gather_feature_vec(cspec, &full_vec, &mut vec, findex);
-            full_vec[findex] = 0;
-            let depth_index = findex + 1;
-            gather_feature_vec(cspec, &full_vec, &mut vec, depth_index);
-            full_vec[depth_index] = 0;
-        }
+            while let Some(findex) = mod_stack.pop() {
+                gather_feature_vec(cspec, full_vec, &mut vec, findex);
+                full_vec[findex] = 0;
+                let depth_index = findex + 1;
+                gather_feature_vec(cspec, full_vec, &mut vec, depth_index);
+                full_vec[depth_index] = 0;
+            }
+        });
     }
 
     vec
@@ -915,8 +944,8 @@ mod tests {
     use super::{
         bill_plus_features_collect_alloc, fv_collect_freq_vector_compute, fv_pack_clause, fv_size,
         fv_unpack_clause, optimized_var_freq_vector_compute, perm_vector_compute_internal,
-        var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout, FvIndexType,
-        FvOverflowSpec, FV_CLAUSE_FEATURES,
+        var_freq_vector_compute, FreqVector, FullFeatureScratch, FvCollect, FvCollectLayout,
+        FvIndexType, FvOverflowSpec, FV_CLAUSE_FEATURES,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1070,6 +1099,34 @@ mod tests {
 
         let vector = fv_collect_freq_vector_compute(&clause, &cspec);
         assert_eq!(vector.as_slice(), &[3, 1, 2, 0]);
+
+        let repeated = fv_collect_freq_vector_compute(&clause, &cspec);
+        assert_eq!(repeated, vector);
+    }
+
+    #[test]
+    fn collect_scratch_reuses_storage_and_grows_by_c_doubling_policy() {
+        let mut scratch = FullFeatureScratch::default();
+        let first_pointer;
+        {
+            let values = scratch.provide(5);
+            assert_eq!(values.len(), 8);
+            assert!(values.iter().all(|value| *value == 0));
+            values[..5].copy_from_slice(&[1, 2, 3, 4, 5]);
+            first_pointer = values.as_ptr();
+        }
+
+        {
+            let values = scratch.provide(4);
+            assert_eq!(values.len(), 8);
+            assert_eq!(values.as_ptr(), first_pointer);
+            assert_eq!(&values[..5], &[1, 2, 3, 4, 5]);
+        }
+
+        let values = scratch.provide(9);
+        assert_eq!(values.len(), 16);
+        assert_eq!(&values[..5], &[1, 2, 3, 4, 5]);
+        assert!(values[8..].iter().all(|value| *value == 0));
     }
 
     #[test]

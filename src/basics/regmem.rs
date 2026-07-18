@@ -1,3 +1,11 @@
+//! Safe registered-memory compatibility helpers.
+//!
+//! C exposes untyped registered pointers whose allocation contents are
+//! initially uninitialized. Rust uses opaque handles and initialized byte
+//! buffers so safe callers can never observe uninitialized memory. The one C
+//! production owner that needs typed persistent scratch storage wraps the same
+//! doubling policy at its `Vec<i64>` ownership boundary in `freqvectors`.
+
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -62,7 +70,7 @@ fn zeroed_buffer(size: usize) -> Result<Vec<u8>, RegMemError> {
     Ok(buffer)
 }
 
-fn doubled_limit(old_size: usize, new_size: usize) -> Result<usize, RegMemError> {
+pub(crate) fn regmem_doubled_limit(old_size: usize, new_size: usize) -> Result<usize, RegMemError> {
     let mut new_limit = old_size.max(1);
     while new_limit < new_size {
         let Some(next) = new_limit.checked_mul(2) else {
@@ -171,7 +179,7 @@ pub fn try_regmem_provide(
         return Ok(handle);
     }
 
-    let new_limit = doubled_limit(*old_size, new_size)?;
+    let new_limit = regmem_doubled_limit(*old_size, new_size)?;
     let new_handle = match handle {
         Some(handle) => try_regmem_realloc_preserving(handle, new_limit, *old_size)?,
         None => try_regmem_alloc(new_limit)?,
@@ -237,7 +245,7 @@ mod tests {
     use super::{
         regmem_alloc, regmem_buffer_len, regmem_cleanup, regmem_free, regmem_provide,
         regmem_realloc, regmem_registered_count, regmem_with_bytes, regmem_with_bytes_mut,
-        try_regmem_free, try_regmem_realloc, RegMemError, RegMemHandle,
+        try_regmem_free, try_regmem_provide, try_regmem_realloc, RegMemError, RegMemHandle,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -351,5 +359,22 @@ mod tests {
             vec![9, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(regmem_cleanup(), 1);
+    }
+
+    #[test]
+    fn provide_overflow_is_recoverable_and_leaves_ownership_unchanged() {
+        let _guard = global_test_lock();
+        let _ = regmem_cleanup();
+        let mut old_size = usize::MAX / 2 + 1;
+
+        assert_eq!(
+            try_regmem_provide(None, &mut old_size, usize::MAX),
+            Err(RegMemError::SizeOverflow {
+                old_size,
+                new_size: usize::MAX,
+            })
+        );
+        assert_eq!(old_size, usize::MAX / 2 + 1);
+        assert_eq!(regmem_registered_count(), 0);
     }
 }
