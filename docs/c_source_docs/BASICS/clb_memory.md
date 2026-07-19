@@ -133,6 +133,7 @@ Source files reviewed: `BASICS/clb_memory.h`, `BASICS/clb_memory.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Rust exposes this allocator as an owned compatibility model rather than replacing the process allocator. No production Rust module outside `basics::memory`/`basics::newmem` constructs a `MemoryBlock`; executable owners use typed `Vec`, `Box`, and shared handles. This preserves sizing, reuse, retry, counter, string, and flush semantics without recreating C allocator-address identity, uninitialized bytes, or debug poison writes. Exact old/new policy boundaries and the complete Rust owner audit are retained in [`experiment 123`](../../../experiments/2026-07-18-123-memory-policy-boundary/FINDINGS.md).
 
 ### Porting Focus
 

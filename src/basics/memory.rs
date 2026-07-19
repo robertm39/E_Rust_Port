@@ -482,7 +482,7 @@ mod tests {
         mem_free_list_print, mem_is_low, memory_stats, memory_test_lock, reset_memory_for_tests,
         secure_malloc, secure_realloc, secure_strdup, secure_strndup, set_mem_is_low, size_free,
         size_malloc, try_int_array_alloc, try_mem_add_new_chunk, MemoryError, MemoryPolicy,
-        MEM_ALIGN, MEM_MULTIPLIER,
+        MEM_ALIGN, MEM_CHUNKLIMIT, MEM_MULTIPLIER,
     };
 
     #[test]
@@ -517,6 +517,25 @@ mod tests {
         assert_eq!(stats.secure_malloc_count, 1);
         assert_eq!(stats.free_list_blocks, MEM_MULTIPLIER - 1);
         assert_eq!(stats.free_list_bytes, (MEM_MULTIPLIER - 1) * MEM_ALIGN);
+    }
+
+    #[test]
+    fn new_policy_chunk_threshold_uses_effective_bytes_not_bucket_index() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        let below = size_malloc(MemoryPolicy::NewAligned, MEM_CHUNKLIMIT - 1);
+        assert_eq!(below.allocation_size(), MEM_CHUNKLIMIT);
+        let below_stats = memory_stats();
+        assert_eq!(below_stats.secure_malloc_count, 1);
+        assert_eq!(below_stats.free_list_blocks, MEM_MULTIPLIER - 1);
+
+        reset_memory_for_tests();
+        let at = size_malloc(MemoryPolicy::NewAligned, MEM_CHUNKLIMIT);
+        assert_eq!(at.allocation_size(), MEM_CHUNKLIMIT);
+        let at_stats = memory_stats();
+        assert_eq!(at_stats.secure_malloc_count, 1);
+        assert_eq!(at_stats.free_list_blocks, 0);
     }
 
     #[test]

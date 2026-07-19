@@ -1,0 +1,22 @@
+{
+  "accepted": true,
+  "checks": {
+    "c_new_policy_uses_byte_threshold_and_dummy_flush": true,
+    "c_old_policy_is_exact_size_and_flushes": true,
+    "ordinary_c_build_uses_old_allocator": true,
+    "rust_boundary_contains_no_unsafe_code": true,
+    "rust_has_no_external_memory_block_owner": true,
+    "rust_has_no_external_policy_owner": true,
+    "rust_models_exact_and_aligned_policies": true,
+    "rust_newmem_flush_is_no_op": true,
+    "rust_pins_255_256_threshold": true,
+    "rust_uses_owned_initialized_byte_buffers": true
+  },
+  "compatibility_owner_files": [
+    "src/basics/memory.rs",
+    "src/basics/newmem.rs"
+  ],
+  "external_memory_block_owner_files": [],
+  "external_memory_policy_owner_files": [],
+  "schema_version": 1
+}
