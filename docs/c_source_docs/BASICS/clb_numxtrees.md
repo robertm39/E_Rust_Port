@@ -93,7 +93,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`.
 
@@ -114,5 +114,7 @@ Source files reviewed: `BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`.
 
 ### Change Later
 
-- `NumXTreeLimitedTraverseInit` comments say it returns a path to the smallest element smaller than or equal to the limit, but the implementation skips keys below the limit and initializes traversal at the first key greater than or equal to it. Rust preserves the implemented behavior; the C comment should be corrected only after compatibility tests confirm no caller relied on the wording.
+- `NumXTreeLimitedTraverseInit` comments say it returns a path to the smallest element smaller than or equal to the limit, but the implementation skips keys below the limit and initializes traversal at the first key greater than or equal to it. Rust preserves the implemented behavior with logarithmic path initialization; exact, inexact, and out-of-range limits are captured against unchanged C in [`experiment 116`](../../../experiments/2026-07-18-116-numxtree-splay-topology/FINDINGS.md). The vendored C comment remains unchanged.
+- The C header says `NumXTreeStore` zeroes value slots beyond the first two, but the implementation uses `NumXTreeCellAlloc` and initializes only slots zero and one. No current C production caller invokes `NumXTreeStore`; direct-cell formula-definition owners initialize later slots before reading them. Rust honors the documented contract with deterministic `Default` tail values rather than exposing uninitialized memory, while `insert_entry` accepts all four explicit values.
+- C's splay loop compares signed `long` keys by subtraction, which is undefined when the difference overflows. Rust uses total `i64` comparison, matching the pinned LP64 reference for defined inputs and remaining safe at extreme keys. Exact safe index-linked topology, including nearest misses and failed extraction, is retained by experiment 116.
 <!-- END MANUAL REVIEW: c_source_docs -->
