@@ -1,0 +1,119 @@
+{
+  "accepted": true,
+  "records": [
+    {
+      "entries": 1,
+      "max": 0,
+      "min": 0,
+      "name": "single",
+      "offset": -1,
+      "record": "shape",
+      "size": -1,
+      "storage": 20,
+      "type": 1
+    },
+    {
+      "entries": 2,
+      "max": 1,
+      "min": 0,
+      "name": "dense",
+      "offset": 0,
+      "record": "shape",
+      "size": 8,
+      "storage": 76,
+      "type": 2
+    },
+    {
+      "entries": 2,
+      "max": 100,
+      "min": 0,
+      "name": "sparse_descending",
+      "offset": -1,
+      "record": "shape",
+      "size": -1,
+      "storage": 68,
+      "type": 3
+    },
+    {
+      "entries": 2,
+      "max": 100,
+      "min": 0,
+      "name": "sparse_ascending",
+      "offset": 0,
+      "record": "shape",
+      "size": 104,
+      "storage": 460,
+      "type": 2
+    },
+    {
+      "first": 2,
+      "offset": 0,
+      "record": "null_count",
+      "second": 3,
+      "size": 8,
+      "slot_is_null": 1,
+      "storage": 76,
+      "third": 4,
+      "type": 2
+    },
+    {
+      "after_offset": 2,
+      "after_size": 16,
+      "after_storage": 108,
+      "before_offset": 10,
+      "before_size": 8,
+      "before_storage": 76,
+      "entries": 2,
+      "found": 0,
+      "max": 11,
+      "min": 10,
+      "name": "get",
+      "record": "miss"
+    },
+    {
+      "after_offset": 2,
+      "after_size": 16,
+      "after_storage": 108,
+      "before_offset": 10,
+      "before_size": 8,
+      "before_storage": 76,
+      "entries": 2,
+      "found": 0,
+      "max": 11,
+      "min": 10,
+      "name": "delete",
+      "record": "miss"
+    },
+    {
+      "after_offset": 2,
+      "after_size": 16,
+      "after_storage": 108,
+      "before_offset": 10,
+      "before_size": 8,
+      "before_storage": 76,
+      "entries": 2,
+      "found": 1,
+      "key": 10,
+      "max": 11,
+      "min": 10,
+      "record": "iterator"
+    }
+  ],
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_defines_h_sha256": "6eb8b0bc72b86ded679d2d7d113256076000994b248020d0dc18ff81626ecb0e",
+    "clb_intmap_c_sha256": "90449108165d8b04977b32805fea78beac36b5cdbb538961520157c5e3d09e41",
+    "clb_intmap_h_sha256": "30caa90f7c3404c4a2814d6e5eebb35b06c16eeb35754e992b864f51f32b5313",
+    "clb_numtrees_h_sha256": "5a6f5edb168fd001bd5f7fc943a0271fd381f76b13115bd73203614d06e66790",
+    "clb_pdarrays_h_sha256": "62fc3755daf5eff558e4048d3ac5fcbb06c72edb8bebbc5c234d169cc318a8fa",
+    "clb_pdrangearrays_c_sha256": "4f7d6554bd7334ddf0f275c4e0aeec98f835d5ca76737f34c408f1d691a8d093",
+    "clb_pdrangearrays_h_sha256": "3afcf0db7d98f3783f4c051969fe9b5eb2247f8ea4f55a1aad5acaf560244f6a",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "compile_mode": "CONSTANT_MEM_ESTIMATE",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "4944e8573e0ded6f7325bdbc07c57e60ced589d331f3933d22624665a0c7e8eb"
+  },
+  "schema_version": 1,
+  "stderr": "",
+  "stdout": "record=shape,name=single,type=1,entries=1,min=0,max=0,offset=-1,size=-1,storage=20\nrecord=shape,name=dense,type=2,entries=2,min=0,max=1,offset=0,size=8,storage=76\nrecord=shape,name=sparse_descending,type=3,entries=2,min=0,max=100,offset=-1,size=-1,storage=68\nrecord=shape,name=sparse_ascending,type=2,entries=2,min=0,max=100,offset=0,size=104,storage=460\nrecord=null_count,first=2,second=3,third=4,slot_is_null=1,type=2,offset=0,size=8,storage=76\nrecord=miss,name=get,found=0,before_offset=10,before_size=8,after_offset=2,after_size=16,entries=2,min=10,max=11,before_storage=76,after_storage=108\nrecord=miss,name=delete,found=0,before_offset=10,before_size=8,after_offset=2,after_size=16,entries=2,min=10,max=11,before_storage=76,after_storage=108\nrecord=iterator,found=1,key=10,before_offset=10,before_size=8,after_offset=2,after_size=16,entries=2,min=10,max=11,before_storage=76,after_storage=108\n"
+}

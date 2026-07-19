@@ -717,4 +717,27 @@ mod tests {
             INTMAPCELL_MEM + 2 * NUMTREECELL_MEM
         );
     }
+
+    #[test]
+    fn sparse_second_key_preserves_c_single_insertion_order_asymmetry() {
+        let mut ascending = IntMap::new();
+        ascending.assign(0, "zero");
+        ascending.assign(100, "hundred");
+
+        let mut descending = IntMap::new();
+        descending.assign(100, "hundred");
+        descending.assign(0, "zero");
+
+        assert_eq!(ascending.entries(), descending.entries());
+        assert_eq!(ascending.map_type(), IntMapType::Array);
+        assert_eq!(descending.map_type(), IntMapType::Tree);
+        assert_eq!(
+            ascending.constant_mem_storage_estimate(),
+            INTMAPCELL_MEM + PDARRAYCELL_MEM + INTORP_MEM + 104 * INTORP_MEM
+        );
+        assert_eq!(
+            descending.constant_mem_storage_estimate(),
+            INTMAPCELL_MEM + 2 * NUMTREECELL_MEM
+        );
+    }
 }

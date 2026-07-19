@@ -1,0 +1,40 @@
+{
+  "accepted": true,
+  "checks": {
+    "c_array_iterator_starts_at_raw_lower_and_grows": true,
+    "c_array_lookup_and_delete_use_growing_element_access": true,
+    "c_constant_storage_shapes_are_present": true,
+    "c_null_array_slots_inflate_entry_count": true,
+    "c_single_transition_has_argument_order_asymmetry": true,
+    "compatibility_boundary_contains_no_unsafe_code": true,
+    "constant_storage_owners_are_exactly_fv_and_pdt": true,
+    "fv_owner_uses_map_only_for_storage_compatibility": true,
+    "pdt_owner_guards_created_slot_and_deletes_known_child": true,
+    "production_has_no_mutating_iterator_owner": true,
+    "production_has_no_mutating_lookup_owner": true,
+    "production_owners_are_exactly_fv_and_pdt": true,
+    "rust_exposes_side_effect_free_iteration": true,
+    "rust_pins_same_keys_different_representation": true,
+    "rust_preserves_all_four_representations": true,
+    "rust_preserves_mutating_miss_boundary": true,
+    "rust_preserves_null_count_inflation": true,
+    "rust_preserves_single_argument_order": true
+  },
+  "constant_storage_owner_files": [
+    "src/clauses/fcvindexing.rs",
+    "src/clauses/pdtrees.rs"
+  ],
+  "delete_owner_files": [
+    "src/clauses/pdtrees.rs"
+  ],
+  "get_ref_owner_files": [
+    "src/clauses/pdtrees.rs"
+  ],
+  "mutating_iterator_owner_files": [],
+  "mutating_lookup_owner_files": [],
+  "production_owner_files": [
+    "src/clauses/fcvindexing.rs",
+    "src/clauses/pdtrees.rs"
+  ],
+  "schema_version": 1
+}
