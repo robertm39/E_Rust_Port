@@ -882,7 +882,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        Scanner::from_file_content("-", data, false)
+        Scanner::from_file_content("<stdin>", data, false)
     } else {
         Scanner::from_file(Path::new(name), false).map_err(epatternize_scanner_open_diagnostic)
     }
@@ -1020,7 +1020,10 @@ fn epatternize_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error
 }
 
 fn epatternize_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -1817,10 +1820,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -1848,9 +1850,8 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert!(
-            error
-                .message()
-                .contains("missing-include.p for reading\nepatternize: "),
+            error.message().contains("Cannot stat file ")
+                && error.message().contains("missing-include.p\nepatternize: "),
             "unexpected include diagnostic: {}",
             error.message()
         );
@@ -1885,10 +1886,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(fs::read_to_string(&output_path).unwrap(), "");
         assert!(stdout.is_empty());

@@ -1602,10 +1602,14 @@ class ComparisonTests(unittest.TestCase):
             "bogus_record",
             cases_by_name["epatternize/tstp-unrecognized-tail"]["stdin"],
         )
+        epatternize_old_case = cases_by_name["epatternize/old-tptp-record-mix"]
+        self.assertIn("input_formula(old_formula", epatternize_old_case["stdin"])
+        self.assertIn("input_clause(old_clause", epatternize_old_case["stdin"])
         epatternize_mixed_case = cases_by_name["epatternize/tstp-mixed-corpus"]
-        self.assertIn("input_formula(old_formula", epatternize_mixed_case["stdin"])
+        self.assertIn("fof(unit_formula", epatternize_mixed_case["stdin"])
         self.assertIn("tcf(typed_clause", epatternize_mixed_case["stdin"])
         self.assertIn("cnf(watch,watchlist", epatternize_mixed_case["stdin"])
+        self.assertNotIn("input_formula", epatternize_mixed_case["stdin"])
         epatternize_include_case = cases_by_name[
             "epatternize/nested-selected-include"
         ]
@@ -1615,7 +1619,7 @@ class ComparisonTests(unittest.TestCase):
             epatternize_include_case["workdir_files"]["child.p"],
         )
         self.assertIn(
-            "input_clause(old_clause",
+            "cnf(old_clause",
             epatternize_include_case["workdir_files"]["grandchild.p"],
         )
         epatternize_output_case = cases_by_name["epatternize/multi-file-output"]
@@ -1665,6 +1669,68 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("f(h(f(b),g(b,a)))", recursive_tsm_case["stdin"])
         empty_tsm_case = cases_by_name["tsm_classify/empty-test-set"]
         self.assertTrue(empty_tsm_case["stdin"].endswith("Test:\n.\n"))
+
+    def test_support_tool_matrix_pins_live_baseline_policy(self):
+        cases = e_interop.tool_comparison_cases(e_interop.REFERENCE_TOOL_BINARIES)
+
+        self.assertEqual(len(cases), 216)
+        self.assertEqual(
+            {
+                case["name"]: case["reference_mode"]
+                for case in cases
+                if case.get("reference_mode") == "ho"
+            },
+            {
+                "classify_problem/fool-term-let": "ho",
+                "classify_problem/raw-thf": "ho",
+                "classify_problem/merged-positive-fool": "ho",
+                "classify_problem/merged-positive-thf": "ho",
+                "e_axfilter/tstp-lambda-def-formulas": "ho",
+                "enormalizer/thf-wrapper-matrix": "ho",
+                "term2dag/shared-typed-boundary": "ho",
+            },
+        )
+        self.assertEqual(
+            {
+                case["name"]: case["expected_mismatches"]
+                for case in cases
+                if case.get("expected_mismatches")
+            },
+            {
+                "CSSCPA_filter/large-stateful-corpus": ["normalized_stdout"],
+                "checkproof/real-e-single-percent-marker-success": [
+                    "normalized_stdout"
+                ],
+                "checkproof/e-single-percent-marker-success": [
+                    "normalized_stdout"
+                ],
+                "classify_problem/fool-term-let": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                ],
+                "classify_problem/merged-positive-fool": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                ],
+                "ekb_ginsert/stdin-protocol": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "epatternize/multi-file-output": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "term2dag/shared-typed-boundary": ["normalized_stdout"],
+            },
+        )
 
     def test_tool_fixture_materialization_substitutes_arguments(self):
         [case] = [

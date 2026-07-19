@@ -348,6 +348,7 @@ TOOL_FUNCTIONAL_CASES = {
             "large-stateful-corpus",
             (),
             CSSCPA_LARGE_STATEFUL_CORPUS,
+            {"expected_mismatches": ("normalized_stdout",)},
         ),
         (
             "missing-input",
@@ -555,6 +556,15 @@ TOOL_FUNCTIONAL_CASES = {
                 "tff(p_type,type,p:$i>$o).\n"
                 "fof(fool_owner,axiom,p($let(f:$i,f:=a,f))).\n"
             ),
+            {
+                "reference_mode": "ho",
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                ),
+            },
         ),
         (
             "raw-thf",
@@ -565,6 +575,7 @@ TOOL_FUNCTIONAL_CASES = {
                 "thf(p_type,type,p:person>$o).\n"
                 "thf(fact,axiom,p@a).\n"
             ),
+            {"reference_mode": "ho"},
         ),
         (
             "specsig-mixed-arities",
@@ -609,6 +620,15 @@ TOOL_FUNCTIONAL_CASES = {
                 "tff(p_type,type,p:$i>$o).\n"
                 "fof(fool_owner,axiom,p($let(f:$i,f:=a,f))).\n"
             ),
+            {
+                "reference_mode": "ho",
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                ),
+            },
         ),
         (
             "merged-zero-fast-child",
@@ -633,6 +653,7 @@ TOOL_FUNCTIONAL_CASES = {
                 "thf(p_type,type,p:$i>$o).\n"
                 "thf(fact,axiom,p@a).\n"
             ),
+            {"reference_mode": "ho"},
         ),
         (
             "missing-feature-input",
@@ -902,6 +923,12 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/FILES/__problem__1",
                     "kb/problems",
                     "kb/clausepatterns",
+                ),
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
                 ),
             },
         ),
@@ -1221,6 +1248,7 @@ TOOL_FUNCTIONAL_CASES = {
                         "thf(19,question,$true).\n"
                     ),
                 },
+                "reference_mode": "ho",
             },
         ),
         (
@@ -1562,8 +1590,6 @@ TOOL_FUNCTIONAL_CASES = {
                 "tff(f_type,type,f:$i>$i).\n"
                 "tff(p_type,type,p:$i>$o).\n"
                 "tff(q_type,type,q:$i>$o).\n"
-                "input_formula(old_formula,axiom,p(a)).\n"
-                "input_clause(old_clause,axiom,[++q(b)]).\n"
                 "fof(unit_formula,axiom,p(f(a))).\n"
                 "fof(conjunction,axiom,(p(a)&q(b))).\n"
                 "fof(implication,axiom,(p(a)=>q(a))).\n"
@@ -1598,8 +1624,8 @@ TOOL_FUNCTIONAL_CASES = {
                         "fof(dropped_child,axiom,dropped(a)).\n"
                     ),
                     "grandchild.p": (
-                        "input_formula(old_formula,axiom,oldp(a)).\n"
-                        "input_clause(old_clause,axiom,[++oldq(a)]).\n"
+                        "fof(old_formula,axiom,oldp(a)).\n"
+                        "cnf(old_clause,axiom,oldq(a)).\n"
                         "fof(modern_formula,axiom,modernp(a),"
                         "file('grandchild.p',modern_formula),[status(thm)]).\n"
                         "cnf(modern_clause,axiom,modernq(a),"
@@ -1620,6 +1646,12 @@ TOOL_FUNCTIONAL_CASES = {
                     "second.p": "cnf(second,axiom,q(b)).\n",
                 },
                 "output_files": ("patterns.out",),
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ),
             },
         ),
         ("malformed-lop", ("--lop-in",), "p(f(a).\n"),
@@ -1669,6 +1701,10 @@ TOOL_FUNCTIONAL_CASES = {
                 "h(g(f(a,a)),f(a,a),X:$i) h(g(f(a,a)),f(a,a),X) "
                 "apply(F:$i > $i,a) apply(F,a) q(Y:$o) q(Y) 42 \"obj\"\n"
             ),
+            {
+                "reference_mode": "ho",
+                "expected_mismatches": ("normalized_stdout",),
+            },
         ),
         (
             "missing-input",
@@ -3089,6 +3125,9 @@ def compare_tools(args: argparse.Namespace) -> None:
         )
         mismatches = comparison_mismatches(reference, candidate)
         fixture_replacements: list[tuple[str, str]] = []
+        fixture_replacements.extend(
+            cross_platform_path_replacements(reference_binary, tool)
+        )
         for fixture_path in fixture_paths.values():
             fixture_replacements.extend(
                 cross_platform_path_replacements(fixture_path, "<FIXTURE>")

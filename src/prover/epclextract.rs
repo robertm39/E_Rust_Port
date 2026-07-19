@@ -458,7 +458,7 @@ fn scanner_for_input(
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        Scanner::from_file_content("-", data, ignore_comments)?
+        Scanner::from_file_content("<stdin>", data, ignore_comments)?
     } else {
         Scanner::from_file(Path::new(name), ignore_comments)
             .map_err(epclextract_scanner_open_diagnostic)?
@@ -546,7 +546,10 @@ fn epclextract_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error
 }
 
 fn epclextract_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -989,10 +992,9 @@ mod tests {
         .expect_err("missing input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -1023,10 +1025,9 @@ mod tests {
         .expect_err("missing input file is reported after output creation");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(
             std::fs::read_to_string(&output_path).expect("output file is readable"),

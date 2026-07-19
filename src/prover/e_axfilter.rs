@@ -1074,7 +1074,10 @@ fn e_axfilter_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error)
 }
 
 fn e_axfilter_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().rsplit_once(": ") else {

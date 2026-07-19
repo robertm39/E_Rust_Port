@@ -1308,7 +1308,7 @@ mod tests {
         let missing = temp_path("missing");
         let error = Scanner::from_file(&missing, false).unwrap_err();
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().contains("Cannot open file"));
+        assert!(error.message().contains("Cannot stat file"));
     }
 
     #[test]

@@ -104,7 +104,7 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors including `CreateStream`-style fail-or-null file opening and `NULL`/`"-"` stdin labeling as `"<stdin>"`, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
+- `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors including `CreateStream`-style fail-or-null file opening with C's named-path `stat` preflight and `NULL`/`"-"` stdin labeling as `"<stdin>"`, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing. The complete live scanner-diagnostic comparison is retained in [`experiment 127`](../../../experiments/2026-07-18-127-support-tool-matrix-closure/FINDINGS.md).
 - Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, pops back to the previous stream in LIFO order, and offers a C-shaped asserting close for nonempty-stack compatibility paths; `Scanner` uses this stack for automatic include splicing.
 - Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, C-shaped stdin source labeling, string-source construction, file-named in-memory sources for stdin-like data, stacked stream push/pop restoration, and the `CloseStackedInput` nonempty-stack assertion.
 

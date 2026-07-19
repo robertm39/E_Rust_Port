@@ -138,6 +138,13 @@ those outputs under `expected-differences/` and counts them separately; an
 extra or missing difference still fails the command. Self-tests ignore those
 declarations and require exact archived-C equality.
 
+Cases that exercise the unified Rust parser on typed or higher-order input set
+`reference_mode` to `ho` and use the archived `eprover-ho` support tool. The
+maintained baseline currently covers 216 cases across 25 tools with zero
+unexpected mismatches and eight exact declared differences; the pinned report
+and a reproducible audit are retained in
+[`experiment 127`](../experiments/2026-07-18-127-support-tool-matrix-closure/FINDINGS.md).
+
 ## Performance comparison
 
 ```powershell

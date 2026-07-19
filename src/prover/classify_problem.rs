@@ -1638,7 +1638,7 @@ fn parse_raw_feature_line(scanner: &mut Scanner) -> Result<ParsedRawFeatureLine,
 fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagnostic> {
     if name == "-" {
         let data = read_stdin_data(stdin)?;
-        Scanner::from_file_content("-", data, true)
+        Scanner::from_file_content("<stdin>", data, true)
     } else {
         Scanner::from_file(Path::new(name), true).map_err(classify_scanner_open_diagnostic)
     }
@@ -1647,7 +1647,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
 fn real_input_scanner(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagnostic> {
     if name == "-" {
         let data = read_stdin_data(stdin)?;
-        Scanner::from_file_content("-", data, false)
+        Scanner::from_file_content("<stdin>", data, false)
     } else {
         Scanner::from_file(Path::new(name), false).map_err(classify_scanner_open_diagnostic)
     }
@@ -1787,7 +1787,10 @@ fn classify_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -
 }
 
 fn classify_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -2471,10 +2474,9 @@ mod tests {
         .expect_err("missing input is still reported after output creation");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         assert_eq!(
@@ -2507,10 +2509,9 @@ mod tests {
         .expect_err("missing feature input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -2538,10 +2539,9 @@ mod tests {
         .expect_err("missing real input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -2600,7 +2600,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
             error.message(),
-            "-:2:(Column 1):(just read ''): Colon (':') expected, but No token (probably EOF) read "
+            "<stdin>:2:(Column 1):(just read ''): Colon (':') expected, but No token (probably EOF) read "
         );
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());

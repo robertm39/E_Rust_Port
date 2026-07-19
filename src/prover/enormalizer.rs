@@ -17,6 +17,7 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     parse_tstp_top_level_distinct_formula, tcf_tstp_parse, tformula_has_free_vars,
+    tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -881,7 +882,11 @@ fn parse_tstp_wrapped_formula(
         scanner.accept_tok(TokenType::FULLSTOP)?;
         return Ok(FormulaTarget {
             formula: wrapped_formula(
-                bank.true_term().clone(),
+                if formula_problem_type == ProblemType::HigherOrder {
+                    tformula_prop_constant_alloc(bank, true)?
+                } else {
+                    bank.true_term().clone()
+                },
                 CP_TYPE_AXIOM,
                 &name,
                 &start_source,
@@ -1001,7 +1006,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        return Scanner::from_file_content("-", data, true);
+        return Scanner::from_file_content("<stdin>", data, true);
     }
     Scanner::from_file(Path::new(name), true).map_err(enormalizer_scanner_open_diagnostic)
 }
@@ -1240,7 +1245,10 @@ fn enormalizer_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error
 }
 
 fn enormalizer_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -1996,7 +2004,15 @@ mod tests {
             assert_eq!(target.problem_type, problem_type, "{input}");
             assert_eq!(target.formula.get_id(true), name, "{input}");
             assert_eq!(target.formula.query_tptp_type(), CP_TYPE_AXIOM, "{input}");
-            assert_eq!(target.formula.formula(), bank.true_term(), "{input}");
+            if problem_type == ProblemType::HigherOrder {
+                assert_eq!(
+                    target.formula.formula().f_code(),
+                    bank.signature().eqn_code(),
+                    "{input}"
+                );
+            } else {
+                assert_eq!(target.formula.formula(), bank.true_term(), "{input}");
+            }
             assert!(target.formula.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
             assert!(scanner.test_tok(TokenType::NO_TOKEN), "{input}");
         }
@@ -2500,8 +2516,8 @@ mod tests {
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
         let rendered = String::from_utf8(stdout).expect("utf8");
-        assert!(rendered.contains("thf(person_type, axiom, $true)."));
-        assert!(rendered.contains(" ==> thf(person_type, axiom, $true)."));
+        assert!(rendered.contains("thf(person_type, axiom, ($true))."));
+        assert!(rendered.contains(" ==> thf(person_type, axiom, ($true))."));
 
         let _ = fs::remove_file(rule_path);
         let _ = fs::remove_file(formula_path);
@@ -2928,10 +2944,9 @@ mod tests {
         .expect_err("missing rule file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -2963,10 +2978,9 @@ mod tests {
         .expect_err("missing target file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
@@ -3000,10 +3014,9 @@ mod tests {
         .expect_err("missing rule file is reported after output creation");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(output_path.exists());
         assert_eq!(fs::read_to_string(&output_path).expect("output read"), "");
         assert!(stdout.is_empty());

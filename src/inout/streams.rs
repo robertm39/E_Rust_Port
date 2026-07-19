@@ -90,6 +90,12 @@ impl InputStream {
     }
 
     pub fn from_file(path: &Path) -> Result<Self, Diagnostic> {
+        fs::metadata(path).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot stat file {}: {error}", path.display()),
+            )
+        })?;
         let data = fs::read(path).map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,

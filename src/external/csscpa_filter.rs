@@ -244,7 +244,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
         stdin
             .read_to_end(&mut data)
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
-        return Scanner::from_file_content("-", data, true);
+        return Scanner::from_file_content("<stdin>", data, true);
     }
     Scanner::from_file(Path::new(name), true).map_err(csscpa_scanner_open_diagnostic)
 }
@@ -370,7 +370,10 @@ fn csscpa_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> 
 }
 
 fn csscpa_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
-    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+    if error.code() != ErrorCode::FILE_ERROR
+        || !(error.message().starts_with("Cannot stat file ")
+            || error.message().starts_with("Cannot open file "))
+    {
         return error;
     }
     let Some((prefix, source_error)) = error.message().split_once(": ") else {
@@ -799,10 +802,9 @@ check improve(1.0,0.0): cnf(csscpa_pos,axiom,p(a)).\n"
         .expect_err("missing input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().starts_with(&format!(
-            "Cannot open file {} for reading",
-            missing_path.display()
-        )));
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
         assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
