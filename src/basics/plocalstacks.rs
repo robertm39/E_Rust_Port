@@ -314,7 +314,10 @@ impl<T, Tag> PLocalTaggedStack<T, Tag> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PLocalStack, PLocalTaggedStack, PLOCALSTACK_DEFAULT_SIZE};
+    use super::{
+        PLocalStack, PLocalTaggedStack, PLOCALSTACK_DEFAULT_SIZE, PLOCALSTACK_TAG_BITS,
+        PLOCALSTACK_TAG_MASK,
+    };
 
     #[test]
     fn default_stack_starts_empty_with_c_default_size() {
@@ -403,6 +406,33 @@ mod tests {
         assert_eq!(stack.current_entries(), 2);
         assert_eq!(stack.pop(), ("term-b", 2));
         assert_eq!(stack.pop(), ("term-a", 1));
+    }
+
+    #[test]
+    fn tagged_stack_constants_and_frame_size_match_portable_c_slots() {
+        assert_eq!(PLOCALSTACK_TAG_BITS, 2);
+        assert_eq!(PLOCALSTACK_TAG_MASK, 3);
+        assert_eq!(
+            std::mem::size_of::<(usize, u8)>(),
+            2 * std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn tagged_wide_ensure_matches_portable_c_slot_growth() {
+        let mut stack = PLocalTaggedStack::with_size(64);
+
+        stack.ensure_space(40);
+        for value in 0..40 {
+            stack.push(value, u8::try_from(value & 3).unwrap());
+        }
+
+        assert_eq!(stack.allocated_slots(), 256);
+        assert_eq!(stack.current_entries(), 40);
+        assert_eq!(stack.current_slots(), 80);
+        for expected in (0..40).rev() {
+            assert_eq!(stack.pop(), (expected, u8::try_from(expected & 3).unwrap()));
+        }
     }
 
     #[test]
