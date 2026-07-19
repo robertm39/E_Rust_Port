@@ -14,6 +14,51 @@ use std::sync::Arc;
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
 pub const EMPTY_INCLUDE_SELECTOR_SENTINEL: &str = "** Not a legal name**";
 
+/// Apply one C `FormulaAndClauseSetParse` include selector to an entry name.
+///
+/// An absent or empty selector accepts every entry. The sentinel inserted for
+/// `include(..., [])` rejects every entry, while a named match is marked as
+/// found for the caller's later missing-selector check.
+pub(crate) fn include_entry_selected(
+    name: Option<&str>,
+    selectors: Option<&mut StrTree<i64, i64>>,
+) -> bool {
+    let Some(selectors) = selectors else {
+        return true;
+    };
+    if selectors.is_empty() {
+        return true;
+    }
+    if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
+        return false;
+    }
+    let Some(name) = name else {
+        return false;
+    };
+    let Some(entry) = selectors.find_mut(name) else {
+        return false;
+    };
+    entry.val1 = 1;
+    true
+}
+
+/// Apply nested include selectors in C's inner-to-outer filtering order.
+///
+/// C filters each completed included set before returning it to its parent.
+/// Testing the innermost frame first is the streaming equivalent: an entry
+/// rejected by a nested selector must not mark an outer selector as found.
+pub(crate) fn include_entry_selected_by_stack(
+    name: Option<&str>,
+    include_selector_stack: &mut [StrTree<i64, i64>],
+) -> bool {
+    for selectors in include_selector_stack.iter_mut().rev() {
+        if !include_entry_selected(name, Some(selectors)) {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
 pub enum IoFormat {

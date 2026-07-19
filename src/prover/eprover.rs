@@ -140,8 +140,8 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
-    test_id as scanner_test_id, test_tok as scanner_test_tok, token_pos_rep, IoFormat, Scanner,
-    TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL, MAX_TOKEN_LOOKAHEAD,
+    include_entry_selected, include_entry_selected_by_stack, test_id as scanner_test_id,
+    test_tok as scanner_test_tok, token_pos_rep, IoFormat, Scanner, TokenType, MAX_TOKEN_LOOKAHEAD,
 };
 use crate::inout::signals::{
     configure_time_limits, e_sched_signal_setup, e_signal_setup, finalize_cpu_limit_outcome,
@@ -11062,7 +11062,7 @@ fn parse_tptp_app_encode_entry_list(
         if scanner.test_id("input_clause") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            if tstp_entry_selected(
+            if include_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
@@ -11070,13 +11070,13 @@ fn parse_tptp_app_encode_entry_list(
             }
         } else if scanner.test_id("input_formula") {
             let formula = parse_tptp_app_encode_formula(scanner, bank)?;
-            if tstp_entry_selected(formula.name(), selectors.as_deref_mut()) {
+            if include_entry_selected(formula.name(), selectors.as_deref_mut()) {
                 result.add_formula_owner(formula, bank, formulas)?;
             }
         } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            if tstp_entry_selected(
+            if include_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
@@ -11084,7 +11084,7 @@ fn parse_tptp_app_encode_entry_list(
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
             let formula = parse_tptp_app_encode_formula(scanner, bank)?;
-            if tstp_entry_selected(formula.name(), selectors.as_deref_mut()) {
+            if include_entry_selected(formula.name(), selectors.as_deref_mut()) {
                 result.add_formula_owner(formula, bank, formulas)?;
             }
         } else {
@@ -11115,7 +11115,7 @@ fn parse_tstp_app_encode_entry_list(
                 ProblemType::FirstOrder,
                 ClauseParseOptions::default(),
             )?;
-            if tstp_entry_selected(
+            if include_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
@@ -11123,13 +11123,13 @@ fn parse_tstp_app_encode_entry_list(
             }
         } else if scanner.test_id("input_formula") {
             let formula = parse_tptp_app_encode_formula(scanner, bank)?;
-            if tstp_entry_selected(formula.name(), selectors.as_deref_mut()) {
+            if include_entry_selected(formula.name(), selectors.as_deref_mut()) {
                 result.add_formula_owner(formula, bank, formulas)?;
             }
         } else if scanner.test_id("cnf") {
             set_problem_type(ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            if tstp_entry_selected(
+            if include_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
@@ -11138,7 +11138,7 @@ fn parse_tstp_app_encode_entry_list(
         } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
                 if formula.query_tptp_type() != CP_TYPE_WATCH_CLAUSE
-                    && tstp_entry_selected(formula.name(), selectors.as_deref_mut())
+                    && include_entry_selected(formula.name(), selectors.as_deref_mut())
                 {
                     result.add_formula_owner(formula, bank, formulas)?;
                 }
@@ -11214,7 +11214,7 @@ fn parse_tptp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected_by_include_stack(
+            if include_entry_selected_by_stack(
                 clause.info().and_then(ClauseInfo::name),
                 include_selector_stack,
             ) {
@@ -11228,10 +11228,7 @@ fn parse_tptp_entry_list(
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected_by_include_stack(
-                Some(parsed.name.as_str()),
-                include_selector_stack,
-            ) {
+            if include_entry_selected_by_stack(Some(parsed.name.as_str()), include_selector_stack) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -11250,7 +11247,7 @@ fn parse_tptp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected_by_include_stack(
+            if include_entry_selected_by_stack(
                 clause.info().and_then(ClauseInfo::name),
                 include_selector_stack,
             ) {
@@ -11264,10 +11261,7 @@ fn parse_tptp_entry_list(
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected_by_include_stack(
-                Some(parsed.name.as_str()),
-                include_selector_stack,
-            ) {
+            if include_entry_selected_by_stack(Some(parsed.name.as_str()), include_selector_stack) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -11340,7 +11334,7 @@ fn parse_tstp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected_by_include_stack(
+            if include_entry_selected_by_stack(
                 clause.info().and_then(ClauseInfo::name),
                 include_selector_stack,
             ) {
@@ -11354,10 +11348,7 @@ fn parse_tstp_entry_list(
                 formula_preprocessing,
                 destination.formula_owner_handling(),
             )?;
-            if tstp_entry_selected_by_include_stack(
-                Some(parsed.name.as_str()),
-                include_selector_stack,
-            ) {
+            if include_entry_selected_by_stack(Some(parsed.name.as_str()), include_selector_stack) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -11376,7 +11367,7 @@ fn parse_tstp_entry_list(
                 clause_parse_options,
             )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
-            if tstp_entry_selected_by_include_stack(
+            if include_entry_selected_by_stack(
                 clause.info().and_then(ClauseInfo::name),
                 include_selector_stack,
             ) {
@@ -11393,10 +11384,7 @@ fn parse_tstp_entry_list(
                 destination.formula_owner_handling(),
             )?;
             result.problem_type = combine_problem_types(result.problem_type, record_problem_type);
-            if tstp_entry_selected_by_include_stack(
-                Some(parsed.name.as_str()),
-                include_selector_stack,
-            ) {
+            if include_entry_selected_by_stack(Some(parsed.name.as_str()), include_selector_stack) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
                     result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
@@ -11521,41 +11509,6 @@ fn tstp_formula_free_variables_error(position: &str) -> Diagnostic {
         ErrorCode::SYNTAX_ERROR,
         format!("{position} {TSTP_FORMULA_FREE_VARIABLES_MESSAGE}"),
     )
-}
-
-fn tstp_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
-    let Some(selectors) = selectors else {
-        return true;
-    };
-    if selectors.is_empty() {
-        return true;
-    }
-    if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
-        return false;
-    }
-    let Some(name) = name else {
-        return false;
-    };
-    let Some(entry) = selectors.find_mut(name) else {
-        return false;
-    };
-    entry.val1 = 1;
-    true
-}
-
-fn tstp_entry_selected_by_include_stack(
-    name: Option<&str>,
-    include_selector_stack: &mut [StrTree<i64, i64>],
-) -> bool {
-    // C filters each completed included set before returning it to its parent.
-    // Testing the innermost frame first is the streaming equivalent: an entry
-    // rejected by a nested selector must not mark an outer selector as found.
-    for selectors in include_selector_stack.iter_mut().rev() {
-        if !tstp_entry_selected(name, Some(selectors)) {
-            return false;
-        }
-    }
-    true
 }
 
 fn check_tstp_include_selectors_found(

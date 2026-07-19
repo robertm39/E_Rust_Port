@@ -27,7 +27,8 @@ use crate::inout::basicparser::{
     parse_int, parse_skip_parenthesized_expr,
 };
 use crate::inout::scanner::{
-    token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+    include_entry_selected_by_stack, token_pos_rep, IoFormat, Scanner, TokenType,
+    EMPTY_INCLUDE_SELECTOR_SENTINEL,
 };
 use crate::inout::tempfile::temp_file_create;
 use crate::terms::signature::Signature;
@@ -1812,7 +1813,9 @@ fn parse_batch_problem_entries_root(
     ctrl: &StructFofSpec,
 ) -> Result<BatchProblemData, Diagnostic> {
     reset_problem_type();
-    let mut problem = parse_batch_problem_entries(scanner, bank, ctrl, None)?;
+    let mut include_selector_stack = Vec::new();
+    let mut problem =
+        parse_batch_problem_entries(scanner, bank, ctrl, &mut include_selector_stack)?;
     problem.problem_type = normalize_batch_problem_type(problem.problem_type);
     Ok(problem)
 }
@@ -1821,7 +1824,7 @@ fn parse_batch_problem_entries(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     ctrl: &StructFofSpec,
-    mut selectors: Option<&mut StrTree<i64, i64>>,
+    include_selector_stack: &mut Vec<StrTree<i64, i64>>,
 ) -> Result<BatchProblemData, Diagnostic> {
     let mut clauses = ClauseSet::new();
     let mut formulas = FormulaSet::new();
@@ -1832,16 +1835,16 @@ fn parse_batch_problem_entries(
             set_problem_type(ProblemType::FirstOrder)?;
             problem_type = combine_batch_problem_types(problem_type, ProblemType::FirstOrder)?;
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            if batch_entry_selected(
+            if include_entry_selected_by_stack(
                 clause.info().and_then(ClauseInfo::name),
-                selectors.as_deref_mut(),
+                include_selector_stack,
             ) {
                 insert_batch_clause(bank, &mut clauses, &mut formulas, clause)?;
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
             let parsed = parse_batch_tstp_formula(scanner, bank)?;
             problem_type = combine_batch_problem_types(problem_type, parsed.problem_type)?;
-            if batch_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+            if include_entry_selected_by_stack(Some(parsed.name.as_str()), include_selector_stack) {
                 insert_batch_formula(bank, &mut clauses, &mut formulas, parsed.formula)?;
             }
         } else if scanner.test_id("include") {
@@ -1850,12 +1853,15 @@ fn parse_batch_problem_entries(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                let mut included_data = parse_batch_problem_entries(
-                    &mut included,
-                    bank,
-                    ctrl,
-                    Some(&mut include_selectors),
-                )?;
+                include_selector_stack.push(include_selectors);
+                let included_result =
+                    parse_batch_problem_entries(&mut included, bank, ctrl, include_selector_stack);
+                let popped_selectors = include_selector_stack.pop();
+                debug_assert!(
+                    popped_selectors.is_some(),
+                    "recursive batch include must own one selector frame"
+                );
+                let mut included_data = included_result?;
                 problem_type =
                     combine_batch_problem_types(problem_type, included_data.problem_type)?;
                 clauses.insert_set(&mut included_data.clauses);
@@ -1873,7 +1879,7 @@ fn parse_batch_problem_entries(
         }
     }
 
-    if let Some(selector_tree) = selectors.as_ref() {
+    if let Some(selector_tree) = include_selector_stack.last() {
         check_batch_include_selectors_found(scanner, selector_tree)?;
     }
 
@@ -2096,26 +2102,6 @@ fn parsed_include_skip_tree(ctrl: &StructFofSpec) -> StrTree<i64, i64> {
     skip
 }
 
-fn batch_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
-    let Some(selectors) = selectors else {
-        return true;
-    };
-    if selectors.is_empty() {
-        return true;
-    }
-    if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
-        return false;
-    }
-    let Some(name) = name else {
-        return false;
-    };
-    let Some(entry) = selectors.find_mut(name) else {
-        return false;
-    };
-    entry.val1 = 1;
-    true
-}
-
 fn check_batch_include_selectors_found(
     scanner: &Scanner,
     selectors: &StrTree<i64, i64>,
@@ -2256,6 +2242,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::cell::Cell;
     use std::collections::VecDeque;
     use std::ffi::OsString;
@@ -3278,6 +3265,98 @@ mod tests {
             formulas[1].info().and_then(ClauseInfo::name),
             Some("goal_formula")
         );
+    }
+
+    #[test]
+    fn batch_explicit_include_policy_applies_nested_selectors_inner_to_outer() {
+        let _guard = global_state_lock();
+        let dir = test_path("batch-nested-include-selectors");
+        _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("grand.ax"),
+            "fof(inner_selected, axiom, p(a)).\n\
+             fof(outer_selected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("child.ax"),
+            "include('grand.ax',[inner_selected]).\n\
+             fof(outer_selected, axiom, r(a)).\n",
+        )
+        .unwrap();
+        let source = dir.join("main.p");
+        fs::write(&source, "include('child.ax',[outer_selected]).\n").unwrap();
+        let source_name = source.to_string_lossy().into_owned();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        let names = problem
+            .formulas
+            .iter()
+            .map(|formula| formula.info().and_then(ClauseInfo::name).unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["outer_selected"]);
+        assert!(problem.clauses.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn batch_explicit_include_policy_skips_registered_but_preserves_repeats() {
+        let _guard = global_state_lock();
+        let dir = test_path("batch-skip-and-repeat-includes");
+        _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("skip.ax"), "fof(skipped, axiom, p(a)).\n").unwrap();
+        fs::write(dir.join("repeat.ax"), "fof(repeated, axiom, q(a)).\n").unwrap();
+        let source = dir.join("main.p");
+        fs::write(
+            &source,
+            "include('skip.ax',[missing]).\n\
+             include('repeat.ax').\n\
+             include('repeat.ax').\n\
+             fof(main, axiom, r(a)).\n",
+        )
+        .unwrap();
+        let source_name = source.to_string_lossy().into_owned();
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        assert!(ctrl.mark_include_parsed("skip.ax"));
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        let names = problem
+            .formulas
+            .iter()
+            .map(|formula| formula.info().and_then(ClauseInfo::name).unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["repeated", "repeated", "main"]);
+        assert!(problem.clauses.is_empty());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

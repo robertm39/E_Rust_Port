@@ -1,0 +1,2 @@
+include('grand.ax',[inner_selected]).
+fof(outer_selected, axiom, r(a)).

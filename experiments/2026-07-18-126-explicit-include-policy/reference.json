@@ -1,0 +1,25 @@
+{
+  "accepted": true,
+  "c": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "fof(outer_selected, axiom, r(a)).\nfof(repeated, axiom, s(a)).\nfof(repeated, axiom, s(a)).\nfof(main, axiom, t(a)).\n"
+  },
+  "case": "nested inner/outer selectors plus repeated include",
+  "reference": {
+    "c_binary_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+    "c_formula_parser_sha256": "249b475f1b22a655b16c07ec13786d66eef818c8a9c3c2b7b761365d015b0b4f",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "fixture_sha256": "6923cbf696a8e4464d59a6a3354b6317f4f20e2734d802fdb22dfa2798c84929",
+    "platform": "unchanged C under WSL 2; Rust on Windows",
+    "rust_batch_parser_sha256": "23f7aab1796308f3c9cff960e81a19feef98d1c3d4a7a4c8f2aa84a397badaf4",
+    "rust_general_parser_sha256": "154cf65494b547b01725661a360bd5420abf6301916b4f5a48b38c3949af65f4",
+    "rust_scanner_sha256": "9d0fb5fc25d573b827d7c71540475c80d1f96b5c7b438e89ab096c0d0061568f"
+  },
+  "rust": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "fof(outer_selected, axiom, r(a)).\nfof(repeated, axiom, s(a)).\nfof(repeated, axiom, s(a)).\nfof(main, axiom, t(a)).\n"
+  },
+  "schema_version": 1
+}
