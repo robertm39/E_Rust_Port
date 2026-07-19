@@ -52,7 +52,7 @@ mod tests {
             subst
                 .used_ids
                 .as_ref()
-                .and_then(|tree| tree.find(7))
+                .and_then(|tree| tree.find_binary(7))
                 .unwrap()
                 .val1,
             11

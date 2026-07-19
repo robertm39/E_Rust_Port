@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_numtrees_c_sha256": "81e5123787a19efecbdc071d3f292b8768b81be915e692deb55b6d76aa4a97c1",
+    "clb_numtrees_h_sha256": "5a6f5edb168fd001bd5f7fc943a0271fd381f76b13115bd73203614d06e66790",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "f815888dcd2aedb57ea642db3c0c7079f7c56e82704d7cf867aced9f3987c2f3"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "empty=.\nstore4=[4](.,.)\nstore2=[2](.,[4](.,.))\nstore6=[6]([4]([2](.,.),.),.)\nstore3=[3]([2](.,.),[4](.,[6](.,.)))\nduplicate4=[4]([3]([2](.,.),.),[6](.,.))\nvalues4=40,400\nfind2=[2](.,[3](.,[4](.,[6](.,.))))\nmax=[2](.,[3](.,[4](.,[6](.,.))))\nmiss1=[2](.,[3](.,[4](.,[6](.,.))))\nmiss9=[6]([3]([2](.,.),[4](.,.)),.)\nfind4=[4]([3]([2](.,.),.),[6](.,.))\nextract_miss5=[6]([4]([3]([2](.,.),.),.),.)\nextract3=[2](.,[4](.,[6](.,.)))\nextract_root=[4](.,[6](.,.))\nnodes=4\nall=1,3,5,7\nlimit4=5,7\nlimit5=5,7\nlimit8=\ndebug_keys_begin\n7\n    5\n        3\n            1\n            []\n        []\n    []\nTree size: 4\ndebug_keys_end\n"
+  },
+  "schema_version": 1
+}

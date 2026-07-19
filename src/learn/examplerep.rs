@@ -117,7 +117,7 @@ impl ExampleSet {
 
     #[must_use]
     pub fn find_ident(&self, ident: i64) -> Option<&ExampleRep> {
-        self.ident_index.find(ident).map(|entry| &entry.val1)
+        self.ident_index.find_binary(ident).map(|entry| &entry.val1)
     }
 
     pub fn find_ident_mut(&mut self, ident: i64) -> Option<&mut ExampleRep> {

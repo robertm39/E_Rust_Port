@@ -261,7 +261,7 @@ mod tests {
     }
 
     fn find_term(set: &FlatAnnoSet, term: &Term) -> FlatAnnoTerm {
-        set.find(term.entry_no())
+        set.find_binary(term.entry_no())
             .unwrap_or_else(|| panic!("flat annotation for term {} not found", term.entry_no()))
             .val1
             .clone()

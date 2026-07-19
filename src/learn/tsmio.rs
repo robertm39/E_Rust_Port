@@ -684,8 +684,14 @@ mod tests {
         assert_eq!(annos.nodes(), 2);
         assert!(annos.get(30).is_none());
         assert_eq!(flat.nodes(), 2);
-        let left_flat = &flat.find(left.entry_no()).expect("left flat term").val1;
-        let right_flat = &flat.find(right.entry_no()).expect("right flat term").val1;
+        let left_flat = &flat
+            .find_binary(left.entry_no())
+            .expect("left flat term")
+            .val1;
+        let right_flat = &flat
+            .find_binary(right.entry_no())
+            .expect("right flat term")
+            .val1;
         assert_close(left_flat.eval(), 19.0 / 6.0);
         assert_close(right_flat.eval(), 7.0);
         assert_close(left_flat.eval_weight(), 1.0);

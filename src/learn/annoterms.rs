@@ -84,7 +84,7 @@ impl AnnoSet {
 
     #[must_use]
     pub fn get(&self, entry_no: i64) -> Option<&AnnoTerm> {
-        self.set.find(entry_no).map(|entry| &entry.val1)
+        self.set.find_binary(entry_no).map(|entry| &entry.val1)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (i64, &AnnoTerm)> {

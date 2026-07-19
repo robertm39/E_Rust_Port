@@ -1169,10 +1169,10 @@ mod tests {
 
         let freqs = tb_count_term_freqs(&bank);
 
-        assert_eq!(freqs.find(first.entry_no()).unwrap().val1, 1);
-        assert_eq!(freqs.find(second.entry_no()).unwrap().val1, 1);
-        assert_eq!(freqs.find(a.entry_no()).unwrap().val1, 3);
-        assert_eq!(freqs.find(g.entry_no()).unwrap().val1, 1);
+        assert_eq!(freqs.find_binary(first.entry_no()).unwrap().val1, 1);
+        assert_eq!(freqs.find_binary(second.entry_no()).unwrap().val1, 1);
+        assert_eq!(freqs.find_binary(a.entry_no()).unwrap().val1, 3);
+        assert_eq!(freqs.find_binary(g.entry_no()).unwrap().val1, 1);
     }
 
     #[test]
