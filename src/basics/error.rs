@@ -142,6 +142,19 @@ pub fn init_error(program_name: impl Into<String>) {
     *lock_program_name() = program_name.into();
 }
 
+/// Initialize the global diagnostic name from the executable invocation.
+///
+/// C entry points that call `InitIO(argv[0])` or `InitError(argv[0])` retain
+/// the exact invoked name. `fallback_program_name` covers the theoretical
+/// empty-argument environment while keeping the canonical executable name.
+pub fn init_error_from_invocation(fallback_program_name: &str) {
+    init_error(
+        std::env::args()
+            .next()
+            .unwrap_or_else(|| fallback_program_name.to_owned()),
+    );
+}
+
 #[must_use]
 pub fn program_name() -> String {
     lock_program_name().clone()
@@ -206,6 +219,17 @@ pub fn render_tmp_errno_warning_message(message: &str) -> String {
         &format!("Warning: {message}"),
         &system_message,
     )
+}
+
+/// Write one C-shaped top-level fatal diagnostic using the stored program name.
+///
+/// The exit status is returned even when stderr cannot be written, matching the
+/// executable wrappers' fatal-path behavior.
+#[must_use]
+pub fn report_fatal_diagnostic(output: &mut impl Write, code: ErrorCode, message: &str) -> u8 {
+    let program_name = program_name();
+    let _ = output.write_all(render_error_message(&program_name, message).as_bytes());
+    code.exit_status()
 }
 
 pub fn write_error_message(
@@ -326,9 +350,9 @@ mod tests {
         elog_in_dir_with_stderr, init_error, program_name, render_elog_record,
         render_error_message, render_sys_error_message, render_sys_warning_message,
         render_tmp_errno_error_message, render_tmp_errno_warning_message, render_warning_message,
-        set_tmp_errno, test_letter_string, tmp_errno, write_elog_message, write_error_message,
-        write_sys_error_message, write_sys_warning_message, write_warning_message, Diagnostic,
-        ErrorCode,
+        report_fatal_diagnostic, set_tmp_errno, test_letter_string, tmp_errno, write_elog_message,
+        write_error_message, write_sys_error_message, write_sys_warning_message,
+        write_warning_message, Diagnostic, ErrorCode,
     };
     use crate::test_support::global_state_lock;
     use std::io;
@@ -417,6 +441,23 @@ mod tests {
 
         init_error("Unknown program");
         set_tmp_errno(0);
+    }
+
+    #[test]
+    fn top_level_fatal_report_uses_stored_program_name_and_status() {
+        let _guard = global_state_lock();
+        init_error("invoked/path/termprops");
+        let mut output = Vec::new();
+
+        let status =
+            report_fatal_diagnostic(&mut output, ErrorCode::SYNTAX_ERROR, "malformed term");
+
+        assert_eq!(status, ErrorCode::SYNTAX_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "invoked/path/termprops: malformed term\n"
+        );
+        init_error("Unknown program");
     }
 
     #[test]
