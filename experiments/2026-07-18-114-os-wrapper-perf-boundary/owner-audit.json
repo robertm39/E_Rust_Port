@@ -1,0 +1,75 @@
+{
+  "accepted": true,
+  "c_counter_names": [
+    "MguTimer",
+    "SatTimer",
+    "ParamodTimer",
+    "PMIndexTimer",
+    "IndexUnifTimer",
+    "BWRWTimer",
+    "BWRWIndexTimer",
+    "IndexMatchTimer",
+    "FreqVecTimer",
+    "FVIndexTimer",
+    "SubsumeTimer",
+    "SetSubsumeTimer",
+    "ClauseEvalTimer"
+  ],
+  "c_secure_fopen_callers": [
+    {
+      "mode": "w",
+      "path": "eprover/CONTROL/cco_batch_spec.c"
+    },
+    {
+      "mode": "w",
+      "path": "eprover/CONTROL/cco_batch_spec.c"
+    },
+    {
+      "mode": "w",
+      "path": "eprover/CONTROL/cco_einteractive_mode.c"
+    }
+  ],
+  "checks": {
+    "all_direct_c_secure_fopen_callers_use_write_mode": true,
+    "c_prints_exact_counter_surface": true,
+    "duplicated_rlimit_data_branch_is_retained": true,
+    "linux_proc_fallback_uses_runtime_clock_rate": true,
+    "linux_resource_usage_prefers_getrusage_with_proc_fallback": true,
+    "perf_guards_use_process_cpu_clock_and_single_start_slots": true,
+    "rust_has_no_extra_legacy_counter_names": true,
+    "rust_prints_exact_counter_surface": true,
+    "sat_timer_wraps_main_saturation_owner": true,
+    "windows_job_object_is_memory_only": true
+  },
+  "expected_counter_names": [
+    "MguTimer",
+    "SatTimer",
+    "ParamodTimer",
+    "PMIndexTimer",
+    "IndexUnifTimer",
+    "BWRWTimer",
+    "BWRWIndexTimer",
+    "IndexMatchTimer",
+    "FreqVecTimer",
+    "FVIndexTimer",
+    "SubsumeTimer",
+    "SetSubsumeTimer",
+    "ClauseEvalTimer"
+  ],
+  "rust_counter_names": [
+    "MguTimer",
+    "SatTimer",
+    "ParamodTimer",
+    "PMIndexTimer",
+    "IndexUnifTimer",
+    "BWRWTimer",
+    "BWRWIndexTimer",
+    "IndexMatchTimer",
+    "FreqVecTimer",
+    "FVIndexTimer",
+    "SubsumeTimer",
+    "SetSubsumeTimer",
+    "ClauseEvalTimer"
+  ],
+  "schema_version": 1
+}

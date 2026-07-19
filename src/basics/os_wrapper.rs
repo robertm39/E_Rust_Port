@@ -143,12 +143,6 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
 
 #[cfg(windows)]
 #[must_use]
-pub fn set_hard_cpu_limit(limit_seconds: u64) -> RLimResult {
-    windows_kernel32::set_process_cpu_limit(limit_seconds)
-}
-
-#[cfg(windows)]
-#[must_use]
 pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         RLimResult::Success
@@ -526,10 +520,11 @@ fn timeval_seconds(time: linux_resource::TimeVal) -> f64 {
 fn linux_proc_resource_usage() -> Option<ResourceUsage> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     let (user_ticks, system_ticks) = parse_linux_stat_cpu_ticks(&stat)?;
+    let ticks_per_second = linux_resource::clock_ticks_per_second()?;
     let status = std::fs::read_to_string("/proc/self/status").ok();
     Some(ResourceUsage {
-        user_time_seconds: linux_ticks_to_seconds(user_ticks),
-        system_time_seconds: linux_ticks_to_seconds(system_ticks),
+        user_time_seconds: linux_ticks_to_seconds(user_ticks, ticks_per_second),
+        system_time_seconds: linux_ticks_to_seconds(system_ticks, ticks_per_second),
         // Linux getrusage returns ru_maxrss in KiB, despite E's historical
         // "pages" label. Preserve the raw Linux-style value for compatibility.
         max_resident_pages: status
@@ -567,14 +562,11 @@ fn parse_linux_status_vm_hwm_kib(status: &str) -> Option<u64> {
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 #[allow(clippy::cast_precision_loss)]
-fn linux_ticks_to_seconds(ticks: u64) -> f64 {
-    // Linux exposes /proc CPU fields in USER_HZ units. sysconf(_SC_CLK_TCK)
-    // would require libc FFI; the port keeps this safe and documents that
-    // exact nonstandard tick rates should be revisited if reference tests need
-    // them.
-    ticks as f64 / 100.0
+fn linux_ticks_to_seconds(ticks: u64, ticks_per_second: i64) -> f64 {
+    debug_assert!(ticks_per_second > 0);
+    ticks as f64 / ticks_per_second as f64
 }
 
 #[cfg(windows)]
@@ -620,9 +612,7 @@ mod windows_kernel32 {
     type Handle = *mut c_void;
 
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
-    pub(super) const JOB_OBJECT_LIMIT_PROCESS_TIME: Dword = 0x0000_0002;
     pub(super) const JOB_OBJECT_LIMIT_PROCESS_MEMORY: Dword = 0x0000_0100;
-    const HUNDRED_NS_PER_SEC: u64 = 10_000_000;
 
     #[repr(C)]
     struct FileTime {
@@ -739,7 +729,6 @@ mod windows_kernel32 {
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     pub(super) struct JobLimitState {
-        pub(super) process_time_100ns: Option<i64>,
         pub(super) process_memory_limit: Option<usize>,
     }
 
@@ -750,16 +739,8 @@ mod windows_kernel32 {
         update_process_limits(|limits| limits.process_memory_limit = Some(limit))
     }
 
-    pub(super) fn set_process_cpu_limit(limit_seconds: u64) -> RLimResult {
-        let Some(limit) = seconds_to_100ns(limit_seconds) else {
-            return RLimResult::Failed;
-        };
-        update_process_limits(|limits| limits.process_time_100ns = Some(limit))
-    }
-
     fn update_process_limits(update: impl FnOnce(&mut JobLimitState)) -> RLimResult {
         static PROCESS_LIMITS: Mutex<JobLimitState> = Mutex::new(JobLimitState {
-            process_time_100ns: None,
             process_memory_limit: None,
         });
 
@@ -796,11 +777,6 @@ mod windows_kernel32 {
         } else {
             RLimResult::Success
         }
-    }
-
-    pub(super) fn seconds_to_100ns(seconds: u64) -> Option<i64> {
-        let ticks = seconds.checked_mul(HUNDRED_NS_PER_SEC)?;
-        i64::try_from(ticks).ok()
     }
 
     pub(super) fn process_times_100ns() -> Option<(u64, u64)> {
@@ -937,19 +913,15 @@ mod windows_kernel32 {
     pub(super) const fn job_object_extended_limit_information(
         limits: JobLimitState,
     ) -> JobObjectExtendedLimitInformation {
-        let (time_flag, time_limit) = match limits.process_time_100ns {
-            Some(limit) => (JOB_OBJECT_LIMIT_PROCESS_TIME, limit),
-            None => (0, 0),
-        };
         let (memory_flag, memory_limit) = match limits.process_memory_limit {
             Some(limit) => (JOB_OBJECT_LIMIT_PROCESS_MEMORY, limit),
             None => (0, 0),
         };
         JobObjectExtendedLimitInformation {
             basic_limit_information: JobObjectBasicLimitInformation {
-                per_process_user_time_limit: time_limit,
+                per_process_user_time_limit: 0,
                 per_job_user_time_limit: 0,
-                limit_flags: time_flag | memory_flag,
+                limit_flags: memory_flag,
                 minimum_working_set_size: 0,
                 maximum_working_set_size: 0,
                 active_process_limit: 0,
@@ -1094,6 +1066,8 @@ mod linux_resource {
     #[cfg(target_os = "linux")]
     const CLOCKS_PER_SEC_COMPAT: c_long = 1_000_000;
     #[cfg(target_os = "linux")]
+    const SC_CLK_TCK_COMPAT: i32 = 2;
+    #[cfg(target_os = "linux")]
     const SC_PAGESIZE_COMPAT: i32 = 30;
     #[cfg(target_os = "linux")]
     const SC_NPROCESSORS_ONLN_COMPAT: i32 = 84;
@@ -1142,6 +1116,11 @@ mod linux_resource {
         // for the current process, matching C GetUSecClock's use.
         let ticks = unsafe { clock() };
         clock_ticks_to_usec(ticks, CLOCKS_PER_SEC_COMPAT)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn clock_ticks_per_second() -> Option<i64> {
+        i64::try_from(sysconf_positive(SC_CLK_TCK_COMPAT)?).ok()
     }
 
     #[cfg(target_os = "linux")]
@@ -1253,8 +1232,8 @@ mod tests {
     use super::{
         combine_rlimit_results, current_resource_usage, format_resource_usage, get_core_number,
         get_msec_time, get_sec_time, get_sec_time_mod, get_system_page_size,
-        get_system_phys_memory, get_usec_clock, get_usec_time, parse_linux_stat_cpu_ticks,
-        parse_linux_status_vm_hwm_kib, resource_limit_error_message,
+        get_system_phys_memory, get_usec_clock, get_usec_time, linux_ticks_to_seconds,
+        parse_linux_stat_cpu_ticks, parse_linux_status_vm_hwm_kib, resource_limit_error_message,
         resource_usage_from_linux_rusage, secure_fclose, secure_fopen, set_memory_limit,
         stride_memory, RLimResult, RLimitOutcome, ResourceUsage,
     };
@@ -1298,10 +1277,9 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_job_limit_info_sets_combined_process_limits() {
+    fn windows_job_limit_info_sets_only_the_process_memory_limit() {
         let info = super::windows_kernel32::job_object_extended_limit_information(
             super::windows_kernel32::JobLimitState {
-                process_time_100ns: Some(30_000_000),
                 process_memory_limit: Some(4096),
             },
         );
@@ -1311,26 +1289,12 @@ mod tests {
                 & super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY,
             super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY
         );
+        assert_eq!(info.basic_limit_information.per_process_user_time_limit, 0);
         assert_eq!(
-            info.basic_limit_information.limit_flags
-                & super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_TIME,
-            super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_TIME
-        );
-        assert_eq!(
-            info.basic_limit_information.per_process_user_time_limit,
-            30_000_000
+            info.basic_limit_information.limit_flags,
+            super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY
         );
         assert_eq!(info.process_memory_limit, 4096);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_cpu_limit_seconds_convert_to_job_time_units() {
-        assert_eq!(
-            super::windows_kernel32::seconds_to_100ns(3),
-            Some(30_000_000)
-        );
-        assert_eq!(super::windows_kernel32::seconds_to_100ns(u64::MAX), None);
     }
 
     #[cfg(windows)]
@@ -1497,6 +1461,12 @@ mod tests {
             None
         );
         assert_eq!(super::linux_resource::clock_ticks_to_usec(1, 0), None);
+    }
+
+    #[test]
+    fn linux_proc_ticks_use_the_runtime_clock_tick_rate() {
+        assert!((linux_ticks_to_seconds(250, 100) - 2.5).abs() < f64::EPSILON);
+        assert!((linux_ticks_to_seconds(250, 250) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

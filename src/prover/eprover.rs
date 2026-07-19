@@ -6077,6 +6077,8 @@ fn run_proof_search<W: Write + ?Sized>(
         }
     };
     next_doc_ident = presat_result.next_doc_ident;
+    let sat_timer =
+        crate::basics::perf_counters::start(crate::basics::perf_counters::PerfCounter::SatTimer);
     let saturation = if let Some(outcome) = presat_result.outcome {
         SaturationRunResult {
             outcome,
@@ -6085,6 +6087,7 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         run_main_saturation(output, config, next_doc_ident, &mut state, &mut control)?
     };
+    drop(sat_timer);
     next_doc_ident = saturation.next_doc_ident;
     let mut outcome = saturation.outcome;
     if hard_time_limit_expired_in_saturation(&outcome) {

@@ -1,9 +1,9 @@
 #[cfg(feature = "instrument-perf-ctr")]
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 #[cfg(feature = "instrument-perf-ctr")]
-use std::sync::atomic::{AtomicI64, Ordering};
+use crate::basics::os_wrapper::get_usec_clock;
 #[cfg(feature = "instrument-perf-ctr")]
-use std::time::Instant;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PerfCounter {
@@ -20,17 +20,10 @@ pub enum PerfCounter {
     SubsumeTimer,
     SetSubsumeTimer,
     ClauseEvalTimer,
-    GenerateTimer,
-    ForwardModifyTimer,
-    InsertNewTimer,
-    ForwardRewriteTimer,
-    OrientTimer,
-    SimplifyReflectTimer,
-    SelectionTimer,
 }
 
 #[cfg(feature = "instrument-perf-ctr")]
-const ALL_COUNTERS: [PerfCounter; 20] = [
+const ALL_COUNTERS: [PerfCounter; 13] = [
     PerfCounter::MguTimer,
     PerfCounter::SatTimer,
     PerfCounter::ParamodTimer,
@@ -44,13 +37,6 @@ const ALL_COUNTERS: [PerfCounter; 20] = [
     PerfCounter::SubsumeTimer,
     PerfCounter::SetSubsumeTimer,
     PerfCounter::ClauseEvalTimer,
-    PerfCounter::GenerateTimer,
-    PerfCounter::ForwardModifyTimer,
-    PerfCounter::InsertNewTimer,
-    PerfCounter::ForwardRewriteTimer,
-    PerfCounter::OrientTimer,
-    PerfCounter::SimplifyReflectTimer,
-    PerfCounter::SelectionTimer,
 ];
 
 impl PerfCounter {
@@ -70,13 +56,6 @@ impl PerfCounter {
             Self::SubsumeTimer => "SubsumeTimer",
             Self::SetSubsumeTimer => "SetSubsumeTimer",
             Self::ClauseEvalTimer => "ClauseEvalTimer",
-            Self::GenerateTimer => "GenerateTimer",
-            Self::ForwardModifyTimer => "ForwardModifyTimer",
-            Self::InsertNewTimer => "InsertNewTimer",
-            Self::ForwardRewriteTimer => "ForwardRewriteTimer",
-            Self::OrientTimer => "OrientTimer",
-            Self::SimplifyReflectTimer => "SimplifyReflectTimer",
-            Self::SelectionTimer => "SelectionTimer",
         }
     }
 }
@@ -89,7 +68,6 @@ pub fn start(counter: PerfCounter) -> PerfCounterGuard {
 #[cfg(feature = "instrument-perf-ctr")]
 pub struct PerfCounterGuard {
     counter: PerfCounter,
-    start: Instant,
 }
 
 #[cfg(not(feature = "instrument-perf-ctr"))]
@@ -98,10 +76,8 @@ pub struct PerfCounterGuard;
 #[cfg(feature = "instrument-perf-ctr")]
 impl PerfCounterGuard {
     fn new(counter: PerfCounter) -> Self {
-        Self {
-            counter,
-            start: Instant::now(),
-        }
+        counter_start_cell(counter).store(get_usec_clock(), Ordering::Relaxed);
+        Self { counter }
     }
 }
 
@@ -115,8 +91,9 @@ impl PerfCounterGuard {
 #[cfg(feature = "instrument-perf-ctr")]
 impl Drop for PerfCounterGuard {
     fn drop(&mut self) {
-        let micros = i64::try_from(self.start.elapsed().as_micros()).unwrap_or(i64::MAX);
-        add_micros(self.counter, micros);
+        let end = get_usec_clock();
+        let start = counter_start_cell(self.counter).swap(0, Ordering::Relaxed);
+        add_micros(self.counter, end.saturating_sub(start));
     }
 }
 
@@ -147,19 +124,31 @@ static SET_SUBSUME_TIMER: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
 static CLAUSE_EVAL_TIMER: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static GENERATE_TIMER: AtomicI64 = AtomicI64::new(0);
+static MGU_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static FORWARD_MODIFY_TIMER: AtomicI64 = AtomicI64::new(0);
+static SAT_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static INSERT_NEW_TIMER: AtomicI64 = AtomicI64::new(0);
+static PARAMOD_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static FORWARD_REWRITE_TIMER: AtomicI64 = AtomicI64::new(0);
+static PM_INDEX_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static ORIENT_TIMER: AtomicI64 = AtomicI64::new(0);
+static INDEX_UNIF_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static SIMPLIFY_REFLECT_TIMER: AtomicI64 = AtomicI64::new(0);
+static BWRW_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "instrument-perf-ctr")]
-static SELECTION_TIMER: AtomicI64 = AtomicI64::new(0);
+static BWRW_INDEX_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static INDEX_MATCH_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static FREQ_VEC_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static FV_INDEX_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static SUBSUME_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static SET_SUBSUME_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "instrument-perf-ctr")]
+static CLAUSE_EVAL_TIMER_STORE: AtomicI64 = AtomicI64::new(0);
 
 #[cfg(feature = "instrument-perf-ctr")]
 fn counter_cell(counter: PerfCounter) -> &'static AtomicI64 {
@@ -177,13 +166,25 @@ fn counter_cell(counter: PerfCounter) -> &'static AtomicI64 {
         PerfCounter::SubsumeTimer => &SUBSUME_TIMER,
         PerfCounter::SetSubsumeTimer => &SET_SUBSUME_TIMER,
         PerfCounter::ClauseEvalTimer => &CLAUSE_EVAL_TIMER,
-        PerfCounter::GenerateTimer => &GENERATE_TIMER,
-        PerfCounter::ForwardModifyTimer => &FORWARD_MODIFY_TIMER,
-        PerfCounter::InsertNewTimer => &INSERT_NEW_TIMER,
-        PerfCounter::ForwardRewriteTimer => &FORWARD_REWRITE_TIMER,
-        PerfCounter::OrientTimer => &ORIENT_TIMER,
-        PerfCounter::SimplifyReflectTimer => &SIMPLIFY_REFLECT_TIMER,
-        PerfCounter::SelectionTimer => &SELECTION_TIMER,
+    }
+}
+
+#[cfg(feature = "instrument-perf-ctr")]
+fn counter_start_cell(counter: PerfCounter) -> &'static AtomicI64 {
+    match counter {
+        PerfCounter::MguTimer => &MGU_TIMER_STORE,
+        PerfCounter::SatTimer => &SAT_TIMER_STORE,
+        PerfCounter::ParamodTimer => &PARAMOD_TIMER_STORE,
+        PerfCounter::PmIndexTimer => &PM_INDEX_TIMER_STORE,
+        PerfCounter::IndexUnifTimer => &INDEX_UNIF_TIMER_STORE,
+        PerfCounter::BwrwTimer => &BWRW_TIMER_STORE,
+        PerfCounter::BwrwIndexTimer => &BWRW_INDEX_TIMER_STORE,
+        PerfCounter::IndexMatchTimer => &INDEX_MATCH_TIMER_STORE,
+        PerfCounter::FreqVecTimer => &FREQ_VEC_TIMER_STORE,
+        PerfCounter::FvIndexTimer => &FV_INDEX_TIMER_STORE,
+        PerfCounter::SubsumeTimer => &SUBSUME_TIMER_STORE,
+        PerfCounter::SetSubsumeTimer => &SET_SUBSUME_TIMER_STORE,
+        PerfCounter::ClauseEvalTimer => &CLAUSE_EVAL_TIMER_STORE,
     }
 }
 
@@ -229,7 +230,7 @@ pub fn counter_line(counter: PerfCounter) -> String {
 
 #[cfg(all(test, feature = "instrument-perf-ctr"))]
 mod tests {
-    use super::{add_micros, counter_line, reset, PerfCounter};
+    use super::{add_micros, counter_line, reset, statistics_string, PerfCounter};
 
     #[test]
     fn counter_line_matches_c_perf_ctr_print_shape() {
@@ -239,6 +240,34 @@ mod tests {
         assert_eq!(
             counter_line(PerfCounter::MguTimer),
             "% PC(MguTimer)                         : 0.000910"
+        );
+    }
+
+    #[test]
+    fn statistics_match_c_counter_names_and_order() {
+        let statistics = statistics_string();
+        let labels = statistics
+            .lines()
+            .map(|line| line.split(':').next().unwrap().trim_end())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            [
+                "% PC(MguTimer)",
+                "% PC(SatTimer)",
+                "% PC(ParamodTimer)",
+                "% PC(PMIndexTimer)",
+                "% PC(IndexUnifTimer)",
+                "% PC(BWRWTimer)",
+                "% PC(BWRWIndexTimer)",
+                "% PC(IndexMatchTimer)",
+                "% PC(FreqVecTimer)",
+                "% PC(FVIndexTimer)",
+                "% PC(SubsumeTimer)",
+                "% PC(SetSubsumeTimer)",
+                "% PC(ClauseEvalTimer)",
+            ]
         );
     }
 }

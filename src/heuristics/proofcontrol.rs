@@ -2205,7 +2205,7 @@ pub fn proof_state_forward_modify_clause_with_docs(
 
 #[expect(
     clippy::too_many_lines,
-    reason = "C-compatible ForwardModifyClause staging keeps mutation order and phase timers visible"
+    reason = "C-compatible ForwardModifyClause staging keeps mutation order visible"
 )]
 fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     state: &mut ProofState,
@@ -2216,9 +2216,6 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     problem_type: ProblemType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
-    let _timer = crate::basics::perf_counters::start(
-        crate::basics::perf_counters::PerfCounter::ForwardModifyTimer,
-    );
     let prefer_general = control.heuristic_parms().prefer_general;
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let local_rw = control.heuristic_parms().local_rw;
@@ -2240,32 +2237,27 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
         forward_modify_check_higher_order_ordering(higher_order, ocb, clause, &demodulators)?;
         loop {
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
-            let steps = {
-                let _timer = crate::basics::perf_counters::start(
-                    crate::basics::perf_counters::PerfCounter::ForwardRewriteTimer,
-                );
-                match doc_context.as_mut() {
-                    Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
-                        output,
-                        session,
-                        terms,
-                        ocb,
-                        clause,
-                        &demodulators,
-                        level,
-                        prefer_general,
-                        lambda_demod,
-                    )?,
-                    None => clause_compute_li_normalform_plain(
-                        terms,
-                        ocb,
-                        clause,
-                        &demodulators,
-                        level,
-                        prefer_general,
-                        lambda_demod,
-                    )?,
-                }
+            let steps = match doc_context.as_mut() {
+                Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
+                    output,
+                    session,
+                    terms,
+                    ocb,
+                    clause,
+                    &demodulators,
+                    level,
+                    prefer_general,
+                    lambda_demod,
+                )?,
+                None => clause_compute_li_normalform_plain(
+                    terms,
+                    ocb,
+                    clause,
+                    &demodulators,
+                    level,
+                    prefer_general,
+                    lambda_demod,
+                )?,
             };
             rw_steps += steps;
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
@@ -2298,17 +2290,9 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             }
 
-            {
-                let _timer = crate::basics::perf_counters::start(
-                    crate::basics::perf_counters::PerfCounter::OrientTimer,
-                );
-                clause.orient_literals_with_bank(ocb, terms)?;
-            }
+            clause.orient_literals_with_bank(ocb, terms)?;
 
             if forward_modify_condense(terms, clause, condense_clause, &mut doc_context)? {
-                let _timer = crate::basics::perf_counters::start(
-                    crate::basics::perf_counters::PerfCounter::OrientTimer,
-                );
                 clause.orient_literals_with_bank(ocb, terms)?;
             }
 
@@ -2321,24 +2305,19 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             }
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
 
-            {
-                let _timer = crate::basics::perf_counters::start(
-                    crate::basics::perf_counters::PerfCounter::SimplifyReflectTimer,
-                );
-                forward_modify_positive_simplify_reflect(
-                    terms,
-                    processed_sets.pos_eqns,
-                    clause,
-                    strong_unit_forward_subsumption,
-                    &mut doc_context,
-                )?;
-                forward_modify_negative_simplify_reflect(
-                    terms,
-                    processed_sets.neg_units,
-                    clause,
-                    &mut doc_context,
-                )?;
-            }
+            forward_modify_positive_simplify_reflect(
+                terms,
+                processed_sets.pos_eqns,
+                clause,
+                strong_unit_forward_subsumption,
+                &mut doc_context,
+            )?;
+            forward_modify_negative_simplify_reflect(
+                terms,
+                processed_sets.neg_units,
+                clause,
+                &mut doc_context,
+            )?;
             if clause.query_prop(CP_LIMITED_RW) == limited_rw {
                 break false;
             }
@@ -3838,9 +3817,6 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
     mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let _timer = crate::basics::perf_counters::start(
-        crate::basics::perf_counters::PerfCounter::InsertNewTimer,
-    );
     proof_state_record_tmp_store_generated_snapshot(state);
 
     while let Some(mut clause) = state.tmp_store_mut().extract_first() {
@@ -4336,9 +4312,6 @@ pub fn proof_state_select_unprocessed_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let _timer = crate::basics::perf_counters::start(
-        crate::basics::perf_counters::PerfCounter::SelectionTimer,
-    );
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -6830,9 +6803,6 @@ fn proof_state_generate_new_clauses_with_disjoint_copy_impl<W: fmt::Write>(
     indices: Option<&GlobalIndices>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    let _timer = crate::basics::perf_counters::start(
-        crate::basics::perf_counters::PerfCounter::GenerateTimer,
-    );
     state.terms().vars().set_v_counts_to_used();
     let _ = compute_ho_inferences(
         state,
