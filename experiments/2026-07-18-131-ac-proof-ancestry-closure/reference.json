@@ -1,0 +1,25 @@
+{
+  "arguments": [
+    "--auto",
+    "--silent",
+    "--cpu-limit=60",
+    "--memory-limit=2048",
+    "--detsort-rw",
+    "--detsort-new",
+    "--proof-object=1"
+  ],
+  "candidate_exit_code": 0,
+  "candidate_kind": "windows-rust",
+  "candidate_status": "Theorem",
+  "expected_mismatches": [],
+  "mismatch_expectation_met": true,
+  "mismatches": [],
+  "mode": "fol",
+  "name": "ALL_RULES.p",
+  "normalized_output_equal": true,
+  "reference_exit_code": 0,
+  "reference_status": "Theorem",
+  "scenario": "file",
+  "schema_version": 1,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}
