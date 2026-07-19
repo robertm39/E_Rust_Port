@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_objmaps_c_sha256": "2e26cefadf6b46e6774a2d1ad22c0ee0ddbbd8067e8023781d08c3fb7370c49a",
+    "clb_objmaps_h_sha256": "6df1665ee24d28a6301cfc9e7bf883103aa4d700e1576aecf01b1115b59f90bd",
+    "clb_objtrees_c_sha256": "8c31191020326dde0d670d5a98ec1ba43f910beea088c91c1e98beec01be71c8",
+    "clb_objtrees_h_sha256": "b1a8e3423cf9b5631e2998395b86740573021a9727c483bbabc2822574c1f84f",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "992bc9fa1ecd812b19b1f743ffaafab4ef2ef1ce09d0d54325fe5b922bd88388"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "tree empty=.\ntree store4=[4](.,.)\ntree store2=[2](.,[4](.,.))\ntree store6=[6]([4]([2](.,.),.),.)\ntree store3=[3]([2](.,.),[4](.,[6](.,.)))\ntree duplicate4=[4]([3]([2](.,.),.),[6](.,.))\ntree find2=[2](.,[3](.,[4](.,[6](.,.))))\ntree binary6=[2](.,[3](.,[4](.,[6](.,.))))\ntree miss1=[2](.,[3](.,[4](.,[6](.,.))))\ntree miss9=[6]([3]([2](.,.),[4](.,.)),.)\ntree find4=[4]([3]([2](.,.),.),[6](.,.))\ntree extract_miss5=[6]([4]([3]([2](.,.),.),.),.)\ntree extract3=[2](.,[4](.,[6](.,.)))\ntree extract_root=[4](.,[6](.,.))\ntree merge=[2]([1](.,.),[3](.,[4](.,.)))\ntree free=1,3,2\nmap empty=.\nmap store4=[4](.,.)\nmap store2=[2](.,[4](.,.))\nmap store6=[6]([4]([2](.,.),.),.)\nmap store3=[3]([2](.,.),[4](.,[6](.,.)))\nmap duplicate4=[4]([3]([2](.,.),.),[6](.,.))\nmap find2=[2](.,[3](.,[4](.,[6](.,.))))\nmap miss1=[2](.,[3](.,[4](.,[6](.,.))))\nmap miss9=[6]([3]([2](.,.),[4](.,.)),.)\nmap find4=[4]([3]([2](.,.),.),[6](.,.))\nmap extract_miss5=[6]([4]([3]([2](.,.),.),.),.)\nmap extract3=[2](.,[4](.,[6](.,.)))\nmap extract2=[4](.,[6](.,.))\nmap null_created=[7](.,.)\nmap null_find=[7](.,.)\nmap null_extract=.\nmap free=1,3,2\n"
+  },
+  "schema_version": 1
+}

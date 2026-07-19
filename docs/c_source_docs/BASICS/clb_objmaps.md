@@ -90,7 +90,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`.
 
@@ -112,6 +112,6 @@ Source files reviewed: `BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`.
 
 ### Change Later
 
-- `PObjMapFind`, `PObjMapInsert`, and `do_extract_entry` splay the raw root as a side effect, including miss-nearest rebalancing. Rust exposes successful splayed lookup/root tracking, including keys whose stored value is `NULL`, but exact miss-splay locality should wait for stable pointer/handle identity and profiling.
-- `PObjMapGetRef` allocates a candidate node before discovering duplicate keys and frees it again on hits. Rust skips that transient allocation; preserve the visible update flag/null-slot behavior, but prefer the cleaner allocation shape unless allocator churn becomes compatibility-observable in benchmarks.
+- `PObjMapFind`, `PObjMapInsert`, and `do_extract_entry` splay the raw root as a side effect, including miss-nearest rebalancing. Rust now preserves the complete topology with safe index-linked arena nodes, including `NULL`-shaped value slots, failed lookup, and failed extraction. Existing equivalent keys remain owned by the stored node while only values are replaced. Exact topology and ownership evidence is retained in [`experiment 115`](../../../experiments/2026-07-18-115-obj-splay-topology/FINDINGS.md).
+- `PObjMapGetRef` allocates a candidate node before discovering duplicate keys and frees it again on hits. Rust allocates only after the splay proves a miss, while preserving the visible update flag, original-key retention, and null-slot behavior. The transient C allocator churn has no semantic effect and generic `ObjMap` currently has no direct Rust production owner; revisit only if a future owner demonstrates a measured allocator dependency.
 <!-- END MANUAL REVIEW: c_source_docs -->

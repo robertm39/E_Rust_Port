@@ -43,7 +43,7 @@ impl SubtermIndex {
         self.index
             .find(term)
             .and_then(FPTree::payload)
-            .and_then(|payload| payload.find(&SubtermOcc::new(term)))
+            .and_then(|payload| payload.find_binary(&SubtermOcc::new(term)))
     }
 
     #[must_use]

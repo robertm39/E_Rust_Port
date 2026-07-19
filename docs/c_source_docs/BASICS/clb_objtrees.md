@@ -90,7 +90,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`.
 
@@ -113,5 +113,5 @@ Source files reviewed: `BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`.
 ### Change Later
 
 - `PTreeObjMerge` asserts that inserted objects are not already present, but in release builds the returned duplicate node is only assigned to an unused local and is not freed. Rust enforces the disjoint-merge precondition with an assertion instead of reproducing the leak-shaped release path; a cleaned API should keep this as an explicit `Result` or prevalidated merge operation.
-- The generic tree stores untyped borrowed-or-owned `void*` keys and delegates both equality and ordering to a caller-supplied function, while `PObjTreeFree` separately receives a deletion callback. This makes ownership transfer implicit and lets ordinary lookup mutate the root through splaying. Rust preserves shared object identity without deep copies through typed `Rc` payloads; a future C API should use typed containers or explicit owner/borrow variants and name mutating versus non-mutating lookup directly.
+- The generic tree stores untyped borrowed-or-owned `void*` keys and delegates both equality and ordering to a caller-supplied function, while `PObjTreeFree` separately receives a deletion callback. Rust uses typed owned arena nodes with safe index links; root changes move only an index, so no `Rc` or payload clone is required. `find` preserves C's mutating hit/miss splay and `find_binary` names the non-mutating path directly. Complete topology, merge/deleter order, production-owner, and executable evidence is retained in [`experiment 115`](../../../experiments/2026-07-18-115-obj-splay-topology/FINDINGS.md).
 <!-- END MANUAL REVIEW: c_source_docs -->
