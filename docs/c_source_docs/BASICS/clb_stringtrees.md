@@ -83,7 +83,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`.
 
@@ -95,6 +95,10 @@ Source files reviewed: `BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`.
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- The top-down splay routine reorganizes the tree on duplicate insertion, successful lookup, nearest miss, and successful or failed extraction. Rust now preserves the exact root/child topology with safe arena indices and free-slot reuse.
+- `StrTreeStore` duplicates the caller's key and the tree owns that copy. Rust likewise stores an owned `String`; extraction transfers the stored key and values without cloning them.
+- C `strcmp` compares unsigned bytes and terminates at the first NUL. Rust preserves that ordering for valid UTF-8 owner strings, truncates stored keys at an embedded NUL, and ignores query suffixes after NUL. The safe `&str` API intentionally excludes arbitrary invalid-UTF-8 C byte strings; none of the four direct Rust owners supplies such keys.
+- Exact unchanged-C topology, embedded-NUL, non-ASCII byte-order, and C/Rust owner evidence is retained in [`experiments/2026-07-18-119-strtree-splay-topology`](../../../experiments/2026-07-18-119-strtree-splay-topology/FINDINGS.md).
 
 ### Porting Focus
 
@@ -104,5 +108,5 @@ Source files reviewed: `BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`.
 
 ### Change Later
 
-- `StrTreeFind`, `StrTreeStore`, and `StrTreeExtractEntry` all splay the raw tree root as a lookup side effect, including miss-nearest rebalancing. Rust now tracks successful recent-root keys for compatibility-sensitive callers, but a cleaned implementation should decide whether exact miss-splay locality is worth preserving or whether string indexes should stay deterministic map lookups.
+- The generic safe Rust API accepts UTF-8 `&str`, while raw C `char*` keys can contain arbitrary nonzero bytes. If a future direct Rust owner needs opaque filesystem or protocol bytes, add a byte-key boundary for that owner without changing the proven `strcmp` topology.
 <!-- END MANUAL REVIEW: c_source_docs -->

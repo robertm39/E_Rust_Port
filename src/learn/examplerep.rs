@@ -128,7 +128,7 @@ impl ExampleSet {
 
     #[must_use]
     pub fn find_name(&self, name: &str) -> Option<&ExampleRep> {
-        let ident = self.name_index.find(name)?.val1;
+        let ident = self.name_index.find_binary(name)?.val1;
         self.find_ident(ident)
     }
 

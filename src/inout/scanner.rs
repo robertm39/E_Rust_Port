@@ -472,7 +472,7 @@ impl Scanner {
         self.check_tok(TokenType::SQ_STRING)?;
         let name = strip_quote_core(self.current_token().literal_bytes())?;
 
-        let included = if skip_includes.find(&name).is_none() {
+        let included = if skip_includes.find_binary(&name).is_none() {
             let mut scanner = Self::from_file_with_default_dir(
                 Path::new(&name),
                 self.ignore_comments,

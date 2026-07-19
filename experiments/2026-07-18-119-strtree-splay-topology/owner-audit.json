@@ -1,0 +1,145 @@
+{
+  "accepted": true,
+  "c_owner_files": [
+    {
+      "mentions": 4,
+      "path": "eprover/BASICS/clb_permastrings.c"
+    },
+    {
+      "mentions": 10,
+      "path": "eprover/CLAUSES/ccl_formulafunc.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CLAUSES/ccl_formulafunc.h"
+    },
+    {
+      "mentions": 3,
+      "path": "eprover/CONTROL/cco_sine.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CONTROL/cco_sine.h"
+    },
+    {
+      "mentions": 13,
+      "path": "eprover/INOUT/cio_filevars.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/INOUT/cio_filevars.h"
+    },
+    {
+      "mentions": 7,
+      "path": "eprover/INOUT/cio_scanner.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/INOUT/cio_scanner.h"
+    },
+    {
+      "mentions": 3,
+      "path": "eprover/INOUT/cio_tempfile.c"
+    },
+    {
+      "mentions": 7,
+      "path": "eprover/LEARN/cle_examplerep.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_examplerep.h"
+    },
+    {
+      "mentions": 5,
+      "path": "eprover/PROPOSITIONAL/cpr_propsig.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROPOSITIONAL/cpr_propsig.h"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROVER/classify_problem.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROVER/eground.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROVER/enormalizer.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROVER/epatternize.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/PROVER/eprover.c"
+    },
+    {
+      "mentions": 12,
+      "path": "eprover/TERMS/cte_signature.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/TERMS/cte_signature.h"
+    },
+    {
+      "mentions": 5,
+      "path": "eprover/TERMS/cte_simplesorts.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/TERMS/cte_simplesorts.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/TERMS/cte_termbanks.c"
+    },
+    {
+      "mentions": 11,
+      "path": "eprover/TERMS/cte_termvars.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/TERMS/cte_termvars.h"
+    },
+    {
+      "mentions": 6,
+      "path": "eprover/TERMS/cte_typebanks.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/TERMS/cte_typebanks.h"
+    }
+  ],
+  "checks": {
+    "c_owner_inventory_is_nonempty": true,
+    "direct_rust_owner_inventory_matches": true,
+    "owned_c_string_prefix_and_byte_order_are_explicit": true,
+    "primary_find_and_extract_splay_on_misses": true,
+    "read_only_binary_query_is_explicit": true,
+    "safe_index_linked_splay_representation": true,
+    "standard_tree_and_root_marker_are_removed": true
+  },
+  "direct_rust_owners": [
+    {
+      "path": "src/control/batch_spec.rs",
+      "type_mentions": 6
+    },
+    {
+      "path": "src/inout/scanner.rs",
+      "type_mentions": 8
+    },
+    {
+      "path": "src/learn/examplerep.rs",
+      "type_mentions": 2
+    },
+    {
+      "path": "src/prover/eprover.rs",
+      "type_mentions": 11
+    }
+  ],
+  "schema_version": 1
+}
