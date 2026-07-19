@@ -8,6 +8,7 @@ use crate::clauses::eqn_props::PatEqnDirection;
 use crate::clauses::picosat::{PicoSat, PicoSatError, PicoSatSolveResult};
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::hcb::GroundingStrategy;
+use crate::inout::signals::time_is_up;
 use crate::terms::functypes::FunCode;
 use crate::terms::replace::term_follow_rw_chain;
 use crate::terms::subst::Substitution;
@@ -556,18 +557,50 @@ pub fn sat_check_proof_state(
     norm_const: bool,
     decision_limit: i32,
 ) -> Result<SatCheckReport, Diagnostic> {
-    let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
+    sat_check_proof_state_with_stop(state, grounding, norm_const, decision_limit, || false)?
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::CPU_LIMIT_ERROR,
+                "uninterruptible SAT check stopped",
+            )
+        })
+}
+
+pub(crate) fn sat_check_proof_state_until_time_limit(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+) -> Result<Option<SatCheckReport>, Diagnostic> {
+    sat_check_proof_state_with_stop(state, grounding, norm_const, decision_limit, time_is_up)
+}
+
+fn sat_check_proof_state_with_stop(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    mut should_stop: impl FnMut() -> bool,
+) -> Result<Option<SatCheckReport>, Diagnostic> {
+    let Some((mut satset, encoding_time)) =
+        encode_sat_check_set(state, grounding, norm_const, &mut should_stop)?
+    else {
+        return Ok(None);
+    };
+    if should_stop() {
+        return Ok(None);
+    }
     let solver_start = Instant::now();
     let (result, empty) = satset.check_unsat(decision_limit);
     let solver_time = solver_start.elapsed().as_secs_f64();
 
-    Ok(sat_check_report(
+    Ok(Some(sat_check_report(
         &satset,
         result,
         empty,
         encoding_time,
         solver_time,
-    ))
+    )))
 }
 
 pub fn sat_check_proof_state_with_picosat(
@@ -577,20 +610,68 @@ pub fn sat_check_proof_state_with_picosat(
     decision_limit: i32,
     solver: &mut PicoSat,
 ) -> Result<SatCheckReport, Diagnostic> {
-    let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
+    sat_check_proof_state_with_picosat_and_stop(
+        state,
+        grounding,
+        norm_const,
+        decision_limit,
+        solver,
+        || false,
+    )?
+    .ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::CPU_LIMIT_ERROR,
+            "uninterruptible SAT check stopped",
+        )
+    })
+}
+
+pub(crate) fn sat_check_proof_state_with_picosat_until_time_limit(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    solver: &mut PicoSat,
+) -> Result<Option<SatCheckReport>, Diagnostic> {
+    sat_check_proof_state_with_picosat_and_stop(
+        state,
+        grounding,
+        norm_const,
+        decision_limit,
+        solver,
+        time_is_up,
+    )
+}
+
+fn sat_check_proof_state_with_picosat_and_stop(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    solver: &mut PicoSat,
+    mut should_stop: impl FnMut() -> bool,
+) -> Result<Option<SatCheckReport>, Diagnostic> {
+    let Some((mut satset, encoding_time)) =
+        encode_sat_check_set(state, grounding, norm_const, &mut should_stop)?
+    else {
+        return Ok(None);
+    };
+    if should_stop() {
+        return Ok(None);
+    }
     let solver_start = Instant::now();
     let (result, empty) = satset
         .check_unsat_with_picosat(solver, decision_limit)
         .map_err(|error| picosat_error_to_diagnostic(&error))?;
     let solver_time = solver_start.elapsed().as_secs_f64();
 
-    Ok(sat_check_report(
+    Ok(Some(sat_check_report(
         &satset,
         result,
         empty,
         encoding_time,
         solver_time,
-    ))
+    )))
 }
 
 #[must_use]
@@ -605,9 +686,9 @@ fn encode_sat_check_set(
     state: &mut ProofState,
     grounding: GroundingStrategy,
     norm_const: bool,
-) -> Result<(SatClauseSet, f64), Diagnostic> {
+    should_stop: &mut impl FnMut() -> bool,
+) -> Result<Option<(SatClauseSet, f64)>, Diagnostic> {
     let encoding_start = Instant::now();
-    let source_clauses = proof_state_sat_source_clauses(state);
     let mut dist_array = signature_distribution_array(state);
     let mut conj_dist_array = signature_distribution_array(state);
     state.axioms().add_symbol_distribution(&mut dist_array);
@@ -617,22 +698,28 @@ fn encode_sat_check_set(
 
     let mut satset = SatClauseSet::new();
     {
-        let bank = state.terms_mut();
+        let import_context = state.sat_import_context();
         let mut substitution = pseudo_ground_substitution(
-            bank,
+            import_context.terms,
             grounding,
             norm_const,
             &mut conj_dist_array,
             &dist_array,
         )?;
-        for clause in &source_clauses {
-            let _ = satset.import_clause(bank, clause)?;
+        for set in import_context.clause_sets {
+            for clause in set.iter() {
+                if should_stop() {
+                    substitution.backtrack();
+                    return Ok(None);
+                }
+                let _ = satset.import_clause(import_context.terms, clause)?;
+            }
         }
         substitution.backtrack();
     }
     let encoding_time = encoding_start.elapsed().as_secs_f64();
 
-    Ok((satset, encoding_time))
+    Ok(Some((satset, encoding_time)))
 }
 
 fn sat_check_report(
@@ -651,20 +738,6 @@ fn sat_check_report(
         encoding_time,
         solver_time,
     }
-}
-
-fn proof_state_sat_source_clauses(state: &ProofState) -> Vec<Clause> {
-    let mut clauses = Vec::new();
-    append_clause_set(&mut clauses, state.processed_pos_rules());
-    append_clause_set(&mut clauses, state.processed_pos_eqns());
-    append_clause_set(&mut clauses, state.processed_neg_units());
-    append_clause_set(&mut clauses, state.processed_non_units());
-    append_clause_set(&mut clauses, state.unprocessed());
-    clauses
-}
-
-fn append_clause_set(clauses: &mut Vec<Clause>, set: &ClauseSet) {
-    clauses.extend(set.iter().cloned());
 }
 
 fn signature_distribution_array(state: &ProofState) -> Vec<i64> {
@@ -1014,8 +1087,8 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         prefer_conj_max_max_freq, prefer_conj_max_min_freq, prefer_conj_min_max_freq,
-        prefer_conj_min_min_freq, sat_check_proof_state, solve_sat, ExternalSatSolver,
-        PicoSatSolveResult, SatClause, SatClauseSet, SolverStatus,
+        prefer_conj_min_min_freq, sat_check_proof_state, sat_check_proof_state_with_stop,
+        solve_sat, ExternalSatSolver, PicoSatSolveResult, SatClause, SatClauseSet, SolverStatus,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
@@ -1038,6 +1111,27 @@ mod tests {
             .declare_type(f_code, type_.clone())
             .unwrap();
         bank.create_const_term(f_code).unwrap()
+    }
+
+    #[test]
+    fn sat_check_stops_before_import_when_resource_callback_fires() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut callback_count = 0;
+
+        let report = sat_check_proof_state_with_stop(
+            &mut state,
+            GroundingStrategy::PseudoVar,
+            false,
+            -1,
+            || {
+                callback_count += 1;
+                true
+            },
+        )
+        .unwrap();
+
+        assert!(report.is_none());
+        assert_eq!(callback_count, 1);
     }
 
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {

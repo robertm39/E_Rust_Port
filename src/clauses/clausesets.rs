@@ -42,6 +42,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{self, Write};
+use std::num::NonZeroUsize;
 
 const CLAUSECELL_MEM: i64 = 68;
 const PTREE_CELL_MEM: i64 = 16;
@@ -105,12 +106,18 @@ impl Ord for EvalIndexEntry {
 
 type ClauseSlot = usize;
 const SPARSE_STORE_COMPACT_MIN_HOLES: usize = 64;
+const SPARSE_STORE_CHUNK_BITS: usize = 12;
+const SPARSE_STORE_CHUNK_SIZE: usize = 1 << SPARSE_STORE_CHUNK_BITS;
+const SPARSE_STORE_CHUNK_MASK: usize = SPARSE_STORE_CHUNK_SIZE - 1;
 
 #[derive(Clone, Debug, Default)]
 struct SparseClauseStore {
-    slots: Vec<Option<Clause>>,
+    first_chunk: Vec<Option<Clause>>,
+    overflow_chunks: Vec<Vec<Option<Clause>>>,
     len: usize,
-    first_occupied: usize,
+    slots_len: usize,
+    first_occupied: ClauseSlot,
+    tail_chunk: usize,
 }
 
 impl SparseClauseStore {
@@ -123,49 +130,148 @@ impl SparseClauseStore {
     }
 
     fn iter(&self) -> impl Iterator<Item = &Clause> {
-        self.slots.iter().flatten()
+        std::iter::once(&self.first_chunk)
+            .chain(&self.overflow_chunks)
+            .flat_map(|chunk| chunk.iter())
+            .flatten()
     }
 
     fn iter_mut(&mut self) -> impl Iterator<Item = &mut Clause> {
-        self.slots.iter_mut().flatten()
+        std::iter::once(&mut self.first_chunk)
+            .chain(&mut self.overflow_chunks)
+            .flat_map(|chunk| chunk.iter_mut())
+            .flatten()
+    }
+
+    fn into_clauses(self) -> impl Iterator<Item = Clause> {
+        std::iter::once(self.first_chunk)
+            .chain(self.overflow_chunks)
+            .flat_map(Vec::into_iter)
+            .flatten()
+    }
+
+    fn chunk(&self, index: usize) -> Option<&Vec<Option<Clause>>> {
+        if index == 0 {
+            Some(&self.first_chunk)
+        } else {
+            self.overflow_chunks.get(index - 1)
+        }
+    }
+
+    fn chunk_mut(&mut self, index: usize) -> Option<&mut Vec<Option<Clause>>> {
+        if index == 0 {
+            Some(&mut self.first_chunk)
+        } else {
+            self.overflow_chunks.get_mut(index - 1)
+        }
     }
 
     fn reserve_exact(&mut self, additional: usize) {
-        self.slots.reserve_exact(additional);
+        if additional == 0 {
+            return;
+        }
+        if self.first_chunk.capacity() == 0 {
+            let capacity = additional.min(SPARSE_STORE_CHUNK_SIZE);
+            self.first_chunk.reserve_exact(capacity);
+            self.tail_chunk = 0;
+        }
+
+        let mut spare = std::iter::once(&self.first_chunk)
+            .chain(&self.overflow_chunks)
+            .skip(self.tail_chunk)
+            .map(|chunk| chunk.capacity().saturating_sub(chunk.len()))
+            .sum::<usize>();
+        if spare >= additional {
+            return;
+        }
+
+        let tail = self
+            .chunk_mut(self.tail_chunk)
+            .expect("tail chunk must be allocated");
+        let tail_room = SPARSE_STORE_CHUNK_SIZE.saturating_sub(tail.len());
+        let reserve_here = additional
+            .saturating_sub(spare)
+            .min(tail_room.saturating_sub(tail.capacity().saturating_sub(tail.len())));
+        if reserve_here > 0 {
+            tail.reserve_exact(reserve_here);
+            spare += reserve_here;
+        }
+
+        let mut remaining = additional.saturating_sub(spare);
+        while remaining > 0 {
+            let capacity = remaining.min(SPARSE_STORE_CHUNK_SIZE);
+            self.overflow_chunks.push(Vec::with_capacity(capacity));
+            remaining -= capacity;
+        }
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        std::iter::once(&self.first_chunk)
+            .chain(&self.overflow_chunks)
+            .map(Vec::capacity)
+            .sum()
     }
 
     fn occupied_slots(&self) -> impl Iterator<Item = ClauseSlot> + '_ {
-        self.slots
-            .iter()
+        std::iter::once(&self.first_chunk)
+            .chain(&self.overflow_chunks)
             .enumerate()
-            .skip(self.first_occupied)
-            .filter_map(|(slot, clause)| clause.as_ref().map(|_| slot))
+            .flat_map(|(chunk_index, chunk)| {
+                chunk
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(offset, clause)| {
+                        clause
+                            .as_ref()
+                            .map(|_| encode_clause_slot(chunk_index, offset))
+                    })
+            })
+            .skip_while(|&slot| slot < self.first_occupied)
     }
 
     fn push_back(&mut self, clause: Clause) -> ClauseSlot {
-        let slot = self.slots.len();
+        if self
+            .chunk(self.tail_chunk)
+            .is_some_and(|chunk| chunk.len() == SPARSE_STORE_CHUNK_SIZE)
+        {
+            self.tail_chunk += 1;
+            if self.tail_chunk > self.overflow_chunks.len() {
+                self.overflow_chunks.push(Vec::new());
+            }
+        }
+
+        let offset = self
+            .chunk(self.tail_chunk)
+            .expect("tail chunk must be allocated")
+            .len();
+        let slot = encode_clause_slot(self.tail_chunk, offset);
         if self.len == 0 {
             self.first_occupied = slot;
         }
-        self.slots.push(Some(clause));
+        self.chunk_mut(self.tail_chunk)
+            .expect("tail chunk must be allocated")
+            .push(Some(clause));
         self.len += 1;
+        self.slots_len += 1;
         slot
     }
 
     fn get_slot(&self, slot: ClauseSlot) -> Option<&Clause> {
-        self.slots.get(slot)?.as_ref()
+        let (chunk, offset) = decode_clause_slot(slot);
+        self.chunk(chunk)?.get(offset)?.as_ref()
     }
 
     fn get_slot_mut(&mut self, slot: ClauseSlot) -> Option<&mut Clause> {
-        self.slots.get_mut(slot)?.as_mut()
+        let (chunk, offset) = decode_clause_slot(slot);
+        self.chunk_mut(chunk)?.get_mut(offset)?.as_mut()
     }
 
     fn position_of_slot(&self, slot: ClauseSlot) -> Option<usize> {
         self.get_slot(slot)?;
         Some(
-            self.slots[self.first_occupied..slot]
-                .iter()
-                .filter(|clause| clause.is_some())
+            self.occupied_slots()
+                .take_while(|&occupied| occupied != slot)
                 .count(),
         )
     }
@@ -176,43 +282,47 @@ impl SparseClauseStore {
     }
 
     fn remove_slot(&mut self, slot: ClauseSlot) -> Option<Clause> {
-        let clause = self.slots.get_mut(slot)?.take()?;
+        let (chunk, offset) = decode_clause_slot(slot);
+        let clause = self.chunk_mut(chunk)?.get_mut(offset)?.take()?;
         self.len -= 1;
         if self.len == 0 {
-            self.slots.clear();
+            self.first_chunk.clear();
+            self.overflow_chunks.clear();
+            self.slots_len = 0;
             self.first_occupied = 0;
+            self.tail_chunk = 0;
         } else if slot == self.first_occupied {
-            self.first_occupied = self.slots[slot + 1..]
-                .iter()
-                .position(Option::is_some)
-                .map_or(self.slots.len(), |offset| slot + 1 + offset);
+            let first_occupied = {
+                let mut occupied = self.occupied_slots();
+                occupied
+                    .next()
+                    .expect("non-empty sparse store must have an occupied slot")
+            };
+            self.first_occupied = first_occupied;
         }
         Some(clause)
     }
 
     fn compact_if_sparse(&mut self) -> bool {
-        let holes = self.slots.len().saturating_sub(self.len);
+        let holes = self.slots_len.saturating_sub(self.len);
         if holes < SPARSE_STORE_COMPACT_MIN_HOLES || holes <= self.len {
             return false;
         }
 
-        self.slots = std::mem::take(&mut self.slots)
-            .into_iter()
-            .flatten()
-            .map(Some)
-            .collect();
-        self.first_occupied = 0;
+        let clauses = std::mem::take(self).into_clauses().collect::<Vec<_>>();
+        for clause in clauses {
+            self.push_back(clause);
+        }
         true
     }
 
     fn sort_unstable_by(&mut self, mut compare: impl FnMut(&Clause, &Clause) -> Ordering) {
-        let slots = std::mem::take(&mut self.slots);
         let mut clauses = Vec::with_capacity(self.len);
-        clauses.extend(slots.into_iter().flatten());
+        clauses.extend(std::mem::take(self).into_clauses());
         clauses.sort_unstable_by(|left, right| compare(left, right));
-        self.len = clauses.len();
-        self.slots = clauses.into_iter().map(Some).collect();
-        self.first_occupied = 0;
+        for clause in clauses {
+            self.push_back(clause);
+        }
     }
 }
 
@@ -222,31 +332,19 @@ impl PartialEq for SparseClauseStore {
     }
 }
 
-impl<'a> IntoIterator for &'a SparseClauseStore {
-    type Item = &'a Clause;
-    type IntoIter = std::iter::Flatten<std::slice::Iter<'a, Option<Clause>>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.slots.iter().flatten()
-    }
+fn encode_clause_slot(chunk: usize, offset: usize) -> ClauseSlot {
+    debug_assert!(offset < SPARSE_STORE_CHUNK_SIZE);
+    chunk
+        .checked_shl(u32::try_from(SPARSE_STORE_CHUNK_BITS).expect("chunk shift fits u32"))
+        .and_then(|base| base.checked_add(offset))
+        .expect("clause slot space exhausted")
 }
 
-impl<'a> IntoIterator for &'a mut SparseClauseStore {
-    type Item = &'a mut Clause;
-    type IntoIter = std::iter::Flatten<std::slice::IterMut<'a, Option<Clause>>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.slots.iter_mut().flatten()
-    }
-}
-
-impl IntoIterator for SparseClauseStore {
-    type Item = Clause;
-    type IntoIter = std::iter::Flatten<std::vec::IntoIter<Option<Clause>>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.slots.into_iter().flatten()
-    }
+fn decode_clause_slot(slot: ClauseSlot) -> (usize, usize) {
+    (
+        slot >> SPARSE_STORE_CHUNK_BITS,
+        slot & SPARSE_STORE_CHUNK_MASK,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -262,7 +360,7 @@ pub struct ClauseSet {
     indexed_clause_derivation_positions: BTreeMap<ClauseDerivationRef, usize>,
     fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
-    eval_object_slots: Vec<Option<ClauseSlot>>,
+    eval_object_slots: Vec<Option<NonZeroUsize>>,
     eval_no: usize,
     next_eval_object: EvalObjectHandle,
 }
@@ -321,7 +419,7 @@ impl ClauseSet {
 
     #[must_use]
     pub fn into_clauses(self) -> Vec<Clause> {
-        self.clauses.into_iter().collect()
+        self.clauses.into_clauses().collect()
     }
 
     #[must_use]
@@ -558,7 +656,7 @@ impl ClauseSet {
     #[allow(clippy::cast_precision_loss)]
     pub fn write_derivation_stack_statistics(&self, output: &mut impl Write) -> io::Result<()> {
         let mut distribution = PDIntArray::with_default(8, 8, 0);
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             distribution.inc_int(clause.derivation_stack_pointer(), 1);
         }
 
@@ -603,7 +701,7 @@ impl ClauseSet {
         options: EqnPrintOptions,
     ) -> String {
         let mut output = String::new();
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             output.push_str(&clause_print_lop_format_string_with_options(
                 bank, clause, full_terms, options,
             ));
@@ -615,7 +713,7 @@ impl ClauseSet {
     #[must_use]
     pub fn print_lop_prefix_string(&self, bank: &TermBank, prefix: &str) -> String {
         let mut output = String::new();
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             output.push_str(prefix);
             output.push_str(&clause_print_lop_format_string(bank, clause, true));
             output.push('\n');
@@ -635,7 +733,7 @@ impl ClauseSet {
         options: EqnPrintOptions,
     ) -> String {
         let mut output = String::new();
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             output.push_str(&clause_print_tptp_format_string_with_options(
                 bank, clause, options,
             ));
@@ -683,7 +781,7 @@ impl ClauseSet {
         options: EqnPrintOptions,
     ) -> Result<String, Diagnostic> {
         let mut output = String::new();
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             output.push_str(&clause_set_render_clause_string(
                 bank,
                 clause,
@@ -711,7 +809,7 @@ impl ClauseSet {
         options: EqnPrintOptions,
     ) -> Result<String, Diagnostic> {
         let mut output = String::new();
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             output.push_str(prefix);
             output.push_str(&clause_set_render_clause_string(
                 bank,
@@ -755,7 +853,7 @@ impl ClauseSet {
         problem_type: ProblemType,
         print_types: bool,
     ) -> Result<(), Diagnostic> {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause_write_tstp_with_type_suffixes(
                 output,
                 bank,
@@ -867,7 +965,7 @@ impl ClauseSet {
             if self.eval_object_slots.len() <= object {
                 self.eval_object_slots.resize(object + 1, None);
             }
-            self.eval_object_slots[object] = Some(slot);
+            self.eval_object_slots[object] = Some(pack_clause_slot(slot));
         }
         if self.demod_index.is_some() || self.position_indexed {
             self.indexed_clause_positions.entry(ident).or_insert(slot);
@@ -1093,7 +1191,12 @@ impl ClauseSet {
     }
 
     pub fn extract_by_eval_object(&mut self, object: EvalObjectHandle) -> Option<Clause> {
-        let slot = self.eval_object_slots.get(object).copied().flatten()?;
+        let slot = self
+            .eval_object_slots
+            .get(object)
+            .copied()
+            .flatten()
+            .map(unpack_clause_slot)?;
         self.extract_at_slot(slot)
     }
 
@@ -1126,7 +1229,7 @@ impl ClauseSet {
         }
         self.eval_object_slots.clear();
         self.next_eval_object = 0;
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.remove_evaluations();
         }
     }
@@ -1136,7 +1239,7 @@ impl ClauseSet {
         self.eval_object_slots.clear();
         self.eval_no = 0;
         self.next_eval_object = 0;
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             index_clause_evaluations(
                 &mut self.eval_indices,
                 &mut self.eval_no,
@@ -1160,7 +1263,7 @@ impl ClauseSet {
     where
         F: FnMut(&Clause, &Clause) -> Ordering,
     {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.set_weight(clause.standard_weight());
         }
         self.clauses
@@ -1173,27 +1276,27 @@ impl ClauseSet {
     where
         F: FnMut(&crate::clauses::eqn::Eqn, &crate::clauses::eqn::Eqn) -> i64,
     {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.sort_literals_by(&mut compare);
         }
     }
 
     pub fn set_prop(&mut self, prop: FormulaProperties) {
         self.demod_index_coverage.set(None);
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.set_prop(prop);
         }
     }
 
     pub fn del_prop(&mut self, prop: FormulaProperties) {
         self.demod_index_coverage.set(None);
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.del_prop(prop);
         }
     }
 
     pub fn set_tptp_type(&mut self, type_: FormulaProperties) {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.set_tptp_type(type_);
         }
     }
@@ -1248,7 +1351,7 @@ impl ClauseSet {
     }
 
     pub fn delete_non_units(&mut self) -> i64 {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             if clause.literal_number() > 1 {
                 clause.set_prop(CP_DELETE_CLAUSE);
             } else {
@@ -1322,7 +1425,7 @@ impl ClauseSet {
 
     pub fn mark_sos(&mut self, tptp_types: bool) -> i64 {
         let mut result = 0;
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             if (tptp_types && clause.query_tptp_type() == CP_TYPE_CONJECTURE)
                 || (!tptp_types && clause.is_goal())
             {
@@ -1337,7 +1440,7 @@ impl ClauseSet {
 
     /// Orient and mark maximal literals in every clause in set order.
     pub fn mark_maximal_terms(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.mark_maximal_terms(ocb, bank);
         }
     }
@@ -1353,14 +1456,14 @@ impl ClauseSet {
         ocb: &mut OrderControlBlock,
         bank: &mut TermBank,
     ) -> Result<(), Diagnostic> {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.mark_maximal_terms_with_bank(ocb, bank)?;
         }
         Ok(())
     }
 
     pub fn term_set_prop(&self, prop: TermProperties) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause.term_set_prop(prop);
         }
     }
@@ -1380,19 +1483,19 @@ impl ClauseSet {
     }
 
     pub fn add_symbol_distribution(&self, dist_array: &mut [i64]) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause.add_symbol_distribution(dist_array);
         }
     }
 
     pub fn add_type_distribution(&self, sig: &mut Signature, type_array: &mut [i64]) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause.add_type_distribution(sig, type_array);
         }
     }
 
     pub fn add_conj_symbol_distribution(&self, dist_array: &mut [i64]) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             if clause.is_conjecture() {
                 clause.add_symbol_distribution(dist_array);
             }
@@ -1400,7 +1503,7 @@ impl ClauseSet {
     }
 
     pub fn add_axiom_symbol_distribution(&self, dist_array: &mut [i64]) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             if !clause.is_conjecture() {
                 clause.add_symbol_distribution(dist_array);
             }
@@ -1408,7 +1511,7 @@ impl ClauseSet {
     }
 
     pub fn compute_function_ranks(&self, rank_array: &mut [i64], count: &mut i64) {
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause.compute_function_ranks(rank_array, count);
         }
     }
@@ -1424,7 +1527,7 @@ impl ClauseSet {
         fmax.initialize(0);
         fmin.initialize(i64::MAX);
 
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             let current = var_freq_vector_compute(clause, cspec);
             let old_sum = fsum.clone();
             fsum.add_from(&old_sum, &current);
@@ -1500,7 +1603,7 @@ impl ClauseSet {
 
     pub fn apply_fun(&self, mut fun: impl FnMut(&Clause) -> i64) -> i64 {
         let mut result = false;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             result = (i64::from(result) + fun(clause)) != 0;
         }
         i64::from(result)
@@ -1524,7 +1627,7 @@ impl ClauseSet {
     }
 
     pub fn default_weigh_clauses(&mut self) {
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.set_weight(clause.standard_weight());
         }
     }
@@ -1533,7 +1636,7 @@ impl ClauseSet {
     pub fn find_max_standard_weight(&self) -> Option<&Clause> {
         let mut max_weight = 0;
         let mut result = None;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             let weight = clause.standard_weight();
             if weight > max_weight {
                 max_weight = weight;
@@ -1610,7 +1713,7 @@ impl ClauseSet {
 
     pub fn push_clause_refs<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
         let mut pushed = 0;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             stack.push(clause);
             pushed += 1;
         }
@@ -1627,7 +1730,7 @@ impl ClauseSet {
         rest: &mut Vec<&'a Clause>,
     ) -> i64 {
         let mut found = 0;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             if clause.is_conjecture() {
                 conjectures.push(clause);
                 found += 1;
@@ -1640,7 +1743,7 @@ impl ClauseSet {
 
     pub fn count_conjectures(&self, hypos: &mut i64) -> i64 {
         let mut conjectures = 0;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             if clause.is_conjecture() {
                 conjectures += 1;
             }
@@ -1654,7 +1757,7 @@ impl ClauseSet {
     #[must_use]
     pub fn conjecture_order(&self, sig: &Signature) -> usize {
         let mut order = 0;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             for literal in clause.literals().as_slice() {
                 order = order.max(term_compute_order(sig, literal.left()));
                 order = order.max(term_compute_order(sig, literal.right()));
@@ -1704,13 +1807,23 @@ impl ClauseSet {
     /// Returns the clause identified by a stable evaluation-object handle.
     #[must_use]
     pub fn find_by_eval_object(&self, object: EvalObjectHandle) -> Option<&Clause> {
-        let slot = self.eval_object_slots.get(object).copied().flatten()?;
+        let slot = self
+            .eval_object_slots
+            .get(object)
+            .copied()
+            .flatten()
+            .map(unpack_clause_slot)?;
         self.clauses.get_slot(slot)
     }
 
     fn find_by_eval_object_mut(&mut self, object: EvalObjectHandle) -> Option<&mut Clause> {
         self.demod_index_coverage.set(None);
-        let slot = self.eval_object_slots.get(object).copied().flatten()?;
+        let slot = self
+            .eval_object_slots
+            .get(object)
+            .copied()
+            .flatten()
+            .map(unpack_clause_slot)?;
         self.clauses.get_slot_mut(slot)
     }
 
@@ -1849,7 +1962,7 @@ impl ClauseSet {
             if self.eval_object_slots.len() <= object {
                 self.eval_object_slots.resize(object + 1, None);
             }
-            self.eval_object_slots[object] = Some(slot);
+            self.eval_object_slots[object] = Some(pack_clause_slot(slot));
         }
     }
 
@@ -2010,7 +2123,9 @@ fn index_clause_evaluations(
         return;
     };
     let object = *next_eval_object;
-    *next_eval_object += 1;
+    *next_eval_object = next_eval_object
+        .checked_add(1)
+        .expect("evaluation object handle space exhausted");
     evaluations.set_object(Some(object));
     *eval_no = (*eval_no).max(evaluations.eval_no());
     while eval_indices.len() < evaluations.eval_no() {
@@ -2045,6 +2160,15 @@ fn cmp_f32_c(left: f32, right: f32) -> Ordering {
     } else {
         Ordering::Equal
     }
+}
+
+fn pack_clause_slot(slot: ClauseSlot) -> NonZeroUsize {
+    let encoded = slot.checked_add(1).expect("clause slot space exhausted");
+    NonZeroUsize::new(encoded).expect("encoded clause slot must be nonzero")
+}
+
+fn unpack_clause_slot(slot: NonZeroUsize) -> ClauseSlot {
+    slot.get() - 1
 }
 
 #[must_use]
@@ -2343,8 +2467,9 @@ fn tptp_eq_pred_axiom_write(
 mod tests {
     use super::{
         clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
-        clause_set_stack_cardinality, eq_axioms_print_string, eval_mem, ClauseSet,
-        CLAUSECELL_DYN_MEM, EQN_CELL_MEM,
+        clause_set_stack_cardinality, encode_clause_slot, eq_axioms_print_string, eval_mem,
+        ClauseSet, SparseClauseStore, CLAUSECELL_DYN_MEM, EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS,
+        SPARSE_STORE_CHUNK_MASK, SPARSE_STORE_CHUNK_SIZE,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -2385,11 +2510,52 @@ mod tests {
     }
 
     #[test]
+    fn sparse_clause_store_pages_bound_growth_and_preserve_slot_order() {
+        let mut store = SparseClauseStore::default();
+        for ident in 0..=SPARSE_STORE_CHUNK_SIZE {
+            let mut clause = Clause::empty();
+            clause.set_ident(i64::try_from(ident).unwrap());
+            let slot = store.push_back(clause);
+            assert_eq!(
+                slot,
+                encode_clause_slot(
+                    ident >> SPARSE_STORE_CHUNK_BITS,
+                    ident & SPARSE_STORE_CHUNK_MASK
+                )
+            );
+        }
+
+        assert_eq!(store.overflow_chunks.len(), 1);
+        assert_eq!(store.tail_chunk, 1);
+        assert_eq!(store.first_chunk.len(), SPARSE_STORE_CHUNK_SIZE);
+        assert_eq!(store.overflow_chunks[0].len(), 1);
+        assert_eq!(
+            store.get_slot(encode_clause_slot(1, 0)).map(Clause::ident),
+            Some(i64::try_from(SPARSE_STORE_CHUNK_SIZE).unwrap())
+        );
+
+        let last_first_page = encode_clause_slot(0, SPARSE_STORE_CHUNK_SIZE - 1);
+        assert_eq!(
+            store
+                .remove_slot(last_first_page)
+                .map(|clause| clause.ident()),
+            Some(i64::try_from(SPARSE_STORE_CHUNK_SIZE - 1).unwrap())
+        );
+        assert_eq!(
+            store.position_of_slot(encode_clause_slot(1, 0)),
+            Some(SPARSE_STORE_CHUNK_SIZE - 1)
+        );
+        assert!(std::iter::once(&store.first_chunk)
+            .chain(&store.overflow_chunks)
+            .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
+    }
+
+    #[test]
     fn exact_batch_reservation_avoids_clause_store_growth() {
         const CLAUSE_COUNT: usize = 257;
         let mut set = ClauseSet::new();
         set.reserve_exact(CLAUSE_COUNT);
-        let reserved_capacity = set.clauses.slots.capacity();
+        let reserved_capacity = set.clauses.capacity();
 
         for ident in 0..CLAUSE_COUNT {
             let mut clause = Clause::empty();
@@ -2398,7 +2564,7 @@ mod tests {
         }
 
         assert!(reserved_capacity >= CLAUSE_COUNT);
-        assert_eq!(set.clauses.slots.capacity(), reserved_capacity);
+        assert_eq!(set.clauses.capacity(), reserved_capacity);
         assert_eq!(set.len(), CLAUSE_COUNT);
     }
 
@@ -2756,7 +2922,7 @@ mod tests {
         appended.set_ident(9_000);
         set.insert(appended);
         assert!(set.demod_index().is_none());
-        assert_eq!(set.clauses.slots.len(), set.len());
+        assert_eq!(set.clauses.slots_len, set.len());
         assert_eq!(
             set.find_indexed_by_id(identifiers[removed])
                 .map(Clause::ident),
@@ -2797,12 +2963,12 @@ mod tests {
                 .extract_by_id(9_000 + i64::try_from(offset).unwrap())
                 .is_some());
         }
-        assert!(set.clauses.slots.len() > set.len());
+        assert!(set.clauses.slots_len > set.len());
 
         let mut trigger = Clause::empty();
         trigger.set_ident(9_500);
         set.insert(trigger);
-        assert_eq!(set.clauses.slots.len(), set.len());
+        assert_eq!(set.clauses.slots_len, set.len());
         assert!(set.find_by_derivation_ref(original_ref).is_some());
         assert!(set.find_by_derivation_ref(requeued_ref).is_some());
 
@@ -3540,6 +3706,11 @@ mod tests {
         let second_id = second.ident();
         let third_id = third.ident();
         let mut set = ClauseSet::from_clauses([first, second, third]);
+        let second_object = set
+            .find_by_id(second_id)
+            .and_then(Clause::evaluations)
+            .and_then(EvalCell::object)
+            .expect("inserted evaluated clause must have an object handle");
 
         assert_eq!(
             set.extract_best(0).map(|clause| clause.ident()),
@@ -3559,6 +3730,7 @@ mod tests {
             .and_then(EvalCell::object)
             .expect("inserted evaluated clause must have an object handle");
 
+        assert!(fourth_object > second_object);
         assert_eq!(set.find_best(0).map(Clause::ident), Some(fourth_id));
         set.sort_by(|left, right| right.ident().cmp(&left.ident()));
         assert_eq!(set.find_best(0).map(Clause::ident), Some(fourth_id));
@@ -3608,7 +3780,7 @@ mod tests {
         let preferred = clause_with_evaluations(clause_from(vec![base_literal]), &[(40, -1.0)]);
         let preferred_id = preferred.ident();
         set.insert(preferred);
-        assert_eq!(set.clauses.slots.len(), set.len());
+        assert_eq!(set.clauses.slots_len, set.len());
         assert_eq!(set.clauses.first_occupied, 0);
         assert_eq!(
             set.extract_best(0).map(|clause| clause.ident()),

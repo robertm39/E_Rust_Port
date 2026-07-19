@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 pub type EvalPriority = i64;
@@ -17,8 +18,8 @@ static EVALUATION_COUNTER: AtomicI64 = AtomicI64::new(0);
 pub struct SimpleEvalCell {
     priority: EvalPriority,
     heuristic: f32,
-    left: Option<EvalNodeHandle>,
-    right: Option<EvalNodeHandle>,
+    left: Option<NonZeroUsize>,
+    right: Option<NonZeroUsize>,
 }
 
 impl Default for SimpleEvalCell {
@@ -62,28 +63,28 @@ impl SimpleEvalCell {
     }
 
     #[must_use]
-    pub const fn left(&self) -> Option<EvalNodeHandle> {
-        self.left
+    pub fn left(&self) -> Option<EvalNodeHandle> {
+        self.left.map(unpack_handle)
     }
 
-    pub const fn set_left(&mut self, left: Option<EvalNodeHandle>) {
-        self.left = left;
+    pub fn set_left(&mut self, left: Option<EvalNodeHandle>) {
+        self.left = left.map(pack_handle);
     }
 
     #[must_use]
-    pub const fn right(&self) -> Option<EvalNodeHandle> {
-        self.right
+    pub fn right(&self) -> Option<EvalNodeHandle> {
+        self.right.map(unpack_handle)
     }
 
-    pub const fn set_right(&mut self, right: Option<EvalNodeHandle>) {
-        self.right = right;
+    pub fn set_right(&mut self, right: Option<EvalNodeHandle>) {
+        self.right = right.map(pack_handle);
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EvalCell {
     eval_count: EvalPriority,
-    object: Option<EvalObjectHandle>,
+    object: Option<NonZeroUsize>,
     evals: Vec<SimpleEvalCell>,
 }
 
@@ -106,12 +107,12 @@ impl EvalCell {
     }
 
     #[must_use]
-    pub const fn object(&self) -> Option<EvalObjectHandle> {
-        self.object
+    pub fn object(&self) -> Option<EvalObjectHandle> {
+        self.object.map(unpack_handle)
     }
 
-    pub const fn set_object(&mut self, object: Option<EvalObjectHandle>) {
-        self.object = object;
+    pub fn set_object(&mut self, object: Option<EvalObjectHandle>) {
+        self.object = object.map(pack_handle);
     }
 
     /// Returns the simple evaluation at `pos`.
@@ -619,12 +620,25 @@ fn c_float_eq(left: f32, right: f32) -> bool {
     matches!(left.partial_cmp(&right), Some(Ordering::Equal))
 }
 
+fn pack_handle(handle: usize) -> NonZeroUsize {
+    let encoded = handle
+        .checked_add(1)
+        .expect("evaluation handle space exhausted");
+    NonZeroUsize::new(encoded).expect("encoded evaluation handle must be nonzero")
+}
+
+fn unpack_handle(handle: NonZeroUsize) -> usize {
+    handle.get() - 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         eval_compare, eval_greater, evals_alloc, evals_alloc_raw, evaluation_counter, EvalCell,
-        EvalTree, PRIO_BEST, PRIO_DEFER, PRIO_LARGEST_REASONABLE, PRIO_NORMAL, PRIO_PREFER,
+        EvalTree, SimpleEvalCell, PRIO_BEST, PRIO_DEFER, PRIO_LARGEST_REASONABLE, PRIO_NORMAL,
+        PRIO_PREFER,
     };
+    use std::num::NonZeroUsize;
 
     fn eval_with_count(eval_count: i64, priority: i64, heuristic: f32) -> EvalCell {
         let mut eval = evals_alloc_raw(1);
@@ -662,6 +676,12 @@ mod tests {
     #[test]
     fn object_and_tree_link_slots_preserve_c_cell_shape() {
         let mut eval = evals_alloc_raw(1);
+
+        assert_eq!(
+            std::mem::size_of::<Option<NonZeroUsize>>(),
+            std::mem::size_of::<usize>()
+        );
+        assert_eq!(std::mem::size_of::<SimpleEvalCell>(), 32);
 
         eval.set_object(Some(17));
         eval.eval_mut(0).set_left(Some(3));

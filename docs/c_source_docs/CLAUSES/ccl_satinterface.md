@@ -131,7 +131,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bounded proof-state import on 2026-07-19.
 
 Source files reviewed: `CLAUSES/ccl_satinterface.h`, `CLAUSES/ccl_satinterface.c`.
 
@@ -149,7 +149,7 @@ Source files reviewed: `CLAUSES/ccl_satinterface.h`, `CLAUSES/ccl_satinterface.c
 
 ### Compatibility Notes
 
-- `SatClauseSetImportProofState` builds one pseudo-grounding substitution, imports processed positive rules, processed positive equations, processed negative units, processed non-units, and unprocessed clauses in that order, then deletes the substitution. Rust now mirrors that import order and backtracks the temporary substitution after term-bank atom encoding.
+- `SatClauseSetImportProofState` builds one pseudo-grounding substitution, imports processed positive rules, processed positive equations, processed negative units, processed non-units, and unprocessed clauses in that order, then deletes the substitution. Rust mirrors that import order by borrowing the term bank mutably alongside the five disjoint clause-set fields and streaming each set directly into the SAT owner; it does not clone the whole live proof state into a transient `Vec<Clause>`. The temporary substitution is backtracked after term-bank atom encoding. Main proof-control imports also poll the configured time limit between clauses, matching the C process-level CPU signal's ability to interrupt a long SAT import on platforms without `RLIMIT_CPU`; standalone SAT helpers retain their uninterruptible API contract.
 - Four conjecture-frequency tie-break helpers use assignment (`=`) where equality comparison appears intended, mutating `conj_dist_array` while comparing candidates. Rust now preserves that side effect by passing the conjecture distribution mutably through the `TBGetFreqConstTerm`-shaped callback.
 - `SatClauseCreateAndStore` refuses insertions when `set_size_limit != -1` and the current cardinality is already at or above the signed limit, while `SatClauseSetLimitReached` checks exact equality with the limit. Rust now preserves that split and exposes C-shaped clause/clause-set DIMACS rendering with the trailing per-literal space before `0`.
 - `SatClauseSetExportToSolver` resets the exported stack and forwards every clause to the solver in stack order; `SatClauseSetMarkPure` marks a clause as pure when any literal in that clause has only one polarity in the whole SAT clause set, and `SatClauseSetExportToSolverNonPure` then exports only clauses without such literals. Rust preserves both exported-subset shapes as safe solver-clause vectors and can now send the non-pure subset through either the internal solver or a caller-provided runtime-loaded PicoSAT solver.

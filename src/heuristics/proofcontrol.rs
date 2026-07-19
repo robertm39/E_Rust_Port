@@ -73,8 +73,8 @@ use crate::clauses::rewrite::{
 };
 use crate::clauses::rewrite::{find_rewritable_clauses, find_rewritable_clauses_indexed};
 use crate::clauses::satinterface::{
-    picosat_error_to_diagnostic, sat_check_proof_state, sat_check_proof_state_with_picosat,
-    SatCheckReport,
+    picosat_error_to_diagnostic, sat_check_proof_state_until_time_limit,
+    sat_check_proof_state_with_picosat_until_time_limit, SatCheckReport,
 };
 use crate::clauses::splitting::{
     clause_split, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod, SplitDefinitionStore,
@@ -8575,19 +8575,22 @@ fn proof_state_sat_check<W: fmt::Write>(
     }
 
     let report = match &mut control.sat_solver_backend {
-        SatSolverBackend::Internal => sat_check_proof_state(
+        SatSolverBackend::Internal => sat_check_proof_state_until_time_limit(
             state,
             sat_check_grounding,
             sat_check_normconst,
             sat_check_decision_limit,
         )?,
-        SatSolverBackend::PicoSat(solver) => sat_check_proof_state_with_picosat(
+        SatSolverBackend::PicoSat(solver) => sat_check_proof_state_with_picosat_until_time_limit(
             state,
             sat_check_grounding,
             sat_check_normconst,
             sat_check_decision_limit,
             solver,
         )?,
+    };
+    let Some(report) = report else {
+        return Ok(None);
     };
     control
         .reset_sat_solver()

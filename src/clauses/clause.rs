@@ -77,7 +77,7 @@ pub struct Clause {
     create_date: i64,
     proof_depth: i64,
     proof_size: i64,
-    derivation: Option<PStack<RewriteSequenceEntry>>,
+    derivation: Option<Box<PStack<RewriteSequenceEntry>>>,
 }
 
 impl Clause {
@@ -425,26 +425,27 @@ impl Clause {
     }
 
     #[must_use]
-    pub const fn derivation(&self) -> Option<&PStack<RewriteSequenceEntry>> {
-        self.derivation.as_ref()
+    pub fn derivation(&self) -> Option<&PStack<RewriteSequenceEntry>> {
+        self.derivation.as_deref()
     }
 
     pub fn ensure_derivation(&mut self) -> &mut PStack<RewriteSequenceEntry> {
         self.derivation
-            .get_or_insert_with(PStack::with_average_capacity)
+            .get_or_insert_with(|| Box::new(PStack::with_average_capacity()))
+            .as_mut()
     }
 
     pub fn set_derivation(&mut self, derivation: Option<PStack<RewriteSequenceEntry>>) {
-        self.derivation = derivation;
+        self.derivation = derivation.map(Box::new);
     }
 
     pub fn take_derivation(&mut self) -> Option<PStack<RewriteSequenceEntry>> {
-        self.derivation.take()
+        self.derivation.take().map(|derivation| *derivation)
     }
 
     #[must_use]
     pub fn derivation_stack_pointer(&self) -> isize {
-        self.derivation.as_ref().map_or(0, PStack::stack_pointer)
+        self.derivation.as_deref().map_or(0, PStack::stack_pointer)
     }
 
     pub fn recompute_lit_counts(&mut self) {
@@ -2535,6 +2536,15 @@ mod tests {
         fn drop(&mut self) {
             reset_problem_type();
         }
+    }
+
+    #[test]
+    fn clause_keeps_nullable_derivation_owner_out_of_line() {
+        assert_eq!(
+            std::mem::size_of::<Option<Box<PStack<DerivationEntry>>>>(),
+            std::mem::size_of::<usize>()
+        );
+        assert!(std::mem::size_of::<Clause>() <= 160);
     }
 
     fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {

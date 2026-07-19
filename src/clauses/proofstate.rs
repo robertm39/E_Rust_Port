@@ -206,6 +206,11 @@ pub struct ProofStateGenerationContext<'a> {
     pub choice_opcodes: &'a mut BTreeMap<FunCode, Clause>,
 }
 
+pub(crate) struct ProofStateSatImportContext<'a> {
+    pub terms: &'a mut TermBank,
+    pub clause_sets: [&'a ClauseSet; 5],
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProofStateGcAnalysis {
     pub clause_count: u64,
@@ -885,6 +890,19 @@ impl ProofState {
 
     pub fn terms_mut(&mut self) -> &mut TermBank {
         &mut self.terms
+    }
+
+    pub(crate) fn sat_import_context(&mut self) -> ProofStateSatImportContext<'_> {
+        ProofStateSatImportContext {
+            terms: &mut self.terms,
+            clause_sets: [
+                &self.processed_pos_rules,
+                &self.processed_pos_eqns,
+                &self.processed_neg_units,
+                &self.processed_non_units,
+                &self.unprocessed,
+            ],
+        }
     }
 
     #[must_use]
