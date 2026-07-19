@@ -1,0 +1,39 @@
+{
+  "accepted": true,
+  "c_external_direct_grow_calls": [],
+  "c_production_owner_files": [
+    "eprover/CLAUSES/ccl_derivation.c",
+    "eprover/CLAUSES/ccl_sine.c",
+    "eprover/CONTROL/cco_eserver.c",
+    "eprover/INOUT/cio_multiplexer.c",
+    "eprover/INOUT/cio_multiplexer.h",
+    "eprover/TERMS/cte_ho_csu.c",
+    "eprover/TERMS/cte_match_mgu_1-1.c",
+    "eprover/TERMS/cte_pattern_match_mgu.c"
+  ],
+  "checks": {
+    "c_growth_copy_and_tail_shift_are_exact": true,
+    "c_has_no_external_direct_grow_call": true,
+    "c_production_owner_inventory_matches": true,
+    "c_store_and_bury_are_the_only_grow_calls": true,
+    "rust_fifo_owner_mappings_use_vecdeque": true,
+    "rust_has_no_external_direct_raw_grow_call": true,
+    "rust_pins_nonfull_holes_and_stale_slot_copy": true,
+    "rust_pqueue_owner_inventory_matches": true,
+    "rust_raw_growth_is_public_but_memory_safe": true,
+    "rust_store_and_bury_are_the_only_production_raw_grow_calls": true
+  },
+  "rust_external_direct_raw_grow_calls": [],
+  "rust_pqueue_owner_files": [
+    "src/clauses/sine.rs",
+    "src/terms/ho_csu.rs",
+    "src/terms/match_mgu.rs",
+    "src/terms/pattern_match_mgu.rs"
+  ],
+  "rust_vecdeque_owner_mappings": [
+    "src/clauses/proofstate.rs",
+    "src/control/eserver.rs",
+    "src/inout/multiplexer.rs"
+  ],
+  "schema_version": 1
+}

@@ -457,6 +457,36 @@ mod tests {
     }
 
     #[test]
+    fn direct_raw_nonfull_growth_copies_stale_slots_around_new_live_holes() {
+        let mut queue = PQueue {
+            size: 4,
+            head: 2,
+            tail: 0,
+            queue: vec![Some(10), Some(20), Some(30), Some(40)],
+        };
+
+        queue.grow_c_raw();
+
+        assert_eq!(queue.allocated_size(), 8);
+        assert_eq!(queue.head_index(), 2);
+        assert_eq!(queue.tail_index(), 4);
+        assert_eq!(queue.cardinality(), 6);
+        assert_eq!(
+            queue.queue,
+            vec![
+                Some(10),
+                Some(20),
+                None,
+                None,
+                None,
+                None,
+                Some(30),
+                Some(40)
+            ]
+        );
+    }
+
+    #[test]
     fn wrapped_full_growth_keeps_fifo_order() {
         let mut queue = PQueue::with_size(4);
         for value in [1, 2, 3] {
