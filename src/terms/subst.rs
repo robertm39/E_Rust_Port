@@ -11,6 +11,7 @@ use crate::terms::termvars::VarBank;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Substitution {
     bindings: Vec<Term>,
+    norm_stack: Vec<Term>,
 }
 
 impl Substitution {
@@ -18,6 +19,7 @@ impl Substitution {
     pub const fn new() -> Self {
         Self {
             bindings: Vec::new(),
+            norm_stack: Vec::new(),
         }
     }
 
@@ -103,7 +105,9 @@ impl Substitution {
     /// precondition for `VarBankGetFreshVar`.
     pub fn norm_term(&mut self, term: &Term, vars: &VarBank) -> usize {
         let previous = self.len();
-        let mut stack = vec![term.clone()];
+        let mut stack = std::mem::take(&mut self.norm_stack);
+        debug_assert!(stack.is_empty(), "normalization scratch must be empty");
+        stack.push(term.clone());
         while let Some(candidate) = stack.pop() {
             let mut deref = DerefType::Always;
             let current = term_deref(&candidate, &mut deref);
@@ -121,6 +125,7 @@ impl Substitution {
                 }
             }
         }
+        self.norm_stack = stack;
         previous
     }
 
