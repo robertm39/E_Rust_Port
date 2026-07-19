@@ -116,6 +116,9 @@ TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
         "output_directories",
     }
 )
+MAIN_COMPARISON_EXPECTED_MISMATCHES = {
+    ("ho", "sledgehammer.p"): ("normalized_stdout",),
+}
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
 REFERENCE_TOOL_BINARIES = {
@@ -2520,6 +2523,13 @@ def comparison_cases(
                 "memory_limit_mb": 16,
             }
         )
+    for case in cases:
+        case["expected_mismatches"] = list(
+            MAIN_COMPARISON_EXPECTED_MISMATCHES.get(
+                (case["mode"], case["name"]),
+                (),
+            )
+        )
     return cases
 
 
@@ -2529,6 +2539,12 @@ def comparison_mismatches(reference: dict[str, Any], candidate: dict[str, Any]) 
         if reference[field] != candidate[field]:
             mismatches.append(field)
     return mismatches
+
+
+def mismatch_expectation_matches(
+    mismatches: Sequence[str], expected_mismatches: Sequence[str]
+) -> bool:
+    return sorted(mismatches) == sorted(expected_mismatches)
 
 
 def compare(args: argparse.Namespace) -> None:
@@ -2552,6 +2568,7 @@ def compare(args: argparse.Namespace) -> None:
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
+    expected_difference_count = 0
     for index, case in enumerate(cases, 1):
         print(f"[{index}/{len(cases)}] {case['mode']} {case['name']}", flush=True)
         reference_binary = Path(manifest["builds"][case["mode"]]["binary"])
@@ -2611,9 +2628,21 @@ def compare(args: argparse.Namespace) -> None:
         if not normalized_output_equal and case["scenario"] != "cpu-limit":
             mismatches.append("normalized_stdout")
 
-        if mismatches:
+        expected_mismatches = (
+            [] if args.self_test else list(case.get("expected_mismatches", ()))
+        )
+        mismatch_expectation_met = mismatch_expectation_matches(
+            mismatches, expected_mismatches
+        )
+        if expected_mismatches and mismatch_expectation_met:
+            expected_difference_count += 1
+        if not mismatch_expectation_met:
             mismatch_count += 1
-            mismatch_dir = run_dir / "mismatches" / f"{index:04d}"
+        if mismatches or not mismatch_expectation_met:
+            difference_kind = (
+                "expected-differences" if mismatch_expectation_met else "mismatches"
+            )
+            mismatch_dir = run_dir / difference_kind / f"{index:04d}"
             mismatch_dir.mkdir(parents=True, exist_ok=True)
             for label, result in (("reference", reference), ("candidate", candidate)):
                 (mismatch_dir / f"{label}.stdout").write_text(result["stdout"], encoding="utf-8")
@@ -2646,6 +2675,8 @@ def compare(args: argparse.Namespace) -> None:
                 "candidate_seconds": candidate["wall_seconds"],
                 "normalized_output_equal": normalized_output_equal,
                 "mismatches": mismatches,
+                "expected_mismatches": expected_mismatches,
+                "mismatch_expectation_met": mismatch_expectation_met,
             }
         )
 
@@ -2658,12 +2689,16 @@ def compare(args: argparse.Namespace) -> None:
         "memory_limit_mb": args.memory_limit_mb,
         "case_count": len(records),
         "mismatch_count": mismatch_count,
+        "expected_difference_count": expected_difference_count,
         "cases": records,
     }
     write_json(run_dir / "comparison.json", summary)
     write_csv(run_dir / "comparison.csv", records)
     print(f"Comparison report: {run_dir}")
-    print(f"Cases: {len(records)}; mismatches: {mismatch_count}")
+    print(
+        f"Cases: {len(records)}; mismatches: {mismatch_count}; "
+        f"expected differences: {expected_difference_count}"
+    )
     if mismatch_count:
         raise InteropError("Compatibility mismatches were found")
 
@@ -3211,7 +3246,9 @@ def compare_tools(args: argparse.Namespace) -> None:
         expected_mismatches = (
             [] if args.self_test else list(case.get("expected_mismatches", ()))
         )
-        mismatch_expectation_met = sorted(mismatches) == sorted(expected_mismatches)
+        mismatch_expectation_met = mismatch_expectation_matches(
+            mismatches, expected_mismatches
+        )
         if expected_mismatches and mismatch_expectation_met:
             expected_difference_count += 1
         if not mismatch_expectation_met:

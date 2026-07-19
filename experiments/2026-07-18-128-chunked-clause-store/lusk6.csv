@@ -1,0 +1,11 @@
+implementation,run,exit_code,status,wall_seconds,cpu_seconds,sampled_peak_kib,stdout_bytes
+baseline,1,0,Unsatisfiable,3.623647,3.515625,251884,10344
+candidate,1,0,Unsatisfiable,3.801428,3.750000,246228,10344
+candidate,2,0,Unsatisfiable,3.501112,3.484375,246964,10425
+baseline,2,0,Unsatisfiable,3.360521,3.328125,246712,10344
+baseline,3,0,Unsatisfiable,3.611962,3.578125,252808,10344
+candidate,3,0,Unsatisfiable,3.602376,3.562500,246544,10344
+candidate,4,0,Unsatisfiable,3.569333,3.531250,247544,10425
+baseline,4,0,Unsatisfiable,3.611538,3.578125,247332,10344
+baseline,5,0,Unsatisfiable,3.557358,3.546875,247400,10344
+candidate,5,0,Unsatisfiable,3.478499,3.437500,246312,10425

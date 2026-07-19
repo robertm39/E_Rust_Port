@@ -266,6 +266,22 @@ class ComparisonTests(unittest.TestCase):
             ["exit_code", "status", "shape"],
         )
 
+    def test_expected_mismatch_sets_must_match_exactly(self):
+        self.assertTrue(
+            e_interop.mismatch_expectation_matches(
+                ["normalized_stdout", "status"],
+                ["status", "normalized_stdout"],
+            )
+        )
+        self.assertFalse(
+            e_interop.mismatch_expectation_matches([], ["normalized_stdout"])
+        )
+        self.assertFalse(
+            e_interop.mismatch_expectation_matches(
+                ["normalized_stdout", "shape"], ["normalized_stdout"]
+            )
+        )
+
     def test_tool_expected_mismatch_metadata_is_validated(self):
         metadata = e_interop.tool_functional_case_metadata(
             ({"expected_mismatches": ["normalized_stdout"]},)
@@ -371,6 +387,36 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(stdin_app_encode_case["expected_status"])
         self.assertEqual(stdin_app_encode_case["scenario"], "stdin-app-encode")
         self.assertIn("fof(goal, conjecture, p(a)).", stdin_app_encode_case["stdin"])
+
+    def test_default_comparison_cases_declare_only_sledgehammer_output_difference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo_root = Path(directory)
+            smoketest = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "SMOKETEST"
+            tptp = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "TPTP"
+            lfhol = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "LFHOL"
+            smoketest.mkdir(parents=True)
+            tptp.mkdir(parents=True)
+            lfhol.mkdir(parents=True)
+            (tptp / "ordinary.p").write_text(
+                "fof(goal, conjecture, $true).\n", encoding="utf-8"
+            )
+            (lfhol / "sledgehammer.p").write_text(
+                "thf(goal, conjecture, $true).\n", encoding="utf-8"
+            )
+            run_dir = repo_root / "run"
+            run_dir.mkdir()
+
+            cases = e_interop.comparison_cases(repo_root, None, run_dir)
+
+        declared = {
+            (case["mode"], case["name"]): case["expected_mismatches"]
+            for case in cases
+            if case["expected_mismatches"]
+        }
+        self.assertEqual(
+            declared,
+            {("ho", "sledgehammer.p"): ["normalized_stdout"]},
+        )
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(

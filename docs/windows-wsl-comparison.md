@@ -113,8 +113,20 @@ reference with itself:
 
 Compatibility reports are written to `.artifacts/e-compare/<timestamp>/` as
 JSON and CSV. Complete stdout, stderr, and normalized output are retained for
-each mismatch. A mismatch in exit code, timeout state, SZS status, output
-structure, or normalized output makes the command fail.
+each difference. Default-corpus cases may declare an exact
+`expected_mismatches` field set for a proven nonsemantic compatibility
+decision. Those outputs are retained under `expected-differences/` and counted
+separately; an unexpected difference, a missing declared difference, or an
+extra field makes the command fail. Self-tests and caller-supplied corpora
+require exact archived-C equality.
+
+The maintained 50-case main baseline currently has 45 exact cases, one exact
+declared normalized-output difference for `sledgehammer.p`, and four unexpected
+resource/performance failures. The stable inventory and field-level audit are
+retained in
+[`experiment 129`](../experiments/2026-07-18-129-main-matrix-baseline/FINDINGS.md).
+The four failures remain active under Bead `E_Rust_Port-j76.5.3`; they are not
+treated as expected differences.
 
 ## Support-tool comparison
 
