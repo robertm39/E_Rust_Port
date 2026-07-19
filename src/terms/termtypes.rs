@@ -5,7 +5,7 @@ use crate::terms::signature::{
     SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
 };
 use crate::terms::simpletypes::{sort_is_interpreted, Type};
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::num::NonZeroUsize;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 use std::rc::Rc;
@@ -340,6 +340,11 @@ impl Term {
     #[must_use]
     pub fn arguments(&self) -> Ref<'_, [Option<Term>]> {
         Ref::map(self.0.args.borrow(), Vec::as_slice)
+    }
+
+    /// Mutably borrows the argument slots without cloning their terms.
+    pub(crate) fn arguments_mut(&self) -> RefMut<'_, [Option<Term>]> {
+        RefMut::map(self.0.args.borrow_mut(), Vec::as_mut_slice)
     }
 
     #[must_use]

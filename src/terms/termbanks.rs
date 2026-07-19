@@ -1401,16 +1401,21 @@ impl TermBank {
 
         let copy = Term::top_copy_without_args(&term);
         copy.set_properties(TP_IGNORE_PROPS);
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let arguments = term.arguments();
+        let mut copy_arguments = copy.arguments_mut();
+        for (index, arg) in arguments.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
             let shared = self.insert_repl(
-                &arg,
+                arg,
                 Self::convert_lfho_deref(index, limit, current_deref),
                 old,
                 repl,
             )?;
-            copy.set_argument(index, shared);
+            copy_arguments[index] = Some(shared);
         }
+        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
@@ -1440,14 +1445,19 @@ impl TermBank {
         let copy = Term::top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let mut changed = false;
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let replaced = self.insert_repl_plain(&arg, old, repl)?;
-            if replaced != arg {
+        let arguments = term.arguments();
+        let mut copy_arguments = copy.arguments_mut();
+        for (index, arg) in arguments.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let replaced = self.insert_repl_plain(arg, old, repl)?;
+            if replaced != *arg {
                 changed = true;
             }
-            copy.set_argument(index, replaced);
+            copy_arguments[index] = Some(replaced);
         }
+        drop(copy_arguments);
 
         if changed {
             self.term_top_insert(copy)
