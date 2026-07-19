@@ -61,9 +61,9 @@ use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::neweval::{EvalObjectHandle, PRIO_LARGEST_REASONABLE};
 use crate::clauses::paramodulation::{
-    compute_all_paramodulants, compute_all_paramodulants_indexed,
-    compute_all_paramodulants_indexed_with_docs, compute_all_paramodulants_with_docs,
-    ParamodulationType as ClauseParamodulationType,
+    compute_all_paramodulants, compute_all_paramodulants_indexed_with_fresh_vars,
+    compute_all_paramodulants_indexed_with_fresh_vars_and_docs,
+    compute_all_paramodulants_with_docs, ParamodulationType as ClauseParamodulationType,
 };
 use crate::clauses::picosat::{PicoSat, PicoSatError};
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
@@ -6979,7 +6979,7 @@ fn compute_selected_paramodulants(
         indices.and_then(GlobalIndices::pm_paramodulation_indexes)
     {
         let count = if let Some((output, session)) = doc_context.as_mut() {
-            compute_all_paramodulants_indexed_with_docs(
+            compute_all_paramodulants_indexed_with_fresh_vars_and_docs(
                 &mut **output,
                 session,
                 terms,
@@ -6991,9 +6991,10 @@ fn compute_selected_paramodulants(
                 from_index,
                 generation.tmp_store,
                 pm_type,
+                generation.fresh_vars,
             )?
         } else {
-            compute_all_paramodulants_indexed(
+            compute_all_paramodulants_indexed_with_fresh_vars(
                 terms,
                 ocb,
                 source_for_paramod,
@@ -7003,6 +7004,7 @@ fn compute_selected_paramodulants(
                 from_index,
                 generation.tmp_store,
                 pm_type,
+                generation.fresh_vars,
             )?
         };
         Ok(i64_to_u64_saturating(count))

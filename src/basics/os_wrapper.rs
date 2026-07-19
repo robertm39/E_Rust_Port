@@ -147,8 +147,22 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         RLimResult::Success
     } else {
-        windows_kernel32::set_process_memory_limit(mem_limit)
+        windows_kernel32::set_process_memory_limit(windows_process_memory_limit(mem_limit))
     }
+}
+
+#[cfg(windows)]
+const fn windows_process_memory_limit(data_limit: u64) -> u64 {
+    // C limits RLIMIT_DATA, whereas a Windows Job Object charges the entire
+    // process. Preserve the requested heap/data allowance with bounded room
+    // for the executable, stacks, and allocator bookkeeping.
+    const MAX_PROCESS_OVERHEAD: u64 = 256 * 1_048_576;
+    let process_overhead = if data_limit / 8 < MAX_PROCESS_OVERHEAD {
+        data_limit / 8
+    } else {
+        MAX_PROCESS_OVERHEAD
+    };
+    data_limit.saturating_add(process_overhead)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -1273,6 +1287,23 @@ mod tests {
     #[test]
     fn windows_zero_memory_limit_is_noop() {
         assert_eq!(set_memory_limit(0), RLimResult::Success);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_limit_preserves_data_allowance_with_bounded_overhead() {
+        const MIB: u64 = 1_048_576;
+
+        assert_eq!(super::windows_process_memory_limit(16 * MIB), 18 * MIB);
+        assert_eq!(
+            super::windows_process_memory_limit(2_048 * MIB),
+            2_304 * MIB
+        );
+        assert_eq!(
+            super::windows_process_memory_limit(4_096 * MIB),
+            4_352 * MIB
+        );
+        assert_eq!(super::windows_process_memory_limit(u64::MAX), u64::MAX);
     }
 
     #[cfg(windows)]

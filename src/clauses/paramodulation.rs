@@ -403,6 +403,46 @@ pub fn compute_all_paramodulants_indexed(
         store,
         pm_type,
         None,
+        None,
+    )
+}
+
+/// Computes indexed paramodulants using a caller-owned C `freshvars` bank.
+///
+/// The caller-owned bank is reset before each candidate construction, matching
+/// C `ClauseParamodConstruct` and the ordered-paramodulation constructors.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_paramodulants_indexed`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible wrapper mirrors ComputeAllParamodulantsIndexed inputs"
+)]
+pub fn compute_all_paramodulants_indexed_with_fresh_vars(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
+    from_index: &OverlapIndex,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_indexed_impl::<String>(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        into_index,
+        negp_index,
+        from_index,
+        store,
+        pm_type,
+        Some(freshvars),
+        None,
     )
 }
 
@@ -440,6 +480,48 @@ pub fn compute_all_paramodulants_indexed_with_docs(
         from_index,
         store,
         pm_type,
+        None,
+        Some((output, session)),
+    )
+}
+
+/// Computes indexed paramodulants using a caller-owned C `freshvars` bank
+/// while emitting represented proof-documentation output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`compute_all_paramodulants_indexed_with_fresh_vars`], plus any
+/// proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible docs wrapper mirrors ComputeAllParamodulantsIndexed inputs"
+)]
+pub fn compute_all_paramodulants_indexed_with_fresh_vars_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex,
+    negp_index: &OverlapIndex,
+    from_index: &OverlapIndex,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+    freshvars: &VarBank,
+) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_indexed_impl(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        into_index,
+        negp_index,
+        from_index,
+        store,
+        pm_type,
+        Some(freshvars),
         Some((output, session)),
     )
 }
@@ -458,6 +540,7 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
     from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = compute_into_paramodulants_indexed(
@@ -469,6 +552,7 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
         negp_index,
         store,
         pm_type,
+        freshvars,
         &mut doc_context,
     )?;
     paramod_count += compute_from_paramodulants_indexed(
@@ -479,6 +563,7 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
         from_index,
         store,
         pm_type,
+        freshvars,
         &mut doc_context,
     )?;
     Ok(paramod_count)
@@ -497,6 +582,7 @@ fn compute_into_paramodulants_indexed(
     negp_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
@@ -514,6 +600,7 @@ fn compute_into_paramodulants_indexed(
             store,
             parent_alias,
             pm_type,
+            freshvars,
             doc_context,
         )?;
         if from_pos
@@ -530,6 +617,7 @@ fn compute_into_paramodulants_indexed(
                 store,
                 parent_alias,
                 pm_type,
+                freshvars,
                 doc_context,
             )?;
         }
@@ -550,6 +638,7 @@ fn compute_from_paramodulants_indexed(
     from_index: &OverlapIndex,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
@@ -571,6 +660,7 @@ fn compute_from_paramodulants_indexed(
                 store,
                 parent_alias,
                 pm_type,
+                freshvars,
                 doc_context,
             )?;
         }
@@ -592,6 +682,7 @@ fn compute_from_position_into_index(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
@@ -604,6 +695,7 @@ fn compute_from_position_into_index(
             store,
             parent_alias,
             pm_type,
+            freshvars,
             doc_context,
         )?;
     }
@@ -622,6 +714,7 @@ fn compute_from_position_into_occurrence(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
@@ -633,6 +726,7 @@ fn compute_from_position_into_occurrence(
             store,
             parent_alias,
             pm_type,
+            freshvars,
             doc_context,
         );
     }
@@ -667,6 +761,7 @@ fn compute_from_position_into_occurrence(
                 false,
                 effective_pm_type,
                 pm_type,
+                freshvars,
                 doc_context,
             )?;
         }
@@ -689,6 +784,7 @@ fn compute_indexed_sources_into_position(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
@@ -701,6 +797,7 @@ fn compute_indexed_sources_into_position(
             store,
             parent_alias,
             pm_type,
+            freshvars,
             doc_context,
         );
     }
@@ -744,6 +841,7 @@ fn compute_indexed_sources_into_position(
                     &mut subst,
                     false,
                     pm_type,
+                    freshvars,
                     doc_context,
                 )?;
             }
@@ -767,6 +865,7 @@ fn compute_from_position_into_occurrence_csu(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let from_term = from_pos
@@ -815,6 +914,7 @@ fn compute_from_position_into_occurrence_csu(
                 subst_is_ho,
                 effective_pm_type,
                 pm_type,
+                freshvars,
                 doc_context,
             ) {
                 Ok(generated) => generated,
@@ -846,6 +946,7 @@ fn compute_from_position_into_target_clause_entry_with_subst(
     subst_is_ho: bool,
     effective_pm_type: ParamodulationType,
     requested_pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
@@ -877,7 +978,15 @@ fn compute_from_position_into_target_clause_entry_with_subst(
         let from_clause = from_pos
             .clause()
             .expect("indexed source position must be backed by a clause");
-        let freshvars = fresh_var_bank_for_clauses(bank, from_clause, target_entry.clause());
+        let scratch_freshvars = freshvars
+            .is_none()
+            .then(|| fresh_var_bank_for_clauses(bank, from_clause, target_entry.clause()));
+        let freshvars = freshvars.unwrap_or_else(|| {
+            scratch_freshvars
+                .as_ref()
+                .expect("missing indexed paramodulation scratch variable bank")
+        });
+        freshvars.reset_v_counts();
         let paramodulant = indexed_paramod_construct_with_subst(
             bank,
             ocb,
@@ -885,7 +994,7 @@ fn compute_from_position_into_target_clause_entry_with_subst(
             &into_pos,
             from_clause,
             target_entry.clause(),
-            &freshvars,
+            freshvars,
             subst,
             effective_pm_type,
         );
@@ -946,6 +1055,7 @@ fn compute_indexed_sources_into_position_csu(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let into_side = into_pos
@@ -1005,6 +1115,7 @@ fn compute_indexed_sources_into_position_csu(
                     &mut subst,
                     subst_is_ho,
                     pm_type,
+                    freshvars,
                     doc_context,
                 ) {
                     Ok(generated) => generated,
@@ -1037,6 +1148,7 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
     subst: &mut Substitution,
     subst_is_ho: bool,
     pm_type: ParamodulationType,
+    freshvars: Option<&VarBank>,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
@@ -1058,7 +1170,15 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
             into_term.set_prop(TP_POTENTIAL_PARAMOD);
             into_term
         });
-        let freshvars = fresh_var_bank_for_clauses(bank, source_entry.clause(), into_clause);
+        let scratch_freshvars = freshvars
+            .is_none()
+            .then(|| fresh_var_bank_for_clauses(bank, source_entry.clause(), into_clause));
+        let freshvars = freshvars.unwrap_or_else(|| {
+            scratch_freshvars
+                .as_ref()
+                .expect("missing indexed paramodulation scratch variable bank")
+        });
+        freshvars.reset_v_counts();
         let paramodulant = indexed_paramod_construct_with_subst(
             bank,
             ocb,
@@ -1066,7 +1186,7 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
             into_pos,
             source_entry.clause(),
             into_clause,
-            &freshvars,
+            freshvars,
             subst,
             effective_pm_type,
         );
@@ -2533,10 +2653,11 @@ mod tests {
     use super::{
         clause_ordered_paramod, clause_ordered_sim_paramod, clause_ordered_super_sim_paramod,
         compute_all_paramodulants, compute_all_paramodulants_indexed,
-        compute_all_paramodulants_with_docs, compute_clause_clause_paramodulants,
-        effective_paramodulation_type, fresh_var_bank_for_clauses,
-        indexed_plain_paramod_construct_with_subst, paramod_from_side_positions,
-        paramod_into_positions, paramodulation_pair_positions, ParamodulationType,
+        compute_all_paramodulants_indexed_with_fresh_vars, compute_all_paramodulants_with_docs,
+        compute_clause_clause_paramodulants, effective_paramodulation_type,
+        fresh_var_bank_for_clauses, indexed_plain_paramod_construct_with_subst,
+        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
+        ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -2566,6 +2687,7 @@ mod tests {
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
@@ -3810,6 +3932,12 @@ mod tests {
     #[test]
     fn compute_all_paramodulants_indexed_queries_into_index() {
         let mut bank = test_bank();
+        let freshvars = VarBank::new(bank.signature().type_bank());
+        bank.vars().pair_shadow(&freshvars);
+        let individual = bank.signature().type_bank().default_type();
+        let _ = freshvars.get_fresh_var(&individual);
+        let _ = freshvars.get_fresh_var(&individual);
+        assert_eq!(freshvars.v_count_for_type(&individual), 2);
         let source_left = typed_const(&mut bank, "pm_idx_into_source_left");
         let source_right = typed_const(&mut bank, "pm_idx_into_source_right");
         let target_rhs = typed_const(&mut bank, "pm_idx_into_target_rhs");
@@ -3833,7 +3961,7 @@ mod tests {
         let mut ocb = kbo_ocb(&bank);
         let mut store = ClauseSet::new();
 
-        let count = compute_all_paramodulants_indexed(
+        let count = compute_all_paramodulants_indexed_with_fresh_vars(
             &mut bank,
             &mut ocb,
             &source,
@@ -3843,10 +3971,12 @@ mod tests {
             from_index,
             &mut store,
             ParamodulationType::Plain,
+            &freshvars,
         )
         .unwrap();
 
         assert_eq!(count, 1);
+        assert_eq!(freshvars.v_count_for_type(&individual), 0);
         assert_eq!(store.members(), 1);
         let stored = store.iter().next().expect("one indexed paramodulant");
         assert_eq!(stored.proof_depth(), 5);

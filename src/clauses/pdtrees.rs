@@ -12,6 +12,7 @@ use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db};
+#[cfg(test)]
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
 use crate::terms::subst::Substitution;
@@ -126,13 +127,25 @@ pub struct PdtIndexedOccurrence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PrefixQueryCell {
-    token: PrefixToken,
     span: usize,
-    type_uid: TypeUniqueId,
-    weight: i64,
     term: Term,
 }
 
+impl PrefixQueryCell {
+    fn token(&self) -> PrefixToken {
+        prefix_token(&self.term)
+    }
+
+    fn type_uid(&self) -> TypeUniqueId {
+        term_type_uid(&self.term)
+    }
+
+    fn weight(&self) -> i64 {
+        term_standard_weight(&self.term)
+    }
+}
+
+#[cfg(test)]
 struct PrefixQueryMetadata {
     token: PrefixToken,
     type_uid: TypeUniqueId,
@@ -554,7 +567,7 @@ impl PdTree {
         let term_weight = query
             .first()
             .expect("PDTree search query contains its root term")
-            .weight;
+            .weight();
         self.search_traversal_order.set(traversal_order);
         self.search_term_weight.set(term_weight);
         self.search_term_date.set(age_constraint);
@@ -616,13 +629,14 @@ impl PdTree {
             match frame {
                 PrefixQueryBuildFrame::Enter(term) => {
                     let start = query.len();
-                    let metadata = prefix_query_metadata(&term);
                     let arity = term.arity();
+                    let traverses_arguments = !term.is_top_level_free_var();
 
-                    if metadata.traverses_arguments {
+                    if traverses_arguments {
                         build_stack.push(PrefixQueryBuildFrame::Exit(start));
                         let arguments = term.arguments();
-                        for index in (metadata.first_arg..arity).rev() {
+                        let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+                        for index in (first_arg..arity).rev() {
                             let argument = arguments[index].clone().unwrap_or_else(|| {
                                 panic!("term argument {index} is uninitialized")
                             });
@@ -631,10 +645,7 @@ impl PdTree {
                     }
 
                     query.push(PrefixQueryCell {
-                        token: metadata.token,
-                        span: usize::from(!metadata.traverses_arguments),
-                        type_uid: metadata.type_uid,
-                        weight: metadata.weight,
+                        span: usize::from(!traverses_arguments),
                         term,
                     });
                 }
@@ -1269,7 +1280,7 @@ impl PdTree {
             match step {
                 PdtTraversalStep::Symbols => {
                     cursor.frames[frame_index].next_step += 1;
-                    let token = state.query[query_index].token;
+                    let token = state.query[query_index].token();
                     if matches!(token, PrefixToken::FreeVar { .. }) {
                         continue;
                     }
@@ -1298,7 +1309,7 @@ impl PdTree {
                     cursor.frames[frame_index].next_variable_child = variable_child.next_sibling;
                     let next_index = variable_child.node_index;
                     let variable = variable_child.variable.as_ref()?;
-                    if state.query[query_index].type_uid != variable_child.type_uid {
+                    if state.query[query_index].type_uid() != variable_child.type_uid {
                         continue;
                     }
                     let next_query_index =
@@ -1328,7 +1339,7 @@ impl PdTree {
                     self.record_nodes_visited(1);
                     let effective_term_weight = adjusted_variable_edge_weight(
                         cursor.frames[frame_index].effective_term_weight,
-                        state.query[query_index].weight,
+                        state.query[query_index].weight(),
                         variable_child.weight,
                     );
                     cursor.frames.push(PdtTraversalFrame::new(
@@ -1403,7 +1414,7 @@ impl PdTree {
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let token = state.query[query_index].token;
+        let token = state.query[query_index].token();
         if !matches!(token, PrefixToken::FreeVar { .. }) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
                 self.record_nodes_visited(1);
@@ -1452,13 +1463,13 @@ impl PdTree {
                 }
             })
         {
-            if state.query[query_index].type_uid != variable_type_uid {
+            if state.query[query_index].type_uid() != variable_type_uid {
                 continue;
             }
             let variable_key = (variable_id, variable_type_uid, variable_weight);
             let next_effective_term_weight = adjusted_variable_edge_weight(
                 effective_term_weight,
-                state.query[query_index].weight,
+                state.query[query_index].weight(),
                 variable_weight,
             );
             if let Some(bound) = bindings.get(&variable_key).copied() {
@@ -1503,7 +1514,7 @@ impl PdTree {
             return self.nodes[node_index].terminal_count != 0;
         }
 
-        let token = query[query_index].token;
+        let token = query[query_index].token();
         if !matches!(token, PrefixToken::FreeVar { .. })
             && self.nodes[node_index]
                 .children
@@ -1565,7 +1576,7 @@ fn query_subtrees_match(
         && expected
             .iter()
             .zip(actual)
-            .all(|(left, right)| left.token == right.token && left.span == right.span)
+            .all(|(left, right)| left.token() == right.token() && left.span == right.span)
 }
 
 #[cfg(feature = "pdt-count-nodes")]
@@ -1679,13 +1690,7 @@ fn push_prefix_query_cell_reference(query: &mut Vec<PrefixQueryCell>, term: Term
     let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
     let arity = term.arity();
     let traverses_arguments = !term.is_top_level_free_var();
-    query.push(PrefixQueryCell {
-        token: prefix_token(&term),
-        span: 0,
-        type_uid: term_type_uid(&term),
-        weight: term_standard_weight(&term),
-        term,
-    });
+    query.push(PrefixQueryCell { span: 0, term });
 
     if traverses_arguments {
         for index in first_arg..arity {
@@ -1749,6 +1754,7 @@ fn prefix_token(term: &Term) -> PrefixToken {
     }
 }
 
+#[cfg(test)]
 fn prefix_query_metadata(term: &Term) -> PrefixQueryMetadata {
     let f_code = term.f_code();
     let is_db_var = term.is_db_var();
@@ -2000,7 +2006,7 @@ mod tests {
             state
                 .query
                 .iter()
-                .map(|cell| cell.token)
+                .map(super::PrefixQueryCell::token)
                 .collect::<Vec<_>>(),
             prefix_compute_term_code(&first)
         );
@@ -2008,7 +2014,7 @@ mod tests {
             state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
             vec![2, 1]
         );
-        assert_eq!(state.term_weight, state.query[0].weight);
+        assert_eq!(state.term_weight, state.query[0].weight());
         assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
         tree.record_search_exit();
@@ -2040,7 +2046,7 @@ mod tests {
             state
                 .query
                 .iter()
-                .map(|cell| cell.token)
+                .map(super::PrefixQueryCell::token)
                 .collect::<Vec<_>>(),
             prefix_compute_term_code(&second)
         );
@@ -2099,7 +2105,10 @@ mod tests {
         assert!(tree.search_query_build_stack.borrow().is_empty());
 
         assert_eq!(
-            query.iter().map(|cell| cell.token).collect::<Vec<_>>(),
+            query
+                .iter()
+                .map(super::PrefixQueryCell::token)
+                .collect::<Vec<_>>(),
             prefix_compute_term_code(&term)
         );
         assert_eq!(
@@ -2682,7 +2691,7 @@ mod tests {
         let state = tree.search_state().unwrap();
         let root_child_index = tree.nodes[0]
             .children
-            .get(&state.query[0].token)
+            .get(&state.query[0].token())
             .copied()
             .unwrap();
         let (variable_weight, variable_child_index) = tree.nodes[root_child_index]
@@ -2698,12 +2707,12 @@ mod tests {
             .unwrap();
         let adjusted_weight = adjusted_variable_edge_weight(
             state.term_weight,
-            state.query[1].weight,
+            state.query[1].weight(),
             variable_weight,
         );
 
         assert_eq!(state.term_weight, term_standard_weight(&query));
-        assert_eq!(state.query[1].weight, term_standard_weight(&query_head));
+        assert_eq!(state.query[1].weight(), term_standard_weight(&query_head));
         assert_eq!(variable_weight, term_standard_weight(&variable));
         assert!(tree.node_satisfies_constraints(
             variable_child_index,
