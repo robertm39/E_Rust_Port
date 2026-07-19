@@ -61,6 +61,12 @@ impl CompareResult {
         }
     }
 
+    /// Return the C `POCompareSymbol` entry for this relation.
+    ///
+    /// The C table has entries only for values zero through four. The two
+    /// one-sided LPO cache results deliberately return `None`: indexing the C
+    /// table with either value would read past its end, and printable OCB
+    /// precedence matrices exclude those cache-only relations.
     #[must_use]
     pub fn symbol(self) -> Option<&'static str> {
         PO_COMPARE_SYMBOLS.get(usize::from(self.c_value())).copied()

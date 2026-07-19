@@ -80,6 +80,7 @@ Source files reviewed: `BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_ord
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `POInverseRelation` handles every comparison result except `to_unknown`; that default branch is an assertion failure in C. Rust now keeps an assertion-shaped inverse helper for compatibility and a separate option-returning helper for checked callers.
+- `POCompareSymbol` has five entries although `CompareResult` has seven values. The omitted `to_notgteq` and `to_notleeq` values are one-sided LPO cache states: their only C producers are `cto_lpo.c` and `cto_cmpcache.c`, while the sole table index is OCB debug rendering. OCB matrices start with only equal/uncomparable cells, accept only equal/greater/lesser parser and generated-precedence tuples, and propagate only those concrete relations. Rust preserves the five-entry table, returns `None` for the two cache-only symbols, and explicitly rejects them at matrix insertion before debug rendering. The unchanged-C values, table, inverses, and complete C/Rust owner audit are retained in [`experiment 120`](../../../experiments/2026-07-18-120-compare-symbol-boundary/FINDINGS.md).
 
 ### Porting Focus
 
@@ -93,7 +94,7 @@ Source files reviewed: `BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_ord
 
 ### Change Later
 
-- `POCompareSymbol` is an exported `char*` table whose order is coupled to the `CompareResult` discriminants. Rust preserves table-shaped rendering; a cleaned API should prefer an enum method while keeping the table only as a compatibility adapter.
+- `POCompareSymbol` is an exported `char*` table whose order is coupled to only the first five `CompareResult` discriminants; indexing the two cache-only values is out-of-bounds. Rust preserves table-shaped rendering behind a checked enum method. A later C cleanup should likewise expose a bounds-aware relation-to-symbol helper and keep the raw table only as a compatibility adapter.
 - `POInverseRelation(to_unknown)` is an assertion failure even though `to_unknown` has a printable symbol. Later ordering APIs should decide whether unknown is a valid cached relation or only an uninitialized sentinel.
 - `Q_TO_PART(res)` collapses arbitrary signed comparison integers into partial-ordering results. Rust preserves the sign-based conversion, but new callers should use typed comparison results directly once ordering backends no longer exchange raw `long` comparison values.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,50 @@
+{
+  "accepted": true,
+  "c_cache_value_files": [
+    "eprover/ORDERINGS/cto_cmpcache.c",
+    "eprover/ORDERINGS/cto_lpo.c"
+  ],
+  "c_symbol_index_sites": [
+    {
+      "count": 1,
+      "path": "eprover/ORDERINGS/cto_ocb.c"
+    }
+  ],
+  "c_symbol_table_entries": [
+    "\"*u*\"",
+    "\"=/=\"",
+    "\" = \"",
+    "\" > \"",
+    "\" < \""
+  ],
+  "checks": {
+    "c_cache_values_are_confined_to_lpo_and_cache_owners": true,
+    "c_enum_has_seven_ordered_values": true,
+    "c_ocb_matrix_initializes_only_printable_relations": true,
+    "c_parser_produces_only_concrete_relations": true,
+    "c_symbol_table_has_exactly_five_entries": true,
+    "c_symbol_table_is_indexed_only_by_ocb_debug_print": true,
+    "rust_cache_mention_inventory_matches": true,
+    "rust_ocb_rejects_cache_only_relations": true,
+    "rust_symbol_rendering_has_one_production_owner": true,
+    "rust_symbol_table_is_checked_and_five_entries": true
+  },
+  "rust_cache_value_mention_files": [
+    "src/clauses/clause.rs",
+    "src/clauses/eqn.rs",
+    "src/clauses/eqnlist.rs",
+    "src/learn/indexfunctions.rs",
+    "src/learn/patterns.rs",
+    "src/orderings/cto_cmpcache.rs",
+    "src/orderings/cto_kbolin.rs",
+    "src/orderings/cto_lpo.rs",
+    "src/orderings/ocb.rs"
+  ],
+  "rust_symbol_call_sites": [
+    {
+      "count": 1,
+      "path": "src/orderings/ocb.rs"
+    }
+  ],
+  "schema_version": 1
+}

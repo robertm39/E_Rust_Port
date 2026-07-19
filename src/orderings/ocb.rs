@@ -915,6 +915,30 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "only concrete precedence relations are inserted")]
+    fn matrix_precedence_rejects_not_greater_equal_cache_result() {
+        let mut signature = signature();
+        let a = signature.insert_id("a", 0, false);
+        let b = signature.insert_id("b", 0, false);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+
+        let _state = ocb.precedence_add_tuple(&signature, a, b, CompareResult::NotGreaterEqual);
+    }
+
+    #[test]
+    #[should_panic(expected = "only concrete precedence relations are inserted")]
+    fn matrix_precedence_rejects_not_less_equal_cache_result() {
+        let mut signature = signature();
+        let a = signature.insert_id("a", 0, false);
+        let b = signature.insert_id("b", 0, false);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+
+        let _state = ocb.precedence_add_tuple(&signature, a, b, CompareResult::NotLessEqual);
+    }
+
+    #[test]
     fn incompatible_matrix_tuple_returns_zero_without_rewriting_existing_relation() {
         let mut signature = signature();
         let a = signature.insert_id("a", 0, false);
