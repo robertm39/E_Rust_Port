@@ -309,20 +309,119 @@ impl SparseClauseStore {
             return false;
         }
 
-        let clauses = std::mem::take(self).into_clauses().collect::<Vec<_>>();
-        for clause in clauses {
-            self.push_back(clause);
-        }
+        self.compact_in_place();
         true
     }
 
     fn sort_unstable_by(&mut self, mut compare: impl FnMut(&Clause, &Clause) -> Ordering) {
-        let mut clauses = Vec::with_capacity(self.len);
-        clauses.extend(std::mem::take(self).into_clauses());
-        clauses.sort_unstable_by(|left, right| compare(left, right));
-        for clause in clauses {
-            self.push_back(clause);
+        self.compact_in_place();
+        let mut permutation = (0..self.len).collect::<Vec<_>>();
+        permutation.sort_unstable_by(|&left, &right| {
+            compare(self.dense_clause(left), self.dense_clause(right))
+        });
+
+        // Sorting produces destination -> source. Encode its inverse in the
+        // same allocation so the clause cells can be permuted in place.
+        let len = permutation.len();
+        for destination in 0..len {
+            let source = permutation[destination] % len;
+            let encoded_destination = destination
+                .checked_mul(len)
+                .expect("clause-sort permutation encoding overflowed");
+            permutation[source] = permutation[source]
+                .checked_add(encoded_destination)
+                .expect("clause-sort permutation encoding overflowed");
         }
+        for destination in &mut permutation {
+            *destination /= len;
+        }
+
+        for source in 0..len {
+            while permutation[source] != source {
+                let destination = permutation[source];
+                self.swap_dense_clauses(source, destination);
+                permutation.swap(source, destination);
+            }
+        }
+    }
+
+    fn compact_in_place(&mut self) {
+        if self.len == 0 {
+            *self = Self::default();
+            return;
+        }
+        if self.slots_len == self.len && self.first_occupied == 0 {
+            return;
+        }
+
+        let mut write = 0;
+        for read in 0..self.slots_len {
+            let (read_chunk, read_offset) = decode_clause_slot(read);
+            let clause = self
+                .chunk_mut(read_chunk)
+                .and_then(|chunk| chunk.get_mut(read_offset))
+                .and_then(Option::take);
+            let Some(clause) = clause else {
+                continue;
+            };
+            let (write_chunk, write_offset) = decode_clause_slot(write);
+            let destination = self
+                .chunk_mut(write_chunk)
+                .and_then(|chunk| chunk.get_mut(write_offset))
+                .expect("compaction destination must already be allocated");
+            debug_assert!(destination.is_none());
+            *destination = Some(clause);
+            write += 1;
+        }
+        debug_assert_eq!(write, self.len);
+
+        let tail_chunk = (self.len - 1) >> SPARSE_STORE_CHUNK_BITS;
+        let tail_len = self.len - (tail_chunk << SPARSE_STORE_CHUNK_BITS);
+        if tail_chunk == 0 {
+            self.first_chunk.truncate(tail_len);
+            self.overflow_chunks.clear();
+        } else {
+            self.first_chunk.truncate(SPARSE_STORE_CHUNK_SIZE);
+            self.overflow_chunks.truncate(tail_chunk);
+            self.overflow_chunks[tail_chunk - 1].truncate(tail_len);
+        }
+        self.slots_len = self.len;
+        self.first_occupied = 0;
+        self.tail_chunk = tail_chunk;
+    }
+
+    fn dense_clause(&self, index: usize) -> &Clause {
+        let (chunk, offset) = decode_clause_slot(index);
+        self.chunk(chunk)
+            .and_then(|chunk| chunk.get(offset))
+            .and_then(Option::as_ref)
+            .expect("compacted clause slot must be occupied")
+    }
+
+    fn swap_dense_clauses(&mut self, left: usize, right: usize) {
+        if left == right {
+            return;
+        }
+        let (left_chunk, left_offset) = decode_clause_slot(left);
+        let left_clause = self
+            .chunk_mut(left_chunk)
+            .and_then(|chunk| chunk.get_mut(left_offset))
+            .and_then(Option::take)
+            .expect("left compacted clause slot must be occupied");
+        let (right_chunk, right_offset) = decode_clause_slot(right);
+        let right_clause = self
+            .chunk_mut(right_chunk)
+            .and_then(|chunk| chunk.get_mut(right_offset))
+            .and_then(Option::take)
+            .expect("right compacted clause slot must be occupied");
+        self.chunk_mut(left_chunk)
+            .and_then(|chunk| chunk.get_mut(left_offset))
+            .expect("left compacted clause slot must exist")
+            .replace(right_clause);
+        self.chunk_mut(right_chunk)
+            .and_then(|chunk| chunk.get_mut(right_offset))
+            .expect("right compacted clause slot must exist")
+            .replace(left_clause);
     }
 }
 
@@ -2545,6 +2644,42 @@ mod tests {
             store.position_of_slot(encode_clause_slot(1, 0)),
             Some(SPARSE_STORE_CHUNK_SIZE - 1)
         );
+        assert!(std::iter::once(&store.first_chunk)
+            .chain(&store.overflow_chunks)
+            .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
+    }
+
+    #[test]
+    fn sparse_clause_store_sorts_across_pages_after_in_place_compaction() {
+        const HOLE_STRIDE: usize = 127;
+        let clause_count = SPARSE_STORE_CHUNK_SIZE + 37;
+        let mut store = SparseClauseStore::default();
+        let mut slots = Vec::with_capacity(clause_count);
+        let mut expected = Vec::with_capacity(clause_count);
+
+        for insertion in 0..clause_count {
+            let ident = i64::try_from(clause_count - insertion).unwrap();
+            let mut clause = Clause::empty();
+            clause.set_ident(ident);
+            slots.push(store.push_back(clause));
+            if insertion % HOLE_STRIDE != 0 {
+                expected.push(ident);
+            }
+        }
+        for insertion in (0..clause_count).filter(|insertion| insertion % HOLE_STRIDE == 0) {
+            assert!(store.remove_slot(slots[insertion]).is_some());
+        }
+
+        expected.sort_unstable();
+        store.sort_unstable_by(|left, right| left.ident().cmp(&right.ident()));
+
+        assert_eq!(
+            store.iter().map(Clause::ident).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(store.slots_len, store.len);
+        assert_eq!(store.first_occupied, 0);
+        assert_eq!(store.tail_chunk, (store.len - 1) >> SPARSE_STORE_CHUNK_BITS);
         assert!(std::iter::once(&store.first_chunk)
             .chain(&store.overflow_chunks)
             .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
