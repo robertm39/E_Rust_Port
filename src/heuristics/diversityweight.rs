@@ -8,11 +8,13 @@ use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_is_ground;
+use crate::terms::termtypes::{term_identity_id, Term};
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DiversityWeightParam {
     max_term_multiplier: f64,
     max_literal_multiplier: f64,
@@ -24,6 +26,63 @@ pub struct DiversityWeightParam {
     fdiff2weight: f64,
     vdiff1weight: f64,
     vdiff2weight: f64,
+    scratch: DiversityWeightScratch,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DiversityWeightScratch {
+    // C allocates the variable traversal containers per evaluation. The WFCB
+    // owns the Rust equivalents so ordinary clauses can retain their capacity.
+    variable_terms: Vec<Term>,
+    variable_ids: Vec<usize>,
+}
+
+const MAX_RETAINED_DIVERSITY_SCRATCH: usize = 1_024;
+
+impl DiversityWeightScratch {
+    fn new() -> Self {
+        Self {
+            variable_terms: Vec::new(),
+            variable_ids: Vec::new(),
+        }
+    }
+
+    fn count_clause_variables(&mut self, clause: &Clause) -> i64 {
+        debug_assert!(self.variable_terms.is_empty());
+        debug_assert!(self.variable_ids.is_empty());
+
+        // Keep this independent of ClauseReturnFCodes' TP_OP_FLAG walk:
+        // C-shaped term operations may legitimately leave that bit on vars.
+        for literal in clause.literals().as_slice() {
+            for root in [literal.left(), literal.right()] {
+                self.variable_terms.push(root.clone());
+                while let Some(term) = self.variable_terms.pop() {
+                    if term.is_free_var() {
+                        self.variable_ids.push(term_identity_id(&term));
+                    } else {
+                        let arguments = term.arguments();
+                        for argument in arguments.iter().flatten() {
+                            if !term_is_ground(argument) {
+                                self.variable_terms.push(argument.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.variable_ids.sort_unstable();
+        self.variable_ids.dedup();
+        let variable_count = i64::try_from(self.variable_ids.len()).unwrap_or(i64::MAX);
+
+        self.variable_ids.clear();
+        if self.variable_terms.capacity() > MAX_RETAINED_DIVERSITY_SCRATCH {
+            self.variable_terms = Vec::new();
+        }
+        if self.variable_ids.capacity() > MAX_RETAINED_DIVERSITY_SCRATCH {
+            self.variable_ids = Vec::new();
+        }
+        variable_count
+    }
 }
 
 impl DiversityWeightParam {
@@ -32,7 +91,7 @@ impl DiversityWeightParam {
         clippy::too_many_arguments,
         reason = "C-compatible constructor mirrors DiversityWeightInit parameters without OCB"
     )]
-    pub const fn new(
+    pub fn new(
         fweight: i64,
         vweight: i64,
         max_term_multiplier: f64,
@@ -55,56 +114,57 @@ impl DiversityWeightParam {
             fdiff2weight,
             vdiff1weight,
             vdiff2weight,
+            scratch: DiversityWeightScratch::new(),
         }
     }
 
     #[must_use]
-    pub const fn max_term_multiplier(self) -> f64 {
+    pub const fn max_term_multiplier(&self) -> f64 {
         self.max_term_multiplier
     }
 
     #[must_use]
-    pub const fn max_literal_multiplier(self) -> f64 {
+    pub const fn max_literal_multiplier(&self) -> f64 {
         self.max_literal_multiplier
     }
 
     #[must_use]
-    pub const fn pos_multiplier(self) -> f64 {
+    pub const fn pos_multiplier(&self) -> f64 {
         self.pos_multiplier
     }
 
     #[must_use]
-    pub const fn app_var_mult(self) -> f64 {
+    pub const fn app_var_mult(&self) -> f64 {
         self.app_var_mult
     }
 
     #[must_use]
-    pub const fn vweight(self) -> i64 {
+    pub const fn vweight(&self) -> i64 {
         self.vweight
     }
 
     #[must_use]
-    pub const fn fweight(self) -> i64 {
+    pub const fn fweight(&self) -> i64 {
         self.fweight
     }
 
     #[must_use]
-    pub const fn fdiff1weight(self) -> f64 {
+    pub const fn fdiff1weight(&self) -> f64 {
         self.fdiff1weight
     }
 
     #[must_use]
-    pub const fn fdiff2weight(self) -> f64 {
+    pub const fn fdiff2weight(&self) -> f64 {
         self.fdiff2weight
     }
 
     #[must_use]
-    pub const fn vdiff1weight(self) -> f64 {
+    pub const fn vdiff1weight(&self) -> f64 {
         self.vdiff1weight
     }
 
     #[must_use]
-    pub const fn vdiff2weight(self) -> f64 {
+    pub const fn vdiff2weight(&self) -> f64 {
         self.vdiff2weight
     }
 }
@@ -114,7 +174,7 @@ impl DiversityWeightParam {
     clippy::too_many_arguments,
     reason = "C-compatible helper mirrors DiversityWeightInit parameters without OCB"
 )]
-pub const fn diversity_weight_init(
+pub fn diversity_weight_init(
     fweight: i64,
     vweight: i64,
     max_term_multiplier: f64,
@@ -242,10 +302,51 @@ pub fn diversity_weight_compute(
     );
 
     let mut fcodes = Vec::new();
-    let f_diversity = i64_to_f64(clause.return_fcodes(&mut fcodes));
+    let f_diversity = clause.return_fcodes(&mut fcodes);
 
     let mut vars = BTreeMap::new();
-    let v_diversity = i64_to_f64(clause.collect_variables(&mut vars));
+    let v_diversity = clause.collect_variables(&mut vars);
+
+    let f_diversity = i64_to_f64(f_diversity);
+    let v_diversity = i64_to_f64(v_diversity);
+
+    result += f_diversity * (param.fdiff2weight * f_diversity + param.fdiff1weight);
+    result += v_diversity * (param.vdiff2weight * v_diversity + param.vdiff1weight);
+
+    result
+}
+
+fn diversity_weight_compute_reusing_scratch(
+    param: &mut DiversityWeightParam,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    let mut fcodes = Vec::new();
+    let f_diversity = clause.return_fcodes(&mut fcodes);
+    let v_diversity = param.scratch.count_clause_variables(clause);
+    let diversity = (f_diversity, v_diversity);
+    diversity_weight_compute_from_counts(param, bank, clause, diversity)
+}
+
+fn diversity_weight_compute_from_counts(
+    param: &DiversityWeightParam,
+    bank: &TermBank,
+    clause: &Clause,
+    (f_diversity, v_diversity): (i64, i64),
+) -> f64 {
+    let mut result = clause.literal_weight(
+        bank,
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.fweight,
+        param.app_var_mult,
+        false,
+    );
+
+    let f_diversity = i64_to_f64(f_diversity);
+    let v_diversity = i64_to_f64(v_diversity);
 
     result += f_diversity * (param.fdiff2weight * f_diversity + param.fdiff1weight);
     result += v_diversity * (param.vdiff2weight * v_diversity + param.vdiff1weight);
@@ -290,7 +391,7 @@ fn diversity_weight_wfcb_compute(
     clause: &Clause,
 ) -> f64 {
     match data {
-        Some(data) => diversity_weight_compute(data, bank, clause),
+        Some(data) => diversity_weight_compute_reusing_scratch(data, bank, clause),
         None => panic!("Diversityweight WFCB requires initialized weight parameters"),
     }
 }
@@ -302,7 +403,10 @@ fn diversity_weight_wfcb_compute_with_bank(
     clause: &mut Clause,
 ) -> Result<f64, Diagnostic> {
     match data {
-        Some(data) => diversity_weight_compute_with_bank(data, ocb, bank, clause),
+        Some(data) => {
+            clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+            Ok(diversity_weight_compute_reusing_scratch(data, bank, clause))
+        }
         None => panic!("Diversityweight WFCB requires initialized weight parameters"),
     }
 }
@@ -316,9 +420,11 @@ fn i64_to_f64(value: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         diversity_weight_compute, diversity_weight_compute_with_ocb, diversity_weight_init,
-        diversity_weight_parse, DEFAULT_MAX_MULT,
+        diversity_weight_parse, DiversityWeightScratch, DEFAULT_MAX_MULT,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -332,7 +438,7 @@ mod tests {
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG};
     use crate::terms::typebanks::TypeBank;
 
     fn assert_close(actual: f64, expected: f64) {
@@ -483,5 +589,33 @@ mod tests {
         assert_close(wfcb.compute_eval(&bank, &clause), 40.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
         assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn diversity_scratch_counts_stale_flagged_variables_repeatedly() {
+        let mut bank = test_bank();
+        let clause = parsed_unit_clause(&mut bank, "f(X)", "g(X)", true);
+        let mut scratch = DiversityWeightScratch::new();
+        let mut expected_fcodes = Vec::new();
+        let expected_function_count = clause.return_fcodes(&mut expected_fcodes);
+        let mut expected_variables = BTreeMap::new();
+        let expected_variable_count = clause.collect_variables(&mut expected_variables);
+        for variable in expected_variables.values() {
+            variable.set_prop(TP_OP_FLAG);
+        }
+
+        assert_eq!(
+            scratch.count_clause_variables(&clause),
+            expected_variable_count
+        );
+        assert_eq!((expected_function_count, expected_variable_count), (2, 1));
+        let retained_variable_capacity = scratch.variable_ids.capacity();
+        assert!(scratch.variable_terms.is_empty());
+        assert!(scratch.variable_ids.is_empty());
+
+        assert_eq!(scratch.count_clause_variables(&clause), 1);
+        assert_eq!(scratch.variable_ids.capacity(), retained_variable_capacity);
+        assert!(scratch.variable_terms.is_empty());
+        assert!(scratch.variable_ids.is_empty());
     }
 }
