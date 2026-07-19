@@ -85,6 +85,13 @@ trees, binaries, and `~/.cache/e-rust-port/reference.json`, which records the
 upstream commit, compiler, distribution, configuration, versions, hashes, and
 binary paths. Rerunning the command replaces builds for the same commit.
 
+The archive contains all 25 configured support tools. `termprops` and
+`tsm_classify`, whose upstream Makefile targets are commented out, are linked
+inside the isolated cached source tree with idempotent source-compatibility
+patches; the vendored checkout is never edited. The unified command, binary,
+tool, mode, and scenario inventory is retained in
+[`experiment 130`](../experiments/2026-07-18-130-interop-harness-inventory/FINDINGS.md).
+
 The command refuses to run if the nested `eprover` Git repository is dirty and
 checks it again after the build.
 

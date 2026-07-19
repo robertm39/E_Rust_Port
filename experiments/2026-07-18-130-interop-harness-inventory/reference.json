@@ -1,0 +1,155 @@
+{
+  "archived_tool_names": [
+    "CSSCPA_filter",
+    "checkproof",
+    "classify_problem",
+    "direct_examples",
+    "e_axfilter",
+    "e_client",
+    "e_deduction_server",
+    "e_ltb_runner",
+    "e_server",
+    "e_stratpar",
+    "edpll",
+    "eground",
+    "ekb_create",
+    "ekb_delete",
+    "ekb_ginsert",
+    "ekb_insert",
+    "enormalizer",
+    "epatternize",
+    "epclanalyse",
+    "epclextract",
+    "epcllemma",
+    "ex_commandline",
+    "term2dag",
+    "termprops",
+    "tsm_classify"
+  ],
+  "configured_tool_paths": {
+    "CSSCPA_filter": "EXTERNAL/CSSCPA_filter",
+    "checkproof": "PROVER/checkproof",
+    "classify_problem": "PROVER/classify_problem",
+    "direct_examples": "PROVER/direct_examples",
+    "e_axfilter": "PROVER/e_axfilter",
+    "e_client": "PROVER/e_client",
+    "e_deduction_server": "PROVER/e_deduction_server",
+    "e_ltb_runner": "PROVER/e_ltb_runner",
+    "e_server": "PROVER/e_server",
+    "e_stratpar": "PROVER/e_stratpar",
+    "edpll": "PROVER/edpll",
+    "eground": "PROVER/eground",
+    "ekb_create": "PROVER/ekb_create",
+    "ekb_delete": "PROVER/ekb_delete",
+    "ekb_ginsert": "PROVER/ekb_ginsert",
+    "ekb_insert": "PROVER/ekb_insert",
+    "enormalizer": "PROVER/enormalizer",
+    "epatternize": "PROVER/epatternize",
+    "epclanalyse": "PROVER/epclanalyse",
+    "epclextract": "PROVER/epclextract",
+    "epcllemma": "PROVER/epcllemma",
+    "ex_commandline": "SIMPLE_APPS/ex_commandline",
+    "term2dag": "SIMPLE_APPS/term2dag",
+    "termprops": "PROVER/termprops",
+    "tsm_classify": "PROVER/tsm_classify"
+  },
+  "distribution": {
+    "id": "ubuntu",
+    "pretty_name": "Ubuntu 24.04.4 LTS",
+    "version": "24.04"
+  },
+  "driver_commands": [
+    "benchmark",
+    "build-reference",
+    "compare",
+    "compare-tools",
+    "doctor"
+  ],
+  "functional_tool_names": [
+    "CSSCPA_filter",
+    "checkproof",
+    "classify_problem",
+    "direct_examples",
+    "e_axfilter",
+    "e_client",
+    "e_deduction_server",
+    "e_ltb_runner",
+    "e_server",
+    "e_stratpar",
+    "edpll",
+    "eground",
+    "ekb_create",
+    "ekb_delete",
+    "ekb_ginsert",
+    "ekb_insert",
+    "enormalizer",
+    "epatternize",
+    "epclanalyse",
+    "epclextract",
+    "epcllemma",
+    "ex_commandline",
+    "term2dag",
+    "termprops",
+    "tsm_classify"
+  ],
+  "main_case_count": 50,
+  "main_mode_counts": {
+    "fol": 44,
+    "ho": 6
+  },
+  "main_scenario_counts": {
+    "app-encode": 1,
+    "cnf": 1,
+    "cpu-limit": 1,
+    "file": 36,
+    "malformed": 1,
+    "memory-limit": 1,
+    "print-formulas": 1,
+    "prune": 1,
+    "stdin": 1,
+    "stdin-app-encode": 1,
+    "stdin-cnf": 1,
+    "stdin-print-formulas": 1,
+    "stdin-prune": 1,
+    "stdin-syntax-only": 1,
+    "syntax-only": 1
+  },
+  "reference_builds": {
+    "fol": {
+      "configure": [],
+      "mode": "fol",
+      "sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+      "smoke_status": "Theorem",
+      "version": "E 3.3.5 Countess Grey (17026b1bfe61aaf223cfaae54947c8d2679c31a0)"
+    },
+    "ho": {
+      "configure": [
+        "--enable-ho"
+      ],
+      "mode": "ho",
+      "sha256": "50a1ce2444c136f737cdc504233b32e7471de33339d9d2fc963d36ff8a02796a",
+      "smoke_status": "Theorem",
+      "version": "E 3.3.5-ho Countess Grey (17026b1bfe61aaf223cfaae54947c8d2679c31a0)"
+    }
+  },
+  "schema_version": 1,
+  "source_linked_tools": [
+    "termprops",
+    "tsm_classify"
+  ],
+  "source_patched_tools": [
+    "termprops",
+    "tsm_classify"
+  ],
+  "support_tool_case_count": 216,
+  "support_tool_count": 25,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "versioned_tool_count": 22,
+  "wrapper_commands": [
+    "benchmark",
+    "build-reference",
+    "compare",
+    "compare-tools",
+    "setup"
+  ]
+}
