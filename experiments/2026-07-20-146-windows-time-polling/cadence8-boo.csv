@@ -1,0 +1,5 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"cadence8","1","0x7ff6d1f90000","8","ResourceOut","60.118805","59.5625","2304628","428","eprover: CPU time limit exceeded, terminating"
+"cadence8","2","0x7ff6d1f90000","8","ResourceOut","60.606549","60.09375","2307248","428","eprover: CPU time limit exceeded, terminating"
+"cadence8","3","0x7ff6d1f90000","-1073740791",,"59.509476","58.265625","2305840","0","memory allocation of 139264 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

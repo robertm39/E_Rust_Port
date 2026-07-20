@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"cadence8","1","0x7ff6d1f90000","0","Unsatisfiable","55.302027","53.15625","792464","24943",""
+"cadence8","2","0x7ff6d1f90000","0","Unsatisfiable","51.755126","51.296875","791452","24943",""
+"cadence8","3","0x7ff6d1f90000","0","Unsatisfiable","53.591236","53.15625","792432","24943",""
