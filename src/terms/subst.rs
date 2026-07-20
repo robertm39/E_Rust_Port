@@ -42,16 +42,14 @@ impl Substitution {
     ///
     /// # Panics
     ///
-    /// Panics if `var` is not a free variable, is already bound, or has a
-    /// different type from `bind`, matching the C `SubstAddBinding`
-    /// assertions.
+    /// Debug builds panic if `var` is not a free variable, is already bound,
+    /// or has a different type from `bind`, matching the C `SubstAddBinding`
+    /// assertions when `NDEBUG` is not defined.
     pub fn add_binding(&mut self, var: &Term, bind: &Term) -> usize {
         let previous = self.len();
-        assert!(var.is_free_var(), "only free variables can be bound");
-        assert!(var.binding().is_none(), "variable is already bound");
-        let var_type = var.type_().expect("bound variable must have a type");
-        let bind_type = bind.type_().expect("binding term must have a type");
-        assert_eq!(var_type, bind_type, "binding type mismatch");
+        debug_assert!(var.is_free_var(), "only free variables can be bound");
+        debug_assert!(var.binding().is_none(), "variable is already bound");
+        debug_assert_eq!(var.type_(), bind.type_(), "binding type mismatch");
 
         var.set_binding(Some(bind.clone()));
         self.bindings.push(var.clone());
@@ -68,7 +66,7 @@ impl Substitution {
         let Some(var) = self.bindings.pop() else {
             return false;
         };
-        assert!(
+        debug_assert!(
             var.is_free_var(),
             "substitution stack stores free variables"
         );

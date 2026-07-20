@@ -156,6 +156,8 @@ pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
 const IMMEDIATE_CLAUSIFICATION_RENAMING_LIMIT: i64 = 24;
 const IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT: i64 = 100;
 const TMPBANK_GC_LIMIT: i64 = 256;
+#[cfg(not(target_os = "linux"))]
+const EVAL_CLAUSE_TIME_CHECK_INTERVAL: usize = 64;
 
 pub const DEFAULT_HEURISTICS: &str = concat!(
     "Weight     = (1*weight21_ugg)                       \n",
@@ -3819,7 +3821,16 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
 ) -> Result<Option<Clause>, Diagnostic> {
     proof_state_record_tmp_store_generated_snapshot(state);
 
-    while let Some(mut clause) = state.tmp_store_mut().extract_first() {
+    while let Some(mut clause) = state
+        .tmp_store_mut()
+        .extract_first_reclaiming_sparse_pages()
+    {
+        #[cfg(not(target_os = "linux"))]
+        if time_is_up() {
+            state.tmp_store_mut().clear();
+            state.eval_store_mut().clear();
+            return Ok(None);
+        }
         let context_sr = control.heuristic_parms().forward_context_sr_aggressive
             || (control.heuristic_parms().backward_context_sr
                 && clause.query_prop(CP_IS_PROCESSED));
@@ -3929,6 +3940,11 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     }
 
     proof_state_eval_clause_set(state, control)?;
+    #[cfg(not(target_os = "linux"))]
+    if time_is_up() {
+        state.eval_store_mut().clear();
+        return Ok(None);
+    }
     if let Some((output, session)) = doc_context.as_mut() {
         proof_state_move_eval_store_to_unprocessed_with_docs(output, session, state)?;
     } else {
@@ -7658,10 +7674,23 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         let _ = state.tmp_terms_mut().gc_sweep();
     }
 
-    if control.heuristic_parms().detsort_tmpset {
+    // Linux receives C-compatible asynchronous SIGXCPU delivery.  Other
+    // platforms poll inside large paramodulation batches; once that poll
+    // expires, the process-visible result is ResourceOut, so do not spend more
+    // memory sorting and admitting a partial generated batch.
+    #[cfg(target_os = "linux")]
+    let generation_timed_out = false;
+    #[cfg(not(target_os = "linux"))]
+    let generation_timed_out = time_is_up();
+
+    if generation_timed_out {
+        state.tmp_store_mut().clear();
+    } else if control.heuristic_parms().detsort_tmpset {
         proof_state_sort_tmp_store_by_struct_weight(state);
     }
-    let generated_empty = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+    let generated_empty = if generation_timed_out {
+        None
+    } else if let Some((output, session, _output_level)) = doc_context.as_mut() {
         proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
     } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
         proof_state_insert_new_clauses_impl::<String>(
@@ -9492,9 +9521,9 @@ fn proof_state_document_split_clauses<W: fmt::Write>(
 /// `eval_clause_set`.
 ///
 /// C mutates clauses in place after they have already been inserted into the
-/// eval store. The Rust clause set owns evaluation indices, so this helper
-/// extracts and reinserts each clause once after evaluation to keep those
-/// indices synchronized while preserving set order.
+/// eval store. Rust does the same, then rebuilds its safe evaluation roots once
+/// after the batch so clause order and evaluation-object order stay unchanged
+/// without growing the sparse owner as an extract-and-append queue.
 ///
 /// # Errors
 ///
@@ -9516,7 +9545,8 @@ pub fn proof_state_eval_clause_set(
         )
     })?;
 
-    {
+    let mut eval_store = std::mem::take(state.eval_store_mut());
+    let evaluation = {
         let ProofControl {
             hcbs, wfcbs, ocb, ..
         } = control;
@@ -9530,27 +9560,26 @@ pub fn proof_state_eval_clause_set(
             )
         })?;
 
-        for _ in 0..pending {
-            let Some(mut clause) = state.eval_store_mut().extract_first() else {
-                return Err(Diagnostic::new(
-                    ErrorCode::OTHER_ERROR,
-                    "eval_clause_set eval_store changed while evaluating clauses",
-                ));
-            };
-            let evaluation = hcb_clause_evaluate_with_bank(
-                active_hcb,
-                wfcbs,
-                ocb,
-                state.terms_mut(),
-                &mut clause,
-            );
-            if let Err(err) = evaluation {
-                state.eval_store_mut().insert(clause);
-                return Err(err);
+        let mut result = Ok(());
+        for (index, clause) in eval_store.iter_mut().enumerate() {
+            #[cfg(target_os = "linux")]
+            let _ = index;
+            #[cfg(not(target_os = "linux"))]
+            if index.is_multiple_of(EVAL_CLAUSE_TIME_CHECK_INTERVAL) && time_is_up() {
+                break;
             }
-            state.eval_store_mut().insert(clause);
+            if let Err(error) =
+                hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, state.terms_mut(), clause)
+            {
+                result = Err(error);
+                break;
+            }
         }
-    }
+        result
+    };
+    eval_store.rebuild_eval_indices();
+    *state.eval_store_mut() = eval_store;
+    evaluation?;
 
     Ok(pending)
 }
@@ -13655,6 +13684,7 @@ mod tests {
         };
         state.eval_store_mut().insert(first);
         state.eval_store_mut().insert(second);
+        let storage_slots_before = state.eval_store().storage_slots_len();
 
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
@@ -13680,6 +13710,7 @@ mod tests {
 
         assert_eq!(evaluated, 2);
         assert_eq!(state.eval_store().members(), 2);
+        assert_eq!(state.eval_store().storage_slots_len(), storage_slots_before);
         assert_eq!(state.unprocessed().members(), 0);
         assert_eq!(state.tmp_store().members(), 0);
         assert_eq!(

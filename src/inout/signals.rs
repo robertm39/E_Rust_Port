@@ -205,6 +205,38 @@ pub fn time_is_up() -> bool {
     true
 }
 
+/// Latches an active cooperative CPU deadline when it is within `tolerance_usec`.
+///
+/// Non-POSIX callers use this immediately before a large allocation that C's
+/// asynchronous `SIGXCPU` could interrupt. Unlimited configurations are never
+/// latched. The lookahead is capped at 5% of the configured window so short
+/// CPU limits are not consumed entirely by an allocation guard.
+#[must_use]
+pub fn expire_time_limit_if_within(tolerance_usec: u64) -> bool {
+    if TIME_IS_UP.load(Ordering::SeqCst) {
+        return true;
+    }
+    let deadline = TIME_LIMIT_DEADLINE_USEC.load(Ordering::SeqCst);
+    let deadline_kind = TIME_LIMIT_DEADLINE_KIND.load(Ordering::SeqCst);
+    if deadline == i64::MAX || deadline_kind == TIME_LIMIT_KIND_NONE {
+        return false;
+    }
+    let start = TIME_LIMIT_START_USEC.load(Ordering::SeqCst);
+    let active_window = deadline.saturating_sub(start).max(0);
+    let proportional_tolerance = active_window / 20;
+    let tolerance = i64::try_from(tolerance_usec)
+        .unwrap_or(i64::MAX)
+        .min(proportional_tolerance);
+    if get_usec_clock().saturating_add(tolerance) < deadline {
+        return false;
+    }
+
+    TIME_IS_UP.store(true, Ordering::SeqCst);
+    TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+    TIME_LIMIT_EXPIRED_KIND.store(deadline_kind, Ordering::SeqCst);
+    true
+}
+
 #[must_use]
 pub fn set_time_is_up(value: bool) -> bool {
     TIME_LIMIT_EXPIRED_KIND.store(TIME_LIMIT_KIND_NONE, Ordering::SeqCst);
@@ -597,19 +629,22 @@ fn reset_signal_state_for_tests() {
 mod tests {
     use super::{
         configure_time_limits, e_sched_signal_setup, e_sig_term_sched_handler, e_signal_handler,
-        e_signal_setup, finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
-        reset_sig_term_caught, reset_signal_state_for_tests, schedule_time_limit,
-        set_hard_time_limit, set_schedule_time_limit, set_signal_global_out_fd,
-        set_silent_time_out, set_soft_time_limit, set_system_time_limit, set_time_is_up,
-        set_time_limit_is_soft, sig_term_caught, signal_global_out_fd, silent_time_out,
-        soft_time_limit, system_time_limit, time_is_up, time_limit_expired_kind,
-        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, TimeLimitKind,
-        RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        e_signal_setup, expire_time_limit_if_within, finalize_cpu_limit_outcome,
+        finalize_signal_outcome, hard_time_limit, reset_sig_term_caught,
+        reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
+        set_schedule_time_limit, set_signal_global_out_fd, set_silent_time_out,
+        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
+        sig_term_caught, signal_global_out_fd, silent_time_out, soft_time_limit, system_time_limit,
+        time_is_up, time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome,
+        SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
+        SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
+    use crate::basics::os_wrapper::get_usec_clock;
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
     use crate::test_support::global_state_lock;
     use std::fs::File;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn default_globals_match_c_initializers() {
@@ -702,6 +737,23 @@ mod tests {
         assert_eq!(hard_time_limit(), 0);
         assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
         assert!(!time_limit_is_soft());
+        assert!(time_is_up());
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
+    }
+
+    #[test]
+    fn imminent_cooperative_deadline_latches_the_configured_kind() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+
+        configure_time_limits(1, RLIM_INFINITY_COMPAT, 0);
+
+        assert!(!expire_time_limit_if_within(1_000_000));
+        let now = get_usec_clock();
+        super::TIME_LIMIT_START_USEC.store(now.saturating_sub(990_000), Ordering::SeqCst);
+        super::TIME_LIMIT_DEADLINE_USEC.store(now.saturating_add(10_000), Ordering::SeqCst);
+
+        assert!(expire_time_limit_if_within(1_000_000));
         assert!(time_is_up());
         assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
     }

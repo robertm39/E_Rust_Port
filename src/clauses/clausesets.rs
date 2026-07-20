@@ -1,5 +1,7 @@
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
+#[cfg(windows)]
+use crate::basics::os_wrapper::process_memory_limit_headroom;
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
@@ -30,6 +32,8 @@ use crate::clauses::pdtrees::{
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
+#[cfg(not(target_os = "linux"))]
+use crate::inout::signals::expire_time_limit_if_within;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -106,9 +110,45 @@ impl Ord for EvalIndexEntry {
 
 type ClauseSlot = usize;
 const SPARSE_STORE_COMPACT_MIN_HOLES: usize = 64;
-const SPARSE_STORE_CHUNK_BITS: usize = 12;
+// Keep fixed pages small enough that a new page remains a modest allocation
+// at the maintained 2 GiB resource boundary.  Unlike C's intrusive list, a
+// Rust page is contiguous, so a 4,096-slot page required a 557,056-byte
+// allocation at the current Clause layout and could lose the race with the
+// CPU deadline.  A 1,024-slot page preserves stable encoded slots while
+// reducing that allocation quantum to 139,264 bytes.
+const SPARSE_STORE_CHUNK_BITS: usize = 10;
 const SPARSE_STORE_CHUNK_SIZE: usize = 1 << SPARSE_STORE_CHUNK_BITS;
 const SPARSE_STORE_CHUNK_MASK: usize = SPARSE_STORE_CHUNK_SIZE - 1;
+#[cfg(any(test, not(target_os = "linux")))]
+const SPARSE_STORE_CHUNK_BYTES: usize =
+    SPARSE_STORE_CHUNK_SIZE * std::mem::size_of::<Option<Clause>>();
+#[cfg(any(test, not(target_os = "linux")))]
+const CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC: u64 = 1_000_000;
+#[cfg(any(test, not(target_os = "linux")))]
+const CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC: u64 = 2_000_000;
+
+#[cfg(any(test, not(target_os = "linux")))]
+const fn clause_page_deadline_tolerance_for_headroom(
+    headroom: Option<u64>,
+    page_bytes: u64,
+) -> u64 {
+    match headroom {
+        Some(bytes) if bytes <= page_bytes.saturating_mul(2) => {
+            CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC
+        }
+        _ => CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clause_page_deadline_tolerance_usec() -> u64 {
+    #[cfg(windows)]
+    let headroom = process_memory_limit_headroom();
+    #[cfg(not(windows))]
+    let headroom = None;
+    let page_bytes = u64::try_from(SPARSE_STORE_CHUNK_BYTES).unwrap_or(u64::MAX);
+    clause_page_deadline_tolerance_for_headroom(headroom, page_bytes)
+}
 
 #[derive(Clone, Debug, Default)]
 struct SparseClauseStore {
@@ -262,6 +302,37 @@ impl SparseClauseStore {
         slot
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn next_push_allocates_page(&self) -> bool {
+        self.chunk(self.tail_chunk)
+            .is_some_and(|chunk| chunk.len() == SPARSE_STORE_CHUNK_SIZE)
+            && self.tail_chunk >= self.overflow_chunks.len()
+    }
+
+    fn reclaim_empty_prefix_chunks(&mut self) -> usize {
+        let mut reclaimed = 0;
+        while !self.overflow_chunks.is_empty() && self.first_chunk.iter().all(Option::is_none) {
+            debug_assert_eq!(self.first_chunk.len(), SPARSE_STORE_CHUNK_SIZE);
+            self.first_chunk = self.overflow_chunks.remove(0);
+            reclaimed += 1;
+        }
+        if reclaimed == 0 {
+            return 0;
+        }
+
+        let shifted_slots = reclaimed * SPARSE_STORE_CHUNK_SIZE;
+        self.slots_len = self.slots_len.saturating_sub(shifted_slots);
+        self.first_occupied = self
+            .first_occupied
+            .checked_sub(shifted_slots)
+            .expect("occupied clause slot must follow reclaimed prefix pages");
+        self.tail_chunk = self
+            .tail_chunk
+            .checked_sub(reclaimed)
+            .expect("tail chunk must follow reclaimed prefix pages");
+        shifted_slots
+    }
+
     fn get_slot(&self, slot: ClauseSlot) -> Option<&Clause> {
         let (chunk, offset) = decode_clause_slot(slot);
         self.chunk(chunk)?.get(offset)?.as_ref()
@@ -314,10 +385,7 @@ impl SparseClauseStore {
             return false;
         }
 
-        let clauses = std::mem::take(self).into_clauses().collect::<Vec<_>>();
-        for clause in clauses {
-            self.push_back(clause);
-        }
+        self.compact_in_place();
         true
     }
 
@@ -597,7 +665,7 @@ impl ClauseSet {
         if !self.demod_index_covers_units() {
             return true;
         }
-        index.search_root_satisfies_constraints() && index.search_root_may_have_matchable_path()
+        index.search_root_satisfies_constraints()
     }
 
     #[must_use]
@@ -716,6 +784,11 @@ impl ClauseSet {
     #[must_use]
     pub fn len(&self) -> usize {
         self.clauses.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn storage_slots_len(&self) -> usize {
+        self.clauses.slots_len
     }
 
     /// Reserves storage for a known batch of clauses without geometric slack.
@@ -1057,6 +1130,12 @@ impl ClauseSet {
     pub fn insert(&mut self, mut clause: Clause) {
         self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
+        #[cfg(not(target_os = "linux"))]
+        if self.clauses.next_push_allocates_page()
+            && expire_time_limit_if_within(clause_page_deadline_tolerance_usec())
+        {
+            return;
+        }
         self.literals += usize_to_i64(clause.literal_number());
         index_clause_evaluations(
             &mut self.eval_indices,
@@ -1179,6 +1258,31 @@ impl ClauseSet {
     pub fn extract_first(&mut self) -> Option<Clause> {
         let slot = self.clauses.first_slot()?;
         self.extract_at_slot(slot)
+    }
+
+    pub(crate) fn extract_first_reclaiming_sparse_pages(&mut self) -> Option<Clause> {
+        let slot = self.clauses.first_slot()?;
+        let clause = self.extract_at_slot(slot);
+        let shifted_slots = self.clauses.reclaim_empty_prefix_chunks();
+        if shifted_slots > 0 {
+            for mapped_slot in self.indexed_clause_positions.values_mut() {
+                *mapped_slot = mapped_slot
+                    .checked_sub(shifted_slots)
+                    .expect("indexed clause slot must follow reclaimed prefix pages");
+            }
+            for mapped_slot in self.indexed_clause_derivation_positions.values_mut() {
+                *mapped_slot = mapped_slot
+                    .checked_sub(shifted_slots)
+                    .expect("indexed derivation slot must follow reclaimed prefix pages");
+            }
+            for mapped_slot in self.eval_object_slots.iter_mut().flatten() {
+                let shifted = unpack_clause_slot(*mapped_slot)
+                    .checked_sub(shifted_slots)
+                    .expect("evaluation-object slot must follow reclaimed prefix pages");
+                *mapped_slot = pack_clause_slot(shifted);
+            }
+        }
+        clause
     }
 
     pub fn extract_by_id(&mut self, ident: i64) -> Option<Clause> {
@@ -2573,10 +2677,12 @@ fn tptp_eq_pred_axiom_write(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
-        clause_set_stack_cardinality, encode_clause_slot, eq_axioms_print_string, eval_mem,
-        ClauseSet, SparseClauseStore, CLAUSECELL_DYN_MEM, EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS,
-        SPARSE_STORE_CHUNK_MASK, SPARSE_STORE_CHUNK_SIZE,
+        clause_page_deadline_tolerance_for_headroom, clause_set_list_get_max_date,
+        clause_set_ref_stack_cardinality, clause_set_stack_cardinality, encode_clause_slot,
+        eq_axioms_print_string, eval_mem, ClauseSet, SparseClauseStore, CLAUSECELL_DYN_MEM,
+        CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC, CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC,
+        EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS, SPARSE_STORE_CHUNK_BYTES, SPARSE_STORE_CHUNK_MASK,
+        SPARSE_STORE_CHUNK_SIZE,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -2600,6 +2706,8 @@ mod tests {
     use crate::clauses::pdtrees::{PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
+    #[cfg(not(target_os = "linux"))]
+    use crate::inout::signals::{configure_time_limits, time_is_up, RLIM_INFINITY_COMPAT};
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::Signature;
@@ -2656,6 +2764,47 @@ mod tests {
         assert!(std::iter::once(&store.first_chunk)
             .chain(&store.overflow_chunks)
             .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
+    }
+
+    #[test]
+    fn clause_page_deadline_tolerance_expands_only_near_the_memory_limit() {
+        let page_bytes = u64::try_from(SPARSE_STORE_CHUNK_BYTES).unwrap();
+        assert_eq!(
+            clause_page_deadline_tolerance_for_headroom(None, page_bytes),
+            CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC
+        );
+        assert_eq!(
+            clause_page_deadline_tolerance_for_headroom(
+                Some(page_bytes.saturating_mul(2).saturating_add(1)),
+                page_bytes,
+            ),
+            CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC
+        );
+        assert_eq!(
+            clause_page_deadline_tolerance_for_headroom(
+                Some(page_bytes.saturating_mul(2)),
+                page_bytes,
+            ),
+            CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn expired_deadline_avoids_allocating_another_clause_page() {
+        let _guard = global_state_lock();
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut set = ClauseSet::new();
+        for _ in 0..SPARSE_STORE_CHUNK_SIZE {
+            set.insert(Clause::empty());
+        }
+
+        configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
+        set.insert(Clause::empty());
+
+        assert_eq!(set.len(), SPARSE_STORE_CHUNK_SIZE);
+        assert!(time_is_up());
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
     }
 
     #[test]
@@ -3041,6 +3190,50 @@ mod tests {
     }
 
     #[test]
+    fn reclaiming_extract_releases_a_drained_prefix_page() {
+        let clause_count = 2 * super::SPARSE_STORE_CHUNK_SIZE;
+        let mut set = ClauseSet::new_position_indexed();
+        for offset in 0..clause_count {
+            let evaluation = f32::from(u16::try_from(offset).unwrap());
+            let mut clause = clause_with_evaluations(Clause::empty(), &[(40, evaluation)]);
+            clause.set_ident(20_000 + i64::try_from(offset).unwrap());
+            set.insert(clause);
+        }
+        assert_eq!(set.clauses.overflow_chunks.len(), 1);
+
+        let extracted = super::SPARSE_STORE_CHUNK_SIZE;
+        let remaining_ident = 20_000 + i64::try_from(extracted).unwrap();
+        let remaining_object = set
+            .find_indexed_by_id(remaining_ident)
+            .and_then(Clause::evaluations)
+            .and_then(EvalCell::object)
+            .expect("remaining evaluated clause must have an object handle");
+        for offset in 0..extracted {
+            assert_eq!(
+                set.extract_first_reclaiming_sparse_pages()
+                    .map(|clause| clause.ident()),
+                Some(20_000 + i64::try_from(offset).unwrap())
+            );
+        }
+
+        assert_eq!(set.len(), clause_count - extracted);
+        assert_eq!(set.clauses.slots_len, set.len());
+        assert!(set.clauses.overflow_chunks.is_empty());
+        assert_eq!(
+            set.find_indexed_by_id(remaining_ident).map(Clause::ident),
+            Some(remaining_ident)
+        );
+        assert_eq!(
+            set.find_by_eval_object(remaining_object).map(Clause::ident),
+            Some(remaining_ident)
+        );
+        assert_eq!(
+            set.extract_first().map(|clause| clause.ident()),
+            Some(20_000 + i64::try_from(extracted).unwrap())
+        );
+    }
+
+    #[test]
     fn position_indexed_lookup_survives_removal_sort_and_compaction() {
         let clause_count = 2 * super::SPARSE_STORE_COMPACT_MIN_HOLES + 1;
         let mut identifiers = Vec::with_capacity(clause_count);
@@ -3185,7 +3378,7 @@ mod tests {
     }
 
     #[test]
-    fn demod_index_search_may_have_match_uses_trie_path_prune() {
+    fn demod_index_search_defers_path_rejection_to_cursor() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "path_constraint_a");
         let b = typed_const(&mut bank, "path_constraint_b");
@@ -3199,7 +3392,8 @@ mod tests {
         set.indexed_insert_clause_owned(clause, &bank);
 
         set.record_demod_index_search_init(&g_a, PDTREE_IGNORE_NF_DATE, false);
-        assert!(!set.demod_index_search_may_have_match());
+        assert!(set.demod_index_search_may_have_match());
+        assert!(set.demod_index_search_next_candidate_side().is_none());
         set.record_demod_index_search_exit();
 
         set.record_demod_index_search_init(&f_a, PDTREE_IGNORE_NF_DATE, false);

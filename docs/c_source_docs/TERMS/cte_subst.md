@@ -100,7 +100,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for release-assertion parity on 2026-07-20.
 
 Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 
@@ -116,6 +116,7 @@ Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 
 ### Compatibility Notes
 
+- Optimized C builds compile the `SubstAddBinding` and single-backtrack assertions out under `NDEBUG`. Rust keeps the free-variable, unbound-variable, type-equality, and stack-entry invariants as `debug_assert!` checks, avoiding release-path type-handle clones while retaining assertion-build diagnostics.
 - `SubstBindAppVar` calls `TermCreatePrefix`, overwrites the returned prefix type with the bound variable's type, and inserts any newly created non-shared prefix with `TBTermTopInsert` before storing it as the variable binding. Rust mirrors this with an explicit term-bank parameter and preserves the existing substitution-stack backtracking shape.
 - `SubstNormTerm` selects `WHNF_deref` for higher-order problems and `TermDerefAlways` otherwise before walking arguments right-to-left on its stack. Rust currently preserves the first-order path and binding order with generic `term_deref(Always)`; higher-order WHNF parity remains open because Rust's function does not yet receive the mutable term bank required by `whnf_deref`.
 

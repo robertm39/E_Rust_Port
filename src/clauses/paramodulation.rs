@@ -19,6 +19,8 @@ use crate::clauses::overlap_index::{
 };
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::heuristics::to_params::TermOrdering;
+#[cfg(not(target_os = "linux"))]
+use crate::inout::signals::{time_is_up, time_limit_expired_kind};
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
@@ -36,6 +38,25 @@ use crate::terms::termvars::VarBank;
 use std::{collections::BTreeMap, fmt};
 
 pub const PARAMOD_OVERLAP_NON_EQ_LITERALS: bool = true;
+#[cfg(not(target_os = "linux"))]
+const PARAMODULATION_TIME_CHECK_INTERVAL: usize = 64;
+
+#[inline]
+fn paramodulation_time_is_up_before_next_insert(store: &ClauseSet) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = store;
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if time_limit_expired_kind().is_some() {
+            return true;
+        }
+        let next_len = store.len().saturating_add(1);
+        next_len.is_multiple_of(PARAMODULATION_TIME_CHECK_INTERVAL) && time_is_up()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParamodulationType {
@@ -953,6 +974,9 @@ fn compute_from_position_into_target_clause_entry_with_subst(
     let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
     let mut marked_term = None;
     for into_cpos in target_entry.positions() {
+        if paramodulation_time_is_up_before_next_insert(store) {
+            break;
+        }
         let into_pos = unpack_clause_pos(*into_cpos, target_entry.clause().clone());
         ensure_indexed_paramodulation_ordering_supported(
             ocb,
@@ -1156,6 +1180,9 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
         .clause()
         .expect("indexed target position must be backed by its working clause");
     for source_cpos in source_entry.positions() {
+        if paramodulation_time_is_up_before_next_insert(store) {
+            break;
+        }
         let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
         ensure_indexed_paramodulation_ordering_supported(ocb, &source_pos, into_pos, pm_type)?;
         if !indexed_source_allows_under_subst(bank, ocb, &source_pos)? {
@@ -2471,6 +2498,9 @@ fn compute_directed_clause_paramodulants(
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for pair in paramodulation_pair_positions(bank, source, target, no_top, pm_type) {
+        if paramodulation_time_is_up_before_next_insert(store) {
+            break;
+        }
         let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type)?;
         let paramodulant = match effective_pm_type {
             ParamodulationType::Plain => {

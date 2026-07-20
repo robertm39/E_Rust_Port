@@ -12,7 +12,6 @@ use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db};
-#[cfg(test)]
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
 use crate::terms::subst::Substitution;
@@ -220,9 +219,15 @@ struct PdtNormalizedOccurrence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PdtSubstCursor {
     frames: Vec<PdtTraversalFrame>,
-    bindings: Vec<(Term, Term)>,
+    bindings: Vec<PdtCursorBinding>,
     base_subst: usize,
     initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PdtCursorBinding {
+    variable_child: usize,
+    query_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -668,11 +673,15 @@ impl PdTree {
         *scratch = state.query;
     }
 
+    #[inline]
     pub fn record_nodes_visited(&self, count: u64) {
+        #[cfg(feature = "measure-expensive")]
         self.visited_count
             .set(self.visited_count.get().saturating_add(count));
         #[cfg(feature = "pdt-count-nodes")]
         record_global_nodes_visited(count);
+        #[cfg(not(any(feature = "measure-expensive", feature = "pdt-count-nodes")))]
+        let _ = count;
     }
 
     pub fn insert_term(&mut self, term: &Term) -> bool {
@@ -1203,6 +1212,10 @@ impl PdTree {
 
     /// Returns the next first-order indexed match while keeping its bindings
     /// active in `subst`, matching C `PDTreeFindNextDemodulator`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the live `PDTree` variable-edge metadata is internally inconsistent.
     #[expect(
         clippy::too_many_lines,
         reason = "Keeps the cursor traversal and backtracking state machine together"
@@ -1254,12 +1267,17 @@ impl PdTree {
                 if let Some(occurrence) =
                     self.nodes[node_index].terminal_entries[terminal_position - 1].occurrence
                 {
-                    for (variable, binding) in &cursor.bindings {
+                    for binding in &cursor.bindings {
+                        let variable = self.variable_children[binding.variable_child]
+                            .variable
+                            .as_ref()
+                            .expect("live PDTree variable edge has a term");
+                        let query_term = &state.query[binding.query_index].term;
                         debug_assert!(
                             variable.binding().is_none(),
                             "speculative PDTree binding leaked into the shared term"
                         );
-                        subst.add_binding(variable, binding);
+                        subst.add_binding(variable, query_term);
                     }
                     return Some(occurrence);
                 }
@@ -1319,17 +1337,21 @@ impl PdTree {
                     }
                     let binding_pos = cursor.bindings.len();
                     let query_term = &state.query[query_index].term;
-                    let matched = if let Some((_, bound)) = cursor
-                        .bindings
-                        .iter()
-                        .rev()
-                        .find(|(candidate, _)| candidate == variable)
-                    {
-                        *bound == *query_term
+                    let matched = if let Some(bound_query_index) =
+                        cursor.bindings.iter().rev().find_map(|binding| {
+                            let candidate = self.variable_children[binding.variable_child]
+                                .variable
+                                .as_ref()?;
+                            (candidate == variable).then_some(binding.query_index)
+                        }) {
+                        state.query[bound_query_index].term == *query_term
                     } else if let Some(bound) = variable.binding() {
                         bound == *query_term
                     } else {
-                        cursor.bindings.push((variable.clone(), query_term.clone()));
+                        cursor.bindings.push(PdtCursorBinding {
+                            variable_child: variable_index,
+                            query_index,
+                        });
                         true
                     };
                     if !matched {
@@ -1735,22 +1757,40 @@ pub fn prefix_code_ref_count(term_code: &[PrefixToken], prefixes: &[Vec<PrefixTo
 }
 
 fn prefix_token(term: &Term) -> PrefixToken {
-    if term.is_top_level_free_var() {
+    let f_code = term.f_code();
+    if f_code < 0 {
         PrefixToken::FreeVar {
             id: term_identity_id(term),
             type_uid: term_type_uid(term),
             weight: term_standard_weight(term),
         }
-    } else if term.is_db_var() || term.is_applied_db_var() || term.is_lambda() {
-        let key = if term.is_db_var() {
-            term.clone()
-        } else {
-            term.argument(0)
-                .unwrap_or_else(|| panic!("DB/lambda term has no head argument"))
+    } else if term.is_db_var() {
+        PrefixToken::DbLike(term_identity_id(term))
+    } else if f_code == SIG_PHONY_APP_CODE {
+        let arguments = term.arguments();
+        let Some(head) = arguments.first().and_then(Option::as_ref) else {
+            return PrefixToken::Fun(f_code);
         };
-        PrefixToken::DbLike(term_identity_id(&key))
+        if head.is_free_var() {
+            PrefixToken::FreeVar {
+                id: term_identity_id(term),
+                type_uid: term_type_uid(term),
+                weight: term_standard_weight(term),
+            }
+        } else if head.is_db_var() {
+            PrefixToken::DbLike(term_identity_id(head))
+        } else {
+            PrefixToken::Fun(f_code)
+        }
+    } else if matches!(f_code, SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE) {
+        let arguments = term.arguments();
+        let head = arguments
+            .first()
+            .and_then(Option::as_ref)
+            .expect("lambda term has no head argument");
+        PrefixToken::DbLike(term_identity_id(head))
     } else {
-        PrefixToken::Fun(term.f_code())
+        PrefixToken::Fun(f_code)
     }
 }
 
@@ -1812,8 +1852,7 @@ fn prefix_query_metadata(term: &Term) -> PrefixQueryMetadata {
 }
 
 fn term_type_uid(term: &Term) -> TypeUniqueId {
-    term.type_()
-        .map_or(INVALID_TYPE_UID, |type_| type_.type_uid())
+    term.type_uid().unwrap_or(INVALID_TYPE_UID)
 }
 
 fn adjusted_variable_edge_weight(
@@ -1979,7 +2018,10 @@ mod tests {
         tree.record_nodes_visited(2);
 
         assert_eq!(tree.match_count(), 1);
+        #[cfg(feature = "measure-expensive")]
         assert_eq!(tree.visited_count(), 5);
+        #[cfg(not(feature = "measure-expensive"))]
+        assert_eq!(tree.visited_count(), 0);
         #[cfg(feature = "pdt-count-nodes")]
         assert!(pdt_node_counter() >= global_before.saturating_add(5));
     }
@@ -2600,7 +2642,10 @@ mod tests {
             tree.search_matching_occurrences(),
             Some(vec![general, specific])
         );
+        #[cfg(feature = "measure-expensive")]
         assert_eq!(tree.visited_count() - visited_before, 3);
+        #[cfg(not(feature = "measure-expensive"))]
+        assert_eq!(tree.visited_count() - visited_before, 0);
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub const DEFAULT_PAGE_SIZE: isize = 4096;
 static WAITED_CHILD_KERNEL_TIME_100NS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static WAITED_CHILD_USER_TIME_100NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static PROCESS_MEMORY_LIMIT_BYTES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -147,7 +149,34 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         RLimResult::Success
     } else {
-        windows_kernel32::set_process_memory_limit(windows_process_memory_limit(mem_limit))
+        let process_limit = windows_process_memory_limit(mem_limit);
+        let result = windows_kernel32::set_process_memory_limit(process_limit);
+        if result != RLimResult::Failed {
+            PROCESS_MEMORY_LIMIT_BYTES.store(process_limit, Ordering::SeqCst);
+        }
+        result
+    }
+}
+
+#[cfg(windows)]
+#[must_use]
+pub fn process_memory_limit_headroom() -> Option<u64> {
+    let limit = PROCESS_MEMORY_LIMIT_BYTES.load(Ordering::SeqCst);
+    process_memory_headroom(limit, windows_kernel32::process_private_memory_bytes()?)
+}
+
+#[cfg(not(windows))]
+#[must_use]
+pub const fn process_memory_limit_headroom() -> Option<u64> {
+    None
+}
+
+#[cfg(any(test, windows))]
+const fn process_memory_headroom(limit: u64, usage: u64) -> Option<u64> {
+    if limit == 0 {
+        None
+    } else {
+        Some(limit.saturating_sub(usage))
     }
 }
 
@@ -867,8 +896,7 @@ mod windows_kernel32 {
         i64::try_from(status.total_physical / 1_048_576).ok()
     }
 
-    pub(super) fn peak_working_set_pages(page_size: isize) -> Option<u64> {
-        let page_size = u64::try_from(page_size).ok().filter(|size| *size > 0)?;
+    fn process_memory_counters() -> Option<ProcessMemoryCounters> {
         let size = Dword::try_from(size_of::<ProcessMemoryCounters>()).ok()?;
         let mut counters = ProcessMemoryCounters {
             size,
@@ -890,6 +918,17 @@ mod windows_kernel32 {
         if ok == 0 {
             return None;
         }
+
+        Some(counters)
+    }
+
+    pub(super) fn process_private_memory_bytes() -> Option<u64> {
+        u64::try_from(process_memory_counters()?.pagefile_usage).ok()
+    }
+
+    pub(super) fn peak_working_set_pages(page_size: isize) -> Option<u64> {
+        let page_size = u64::try_from(page_size).ok().filter(|size| *size > 0)?;
+        let counters = process_memory_counters()?;
 
         let peak = u64::try_from(counters.peak_working_set_size).ok()?;
         Some(peak.div_ceil(page_size))
@@ -1268,6 +1307,13 @@ mod tests {
         assert_eq!(outcome.result(), RLimResult::Failed);
         assert_eq!(outcome.os_error(), Some(22));
         assert!(!resource_limit_error_message(22).is_empty());
+    }
+
+    #[test]
+    fn process_memory_headroom_is_saturating_and_requires_a_limit() {
+        assert_eq!(super::process_memory_headroom(0, 4_096), None);
+        assert_eq!(super::process_memory_headroom(16_384, 4_096), Some(12_288));
+        assert_eq!(super::process_memory_headroom(4_096, 16_384), Some(0));
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
