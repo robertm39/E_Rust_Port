@@ -1,0 +1,6 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"dpll-trail-inline-borrowed-boo","1","0x7ff6c06a0000","8","ResourceOut","62.05786","61.15625","2093264","428","eprover: CPU time limit exceeded, terminating"
+"dpll-trail-inline-borrowed-boo","2","0x7ff6c06a0000","-1073740791",,"61.799881","60.375","2301756","0","memory allocation of 278528 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"dpll-trail-inline-borrowed-boo","3","0x7ff6c06a0000","-1073740791",,"58.748519","57","2302624","0","memory allocation of 557056 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

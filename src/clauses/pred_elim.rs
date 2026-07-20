@@ -666,7 +666,7 @@ fn check_unsat_and_tauto(
 
     let mut environment = SatClauseSet::new();
     let pivot_environment = Clause::alloc(rest_fresh);
-    environment.import_clause_with_source(bank, &pivot_environment, pivot.clone())?;
+    environment.import_clause_with_source(bank, &pivot_environment, pivot)?;
 
     let mut subst = Substitution::new();
     for gate_id in gate_ids {
@@ -698,7 +698,7 @@ fn check_unsat_and_tauto(
         let rest = clause.literals().copy_except_index(Some(sym_index), bank)?;
         subst.backtrack();
         let environment_clause = Clause::alloc(rest);
-        environment.import_clause_with_source(bank, &environment_clause, clause.clone())?;
+        environment.import_clause_with_source(bank, &environment_clause, clause)?;
     }
     subst.delete();
 
@@ -711,7 +711,7 @@ fn check_unsat_and_tauto(
 }
 
 fn check_and_get_gate_core(
-    environment: &mut SatClauseSet,
+    environment: &mut SatClauseSet<'_>,
     gate_backend: &mut GateValidationBackend<'_>,
 ) -> Result<Option<Vec<Clause>>, Diagnostic> {
     match gate_backend {

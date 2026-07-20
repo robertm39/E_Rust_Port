@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"compact_clause_header","1","0x7ff73fdd0000","-1073740791",,"59.091509","56.28125","2303992","0","memory allocation of 168 bytes failed
+memory allocation of 30 bytes failed
+skipping backtrace printing to avoid potential recursion"

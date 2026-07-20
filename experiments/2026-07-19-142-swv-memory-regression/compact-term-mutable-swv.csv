@@ -1,0 +1,10 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"compact-term-mutable-swv","1","0x7ff7331f0000","101",,"1.55883","0.453125","113468","289","thread 'main' (14112) panicked at src\terms\termtypes.rs:486:24:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"compact-term-mutable-swv","2","0x7ff7331f0000","101",,"0.411817","0.390625","113088","289","thread 'main' (13204) panicked at src\terms\termtypes.rs:486:24:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"compact-term-mutable-swv","3","0x7ff7331f0000","101",,"0.390697","0.359375","111980","289","thread 'main' (26432) panicked at src\terms\termtypes.rs:491:24:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

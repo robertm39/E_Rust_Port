@@ -1,0 +1,6 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"borrowed-sat-sources-swv","1","0x7ff6fd0d0000","8","ResourceOut","63.060378","60.953125","2119820","359","eprover: CPU time limit exceeded, terminating"
+"borrowed-sat-sources-swv","2","0x7ff6fd0d0000","-1073740791",,"59.920013","57.84375","2312388","0","memory allocation of 511716 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"borrowed-sat-sources-swv","3","0x7ff6fd0d0000","-1073740791",,"58.960654","57.28125","2312876","0","memory allocation of 511716 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

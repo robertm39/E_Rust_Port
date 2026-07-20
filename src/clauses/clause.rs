@@ -60,15 +60,52 @@ impl Default for ClauseParseOptions {
     }
 }
 
+const CLAUSE_PROPERTY_BITS: u32 = 31;
+const CLAUSE_PROPERTY_MASK: u64 = (1_u64 << CLAUSE_PROPERTY_BITS) - 1;
+const CLAUSE_POS_LIT_COUNT_MAX: u64 = u64::MAX >> CLAUSE_PROPERTY_BITS;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ClauseHeader(u64);
+
+impl ClauseHeader {
+    const fn new(properties: FormulaProperties) -> Self {
+        Self(properties.bits())
+    }
+
+    const fn properties(self) -> FormulaProperties {
+        FormulaProperties::from_bits(self.0 & CLAUSE_PROPERTY_MASK)
+    }
+
+    fn set_properties(&mut self, properties: FormulaProperties) {
+        debug_assert_eq!(properties.bits() & !CLAUSE_PROPERTY_MASK, 0);
+        self.0 = (self.0 & !CLAUSE_PROPERTY_MASK) | (properties.bits() & CLAUSE_PROPERTY_MASK);
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the packed count originated as usize and therefore fits usize on the same target"
+    )]
+    const fn positive_literal_count(self) -> usize {
+        (self.0 >> CLAUSE_PROPERTY_BITS) as usize
+    }
+
+    fn set_positive_literal_count(&mut self, count: usize) {
+        let count = u64::try_from(count).expect("usize literal count must fit u64");
+        assert!(
+            count <= CLAUSE_POS_LIT_COUNT_MAX,
+            "clause positive-literal count exceeds packed 33-bit range"
+        );
+        self.0 = (self.0 & CLAUSE_PROPERTY_MASK) | (count << CLAUSE_PROPERTY_BITS);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clause {
     ident: i64,
     derivation_generation: u64,
     date: SysDate,
     literals: EqnList,
-    neg_lit_no: usize,
-    pos_lit_no: usize,
-    properties: FormulaProperties,
+    header: ClauseHeader,
     weight: i64,
     evaluations: Option<EvalCell>,
     // C keeps the rarely populated ClauseInfo behind a nullable pointer so
@@ -88,9 +125,7 @@ impl Clause {
             derivation_generation: 0,
             date: SysDate::creation_time(),
             literals: EqnList::new(),
-            neg_lit_no: 0,
-            pos_lit_no: 0,
-            properties: CP_IGNORE_PROPS,
+            header: ClauseHeader::new(CP_IGNORE_PROPS),
             weight: 0,
             evaluations: None,
             info: None,
@@ -115,8 +150,7 @@ impl Clause {
 
         let mut clause = Self::empty();
         clause.ident = next_clause_ident();
-        clause.pos_lit_no = positive.len();
-        clause.neg_lit_no = negative.len();
+        clause.header.set_positive_literal_count(positive.len());
         positive.append(&mut negative);
         clause.literals = EqnList::from_vec(positive);
         clause
@@ -282,67 +316,75 @@ impl Clause {
 
     #[must_use]
     pub const fn positive_literal_count(&self) -> usize {
-        self.pos_lit_no
+        self.header.positive_literal_count()
     }
 
     #[must_use]
     pub const fn negative_literal_count(&self) -> usize {
-        self.neg_lit_no
+        self.literals.len() - self.positive_literal_count()
     }
 
     #[must_use]
     pub const fn properties(&self) -> FormulaProperties {
-        self.properties
+        self.header.properties()
     }
 
     pub fn set_properties(&mut self, properties: FormulaProperties) {
-        self.properties = properties;
+        self.header.set_properties(properties);
     }
 
     pub fn set_prop(&mut self, prop: FormulaProperties) {
-        self.properties.set(prop);
+        let mut properties = self.properties();
+        properties.set(prop);
+        self.header.set_properties(properties);
     }
 
     pub fn del_prop(&mut self, prop: FormulaProperties) {
-        self.properties.delete(prop);
+        let mut properties = self.properties();
+        properties.delete(prop);
+        self.header.set_properties(properties);
     }
 
     #[must_use]
     pub const fn give_props(&self, prop: FormulaProperties) -> FormulaProperties {
-        self.properties.give(prop)
+        self.properties().give(prop)
     }
 
     #[must_use]
     pub const fn query_prop(&self, prop: FormulaProperties) -> bool {
-        self.properties.query(prop)
+        self.properties().query(prop)
     }
 
     #[must_use]
     pub const fn is_any_prop_set(&self, prop: FormulaProperties) -> bool {
-        self.properties.is_any_set(prop)
+        self.properties().is_any_set(prop)
     }
 
     #[must_use]
     pub const fn any_prop_set(&self, prop: FormulaProperties) -> FormulaProperties {
-        self.properties.any_set(prop)
+        self.properties().any_set(prop)
     }
 
     pub fn set_tptp_type(&mut self, type_: FormulaProperties) {
-        self.properties.set_tptp_type(type_);
+        let mut properties = self.properties();
+        properties.set_tptp_type(type_);
+        self.header.set_properties(properties);
     }
 
     #[must_use]
     pub const fn query_tptp_type(&self) -> FormulaProperties {
-        self.properties.query_tptp_type()
+        self.properties().query_tptp_type()
     }
 
     pub fn set_csscpa_source(&mut self, source: u64) {
-        self.properties.set_csscpa_source(source);
+        let mut properties = self.properties();
+        properties.set_csscpa_source(source);
+        self.header.set_properties(properties);
     }
 
     #[must_use]
     pub const fn query_csscpa_source(&self) -> u64 {
-        self.properties.query_csscpa_source()
+        self.properties().query_csscpa_source()
     }
 
     #[must_use]
@@ -449,13 +491,14 @@ impl Clause {
     }
 
     pub fn recompute_lit_counts(&mut self) {
-        self.pos_lit_no = self
+        let positive_literal_count = self
             .literals
             .as_slice()
             .iter()
             .filter(|literal| literal.is_positive())
             .count();
-        self.neg_lit_no = self.literals.len() - self.pos_lit_no;
+        self.header
+            .set_positive_literal_count(positive_literal_count);
     }
 
     pub fn gc_mark_terms(&self, bank: &TermBank) {
@@ -464,7 +507,7 @@ impl Clause {
 
     #[must_use]
     pub const fn literal_number(&self) -> usize {
-        self.pos_lit_no + self.neg_lit_no
+        self.literals.len()
     }
 
     #[must_use]
@@ -479,12 +522,12 @@ impl Clause {
 
     #[must_use]
     pub const fn is_goal(&self) -> bool {
-        self.pos_lit_no == 0
+        self.positive_literal_count() == 0
     }
 
     #[must_use]
     pub const fn is_horn(&self) -> bool {
-        self.pos_lit_no <= 1
+        self.positive_literal_count() <= 1
     }
 
     #[must_use]
@@ -494,7 +537,7 @@ impl Clause {
 
     #[must_use]
     pub const fn is_demodulator(&self) -> bool {
-        self.pos_lit_no == 1 && self.neg_lit_no == 0
+        self.positive_literal_count() == 1 && self.literals.len() == 1
     }
 
     #[must_use]
@@ -514,12 +557,12 @@ impl Clause {
 
     #[must_use]
     pub const fn is_positive(&self) -> bool {
-        self.neg_lit_no == 0
+        self.positive_literal_count() == self.literals.len()
     }
 
     #[must_use]
     pub const fn is_negative(&self) -> bool {
-        self.pos_lit_no == 0
+        self.positive_literal_count() == 0
     }
 
     #[must_use]
@@ -550,7 +593,7 @@ impl Clause {
         if self.literals.find_true(bank).is_some() {
             return true;
         }
-        if self.pos_lit_no != 0 && self.neg_lit_no != 0 {
+        if self.positive_literal_count() != 0 && self.negative_literal_count() != 0 {
             if self.literal_number() > EQN_LIST_LONG_LIMIT {
                 return self.literals.long_is_trivial(bank);
             }
@@ -735,11 +778,17 @@ impl Clause {
         if result != 0 {
             return result;
         }
-        result = usize_diff(self.neg_lit_no, other.neg_lit_no);
+        result = usize_diff(
+            self.negative_literal_count(),
+            other.negative_literal_count(),
+        );
         if result != 0 {
             return result;
         }
-        result = usize_diff(self.pos_lit_no, other.pos_lit_no);
+        result = usize_diff(
+            self.positive_literal_count(),
+            other.positive_literal_count(),
+        );
         if result != 0 {
             return result;
         }
@@ -783,9 +832,15 @@ impl Clause {
 
     #[must_use]
     pub fn compare_fun(&self, other: &Self) -> i32 {
-        let mut result = usize_diff(other.pos_lit_no, self.pos_lit_no);
+        let mut result = usize_diff(
+            other.positive_literal_count(),
+            self.positive_literal_count(),
+        );
         if result == 0 {
-            result = usize_diff(other.neg_lit_no, self.neg_lit_no);
+            result = usize_diff(
+                other.negative_literal_count(),
+                self.negative_literal_count(),
+            );
         }
         if result != 0 {
             return cmp_i64(result);
@@ -1250,9 +1305,7 @@ impl Clause {
             derivation_generation: self.derivation_generation,
             date: self.date,
             literals,
-            neg_lit_no: self.neg_lit_no,
-            pos_lit_no: self.pos_lit_no,
-            properties: self.properties,
+            header: self.header,
             weight: self.weight,
             evaluations: None,
             info: None,
@@ -2489,7 +2542,8 @@ mod tests {
         clause_print_axiom_string, clause_print_format_string, clause_print_goal_string,
         clause_print_lop_format_string, clause_print_query_string, clause_print_rule_string,
         clause_print_tptp_format_string, clause_print_tstp_core_string, clause_starts_maybe,
-        clause_tstp_string, clause_write_tstp_with_type_suffixes, Clause,
+        clause_tstp_string, clause_write_tstp_with_type_suffixes, Clause, ClauseHeader,
+        CLAUSE_POS_LIT_COUNT_MAX,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
@@ -2497,8 +2551,8 @@ mod tests {
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM,
-        CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
+        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_D_INDEXED, CP_IS_LAMBDA_DEF, CP_IS_ORIENTED, CP_IS_SOS,
+        CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::derivation::{DerivationEntry, DC_CNF_EVAL_GC};
@@ -2544,7 +2598,21 @@ mod tests {
             std::mem::size_of::<Option<Box<PStack<DerivationEntry>>>>(),
             std::mem::size_of::<usize>()
         );
-        assert!(std::mem::size_of::<Clause>() <= 160);
+        assert!(std::mem::size_of::<Clause>() <= 136);
+    }
+
+    #[test]
+    fn packed_clause_header_preserves_properties_and_large_literal_counts() {
+        let count = usize::try_from(CLAUSE_POS_LIT_COUNT_MAX).unwrap_or(usize::MAX);
+        let mut header = ClauseHeader::new(CP_INITIAL | CP_IS_LAMBDA_DEF);
+        header.set_positive_literal_count(count);
+
+        assert_eq!(header.positive_literal_count(), count);
+        assert_eq!(header.properties(), CP_INITIAL | CP_IS_LAMBDA_DEF);
+
+        header.set_properties(CP_INPUT_FORMULA | CP_IS_ORIENTED);
+        assert_eq!(header.positive_literal_count(), count);
+        assert_eq!(header.properties(), CP_INPUT_FORMULA | CP_IS_ORIENTED);
     }
 
     fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {

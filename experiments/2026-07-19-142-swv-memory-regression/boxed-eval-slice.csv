@@ -1,0 +1,3 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"boxed_eval_slice","1","0x7ff6bfe00000","-1073740791",,"56.96662","54.203125","2301436","0","memory allocation of 168 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

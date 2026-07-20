@@ -1,0 +1,64 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"compact-term-mutable-fixed-backtrace","1","0x7ff644fc0000","-1073740791",,"55.968214","54.796875","2309116","0","memory allocation of 176160768 bytes failed
+stack backtrace:
+   0:     0x7ff64547da62 - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ff64547da62 - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ff64547da62 - std::sys::backtrace::_print_fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:74
+   3:     0x7ff64547da62 - std::sys::backtrace::impl$0::print::impl$0::fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:44
+   4:     0x7ff6454879c1 - core::fmt::write
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\core\src\fmt\mod.rs:0
+   5:     0x7ff6454613d4 - std::io::default_write_fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\io\mod.rs:639
+   6:     0x7ff6454613d4 - std::io::Write::write_fmt<std::sys::stdio::windows::Stderr>
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\io\mod.rs:1994
+   7:     0x7ff645472cb7 - std::sys::backtrace::BacktraceLock::print
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:47
+   8:     0x7ff645472cb7 - std::alloc::default_alloc_error_hook
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\alloc.rs:397
+   9:     0x7ff645472d7c - std::alloc::rust_oom::closure$0
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\alloc.rs:428
+  10:     0x7ff64546f79f - std::sys::backtrace::__rust_end_short_backtrace<std::alloc::rust_oom::closure_env$0,never$>
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:182
+  11:     0x7ff645472d4b - std::alloc::rust_oom
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\alloc.rs:424
+  12:     0x7ff64545e898 - std::alloc::_::__rust_alloc_error_handler
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\alloc.rs:423
+  13:     0x7ff645497310 - alloc::alloc::handle_alloc_error::rt_error
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\alloc\src\alloc.rs:544
+  14:     0x7ff645497310 - alloc::alloc::handle_alloc_error
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\alloc\src\alloc.rs:550
+  15:     0x7ff64549732a - alloc::raw_vec::handle_error
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\alloc\src\raw_vec\mod.rs:861
+  16:     0x7ff645495669 - alloc::raw_vec::RawVec<T,A>::grow_one::hb350f9be0e1865e2
+  17:     0x7ff6452d32c8 - e_rust_port::clauses::satinterface::SatClauseSet::import_clause_with_source::hcd9e519a17561e5d
+  18:     0x7ff6452d4a24 - e_rust_port::clauses::satinterface::SatClauseSet::check_and_get_core_with_picosat::h6dfe5281bdc03aa4
+  19:     0x7ff6452d6128 - e_rust_port::clauses::satinterface::sat_check_proof_state_until_time_limit::hf241bc96116dbd31
+  20:     0x7ff645001c99 - e_rust_port::heuristics::proofcontrol::proof_state_saturate_impl::h4070d0a600d24ca4
+  21:     0x7ff645037e12 - e_rust_port::prover::eprover::run_main_saturation_with_indices::h16264cc6a5463d58
+  22:     0x7ff64504a5b9 - e_rust_port::clauses::proofstate::ProofState::with_global_and_watchlist_indices::h09c13a3ede04144c
+  23:     0x7ff645029e07 - <alloc::string::String as core::fmt::Write>::write_str::h3a7ea8e04fb6ce60
+  24:     0x7ff64502c930 - <alloc::string::String as core::fmt::Write>::write_str::h3a7ea8e04fb6ce60
+  25:     0x7ff64503c92f - e_rust_port::prover::eprover::run::hacf6cae61510d56d
+  26:     0x7ff645059bd9 - eprover::main::h28448eb9a86df1ff
+  27:     0x7ff645093976 - std::sys::backtrace::__rust_begin_short_backtrace::hfca5800bc2bf21e7
+  28:     0x7ff6454626ff - std::rt::lang_start_internal::closure$0
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\rt.rs:175
+  29:     0x7ff6454626ff - std::panicking::catch_unwind::do_call
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:581
+  30:     0x7ff6454626ff - std::panicking::catch_unwind
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:544
+  31:     0x7ff6454626ff - std::panic::catch_unwind
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panic.rs:359
+  32:     0x7ff6454626ff - std::rt::lang_start_internal
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\rt.rs:171
+  33:     0x7ff645059fec - main
+  34:     0x7ff64549133f - invoke_main
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:78
+  35:     0x7ff64549133f - __scrt_common_main_seh
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+  36:     0x7ffc37c7e957 - BaseThreadInitThunk
+  37:     0x7ffc38f0ad6c - RtlUserThreadStart"

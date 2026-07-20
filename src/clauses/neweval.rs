@@ -85,7 +85,7 @@ impl SimpleEvalCell {
 pub struct EvalCell {
     eval_count: EvalPriority,
     object: Option<NonZeroUsize>,
-    evals: Vec<SimpleEvalCell>,
+    evals: Box<[SimpleEvalCell]>,
 }
 
 impl EvalCell {
@@ -608,7 +608,7 @@ fn evals_alloc_raw(eval_no: usize) -> EvalCell {
     EvalCell {
         eval_count: 0,
         object: None,
-        evals: vec![SimpleEvalCell::new(); eval_no],
+        evals: vec![SimpleEvalCell::new(); eval_no].into_boxed_slice(),
     }
 }
 
@@ -682,6 +682,7 @@ mod tests {
             std::mem::size_of::<usize>()
         );
         assert_eq!(std::mem::size_of::<SimpleEvalCell>(), 32);
+        assert_eq!(std::mem::size_of::<EvalCell>(), 32);
 
         eval.set_object(Some(17));
         eval.eval_mut(0).set_left(Some(3));

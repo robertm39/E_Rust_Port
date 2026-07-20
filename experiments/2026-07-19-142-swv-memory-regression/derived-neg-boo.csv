@@ -1,0 +1,5 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"derived-neg-boo","1","0x7ff784200000","-1073740791",,"63.412614","60.25","2298004","0","memory allocation of 622592 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"derived-neg-boo","2","0x7ff784200000","8","ResourceOut","61.959119","61.203125","2293948","428","eprover: CPU time limit exceeded, terminating"
+"derived-neg-boo","3","0x7ff784200000","8","ResourceOut","61.812081","61.09375","2270444","428","eprover: CPU time limit exceeded, terminating"

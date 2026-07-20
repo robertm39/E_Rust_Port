@@ -219,7 +219,9 @@ struct TermLinks {
 struct TermCell {
     f_code: Cell<FunCode>,
     properties: Cell<TermProperties>,
-    args: RefCell<Vec<Option<Term>>>,
+    // Term arity is fixed after allocation, so a boxed slice avoids Vec's
+    // unused capacity word while retaining the safe mutation boundary.
+    args: RefCell<Box<[Option<Term>]>>,
     // C stores these five nullable pointers inline in TermCell. One shared
     // interior-mutation boundary preserves that compact shape without unsafe
     // access or one borrow flag per pointer.
@@ -339,17 +341,17 @@ impl Term {
     /// Borrows the argument slots without cloning their reference-counted terms.
     #[must_use]
     pub fn arguments(&self) -> Ref<'_, [Option<Term>]> {
-        Ref::map(self.0.args.borrow(), Vec::as_slice)
+        Ref::map(self.0.args.borrow(), |args| args.as_ref())
     }
 
     /// Mutably borrows the argument slots without cloning their terms.
     pub(crate) fn arguments_mut(&self) -> RefMut<'_, [Option<Term>]> {
-        RefMut::map(self.0.args.borrow_mut(), Vec::as_mut_slice)
+        RefMut::map(self.0.args.borrow_mut(), |args| args.as_mut())
     }
 
     #[must_use]
     pub fn argument_clones(&self) -> Vec<Option<Term>> {
-        self.0.args.borrow().clone()
+        self.0.args.borrow().to_vec()
     }
 
     #[must_use]
@@ -678,7 +680,7 @@ impl Term {
         Self(Rc::new(TermCell {
             f_code: Cell::new(0),
             properties: Cell::new(TP_IGNORE_PROPS),
-            args: RefCell::new(vec![None; arity]),
+            args: RefCell::new(vec![None; arity].into_boxed_slice()),
             links: RefCell::new(TermLinks::default()),
             entry_no: Cell::new(0),
             weight: Cell::new(0),
@@ -1113,7 +1115,7 @@ mod tests {
             std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
             48
         );
-        assert_eq!(std::mem::size_of::<super::TermCell>(), 152);
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 144);
 
         let term = Term::const_cell_alloc(1);
         let binding = Term::const_cell_alloc(2);

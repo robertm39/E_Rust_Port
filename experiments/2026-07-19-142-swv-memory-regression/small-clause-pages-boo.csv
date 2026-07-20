@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"small-clause-pages-boo","1","0x7ff7ce580000","8","ResourceOut","62.275434","61.234375","1956204","428","eprover: CPU time limit exceeded, terminating"
+"small-clause-pages-boo","2","0x7ff7ce580000","8","ResourceOut","62.603797","61.734375","2171748","428","eprover: CPU time limit exceeded, terminating"
+"small-clause-pages-boo","3","0x7ff7ce580000","8","ResourceOut","63.198999","61.765625","2239744","428","eprover: CPU time limit exceeded, terminating"

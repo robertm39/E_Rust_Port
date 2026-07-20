@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"fresh_sort","1","0x7ff6b1120000","101",,"2.224041","0.71875","121544","289","thread 'main' (31476) panicked at src\clauses\clausesets.rs:353:9:
+fresh clause sorting requires unstamped create dates
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

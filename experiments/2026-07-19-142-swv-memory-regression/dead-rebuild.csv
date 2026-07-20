@@ -1,0 +1,2 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"dead-rebuild","1","0x7ff6de930000","8","ResourceOut","63.132689","61.046875","2290312","359","eprover: CPU time limit exceeded, terminating"

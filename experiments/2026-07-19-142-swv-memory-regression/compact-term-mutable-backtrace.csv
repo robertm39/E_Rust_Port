@@ -1,0 +1,77 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"compact-term-mutable-backtrace","1","0x7ff7331f0000","101",,"0.45578","0.390625","112276","289","thread 'main' (35500) panicked at src\terms\termtypes.rs:491:24:
+RefCell already borrowed
+stack backtrace:
+   0:     0x7ff7336ae0d2 - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ff7336ae0d2 - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ff7336ae0d2 - std::sys::backtrace::_print_fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:74
+   3:     0x7ff7336ae0d2 - std::sys::backtrace::impl$0::print::impl$0::fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:44
+   4:     0x7ff7336b8031 - core::fmt::write
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\core\src\fmt\mod.rs:0
+   5:     0x7ff733691a44 - std::io::default_write_fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\io\mod.rs:639
+   6:     0x7ff733691a44 - std::io::Write::write_fmt<std::sys::stdio::windows::Stderr>
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\io\mod.rs:1994
+   7:     0x7ff7336a49e0 - std::sys::backtrace::BacktraceLock::print
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:47
+   8:     0x7ff7336a49e0 - std::panicking::default_hook::closure$0
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:292
+   9:     0x7ff7336a47f8 - std::panicking::default_hook
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:319
+  10:     0x7ff7336a4d12 - std::panicking::panic_with_hook
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:825
+  11:     0x7ff7336a4ab4 - std::panicking::panic_handler::closure$0
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:698
+  12:     0x7ff73369fe1f - std::sys::backtrace::__rust_end_short_backtrace<std::panicking::panic_handler::closure_env$0,never$>
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\sys\backtrace.rs:182
+  13:     0x7ff73368ed7e - std::panicking::panic_handler
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:689
+  14:     0x7ff7336c810d - core::panicking::panic_fmt
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\core\src\panicking.rs:80
+  15:     0x7ff7336c7b80 - core::cell::panic_already_borrowed
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\core\src\panic.rs:177
+  16:     0x7ff733395414 - e_rust_port::terms::termtrees::splay_term_tree::hc1d2c3dd17080293
+  17:     0x7ff733396d2c - e_rust_port::terms::termtrees::TermTree::insert::hb82b9b505915925d
+  18:     0x7ff73360c14b - e_rust_port::terms::termcellstore::TermCellStore::insert::h256aefb37f26e737
+  19:     0x7ff733321801 - e_rust_port::terms::termbanks::TermBank::term_top_insert::ha481f9c5874eae3c
+  20:     0x7ff73331a23a - e_rust_port::terms::termbanks::TermBank::insert_repl::h171ff9ddd6edba3c
+  21:     0x7ff73350bb6d - e_rust_port::clauses::eqn::Eqn::copy_repl::h20c24a8310c90986
+  22:     0x7ff73356dc59 - e_rust_port::clauses::eqnlist::EqnList::copy_repl::h881c03f61d0ca8eb
+  23:     0x7ff733563082 - e_rust_port::clauses::paramodulation::compute_all_paramodulants_indexed_impl::he2c48bcbf70ae2f6
+  24:     0x7ff733563dbe - e_rust_port::clauses::paramodulation::higher_order_paramod_diagnostic_for_type::h74d0a81add27d980
+  25:     0x7ff73355e76a - e_rust_port::clauses::paramodulation::indexed_paramod_construct_with_subst::hee69c78699efa2f9
+  26:     0x7ff7335656f6 - e_rust_port::clauses::paramodulation::ensure_indexed_paramodulation_ordering_supported::hb2e998ecf730b2b2
+  27:     0x7ff73355bf16 - e_rust_port::clauses::paramodulation::clause_ordered_super_sim_paramod::h8b54b4f96c2a5fb7
+  28:     0x7ff7335601d0 - e_rust_port::clauses::paramodulation::compute_all_paramodulants_indexed_impl::he2c48bcbf70ae2f6
+  29:     0x7ff73346e6c5 - e_rust_port::heuristics::proofcontrol::proof_state_delete_global_indexed_clause_by_id_from_slot::h326c1bc96785a6b4
+  30:     0x7ff733457db1 - e_rust_port::heuristics::proofcontrol::proof_state_init_global_indices::h697efe910200963c
+  31:     0x7ff7334668a7 - e_rust_port::heuristics::proofcontrol::proof_state_process_clause_for_saturate::h1309a9156b2b1544
+  32:     0x7ff73322e59a - e_rust_port::heuristics::proofcontrol::proof_state_saturate_impl::h4070d0a600d24ca4
+  33:     0x7ff733267e12 - e_rust_port::prover::eprover::run_main_saturation_with_indices::h16264cc6a5463d58
+  34:     0x7ff73327a5b9 - e_rust_port::clauses::proofstate::ProofState::with_global_and_watchlist_indices::h09c13a3ede04144c
+  35:     0x7ff733259e07 - <alloc::string::String as core::fmt::Write>::write_str::h3a7ea8e04fb6ce60
+  36:     0x7ff73325c930 - <alloc::string::String as core::fmt::Write>::write_str::h3a7ea8e04fb6ce60
+  37:     0x7ff73326c92f - e_rust_port::prover::eprover::run::hacf6cae61510d56d
+  38:     0x7ff733289bd9 - eprover::main::h28448eb9a86df1ff
+  39:     0x7ff7332c3976 - std::sys::backtrace::__rust_begin_short_backtrace::hfca5800bc2bf21e7
+  40:     0x7ff733692d6f - std::rt::lang_start_internal::closure$0
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\rt.rs:175
+  41:     0x7ff733692d6f - std::panicking::catch_unwind::do_call
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:581
+  42:     0x7ff733692d6f - std::panicking::catch_unwind
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panicking.rs:544
+  43:     0x7ff733692d6f - std::panic::catch_unwind
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\panic.rs:359
+  44:     0x7ff733692d6f - std::rt::lang_start_internal
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library\std\src\rt.rs:171
+  45:     0x7ff733289fec - main
+  46:     0x7ff7336c19af - invoke_main
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:78
+  47:     0x7ff7336c19af - __scrt_common_main_seh
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+  48:     0x7ffc37c7e957 - BaseThreadInitThunk
+  49:     0x7ffc38f0ad6c - RtlUserThreadStart"

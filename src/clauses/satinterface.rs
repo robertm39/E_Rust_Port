@@ -30,21 +30,106 @@ pub struct SatCheckReport {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct SatClause {
+enum SatClauseSource<'a> {
+    Borrowed(&'a Clause),
+    Owned(Box<Clause>),
+}
+
+impl SatClauseSource<'_> {
+    fn as_clause(&self) -> &Clause {
+        match self {
+            Self::Borrowed(clause) => clause,
+            Self::Owned(clause) => clause.as_ref(),
+        }
+    }
+}
+
+impl From<Box<Clause>> for SatClauseSource<'_> {
+    fn from(clause: Box<Clause>) -> Self {
+        Self::Owned(clause)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SatClause<'a> {
     literals: Vec<i32>,
-    source: Clause,
+    source: SatClauseSource<'a>,
     has_pure_lit: bool,
 }
 
-impl SatClause {
+const SAT_CLAUSE_CHUNK_BITS: usize = 12;
+const SAT_CLAUSE_CHUNK_SIZE: usize = 1 << SAT_CLAUSE_CHUNK_BITS;
+const SAT_CLAUSE_CHUNK_MASK: usize = SAT_CLAUSE_CHUNK_SIZE - 1;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SatClauseStore<'a> {
+    chunks: Vec<Vec<SatClause<'a>>>,
+    len: usize,
+}
+
+impl<'a> SatClauseStore<'a> {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn push(&mut self, clause: SatClause<'a>) {
+        if self
+            .chunks
+            .last()
+            .is_none_or(|chunk| chunk.len() == SAT_CLAUSE_CHUNK_SIZE)
+        {
+            self.chunks.push(Vec::with_capacity(SAT_CLAUSE_CHUNK_SIZE));
+        }
+        self.chunks
+            .last_mut()
+            .expect("SAT clause store has a tail chunk")
+            .push(clause);
+        self.len += 1;
+    }
+
+    fn get(&self, index: usize) -> Option<&SatClause<'a>> {
+        self.chunks
+            .get(index >> SAT_CLAUSE_CHUNK_BITS)?
+            .get(index & SAT_CLAUSE_CHUNK_MASK)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &SatClause<'a>> {
+        self.chunks.iter().flatten()
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut SatClause<'a>> {
+        self.chunks.iter_mut().flatten()
+    }
+}
+
+impl<'a> From<Vec<SatClause<'a>>> for SatClauseStore<'a> {
+    fn from(clauses: Vec<SatClause<'a>>) -> Self {
+        let mut store = Self::default();
+        for clause in clauses {
+            store.push(clause);
+        }
+        store
+    }
+}
+
+impl<'a> std::ops::Index<usize> for SatClauseStore<'a> {
+    type Output = SatClause<'a>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index)
+            .unwrap_or_else(|| panic!("SAT clause index {index} out of bounds"))
+    }
+}
+
+impl SatClause<'_> {
     #[must_use]
     pub fn literals(&self) -> &[i32] {
         &self.literals
     }
 
     #[must_use]
-    pub const fn source(&self) -> &Clause {
-        &self.source
+    pub fn source(&self) -> &Clause {
+        self.source.as_clause()
     }
 
     #[must_use]
@@ -73,22 +158,22 @@ impl SatClause {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct SatClauseSet {
+pub struct SatClauseSet<'a> {
     renumber_index: BTreeMap<i64, i32>,
     max_lit: i32,
-    clauses: Vec<SatClause>,
+    clauses: SatClauseStore<'a>,
     exported: Vec<usize>,
     core: Vec<usize>,
     core_size: u64,
     set_size_limit: i64,
 }
 
-impl Default for SatClauseSet {
+impl Default for SatClauseSet<'_> {
     fn default() -> Self {
         Self {
             renumber_index: BTreeMap::new(),
             max_lit: 0,
-            clauses: Vec::new(),
+            clauses: SatClauseStore::default(),
             exported: Vec::new(),
             core: Vec::new(),
             core_size: 0,
@@ -97,7 +182,7 @@ impl Default for SatClauseSet {
     }
 }
 
-impl SatClauseSet {
+impl<'a> SatClauseSet<'a> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -132,9 +217,8 @@ impl SatClauseSet {
         self.set_size_limit == usize_to_i64(self.clauses.len())
     }
 
-    #[must_use]
-    pub fn clauses(&self) -> &[SatClause] {
-        &self.clauses
+    pub fn clauses(&self) -> impl Iterator<Item = &SatClause<'a>> {
+        self.clauses.iter()
     }
 
     /// Encodes one instantiated clause and appends it unless the C insertion
@@ -151,9 +235,9 @@ impl SatClauseSet {
     pub fn import_clause(
         &mut self,
         bank: &mut TermBank,
-        clause: &Clause,
+        clause: &'a Clause,
     ) -> Result<bool, Diagnostic> {
-        self.import_clause_with_source(bank, clause, clause.clone())
+        self.import_clause_with_source(bank, clause, clause)
     }
 
     /// Encodes `clause` but records `source` as the clause returned for unsat
@@ -171,7 +255,7 @@ impl SatClauseSet {
         &mut self,
         bank: &mut TermBank,
         clause: &Clause,
-        source: Clause,
+        source: &'a Clause,
     ) -> Result<bool, Diagnostic> {
         if self.set_size_limit != -1 && usize_to_i64(self.clauses.len()) >= self.set_size_limit {
             return Ok(false);
@@ -183,7 +267,7 @@ impl SatClauseSet {
         }
         self.clauses.push(SatClause {
             literals,
-            source,
+            source: SatClauseSource::Borrowed(source),
             has_pure_lit: false,
         });
         Ok(true)
@@ -198,7 +282,7 @@ impl SatClauseSet {
     pub fn import_clause_set(
         &mut self,
         bank: &mut TermBank,
-        clauses: &ClauseSet,
+        clauses: &'a ClauseSet,
     ) -> Result<i64, Diagnostic> {
         let mut added = 0_i64;
         for clause in clauses.iter() {
@@ -217,7 +301,7 @@ impl SatClauseSet {
     /// Returns a formatting error if `output` rejects a write.
     pub fn write_dimacs(&self, output: &mut impl fmt::Write) -> fmt::Result {
         writeln!(output, "p cnf {} {}", self.max_lit, self.clauses.len())?;
-        for clause in &self.clauses {
+        for clause in self.clauses.iter() {
             clause.write_dimacs(output)?;
         }
         Ok(())
@@ -415,7 +499,7 @@ impl SatClauseSet {
     fn clauses_for_indices(&self, indices: &[usize]) -> Vec<Clause> {
         indices
             .iter()
-            .map(|index| self.clauses[*index].source.clone())
+            .map(|index| self.clauses[*index].source().clone())
             .collect()
     }
 
@@ -453,7 +537,7 @@ impl SatClauseSet {
 
     fn mark_pure(&mut self) -> u64 {
         let mut lit_state = BTreeMap::<i32, u8>::new();
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             clause.has_pure_lit = false;
             for lit in &clause.literals {
                 let atom = lit.abs();
@@ -466,7 +550,7 @@ impl SatClauseSet {
         }
 
         let mut pure_clauses = 0_u64;
-        for clause in &mut self.clauses {
+        for clause in self.clauses.iter_mut() {
             if clause.literals.iter().any(|lit| {
                 lit_state
                     .get(&lit.abs())
@@ -495,7 +579,7 @@ impl SatClauseSet {
             .core
             .iter()
             .rev()
-            .map(|index| &self.clauses[*index].source);
+            .map(|index| self.clauses[*index].source());
         if let Some(parent) = sources.next() {
             clause_push_derivation(&mut empty, DC_SAT_GEN, Some(parent), None);
             for parent in sources {
@@ -682,12 +766,12 @@ pub fn picosat_error_to_diagnostic(error: &PicoSatError) -> Diagnostic {
     )
 }
 
-fn encode_sat_check_set(
-    state: &mut ProofState,
+fn encode_sat_check_set<'a>(
+    state: &'a mut ProofState,
     grounding: GroundingStrategy,
     norm_const: bool,
     should_stop: &mut impl FnMut() -> bool,
-) -> Result<Option<(SatClauseSet, f64)>, Diagnostic> {
+) -> Result<Option<(SatClauseSet<'a>, f64)>, Diagnostic> {
     let encoding_start = Instant::now();
     let mut dist_array = signature_distribution_array(state);
     let mut conj_dist_array = signature_distribution_array(state);
@@ -723,7 +807,7 @@ fn encode_sat_check_set(
 }
 
 fn sat_check_report(
-    satset: &SatClauseSet,
+    satset: &SatClauseSet<'_>,
     result: ProverResult,
     empty: Option<Clause>,
     encoding_time: f64,
@@ -972,13 +1056,27 @@ fn solve_sat(clauses: &[Vec<i32>], max_lit: i32, decision_limit: i32) -> SolverS
         .unwrap_or(usize::MAX.saturating_sub(1))
         .saturating_add(1);
     let mut assignment = vec![None; len];
+    let mut trail = Vec::new();
     let mut budget = (decision_limit >= 0).then_some(i64::from(decision_limit));
-    dpll(clauses, &mut assignment, &mut budget)
+    dpll(clauses, &mut assignment, &mut trail, &mut budget)
 }
 
 fn dpll(
     clauses: &[Vec<i32>],
     assignment: &mut [Option<bool>],
+    trail: &mut Vec<usize>,
+    budget: &mut Option<i64>,
+) -> SolverStatus {
+    let checkpoint = trail.len();
+    let result = dpll_search(clauses, assignment, trail, budget);
+    undo_assignments(assignment, trail, checkpoint);
+    result
+}
+
+fn dpll_search(
+    clauses: &[Vec<i32>],
+    assignment: &mut [Option<bool>],
+    trail: &mut Vec<usize>,
     budget: &mut Option<i64>,
 ) -> SolverStatus {
     loop {
@@ -988,7 +1086,7 @@ fn dpll(
                 ClauseStatus::Satisfied | ClauseStatus::Open => {}
                 ClauseStatus::Conflict => return SolverStatus::Unsat,
                 ClauseStatus::Unit(lit) => {
-                    if !assign_literal(assignment, lit) {
+                    if !assign_literal(assignment, trail, lit) {
                         return SolverStatus::Unsat;
                     }
                     changed = true;
@@ -1019,13 +1117,14 @@ fn dpll(
 
     let preferred = branch_lit > 0;
     for value in [preferred, !preferred] {
-        let mut next = assignment.to_vec();
-        if !assign_var(&mut next, branch_lit.abs(), value) {
+        let checkpoint = trail.len();
+        if !assign_var(assignment, trail, branch_lit.abs(), value) {
             continue;
         }
-        match dpll(clauses, &mut next, budget) {
-            SolverStatus::Sat => return SolverStatus::Sat,
-            SolverStatus::GaveUp => return SolverStatus::GaveUp,
+        let result = dpll(clauses, assignment, trail, budget);
+        undo_assignments(assignment, trail, checkpoint);
+        match result {
+            SolverStatus::Sat | SolverStatus::GaveUp => return result,
             SolverStatus::Unsat => {}
         }
     }
@@ -1054,11 +1153,16 @@ fn first_open_literal(clauses: &[Vec<i32>], assignment: &[Option<bool>]) -> Opti
         .find(|lit| assignment.get(lit_index(*lit)).is_some_and(Option::is_none))
 }
 
-fn assign_literal(assignment: &mut [Option<bool>], lit: i32) -> bool {
-    assign_var(assignment, lit.abs(), lit > 0)
+fn assign_literal(assignment: &mut [Option<bool>], trail: &mut Vec<usize>, lit: i32) -> bool {
+    assign_var(assignment, trail, lit.abs(), lit > 0)
 }
 
-fn assign_var(assignment: &mut [Option<bool>], atom: i32, value: bool) -> bool {
+fn assign_var(
+    assignment: &mut [Option<bool>],
+    trail: &mut Vec<usize>,
+    atom: i32,
+    value: bool,
+) -> bool {
     let index = usize::try_from(atom).unwrap_or(usize::MAX);
     let Some(slot) = assignment.get_mut(index) else {
         return false;
@@ -1067,7 +1171,15 @@ fn assign_var(assignment: &mut [Option<bool>], atom: i32, value: bool) -> bool {
         existing == value
     } else {
         *slot = Some(value);
+        trail.push(index);
         true
+    }
+}
+
+fn undo_assignments(assignment: &mut [Option<bool>], trail: &mut Vec<usize>, checkpoint: usize) {
+    while trail.len() > checkpoint {
+        let index = trail.pop().expect("SAT assignment trail is nonempty");
+        assignment[index] = None;
     }
 }
 
@@ -1086,9 +1198,10 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        prefer_conj_max_max_freq, prefer_conj_max_min_freq, prefer_conj_min_max_freq,
+        dpll, prefer_conj_max_max_freq, prefer_conj_max_min_freq, prefer_conj_min_max_freq,
         prefer_conj_min_min_freq, sat_check_proof_state, sat_check_proof_state_with_stop,
-        solve_sat, ExternalSatSolver, PicoSatSolveResult, SatClause, SatClauseSet, SolverStatus,
+        solve_sat, ExternalSatSolver, PicoSatSolveResult, SatClause, SatClauseSet, SatClauseStore,
+        SolverStatus, SAT_CLAUSE_CHUNK_SIZE,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
@@ -1156,20 +1269,21 @@ mod tests {
             clauses: vec![
                 SatClause {
                     literals: vec![1, 2],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1, 3],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1, 1],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
-            ],
+            ]
+            .into(),
             ..SatClauseSet::default()
         };
 
@@ -1188,20 +1302,21 @@ mod tests {
             clauses: vec![
                 SatClause {
                     literals: vec![1, 2],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1, 3],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1, 1],
-                    source: Clause::empty(),
+                    source: Box::new(Clause::empty()).into(),
                     has_pure_lit: false,
                 },
-            ],
+            ]
+            .into(),
             ..SatClauseSet::default()
         };
 
@@ -1228,22 +1343,46 @@ mod tests {
     fn sat_clause_and_set_dimacs_rendering_matches_c_shape() {
         let clause = SatClause {
             literals: vec![1, -2],
-            source: Clause::empty(),
+            source: Box::new(Clause::empty()).into(),
             has_pure_lit: false,
         };
         let empty = SatClause {
             literals: Vec::new(),
-            source: Clause::empty(),
+            source: Box::new(Clause::empty()).into(),
             has_pure_lit: false,
         };
         let set = SatClauseSet {
             max_lit: 2,
-            clauses: vec![clause.clone(), empty],
+            clauses: vec![clause.clone(), empty].into(),
             ..SatClauseSet::default()
         };
 
         assert_eq!(clause.dimacs_string(), "1 -2 0\n");
         assert_eq!(set.dimacs_string(), "p cnf 2 2\n1 -2 0\n0\n");
+    }
+
+    #[test]
+    fn sat_clause_store_indexes_across_chunk_boundary() {
+        let mut store = SatClauseStore::default();
+        for index in 0..=SAT_CLAUSE_CHUNK_SIZE {
+            store.push(SatClause {
+                literals: vec![i32::try_from(index).unwrap()],
+                source: Box::new(Clause::empty()).into(),
+                has_pure_lit: false,
+            });
+        }
+
+        assert_eq!(store.len(), SAT_CLAUSE_CHUNK_SIZE + 1);
+        assert_eq!(store[0].literals(), &[0]);
+        assert_eq!(
+            store[SAT_CLAUSE_CHUNK_SIZE - 1].literals(),
+            &[i32::try_from(SAT_CLAUSE_CHUNK_SIZE - 1).unwrap()]
+        );
+        assert_eq!(
+            store[SAT_CLAUSE_CHUNK_SIZE].literals(),
+            &[i32::try_from(SAT_CLAUSE_CHUNK_SIZE).unwrap()]
+        );
+        assert_eq!(store.iter().count(), SAT_CLAUSE_CHUNK_SIZE + 1);
     }
 
     #[test]
@@ -1303,6 +1442,21 @@ mod tests {
     }
 
     #[test]
+    fn dpll_rolls_back_branch_and_unit_assignments() {
+        let clauses = [vec![1, 2], vec![-1, 2], vec![1, -2]];
+        let mut assignment = vec![None; 3];
+        let mut trail = Vec::new();
+        let mut budget = None;
+
+        assert_eq!(
+            dpll(&clauses, &mut assignment, &mut trail, &mut budget),
+            SolverStatus::Sat
+        );
+        assert_eq!(assignment, vec![None; 3]);
+        assert!(trail.is_empty());
+    }
+
+    #[test]
     fn conjecture_frequency_comparators_preserve_c_assignment_tie_breaks() {
         let mut min_max_conj = vec![0, 0, 7, 5];
         let min_max_dist = vec![0, 0, 30, 20];
@@ -1358,15 +1512,16 @@ mod tests {
             clauses: vec![
                 SatClause {
                     literals: vec![1],
-                    source: first.clone(),
+                    source: Box::new(first.clone()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1],
-                    source: second.clone(),
+                    source: Box::new(second.clone()).into(),
                     has_pure_lit: false,
                 },
-            ],
+            ]
+            .into(),
             ..SatClauseSet::default()
         };
 
@@ -1404,25 +1559,26 @@ mod tests {
             clauses: vec![
                 SatClause {
                     literals: vec![1, 2],
-                    source: redundant_pos,
+                    source: Box::new(redundant_pos).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![1, -2],
-                    source: redundant_neg,
+                    source: Box::new(redundant_neg).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![1],
-                    source: positive.clone(),
+                    source: Box::new(positive.clone()).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1],
-                    source: negative.clone(),
+                    source: Box::new(negative.clone()).into(),
                     has_pure_lit: false,
                 },
-            ],
+            ]
+            .into(),
             ..SatClauseSet::default()
         };
 
@@ -1518,7 +1674,7 @@ mod tests {
         }
     }
 
-    fn contradictory_fake_sat_set() -> (SatClauseSet, Clause, Clause) {
+    fn contradictory_fake_sat_set() -> (SatClauseSet<'static>, Clause, Clause) {
         let mut positive = Clause::empty();
         positive.set_ident(401);
         positive.set_csscpa_source(1);
@@ -1531,15 +1687,16 @@ mod tests {
                 clauses: vec![
                     SatClause {
                         literals: vec![1],
-                        source: positive.clone(),
+                        source: Box::new(positive.clone()).into(),
                         has_pure_lit: false,
                     },
                     SatClause {
                         literals: vec![-1],
-                        source: negative.clone(),
+                        source: Box::new(negative.clone()).into(),
                         has_pure_lit: false,
                     },
-                ],
+                ]
+                .into(),
                 ..SatClauseSet::default()
             },
             positive,
@@ -1634,25 +1791,26 @@ mod tests {
             clauses: vec![
                 SatClause {
                     literals: vec![1, 2],
-                    source: redundant_pos,
+                    source: Box::new(redundant_pos).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![1, -2],
-                    source: redundant_neg,
+                    source: Box::new(redundant_neg).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![1],
-                    source: positive,
+                    source: Box::new(positive).into(),
                     has_pure_lit: false,
                 },
                 SatClause {
                     literals: vec![-1],
-                    source: negative,
+                    source: Box::new(negative).into(),
                     has_pure_lit: false,
                 },
-            ],
+            ]
+            .into(),
             ..SatClauseSet::default()
         };
 
@@ -1669,9 +1827,10 @@ mod tests {
             max_lit: 2,
             clauses: vec![SatClause {
                 literals: vec![1, 2],
-                source: Clause::empty(),
+                source: Box::new(Clause::empty()).into(),
                 has_pure_lit: false,
-            }],
+            }]
+            .into(),
             ..SatClauseSet::default()
         };
         assert!(sat.check_and_get_core().is_none());

@@ -309,7 +309,10 @@ impl SparseClauseStore {
             return false;
         }
 
-        self.compact_in_place();
+        let clauses = std::mem::take(self).into_clauses().collect::<Vec<_>>();
+        for clause in clauses {
+            self.push_back(clause);
+        }
         true
     }
 
