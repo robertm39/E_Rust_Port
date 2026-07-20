@@ -237,7 +237,12 @@ impl SparseClauseStore {
         {
             self.tail_chunk += 1;
             if self.tail_chunk > self.overflow_chunks.len() {
-                self.overflow_chunks.push(Vec::new());
+                // Allocate a complete fixed-size page before inserting its
+                // first clause. Growing an inline-clause page from half to
+                // full capacity otherwise needs both buffers live at once,
+                // which creates a 50% transient spike at tight memory limits.
+                self.overflow_chunks
+                    .push(Vec::with_capacity(SPARSE_STORE_CHUNK_SIZE));
             }
         }
 
@@ -2631,6 +2636,7 @@ mod tests {
         assert_eq!(store.tail_chunk, 1);
         assert_eq!(store.first_chunk.len(), SPARSE_STORE_CHUNK_SIZE);
         assert_eq!(store.overflow_chunks[0].len(), 1);
+        assert_eq!(store.overflow_chunks[0].capacity(), SPARSE_STORE_CHUNK_SIZE);
         assert_eq!(
             store.get_slot(encode_clause_slot(1, 0)).map(Clause::ident),
             Some(i64::try_from(SPARSE_STORE_CHUNK_SIZE).unwrap())
