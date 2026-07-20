@@ -303,10 +303,14 @@ impl SparseClauseStore {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn next_push_allocates_page(&self) -> bool {
-        self.chunk(self.tail_chunk)
-            .is_some_and(|chunk| chunk.len() == SPARSE_STORE_CHUNK_SIZE)
-            && self.tail_chunk >= self.overflow_chunks.len()
+    fn next_push_allocates_clause_page(&self) -> bool {
+        let Some(tail) = self.chunk(self.tail_chunk) else {
+            return false;
+        };
+        if tail.len() < SPARSE_STORE_CHUNK_SIZE {
+            return tail.len() == tail.capacity() && tail.capacity() >= SPARSE_STORE_CHUNK_SIZE / 2;
+        }
+        self.tail_chunk >= self.overflow_chunks.len()
     }
 
     fn reclaim_empty_prefix_chunks(&mut self) -> usize {
@@ -1131,7 +1135,7 @@ impl ClauseSet {
         self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
         #[cfg(not(target_os = "linux"))]
-        if self.clauses.next_push_allocates_page()
+        if self.clauses.next_push_allocates_clause_page()
             && expire_time_limit_if_within(clause_page_deadline_tolerance_usec())
         {
             return;
@@ -2764,6 +2768,18 @@ mod tests {
         assert!(std::iter::once(&store.first_chunk)
             .chain(&store.overflow_chunks)
             .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
+    }
+
+    #[test]
+    fn clause_page_growth_is_detected_inside_the_first_page() {
+        let mut store = SparseClauseStore::default();
+        assert!(!store.next_push_allocates_clause_page());
+
+        for _ in 0..SPARSE_STORE_CHUNK_SIZE / 2 {
+            let _ = store.push_back(Clause::empty());
+        }
+        assert_eq!(store.first_chunk.capacity(), SPARSE_STORE_CHUNK_SIZE / 2);
+        assert!(store.next_push_allocates_clause_page());
     }
 
     #[test]

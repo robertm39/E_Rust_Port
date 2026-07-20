@@ -236,7 +236,6 @@ struct PdtTraversalFrame {
     query_index: usize,
     effective_term_weight: i64,
     binding_pos: usize,
-    entered: bool,
     next_step: usize,
     next_variable_child: u32,
     terminal_position: usize,
@@ -288,6 +287,7 @@ impl PdtSubstCursor {
             term_weight,
             0,
             first_variable_child,
+            0,
         ));
         self.base_subst = base_subst;
         self.initialized = true;
@@ -307,16 +307,16 @@ impl PdtTraversalFrame {
         effective_term_weight: i64,
         binding_pos: usize,
         first_variable_child: u32,
+        terminal_position: usize,
     ) -> Self {
         Self {
             node_index,
             query_index,
             effective_term_weight,
             binding_pos,
-            entered: false,
             next_step: 0,
             next_variable_child: first_variable_child,
-            terminal_position: 0,
+            terminal_position,
         }
     }
 }
@@ -1229,6 +1229,9 @@ impl PdTree {
         let mut cursor = self.search_subst_cursor.borrow_mut();
         if !cursor.initialized {
             cursor.start(state.term_weight, subst.len(), self.variable_child_heads[0]);
+            if !self.node_satisfies_constraints(0, state.term_weight, state.term_date) {
+                pop_subst_cursor_frame(&mut cursor);
+            }
         }
         debug_assert!(
             subst.len() >= cursor.base_subst,
@@ -1240,22 +1243,6 @@ impl PdTree {
             let frame_index = cursor.frames.len().checked_sub(1)?;
             let node_index = cursor.frames[frame_index].node_index;
             let query_index = cursor.frames[frame_index].query_index;
-
-            if !cursor.frames[frame_index].entered {
-                cursor.frames[frame_index].entered = true;
-                if !self.node_satisfies_constraints(
-                    node_index,
-                    cursor.frames[frame_index].effective_term_weight,
-                    state.term_date,
-                ) {
-                    pop_subst_cursor_frame(&mut cursor);
-                    continue;
-                }
-                if query_index == state.query.len() {
-                    cursor.frames[frame_index].terminal_position =
-                        self.nodes[node_index].terminal_entries.len();
-                }
-            }
 
             if query_index == state.query.len() {
                 let terminal_position = cursor.frames[frame_index].terminal_position;
@@ -1308,13 +1295,27 @@ impl PdTree {
                     };
                     self.record_nodes_visited(1);
                     let effective_term_weight = cursor.frames[frame_index].effective_term_weight;
+                    if !self.node_satisfies_constraints(
+                        next_index,
+                        effective_term_weight,
+                        state.term_date,
+                    ) {
+                        continue;
+                    }
+                    let next_query_index = query_index + 1;
+                    let terminal_position = if next_query_index == state.query.len() {
+                        self.nodes[next_index].terminal_entries.len()
+                    } else {
+                        0
+                    };
                     let binding_pos = cursor.bindings.len();
                     cursor.frames.push(PdtTraversalFrame::new(
                         next_index,
-                        query_index + 1,
+                        next_query_index,
                         effective_term_weight,
                         binding_pos,
                         self.variable_child_heads[next_index],
+                        terminal_position,
                     ));
                 }
                 PdtTraversalStep::Variables => {
@@ -1364,12 +1365,26 @@ impl PdTree {
                         state.query[query_index].weight(),
                         variable_child.weight,
                     );
+                    if !self.node_satisfies_constraints(
+                        next_index,
+                        effective_term_weight,
+                        state.term_date,
+                    ) {
+                        cursor.bindings.truncate(binding_pos);
+                        continue;
+                    }
+                    let terminal_position = if next_query_index == state.query.len() {
+                        self.nodes[next_index].terminal_entries.len()
+                    } else {
+                        0
+                    };
                     cursor.frames.push(PdtTraversalFrame::new(
                         next_index,
                         next_query_index,
                         effective_term_weight,
                         binding_pos,
                         self.variable_child_heads[next_index],
+                        terminal_position,
                     ));
                 }
             }
