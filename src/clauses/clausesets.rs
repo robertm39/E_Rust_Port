@@ -420,6 +420,49 @@ struct SparseClauseStore {
     tail_chunk: usize,
 }
 
+struct SparseOccupiedSlots<'store> {
+    store: &'store SparseClauseStore,
+    chunk_index: usize,
+    offset: usize,
+    remaining: usize,
+}
+
+impl Iterator for SparseOccupiedSlots<'_> {
+    type Item = ClauseSlot;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        while self.chunk_index <= self.store.tail_chunk {
+            let chunk = self
+                .store
+                .chunk(self.chunk_index)
+                .expect("occupied clause chunk must be allocated");
+            while self.offset < chunk.len() {
+                let offset = self.offset;
+                self.offset += 1;
+                if chunk[offset].is_some() {
+                    self.remaining -= 1;
+                    return Some(encode_clause_slot(self.chunk_index, offset));
+                }
+            }
+            self.chunk_index += 1;
+            self.offset = 0;
+        }
+
+        debug_assert_eq!(self.remaining, 0);
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for SparseOccupiedSlots<'_> {}
+
 impl SparseClauseStore {
     fn len(&self) -> usize {
         self.len
@@ -513,21 +556,14 @@ impl SparseClauseStore {
             .sum()
     }
 
-    fn occupied_slots(&self) -> impl Iterator<Item = ClauseSlot> + '_ {
-        std::iter::once(&self.first_chunk)
-            .chain(&self.overflow_chunks)
-            .enumerate()
-            .flat_map(|(chunk_index, chunk)| {
-                chunk
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(offset, clause)| {
-                        clause
-                            .as_ref()
-                            .map(|_| encode_clause_slot(chunk_index, offset))
-                    })
-            })
-            .skip_while(|&slot| slot < self.first_occupied)
+    fn occupied_slots(&self) -> SparseOccupiedSlots<'_> {
+        let (chunk_index, offset) = decode_clause_slot(self.first_occupied);
+        SparseOccupiedSlots {
+            store: self,
+            chunk_index,
+            offset,
+            remaining: self.len,
+        }
     }
 
     fn push_back(&mut self, clause: Clause) -> ClauseSlot {
@@ -3093,6 +3129,34 @@ mod tests {
         assert!(std::iter::once(&store.first_chunk)
             .chain(&store.overflow_chunks)
             .all(|chunk| chunk.capacity() <= SPARSE_STORE_CHUNK_SIZE));
+    }
+
+    #[test]
+    fn occupied_slot_iterator_skips_holes_and_tracks_remaining_clauses() {
+        let mut store = SparseClauseStore::default();
+        let slots = (0..5)
+            .map(|ident| {
+                let mut clause = Clause::empty();
+                clause.set_ident(ident);
+                store.push_back(clause)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(store.remove_slot(slots[0]).is_some());
+        assert!(store.remove_slot(slots[2]).is_some());
+        assert!(store.remove_slot(slots[4]).is_some());
+
+        let mut occupied = store.occupied_slots();
+        assert_eq!(occupied.len(), 2);
+        assert_eq!(occupied.next(), Some(slots[1]));
+        assert_eq!(occupied.len(), 1);
+        assert_eq!(occupied.next(), Some(slots[3]));
+        assert_eq!(occupied.len(), 0);
+        assert_eq!(occupied.next(), None);
+
+        assert!(store.remove_slot(slots[1]).is_some());
+        assert!(store.remove_slot(slots[3]).is_some());
+        assert!(store.occupied_slots().next().is_none());
     }
 
     #[test]
