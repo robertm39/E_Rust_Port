@@ -713,35 +713,40 @@ pub fn term_identity_cmp(left: &Term, right: &Term) -> i32 {
 ///
 /// # Panics
 ///
-/// Panics if a non-variable term has an active binding or if dereferencing
-/// reaches an applied-variable shape with uninitialized arguments.
+/// In debug builds, panics if a non-variable term has an active binding.
+/// Dereferencing an applied-variable shape with uninitialized arguments also
+/// panics in all builds.
 #[must_use]
 pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
-    assert!(
+    term_deref_if_changed(term, deref).unwrap_or_else(|| term.clone())
+}
+
+#[must_use]
+pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Option<Term> {
+    debug_assert!(
         term.is_top_level_any_var() || term.binding().is_none(),
         "only variables may have active bindings"
     );
     if *deref == DerefType::Always {
-        let mut current = term.clone();
+        let mut current = deref_step(term)?;
         while let Some(next) = deref_step(&current) {
             current = next;
         }
-        return current;
+        return Some(current);
     }
 
-    let mut current = term.clone();
-    while *deref != DerefType::Never {
-        let originally_app_var = current.is_applied_free_var();
-        let Some(next) = deref_step(&current) else {
-            break;
-        };
-        current = next;
-        if originally_app_var {
-            break;
-        }
-        *deref = DerefType::Never;
+    if *deref == DerefType::Never {
+        return None;
     }
-    current
+
+    let originally_app_var = term.is_applied_free_var();
+    let current = deref_step(term)?;
+    if originally_app_var {
+        return Some(current);
+    }
+
+    *deref = DerefType::Never;
+    Some(current)
 }
 
 /// Sets properties on every term cell reachable from `term`.
@@ -1179,6 +1184,23 @@ mod tests {
         let mut deref = DerefType::Once;
         assert_eq!(super::term_deref(&var, &mut deref), bound);
         assert_eq!(deref, DerefType::Never);
+    }
+
+    #[test]
+    fn deref_if_changed_avoids_owning_unchanged_terms() {
+        let constant = Term::const_cell_alloc(4);
+        let mut deref = DerefType::Always;
+        assert_eq!(super::term_deref_if_changed(&constant, &mut deref), None);
+        assert_eq!(deref, DerefType::Always);
+
+        let variable = Term::const_cell_alloc(-2);
+        let binding = Term::const_cell_alloc(5);
+        variable.set_binding(Some(binding.clone()));
+        assert_eq!(
+            super::term_deref_if_changed(&variable, &mut deref),
+            Some(binding)
+        );
+        assert_eq!(deref, DerefType::Always);
     }
 
     #[test]

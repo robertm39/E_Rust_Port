@@ -29,7 +29,7 @@ use crate::terms::termfunc::{
     term_sig_insert, term_standard_weight, var_print_string,
 };
 use crate::terms::termtypes::{
-    term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
+    term_deref_if_changed, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
     DEFAULT_VWEIGHT, TP_GARBAGE_FLAG, TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM,
     TP_HAS_EQ_NEQ_SYM, TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_HAS_LAMBDA_SUBTERM,
     TP_HAS_NON_PATTERN_VAR, TP_IGNORE_PROPS, TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED,
@@ -1372,8 +1372,9 @@ impl TermBank {
     ///
     /// # Panics
     ///
-    /// Panics if `repl` is not already present in this bank, or if a free/DB
-    /// variable has no type, matching `TBInsertRepl`.
+    /// In debug builds, panics if `repl` is not already present in this bank.
+    /// Panics in all builds if a free/DB variable has no type, matching
+    /// `TBInsertRepl`.
     pub fn insert_repl(
         &mut self,
         term: &Term,
@@ -1382,14 +1383,16 @@ impl TermBank {
         repl: &Term,
     ) -> Result<Term, Diagnostic> {
         if term == old {
-            assert!(
+            debug_assert!(
                 self.find(repl).is_some(),
                 "replacement must already be in the term bank"
             );
             return Ok(repl.clone());
         }
 
-        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
+        let (dereferenced, current_deref, limit) =
+            self.deref_root_no_whnf_if_changed(term, deref)?;
+        let term = dereferenced.as_ref().unwrap_or(term);
         if term.is_free_var() {
             let type_ = term.type_().expect("free variable must have a type");
             return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
@@ -1399,7 +1402,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(&term);
+        let copy = Term::top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let arguments = term.arguments();
         let mut copy_arguments = copy.arguments_mut();
@@ -1423,8 +1426,8 @@ impl TermBank {
     ///
     /// # Panics
     ///
-    /// Panics if `repl` is not already present in this bank, matching
-    /// `TBInsertReplPlain`.
+    /// In debug builds, panics if `repl` is not already present in this bank,
+    /// matching `TBInsertReplPlain`.
     pub fn insert_repl_plain(
         &mut self,
         term: &Term,
@@ -1432,7 +1435,7 @@ impl TermBank {
         repl: &Term,
     ) -> Result<Term, Diagnostic> {
         if term == old {
-            assert!(
+            debug_assert!(
                 self.find(repl).is_some(),
                 "replacement must already be in the term bank"
             );
@@ -1505,6 +1508,20 @@ impl TermBank {
         term: &Term,
         deref: DerefType,
     ) -> Result<(Term, DerefType, usize), Diagnostic> {
+        let (dereferenced, current_deref, limit) =
+            self.deref_root_no_whnf_if_changed(term, deref)?;
+        Ok((
+            dereferenced.unwrap_or_else(|| term.clone()),
+            current_deref,
+            limit,
+        ))
+    }
+
+    fn deref_root_no_whnf_if_changed(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+    ) -> Result<(Option<Term>, DerefType, usize), Diagnostic> {
         let limit = Self::deref_limit(term, deref);
         if deref == DerefType::Once
             && term.is_applied_free_var()
@@ -1512,11 +1529,11 @@ impl TermBank {
                 .argument(0)
                 .is_some_and(|head| head.binding().is_some())
         {
-            return Ok((self.deref_applied_free_var_once(term)?, deref, limit));
+            return Ok((Some(self.deref_applied_free_var_once(term)?), deref, limit));
         }
 
         let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let term = term_deref_if_changed(term, &mut current_deref);
         Ok((term, current_deref, limit))
     }
 
@@ -1549,18 +1566,19 @@ impl TermBank {
     ///
     /// # Panics
     ///
-    /// Panics if a ground or bound term is not already present in the bank, or
-    /// if a free/DB variable has no type, matching `TBInsertInstantiatedFO`.
+    /// In debug builds, panics if a ground or bound term is not already present
+    /// in the bank. Panics in all builds if a free/DB variable has no type,
+    /// matching `TBInsertInstantiatedFO`.
     pub fn insert_instantiated_fo(&mut self, term: &Term) -> Result<Term, Diagnostic> {
         if term_is_ground_for_insert(term) {
-            assert!(
+            debug_assert!(
                 self.find(term).is_some(),
                 "ground instantiated terms must already be in the bank"
             );
             return Ok(term.clone());
         }
         if let Some(binding) = term.binding() {
-            assert!(
+            debug_assert!(
                 self.find(&binding).is_some(),
                 "variable binding must already be in the bank"
             );
@@ -1577,11 +1595,15 @@ impl TermBank {
 
         let copy = Term::top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_instantiated_fo(&arg)?;
-            copy.set_argument(index, shared);
+        let arguments = term.arguments();
+        let mut copy_arguments = copy.arguments_mut();
+        for (index, arg) in arguments.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            copy_arguments[index] = Some(self.insert_instantiated_fo(arg)?);
         }
+        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
@@ -3906,8 +3928,14 @@ impl TermBank {
         deref: DerefType,
         mode: InsertMode,
     ) -> Result<Term, Diagnostic> {
-        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
-        self.insert_derefed_with_mode(&term, current_deref, limit, mode)
+        let (dereferenced, current_deref, limit) =
+            self.deref_root_no_whnf_if_changed(term, deref)?;
+        self.insert_derefed_with_mode(
+            dereferenced.as_ref().unwrap_or(term),
+            current_deref,
+            limit,
+            mode,
+        )
     }
 
     fn insert_derefed_with_mode(
@@ -3933,12 +3961,19 @@ impl TermBank {
         if mode == InsertMode::NoProperties {
             copy.set_properties(TP_IGNORE_PROPS);
         }
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared =
-                self.insert_with_mode(&arg, Self::convert_lfho_deref(index, limit, deref), mode)?;
-            copy.set_argument(index, shared);
+        let arguments = term.arguments();
+        let mut copy_arguments = copy.arguments_mut();
+        for (index, arg) in arguments.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            copy_arguments[index] = Some(self.insert_with_mode(
+                arg,
+                Self::convert_lfho_deref(index, limit, deref),
+                mode,
+            )?);
         }
+        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
@@ -3964,9 +3999,12 @@ impl TermBank {
         }
 
         let copy = Term::top_copy_without_args(term);
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_opt(&arg, Self::convert_lfho_deref(index, limit, deref))?;
+        let arguments = term.arguments();
+        for (index, arg) in arguments.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_opt(arg, Self::convert_lfho_deref(index, limit, deref))?;
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)

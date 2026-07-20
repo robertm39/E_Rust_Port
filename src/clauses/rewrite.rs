@@ -245,7 +245,7 @@ pub fn rewrite_with_clause_set_plain(
     restricted_rw: bool,
 ) -> Result<Term, Diagnostic> {
     let mut subst = Substitution::new();
-    rewrite_with_clause_set_plain_with_subst(
+    Ok(rewrite_with_clause_set_plain_with_subst(
         bank,
         ocb,
         term,
@@ -254,7 +254,8 @@ pub fn rewrite_with_clause_set_plain(
         prefer_general,
         restricted_rw,
         &mut subst,
-    )
+    )?
+    .unwrap_or_else(|| term.clone()))
 }
 
 #[expect(
@@ -270,7 +271,7 @@ fn rewrite_with_clause_set_plain_with_subst(
     prefer_general: bool,
     restricted_rw: bool,
     subst: &mut Substitution,
-) -> Result<Term, Diagnostic> {
+) -> Result<Option<Term>, Diagnostic> {
     assert!(!term.is_free_var(), "free variables are not rewritten");
     assert!(
         !term.is_top_rewritten(),
@@ -296,7 +297,7 @@ fn rewrite_with_clause_set_plain_with_subst(
     demodulators.record_demod_index_search_exit();
     let Some(found) = found else {
         debug_assert!(subst.is_empty(), "failed rewrite must backtrack bindings");
-        return Ok(term.clone());
+        return Ok(None);
     };
 
     REWRITE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
@@ -314,7 +315,7 @@ fn rewrite_with_clause_set_plain_with_subst(
     let replacement = replacement?;
 
     if replacement == *term {
-        return Ok(term.clone());
+        return Ok(None);
     }
 
     let result_type = if restricted_rw {
@@ -330,7 +331,7 @@ fn rewrite_with_clause_set_plain_with_subst(
         result_type,
     );
     REWRITE_UNCACHED.fetch_add(1, Ordering::Relaxed);
-    Ok(replacement)
+    Ok(Some(replacement))
 }
 
 /// Rewrite a term at top level with the active prefix of demodulator sets.
@@ -360,7 +361,7 @@ pub fn rewrite_with_clause_set_list_plain(
     restricted_rw: bool,
 ) -> Result<Term, Diagnostic> {
     let mut subst = Substitution::new();
-    rewrite_with_clause_set_list_plain_with_subst(
+    Ok(rewrite_with_clause_set_list_plain_with_subst(
         bank,
         ocb,
         term,
@@ -369,7 +370,8 @@ pub fn rewrite_with_clause_set_list_plain(
         prefer_general,
         restricted_rw,
         &mut subst,
-    )
+    )?
+    .unwrap_or_else(|| term.clone()))
 }
 
 #[expect(
@@ -385,7 +387,7 @@ fn rewrite_with_clause_set_list_plain_with_subst(
     prefer_general: bool,
     restricted_rw: bool,
     subst: &mut Substitution,
-) -> Result<Term, Diagnostic> {
+) -> Result<Option<Term>, Diagnostic> {
     let level_count = rewrite_level_count(level);
     assert!(level_count != 0, "rewrite level must be active");
     assert!(
@@ -399,14 +401,13 @@ fn rewrite_with_clause_set_list_plain_with_subst(
     );
 
     let date_level = rewrite_date_level(level);
-    let mut result = term.clone();
     for demodulator_set in demodulators.iter().take(level_count) {
         if term_is_db_closed(term)
             && term
                 .nf_date(date_level)
                 .is_earlier_than(demodulator_set.date())
         {
-            result = rewrite_with_clause_set_plain_with_subst(
+            let result = rewrite_with_clause_set_plain_with_subst(
                 bank,
                 ocb,
                 term,
@@ -416,12 +417,12 @@ fn rewrite_with_clause_set_list_plain_with_subst(
                 restricted_rw,
                 subst,
             )?;
-            if result != *term {
-                break;
+            if result.is_some() {
+                return Ok(result);
             }
         }
     }
-    Ok(result)
+    Ok(None)
 }
 
 /// Compute a plain leftmost-innermost normal form with a set-list scan.
@@ -576,29 +577,49 @@ fn term_subterm_rewrite_plain(
         return Ok(false);
     }
 
-    let new_term = Term::top_copy_without_args(term);
-    let mut modified = false;
-    for (index, arg) in term.argument_clones().into_iter().enumerate() {
-        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-        let normalized = term_li_normalform_plain_with_date(
-            bank,
-            ocb,
-            &arg,
-            demodulators,
-            level,
-            demod_date,
-            prefer_general,
-            false,
-            lambda_demod,
-            trace,
-        )?;
-        if normalized != arg {
-            modified = true;
-        }
-        new_term.set_argument(index, normalized);
-    }
+    let arity = term.arity();
+    let normalized_args = {
+        let source_args = term.arguments();
+        let mut normalized_args: Option<Vec<Term>> = None;
+        for (index, arg) in source_args.iter().enumerate() {
+            let arg = arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let normalized = term_li_normalform_plain_with_date(
+                bank,
+                ocb,
+                arg,
+                demodulators,
+                level,
+                demod_date,
+                prefer_general,
+                false,
+                lambda_demod,
+                trace,
+            )?;
 
-    if modified {
+            if let Some(args) = &mut normalized_args {
+                args.push(normalized);
+            } else if normalized != *arg {
+                let mut args = Vec::with_capacity(arity);
+                for (previous, arg) in source_args[..index].iter().enumerate() {
+                    args.push(
+                        arg.clone()
+                            .unwrap_or_else(|| panic!("term argument {previous} is uninitialized")),
+                    );
+                }
+                args.push(normalized);
+                normalized_args = Some(args);
+            }
+        }
+        normalized_args
+    };
+
+    if let Some(normalized_args) = normalized_args {
+        let new_term = Term::top_copy_without_args(term);
+        for (slot, normalized) in new_term.arguments_mut().iter_mut().zip(normalized_args) {
+            *slot = Some(normalized);
+        }
         let replacement = bank.term_top_insert(new_term)?;
         assert_ne!(
             replacement, *term,
@@ -612,9 +633,10 @@ fn term_subterm_rewrite_plain(
             RwResultType::AlwaysRewritable,
         );
         *term = replacement;
+        Ok(true)
+    } else {
+        Ok(false)
     }
-
-    Ok(modified)
 }
 
 /// Compute plain leftmost-innermost normal forms for an equation's sides.
