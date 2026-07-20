@@ -566,7 +566,10 @@ impl PdTree {
             !self.search_active.get(),
             "PDTreeSearchInit requires no active search"
         );
-        self.recycle_search_query();
+        debug_assert!(
+            self.search_state.borrow().is_none(),
+            "PDTreeSearchExit recycles the previous query before the next search"
+        );
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
         let query = self.build_search_query(term);
         let term_weight = query
