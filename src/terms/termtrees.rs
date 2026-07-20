@@ -26,8 +26,10 @@ impl TermTree {
     #[must_use]
     pub fn find(&mut self, key: &Term) -> Option<Term> {
         if let Some(root) = self.root.take() {
-            let root = splay_term_tree(root, key);
-            let found = (term_top_compare(&root, key) == 0).then_some(root.clone());
+            let problem_type = problem_type();
+            let root = splay_term_tree(root, key, problem_type);
+            let found = (term_top_compare_for_problem(&root, key, problem_type) == 0)
+                .then_some(root.clone());
             self.root = Some(root);
             found
         } else {
@@ -42,8 +44,9 @@ impl TermTree {
             return None;
         };
 
-        let root = splay_term_tree(root, &new);
-        let cmp = term_top_compare(&new, &root);
+        let problem_type = problem_type();
+        let root = splay_term_tree(root, &new, problem_type);
+        let cmp = term_top_compare_for_problem(&new, &root, problem_type);
         match cmp.cmp(&0) {
             Ordering::Less => {
                 new.set_left_son(root.left_son());
@@ -68,14 +71,15 @@ impl TermTree {
 
     pub fn extract(&mut self, key: &Term) -> Option<Term> {
         let root = self.root.take()?;
-        let root = splay_term_tree(root, key);
-        if term_top_compare(key, &root) != 0 {
+        let problem_type = problem_type();
+        let root = splay_term_tree(root, key, problem_type);
+        if term_top_compare_for_problem(key, &root, problem_type) != 0 {
             self.root = Some(root);
             return None;
         }
 
         let next_root = if let Some(left) = root.left_son() {
-            let new_root = splay_term_tree(left, key);
+            let new_root = splay_term_tree(left, key, problem_type);
             new_root.set_right_son(root.right_son());
             Some(new_root)
         } else {
@@ -117,8 +121,9 @@ impl TermTree {
 ///
 /// # Panics
 ///
-/// Panics if either term has no type, or if first-order mode compares terms
-/// with distinct type handles. The C function encodes these as assertions.
+/// In higher-order mode, panics if either term has no type. In debug builds,
+/// also panics if first-order terms lack types or have distinct type handles.
+/// The C function encodes the first-order preconditions as assertions.
 #[must_use]
 pub fn term_top_compare(left: &Term, right: &Term) -> i64 {
     term_top_compare_for_problem(left, right, problem_type())
@@ -128,8 +133,9 @@ pub fn term_top_compare(left: &Term, right: &Term) -> i64 {
 ///
 /// # Panics
 ///
-/// Panics if either term has no type, or if first-order mode compares terms
-/// with distinct type handles. The C function encodes these as assertions.
+/// In higher-order mode, panics if either term has no type. In debug builds,
+/// also panics if first-order terms lack types or have distinct type handles.
+/// The C function encodes the first-order preconditions as assertions.
 #[must_use]
 pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: ProblemType) -> i64 {
     let mut result = left.f_code() - right.f_code();
@@ -137,15 +143,24 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
         return result;
     }
 
-    let left_type = left.type_().expect("term top comparison requires types");
-    let right_type = right.type_().expect("term top comparison requires types");
     if problem_type == ProblemType::HigherOrder {
+        let left_type = left.type_().expect("term top comparison requires types");
+        let right_type = right.type_().expect("term top comparison requires types");
         result = i64::from(type_identity_cmp(&left_type, &right_type));
         if result != 0 {
             return result;
         }
     } else {
-        assert_eq!(left_type, right_type, "first-order term types must match");
+        debug_assert!(left.type_().is_some(), "term top comparison requires types");
+        debug_assert!(
+            right.type_().is_some(),
+            "term top comparison requires types"
+        );
+        debug_assert_eq!(
+            left.type_(),
+            right.type_(),
+            "first-order term types must match"
+        );
     }
 
     let left_arguments = left.arguments();
@@ -171,20 +186,20 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
     result
 }
 
-fn splay_term_tree(mut tree: Term, key: &Term) -> Term {
+fn splay_term_tree(mut tree: Term, key: &Term, problem_type: ProblemType) -> Term {
     let mut left_root = None;
     let mut left_tail: Option<Term> = None;
     let mut right_root = None;
     let mut right_tail: Option<Term> = None;
 
     loop {
-        let cmp = term_top_compare(key, &tree);
+        let cmp = term_top_compare_for_problem(key, &tree, problem_type);
         match cmp.cmp(&0) {
             Ordering::Less => {
                 let Some(mut next) = tree.take_left_son() else {
                     break;
                 };
-                if term_top_compare(key, &next) < 0 {
+                if term_top_compare_for_problem(key, &next, problem_type) < 0 {
                     let tmp = next;
                     tree.set_left_son(tmp.take_right_son());
                     tmp.set_right_son(Some(tree));
@@ -206,7 +221,7 @@ fn splay_term_tree(mut tree: Term, key: &Term) -> Term {
                 let Some(mut next) = tree.take_right_son() else {
                     break;
                 };
-                if term_top_compare(key, &next) > 0 {
+                if term_top_compare_for_problem(key, &next, problem_type) > 0 {
                     let tmp = next;
                     tree.set_right_son(tmp.take_left_son());
                     tmp.set_left_son(Some(tree));
