@@ -43,7 +43,7 @@ use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::{Term, TermProperties};
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
@@ -106,6 +106,266 @@ impl Ord for EvalIndexEntry {
 
         eval_order.then_with(|| self.object.cmp(&other.object))
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EvalIndexNode {
+    entry: EvalIndexEntry,
+    left: Option<NonZeroUsize>,
+    right: Option<NonZeroUsize>,
+}
+
+impl EvalIndexNode {
+    fn left(&self) -> Option<usize> {
+        self.left.map(unpack_eval_index_node)
+    }
+
+    fn set_left(&mut self, left: Option<usize>) {
+        self.left = left.map(pack_eval_index_node);
+    }
+
+    fn right(&self) -> Option<usize> {
+        self.right.map(unpack_eval_index_node)
+    }
+
+    fn set_right(&mut self, right: Option<usize>) {
+        self.right = right.map(pack_eval_index_node);
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct EvalIndexTree {
+    nodes: Vec<EvalIndexNode>,
+    free: Vec<usize>,
+    root: Option<usize>,
+    len: usize,
+}
+
+impl EvalIndexTree {
+    const fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            free: Vec::new(),
+            root: None,
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.free.clear();
+        self.root = None;
+        self.len = 0;
+    }
+
+    fn first(&self) -> Option<&EvalIndexEntry> {
+        let mut current = self.root?;
+        while let Some(left) = self.node(current).left() {
+            current = left;
+        }
+        Some(&self.node(current).entry)
+    }
+
+    fn insert(&mut self, entry: EvalIndexEntry) -> bool {
+        let Some(root) = self.root else {
+            self.root = Some(self.alloc_node(entry));
+            return true;
+        };
+
+        let root = self.splay(root, &entry);
+        self.root = Some(root);
+        match entry.cmp(&self.node(root).entry) {
+            Ordering::Less => {
+                let left = self.node(root).left();
+                let new_root = self.alloc_node(entry);
+                self.node_mut(new_root).set_left(left);
+                self.node_mut(new_root).set_right(Some(root));
+                self.node_mut(root).set_left(None);
+                self.root = Some(new_root);
+                true
+            }
+            Ordering::Greater => {
+                let right = self.node(root).right();
+                let new_root = self.alloc_node(entry);
+                self.node_mut(new_root).set_right(right);
+                self.node_mut(new_root).set_left(Some(root));
+                self.node_mut(root).set_right(None);
+                self.root = Some(new_root);
+                true
+            }
+            Ordering::Equal => false,
+        }
+    }
+
+    fn remove(&mut self, entry: &EvalIndexEntry) -> bool {
+        let Some(root) = self.root else {
+            return false;
+        };
+        let root = self.splay(root, entry);
+        self.root = Some(root);
+        if entry != &self.node(root).entry {
+            return false;
+        }
+
+        let removed = self.nodes[root];
+        self.root = if let Some(left) = removed.left() {
+            let left = self.splay(left, entry);
+            self.node_mut(left).set_right(removed.right());
+            Some(left)
+        } else {
+            removed.right()
+        };
+        self.free.push(root);
+        self.len -= 1;
+        true
+    }
+
+    fn iter(&self) -> EvalIndexIter<'_> {
+        EvalIndexIter {
+            tree: self,
+            pending: Vec::new(),
+            current: self.root,
+        }
+    }
+
+    fn alloc_node(&mut self, entry: EvalIndexEntry) -> usize {
+        let node = EvalIndexNode {
+            entry,
+            left: None,
+            right: None,
+        };
+        self.len += 1;
+        if let Some(index) = self.free.pop() {
+            self.nodes[index] = node;
+            index
+        } else {
+            self.nodes.push(node);
+            self.nodes.len() - 1
+        }
+    }
+
+    fn node(&self, index: usize) -> &EvalIndexNode {
+        &self.nodes[index]
+    }
+
+    fn node_mut(&mut self, index: usize) -> &mut EvalIndexNode {
+        &mut self.nodes[index]
+    }
+
+    fn splay(&mut self, root: usize, entry: &EvalIndexEntry) -> usize {
+        let mut tree = root;
+        let mut lower_root = None;
+        let mut lower_tail = None;
+        let mut upper_root = None;
+        let mut upper_tail = None;
+
+        loop {
+            match entry.cmp(&self.node(tree).entry) {
+                Ordering::Less => {
+                    let Some(left) = self.node(tree).left() else {
+                        break;
+                    };
+                    if entry < &self.node(left).entry {
+                        let left_right = self.node(left).right();
+                        self.node_mut(tree).set_left(left_right);
+                        self.node_mut(left).set_right(Some(tree));
+                        tree = left;
+                        if self.node(tree).left().is_none() {
+                            break;
+                        }
+                    }
+                    if let Some(tail) = upper_tail {
+                        self.node_mut(tail).set_left(Some(tree));
+                    } else {
+                        upper_root = Some(tree);
+                    }
+                    upper_tail = Some(tree);
+                    tree = self
+                        .node(tree)
+                        .left()
+                        .expect("evaluation splay left link must exist");
+                }
+                Ordering::Greater => {
+                    let Some(right) = self.node(tree).right() else {
+                        break;
+                    };
+                    if entry > &self.node(right).entry {
+                        let right_left = self.node(right).left();
+                        self.node_mut(tree).set_right(right_left);
+                        self.node_mut(right).set_left(Some(tree));
+                        tree = right;
+                        if self.node(tree).right().is_none() {
+                            break;
+                        }
+                    }
+                    if let Some(tail) = lower_tail {
+                        self.node_mut(tail).set_right(Some(tree));
+                    } else {
+                        lower_root = Some(tree);
+                    }
+                    lower_tail = Some(tree);
+                    tree = self
+                        .node(tree)
+                        .right()
+                        .expect("evaluation splay right link must exist");
+                }
+                Ordering::Equal => break,
+            }
+        }
+
+        let tree_left = self.node(tree).left();
+        let tree_right = self.node(tree).right();
+        if let Some(tail) = lower_tail {
+            self.node_mut(tail).set_right(tree_left);
+        } else {
+            lower_root = tree_left;
+        }
+        if let Some(tail) = upper_tail {
+            self.node_mut(tail).set_left(tree_right);
+        } else {
+            upper_root = tree_right;
+        }
+        self.node_mut(tree).set_left(lower_root);
+        self.node_mut(tree).set_right(upper_root);
+        tree
+    }
+}
+
+impl PartialEq for EvalIndexTree {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other.iter())
+    }
+}
+
+struct EvalIndexIter<'tree> {
+    tree: &'tree EvalIndexTree,
+    pending: Vec<usize>,
+    current: Option<usize>,
+}
+
+impl<'tree> Iterator for EvalIndexIter<'tree> {
+    type Item = &'tree EvalIndexEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(current) = self.current {
+            self.pending.push(current);
+            self.current = self.tree.node(current).left();
+        }
+        let next = self.pending.pop()?;
+        self.current = self.tree.node(next).right();
+        Some(&self.tree.node(next).entry)
+    }
+}
+
+fn pack_eval_index_node(index: usize) -> NonZeroUsize {
+    let encoded = index
+        .checked_add(1)
+        .expect("evaluation index handle space exhausted");
+    NonZeroUsize::new(encoded).expect("encoded evaluation index handle must be nonzero")
+}
+
+fn unpack_eval_index_node(index: NonZeroUsize) -> usize {
+    index.get() - 1
 }
 
 type ClauseSlot = usize;
@@ -538,7 +798,7 @@ pub struct ClauseSet {
     indexed_clause_positions: BTreeMap<i64, usize>,
     indexed_clause_derivation_positions: BTreeMap<ClauseDerivationRef, usize>,
     fv_anchor: Option<FvIndexAnchor>,
-    eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
+    eval_indices: Vec<EvalIndexTree>,
     eval_object_slots: Vec<Option<NonZeroUsize>>,
     eval_no: usize,
     next_eval_object: EvalObjectHandle,
@@ -2329,7 +2589,7 @@ fn indexed_clause_for_anchor(
 }
 
 fn index_clause_evaluations(
-    eval_indices: &mut Vec<BTreeSet<EvalIndexEntry>>,
+    eval_indices: &mut Vec<EvalIndexTree>,
     eval_no: &mut usize,
     next_eval_object: &mut EvalObjectHandle,
     clause: &mut Clause,
@@ -2344,7 +2604,7 @@ fn index_clause_evaluations(
     evaluations.set_object(Some(object));
     *eval_no = (*eval_no).max(evaluations.eval_no());
     while eval_indices.len() < evaluations.eval_no() {
-        eval_indices.push(BTreeSet::new());
+        eval_indices.push(EvalIndexTree::new());
     }
     for (pos, root) in eval_indices
         .iter_mut()
@@ -2683,10 +2943,10 @@ mod tests {
     use super::{
         clause_page_deadline_tolerance_for_headroom, clause_set_list_get_max_date,
         clause_set_ref_stack_cardinality, clause_set_stack_cardinality, encode_clause_slot,
-        eq_axioms_print_string, eval_mem, ClauseSet, SparseClauseStore, CLAUSECELL_DYN_MEM,
-        CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC, CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC,
-        EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS, SPARSE_STORE_CHUNK_BYTES, SPARSE_STORE_CHUNK_MASK,
-        SPARSE_STORE_CHUNK_SIZE,
+        eq_axioms_print_string, eval_mem, ClauseSet, EvalIndexEntry, EvalIndexNode, EvalIndexTree,
+        SparseClauseStore, CLAUSECELL_DYN_MEM, CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC,
+        CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC, EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS,
+        SPARSE_STORE_CHUNK_BYTES, SPARSE_STORE_CHUNK_MASK, SPARSE_STORE_CHUNK_SIZE,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -2726,6 +2986,71 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    fn eval_index_entry(
+        object: usize,
+        priority: i64,
+        eval_count: i64,
+        heuristic: f32,
+    ) -> EvalIndexEntry {
+        EvalIndexEntry {
+            object,
+            priority,
+            eval_count,
+            heuristic,
+        }
+    }
+
+    #[test]
+    fn eval_index_tree_preserves_set_order_removal_and_slot_reuse() {
+        assert_eq!(
+            std::mem::size_of::<EvalIndexNode>(),
+            std::mem::size_of::<EvalIndexEntry>() + 2 * std::mem::size_of::<usize>()
+        );
+        let entries = [
+            eval_index_entry(4, 40, 4, 10.0),
+            eval_index_entry(1, 30, 1, 90.0),
+            eval_index_entry(3, 40, 3, 5.0),
+            eval_index_entry(2, 40, 2, 5.0),
+        ];
+        let mut expected = entries;
+        expected.sort_unstable();
+
+        let mut tree = EvalIndexTree::new();
+        for entry in entries {
+            assert!(tree.insert(entry));
+        }
+        assert!(!tree.insert(entries[2]));
+        assert_eq!(tree.first(), expected.first());
+        assert_eq!(tree.iter().copied().collect::<Vec<_>>(), expected);
+
+        let removed = expected[1];
+        assert!(tree.remove(&removed));
+        assert!(!tree.remove(&removed));
+        let arena_len = tree.nodes.len();
+        assert_eq!(tree.free.len(), 1);
+        let replacement = eval_index_entry(9, 50, 9, 1.0);
+        assert!(tree.insert(replacement));
+        assert_eq!(tree.nodes.len(), arena_len);
+        assert!(tree.free.is_empty());
+
+        let mut logical_peer = EvalIndexTree::new();
+        let mut remaining = expected
+            .into_iter()
+            .filter(|entry| entry != &removed)
+            .collect::<Vec<_>>();
+        remaining.push(replacement);
+        for entry in remaining.iter().rev() {
+            assert!(logical_peer.insert(*entry));
+        }
+        assert_eq!(tree, logical_peer);
+
+        tree.clear();
+        assert!(tree.first().is_none());
+        assert!(tree.iter().next().is_none());
+        assert!(tree.nodes.is_empty());
+        assert!(tree.free.is_empty());
     }
 
     #[test]
