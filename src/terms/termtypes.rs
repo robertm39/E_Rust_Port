@@ -726,6 +726,13 @@ pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
     term_deref_if_changed(term, deref).unwrap_or_else(|| term.clone())
 }
 
+/// Dereference an owned term without cloning it when dereferencing makes no
+/// change.
+#[must_use]
+pub(crate) fn term_deref_owned(term: Term, deref: &mut DerefType) -> Term {
+    term_deref_if_changed(&term, deref).unwrap_or(term)
+}
+
 #[must_use]
 pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Option<Term> {
     debug_assert!(

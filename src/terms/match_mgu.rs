@@ -16,7 +16,7 @@ use crate::terms::termfunc::{
     term_is_db_closed, term_standard_weight, term_struct_equal_deref, term_struct_prefix_equal,
 };
 use crate::terms::termtypes::{
-    term_deref, term_is_prefix, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS,
+    term_deref, term_deref_owned, term_is_prefix, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS,
 };
 
 #[cfg(feature = "measure-unification")]
@@ -235,9 +235,9 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
     let mut result = true;
     while !jobs.is_empty() {
         let mut right_deref = DerefType::Always;
-        let mut right = term_deref(&jobs.get_last(), &mut right_deref);
+        let mut right = term_deref_owned(jobs.take_last(), &mut right_deref);
         let mut left_deref = DerefType::Always;
-        let mut left = term_deref(&jobs.get_last(), &mut left_deref);
+        let mut left = term_deref_owned(jobs.take_last(), &mut left_deref);
 
         if right.is_free_var() {
             std::mem::swap(&mut left, &mut right);
