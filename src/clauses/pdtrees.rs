@@ -1389,15 +1389,22 @@ impl PdTree {
                         .query_stack
                         .last()
                         .expect("non-terminal PDTree cursor has a query term");
-                    let token = if state.first_order {
-                        prefix_token_first_order(query_term)
+                    let next_index = if state.first_order {
+                        let Some(code) = first_order_function_code(query_term) else {
+                            continue;
+                        };
+                        self.nodes[node_index]
+                            .fun_alternatives
+                            .get_val_const(fun_code_key(code))
+                            .copied()
                     } else {
-                        prefix_token(query_term)
+                        let token = prefix_token(query_term);
+                        if matches!(token, PrefixToken::FreeVar { .. }) {
+                            continue;
+                        }
+                        self.nodes[node_index].child_index(token)
                     };
-                    if matches!(token, PrefixToken::FreeVar { .. }) {
-                        continue;
-                    }
-                    let Some(next_index) = self.nodes[node_index].child_index(token) else {
+                    let Some(next_index) = next_index else {
                         continue;
                     };
                     self.record_nodes_visited(1);
@@ -1962,7 +1969,20 @@ fn prefix_token(term: &Term) -> PrefixToken {
     }
 }
 
+#[cfg(test)]
 fn prefix_token_first_order(term: &Term) -> PrefixToken {
+    let Some(f_code) = first_order_function_code(term) else {
+        return PrefixToken::FreeVar {
+            id: term_identity_id(term),
+            type_uid: term_type_uid(term),
+            weight: term_standard_weight(term),
+        };
+    };
+    PrefixToken::Fun(f_code)
+}
+
+#[inline]
+fn first_order_function_code(term: &Term) -> Option<FunCode> {
     let f_code = term.f_code();
     debug_assert!(!term.is_db_var());
     debug_assert!(!matches!(
@@ -1970,13 +1990,9 @@ fn prefix_token_first_order(term: &Term) -> PrefixToken {
         SIG_PHONY_APP_CODE | SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE
     ));
     if f_code < 0 {
-        PrefixToken::FreeVar {
-            id: term_identity_id(term),
-            type_uid: term_type_uid(term),
-            weight: term_standard_weight(term),
-        }
+        None
     } else {
-        PrefixToken::Fun(f_code)
+        Some(f_code)
     }
 }
 
