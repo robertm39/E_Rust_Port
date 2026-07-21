@@ -12,6 +12,9 @@ use std::rc::{Rc, Weak};
 
 pub const INITIAL_SORT_STACK_SIZE: usize = 10;
 pub const DEFAULT_VARBANK_SIZE: usize = 30;
+const VARIABLE_PAGE_BITS: u32 = 6;
+const VARIABLE_PAGE_SIZE: usize = 1 << VARIABLE_PAGE_BITS;
+const VARIABLE_PAGE_MASK: usize = VARIABLE_PAGE_SIZE - 1;
 
 #[derive(Clone, Debug)]
 pub struct VarBank(Rc<RefCell<VarBankCell>>);
@@ -25,7 +28,9 @@ struct VarBankCell {
     max_var: FunCode,
     varstacks: BTreeMap<TypeUniqueId, Vec<Term>>,
     v_counts: BTreeMap<TypeUniqueId, usize>,
-    variables: BTreeMap<FunCode, Term>,
+    // Preserve C's direct negated-f-code indexing without materializing every
+    // hole in temporary banks that contain only a few high-numbered variables.
+    variables: VariableTable,
     ext_index: BTreeMap<String, Term>,
     env: Vec<Option<VarBankNamedCell>>,
     shadow: Option<Weak<RefCell<VarBankCell>>>,
@@ -35,6 +40,42 @@ struct VarBankCell {
 struct VarBankNamedCell {
     var: Option<Term>,
     name: String,
+}
+
+#[derive(Debug, Default)]
+struct VariableTable {
+    pages: Vec<Option<Box<[Option<Term>]>>>,
+}
+
+impl VariableTable {
+    #[inline]
+    fn get(&self, index: usize) -> Option<&Term> {
+        self.pages
+            .get(index >> VARIABLE_PAGE_BITS)?
+            .as_deref()?
+            .get(index & VARIABLE_PAGE_MASK)?
+            .as_ref()
+    }
+
+    fn insert(&mut self, index: usize, variable: Term) {
+        let page_index = index >> VARIABLE_PAGE_BITS;
+        if self.pages.len() <= page_index {
+            self.pages.resize_with(page_index + 1, || None);
+        }
+        let page = self.pages[page_index]
+            .get_or_insert_with(|| vec![None; VARIABLE_PAGE_SIZE].into_boxed_slice());
+        let slot = &mut page[index & VARIABLE_PAGE_MASK];
+        assert!(slot.is_none(), "variable f-code already allocated");
+        *slot = Some(variable);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Term> {
+        self.pages
+            .iter()
+            .filter_map(Option::as_deref)
+            .flatten()
+            .filter_map(Option::as_ref)
+    }
 }
 
 impl VarBank {
@@ -48,7 +89,7 @@ impl VarBank {
             max_var: 0,
             varstacks: BTreeMap::new(),
             v_counts: BTreeMap::new(),
-            variables: BTreeMap::new(),
+            variables: VariableTable::default(),
             ext_index: BTreeMap::new(),
             env: Vec::new(),
             shadow: None,
@@ -229,7 +270,11 @@ impl VarBank {
     #[must_use]
     pub fn f_code_find(&self, f_code: FunCode) -> Option<Term> {
         assert!(f_code < 0, "variable f-code must be negative");
-        self.0.borrow().variables.get(&f_code).cloned()
+        self.0
+            .borrow()
+            .variables
+            .get(variable_index(f_code))
+            .cloned()
     }
 
     #[must_use]
@@ -272,7 +317,7 @@ impl VarBank {
         };
         if let Some(shadow) = shadow.and_then(|weak| weak.upgrade()) {
             let mut shadow_inner = shadow.borrow_mut();
-            if !shadow_inner.variables.contains_key(&f_code) {
+            if shadow_inner.variables.get(variable_index(f_code)).is_none() {
                 alloc_no_shadow(&mut shadow_inner, f_code, type_);
             }
         }
@@ -456,14 +501,20 @@ impl VarBank {
         self.0.borrow().var_count
     }
 
+    /// # Panics
+    ///
+    /// Panics if the maximum variable index cannot be represented by `usize`.
     pub fn collect_vars(&self, into: &mut PStack<Term>) -> i64 {
         let inner = self.0.borrow();
         let mut count = 0;
-        for index in 0..inner.max_var {
-            if let Some(var) = inner.variables.get(&-index) {
-                into.push(var.clone());
-                count += 1;
-            }
+        let limit =
+            usize::try_from(inner.max_var).expect("maximum variable index does not fit usize");
+        for index in 0..limit {
+            let Some(var) = inner.variables.get(index) else {
+                continue;
+            };
+            into.push(var.clone());
+            count += 1;
         }
         count
     }
@@ -520,7 +571,7 @@ impl VarBank {
     }
 
     fn all_variables(&self) -> Vec<Term> {
-        self.0.borrow().variables.values().cloned().collect()
+        self.0.borrow().variables.iter().cloned().collect()
     }
 }
 
@@ -535,8 +586,9 @@ pub fn is_alt_var(var: &Term) -> bool {
 }
 
 fn alloc_no_shadow(inner: &mut VarBankCell, f_code: FunCode, type_: &Type) -> Term {
+    let index = variable_index(f_code);
     assert!(
-        !inner.variables.contains_key(&f_code),
+        inner.variables.get(index).is_none(),
         "variable f-code already allocated"
     );
     let sort = type_.type_uid();
@@ -552,13 +604,18 @@ fn alloc_no_shadow(inner: &mut VarBankCell, f_code: FunCode, type_: &Type) -> Te
     var.set_f_code(f_code);
     var.set_type(Some(type_.clone()));
 
-    inner.variables.insert(f_code, var.clone());
+    inner.variables.insert(index, var.clone());
     if !is_alt_var(&var) {
         inner.varstacks.entry(sort).or_default().push(var.clone());
     }
     inner.max_var = inner.max_var.max(-f_code);
     inner.var_count += 1;
     var
+}
+
+fn variable_index(f_code: FunCode) -> usize {
+    debug_assert!(f_code < 0);
+    usize::try_from(f_code.unsigned_abs()).expect("variable f-code index does not fit usize")
 }
 
 fn assert_shared_type(type_: &Type) {
@@ -631,6 +688,27 @@ mod tests {
         assert!(is_alt_var(&alt));
         assert_eq!(bank.normal_stack_len(&i_type), 1);
         assert_eq!(bank.cardinality(), 2);
+    }
+
+    #[test]
+    fn sparse_high_codes_allocate_only_their_variable_page() {
+        let types = TypeBank::new();
+        let bank = VarBank::new(&types);
+        let high_code = -1_000_002;
+
+        let high = bank.var_assert_alloc(high_code, &types.i_type());
+        assert_eq!(bank.f_code_find(high_code), Some(high));
+
+        let inner = bank.0.borrow();
+        assert_eq!(
+            inner
+                .variables
+                .pages
+                .iter()
+                .filter(|page| page.is_some())
+                .count(),
+            1
+        );
     }
 
     #[test]
