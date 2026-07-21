@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,eval_splay_exclusive,splay_delta,splay_percent
+parent,11704174869,0,0.0000,306825308,0,0.0000
+splay_ordering,11707970962,3796093,0.0324,313810070,6984762,2.2765
