@@ -265,79 +265,75 @@ impl EvalIndexTree {
 
     fn splay(&mut self, root: usize, entry: &EvalIndexEntry) -> usize {
         let mut tree = root;
-        let mut lower_root = None;
-        let mut lower_tail = None;
-        let mut upper_root = None;
-        let mut upper_tail = None;
+        let mut lower_root = NO_EVAL_INDEX_NODE;
+        let mut lower_tail = NO_EVAL_INDEX_NODE;
+        let mut upper_root = NO_EVAL_INDEX_NODE;
+        let mut upper_tail = NO_EVAL_INDEX_NODE;
 
         loop {
             match entry.cmp(&self.node(tree).entry) {
                 Ordering::Less => {
-                    let Some(left) = self.node(tree).left() else {
+                    let left = self.node(tree).left;
+                    if left == NO_EVAL_INDEX_NODE {
                         break;
-                    };
+                    }
                     if entry < &self.node(left).entry {
-                        let left_right = self.node(left).right();
-                        self.node_mut(tree).set_left(left_right);
-                        self.node_mut(left).set_right(Some(tree));
+                        let left_right = self.node(left).right;
+                        self.node_mut(tree).left = left_right;
+                        self.node_mut(left).right = tree;
                         tree = left;
-                        if self.node(tree).left().is_none() {
+                        if self.node(tree).left == NO_EVAL_INDEX_NODE {
                             break;
                         }
                     }
-                    if let Some(tail) = upper_tail {
-                        self.node_mut(tail).set_left(Some(tree));
+                    if upper_tail == NO_EVAL_INDEX_NODE {
+                        upper_root = tree;
                     } else {
-                        upper_root = Some(tree);
+                        self.node_mut(upper_tail).left = tree;
                     }
-                    upper_tail = Some(tree);
-                    tree = self
-                        .node(tree)
-                        .left()
-                        .expect("evaluation splay left link must exist");
+                    upper_tail = tree;
+                    tree = self.node(tree).left;
                 }
                 Ordering::Greater => {
-                    let Some(right) = self.node(tree).right() else {
+                    let right = self.node(tree).right;
+                    if right == NO_EVAL_INDEX_NODE {
                         break;
-                    };
+                    }
                     if entry > &self.node(right).entry {
-                        let right_left = self.node(right).left();
-                        self.node_mut(tree).set_right(right_left);
-                        self.node_mut(right).set_left(Some(tree));
+                        let right_left = self.node(right).left;
+                        self.node_mut(tree).right = right_left;
+                        self.node_mut(right).left = tree;
                         tree = right;
-                        if self.node(tree).right().is_none() {
+                        if self.node(tree).right == NO_EVAL_INDEX_NODE {
                             break;
                         }
                     }
-                    if let Some(tail) = lower_tail {
-                        self.node_mut(tail).set_right(Some(tree));
+                    if lower_tail == NO_EVAL_INDEX_NODE {
+                        lower_root = tree;
                     } else {
-                        lower_root = Some(tree);
+                        self.node_mut(lower_tail).right = tree;
                     }
-                    lower_tail = Some(tree);
-                    tree = self
-                        .node(tree)
-                        .right()
-                        .expect("evaluation splay right link must exist");
+                    lower_tail = tree;
+                    tree = self.node(tree).right;
                 }
                 Ordering::Equal => break,
             }
         }
 
-        let tree_left = self.node(tree).left();
-        let tree_right = self.node(tree).right();
-        if let Some(tail) = lower_tail {
-            self.node_mut(tail).set_right(tree_left);
-        } else {
+        let tree_left = self.node(tree).left;
+        let tree_right = self.node(tree).right;
+        if lower_tail == NO_EVAL_INDEX_NODE {
             lower_root = tree_left;
-        }
-        if let Some(tail) = upper_tail {
-            self.node_mut(tail).set_left(tree_right);
         } else {
-            upper_root = tree_right;
+            self.node_mut(lower_tail).right = tree_left;
         }
-        self.node_mut(tree).set_left(lower_root);
-        self.node_mut(tree).set_right(upper_root);
+        if upper_tail == NO_EVAL_INDEX_NODE {
+            upper_root = tree_right;
+        } else {
+            self.node_mut(upper_tail).left = tree_right;
+        }
+        self.node_mut(tree).left = lower_root;
+        self.node_mut(tree).right = upper_root;
         tree
     }
 }
