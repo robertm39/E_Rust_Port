@@ -33,7 +33,7 @@ use crate::clauses::pdtrees::{
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
 #[cfg(not(target_os = "linux"))]
-use crate::inout::signals::expire_time_limit_if_within;
+use crate::inout::signals::{expire_active_time_limit_now, expire_time_limit_if_within};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -244,6 +244,13 @@ impl EvalIndexTree {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn try_reserve_insert_capacity(&mut self) -> bool {
+        !self.free.is_empty()
+            || self.nodes.len() < self.nodes.capacity()
+            || self.nodes.try_reserve(1).is_ok()
+    }
+
     fn node(&self, index: usize) -> &EvalIndexNode {
         &self.nodes[index]
     }
@@ -385,29 +392,25 @@ const SPARSE_STORE_CHUNK_BYTES: usize =
 #[cfg(any(test, not(target_os = "linux")))]
 const CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC: u64 = 1_000_000;
 #[cfg(any(test, not(target_os = "linux")))]
-const CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC: u64 = 2_000_000;
+const CLAUSE_PAGE_MEMORY_HEADROOM_PAGES: u64 = 2;
 
 #[cfg(any(test, not(target_os = "linux")))]
-const fn clause_page_deadline_tolerance_for_headroom(
-    headroom: Option<u64>,
-    page_bytes: u64,
-) -> u64 {
-    match headroom {
-        Some(bytes) if bytes <= page_bytes.saturating_mul(2) => {
-            CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC
-        }
-        _ => CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC,
-    }
+const fn clause_page_headroom_is_exhausted(headroom: Option<u64>, page_bytes: u64) -> bool {
+    matches!(
+        headroom,
+        Some(bytes) if bytes <= page_bytes.saturating_mul(CLAUSE_PAGE_MEMORY_HEADROOM_PAGES)
+    )
 }
 
-#[cfg(not(target_os = "linux"))]
-fn clause_page_deadline_tolerance_usec() -> u64 {
-    #[cfg(windows)]
-    let headroom = process_memory_limit_headroom();
-    #[cfg(not(windows))]
-    let headroom = None;
+#[cfg(windows)]
+fn clause_page_memory_headroom_is_exhausted() -> bool {
     let page_bytes = u64::try_from(SPARSE_STORE_CHUNK_BYTES).unwrap_or(u64::MAX);
-    clause_page_deadline_tolerance_for_headroom(headroom, page_bytes)
+    clause_page_headroom_is_exhausted(process_memory_limit_headroom(), page_bytes)
+}
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
+const fn clause_page_memory_headroom_is_exhausted() -> bool {
+    false
 }
 
 #[derive(Clone, Debug, Default)]
@@ -607,6 +610,36 @@ impl SparseClauseStore {
             return tail.len() == tail.capacity() && tail.capacity() >= SPARSE_STORE_CHUNK_SIZE / 2;
         }
         self.tail_chunk >= self.overflow_chunks.len()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn try_reserve_next_push_capacity(&mut self) -> bool {
+        let tail = self
+            .chunk(self.tail_chunk)
+            .expect("tail clause chunk must be allocated");
+        if tail.len() == SPARSE_STORE_CHUNK_SIZE {
+            if self.tail_chunk >= self.overflow_chunks.len() {
+                if self.overflow_chunks.try_reserve(1).is_err() {
+                    return false;
+                }
+                let mut next = Vec::new();
+                if next.try_reserve_exact(SPARSE_STORE_CHUNK_SIZE).is_err() {
+                    return false;
+                }
+                self.overflow_chunks.push(next);
+            }
+            return true;
+        }
+
+        if tail.len() == tail.capacity() && tail.capacity() >= SPARSE_STORE_CHUNK_SIZE / 2 {
+            let additional = SPARSE_STORE_CHUNK_SIZE - tail.capacity();
+            return self
+                .chunk_mut(self.tail_chunk)
+                .expect("tail clause chunk must be allocated")
+                .try_reserve_exact(additional)
+                .is_ok();
+        }
+        true
     }
 
     fn reclaim_empty_prefix_chunks(&mut self) -> usize {
@@ -1431,10 +1464,27 @@ impl ClauseSet {
         self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
         #[cfg(not(target_os = "linux"))]
-        if self.clauses.next_push_allocates_clause_page()
-            && expire_time_limit_if_within(clause_page_deadline_tolerance_usec())
         {
-            return;
+            let allocates_page = self.clauses.next_push_allocates_clause_page();
+            if allocates_page
+                && ((clause_page_memory_headroom_is_exhausted() && expire_active_time_limit_now())
+                    || expire_time_limit_if_within(CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC))
+            {
+                return;
+            }
+            if allocates_page {
+                // Reserve before evaluation indexing can consume the memory
+                // headroom that the allocation guard just measured.
+                if !self.clauses.try_reserve_next_push_capacity() && expire_active_time_limit_now()
+                {
+                    return;
+                }
+            }
+            if !self.try_reserve_evaluation_insert_capacity(&clause)
+                && expire_active_time_limit_now()
+            {
+                return;
+            }
         }
         self.literals += usize_to_i64(clause.literal_number());
         index_clause_evaluations(
@@ -2396,6 +2446,30 @@ impl ClauseSet {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn try_reserve_evaluation_insert_capacity(&mut self, clause: &Clause) -> bool {
+        let Some(evaluations) = clause.evaluations() else {
+            return true;
+        };
+        let eval_no = evaluations.eval_no();
+        let missing = eval_no.saturating_sub(self.eval_indices.len());
+        if self.eval_indices.try_reserve(missing).is_err() {
+            return false;
+        }
+        while self.eval_indices.len() < eval_no {
+            self.eval_indices.push(EvalIndexTree::new());
+        }
+        for root in self.eval_indices.iter_mut().take(eval_no) {
+            if !root.try_reserve_insert_capacity() {
+                return false;
+            }
+        }
+
+        let required_slots = self.next_eval_object.saturating_add(1);
+        let additional = required_slots.saturating_sub(self.eval_object_slots.len());
+        self.eval_object_slots.try_reserve(additional).is_ok()
+    }
+
     fn index_clause_demodulator(&mut self, clause: &mut Clause) {
         let Some(index) = self.demod_index.as_mut() else {
             return;
@@ -2977,12 +3051,12 @@ fn tptp_eq_pred_axiom_write(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_page_deadline_tolerance_for_headroom, clause_set_list_get_max_date,
+        clause_page_headroom_is_exhausted, clause_set_list_get_max_date,
         clause_set_ref_stack_cardinality, clause_set_stack_cardinality, encode_clause_slot,
         eq_axioms_print_string, eval_mem, ClauseSet, EvalIndexEntry, EvalIndexNode, EvalIndexTree,
-        SparseClauseStore, CLAUSECELL_DYN_MEM, CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC,
-        CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC, EQN_CELL_MEM, SPARSE_STORE_CHUNK_BITS,
-        SPARSE_STORE_CHUNK_BYTES, SPARSE_STORE_CHUNK_MASK, SPARSE_STORE_CHUNK_SIZE,
+        SparseClauseStore, CLAUSECELL_DYN_MEM, CLAUSE_PAGE_MEMORY_HEADROOM_PAGES, EQN_CELL_MEM,
+        SPARSE_STORE_CHUNK_BITS, SPARSE_STORE_CHUNK_BYTES, SPARSE_STORE_CHUNK_MASK,
+        SPARSE_STORE_CHUNK_SIZE,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -3089,6 +3163,42 @@ mod tests {
         assert!(tree.free.is_empty());
     }
 
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn evaluation_insert_reserves_each_infallible_vector_growth() {
+        let _guard = global_state_lock();
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let clause = clause_with_evaluations(
+            Clause::empty(),
+            &[(10, 1.0), (20, 2.0), (30, 3.0), (40, 4.0), (50, 5.0)],
+        );
+        let mut set = ClauseSet::new();
+
+        assert!(set.try_reserve_evaluation_insert_capacity(&clause));
+        assert_eq!(set.eval_indices.len(), 5);
+        let node_capacities = set
+            .eval_indices
+            .iter()
+            .map(|tree| tree.nodes.capacity())
+            .collect::<Vec<_>>();
+        let object_capacity = set.eval_object_slots.capacity();
+        assert!(node_capacities.iter().all(|capacity| *capacity > 0));
+        assert!(object_capacity > 0);
+
+        set.insert(clause);
+
+        assert_eq!(set.eval_object_slots.len(), 1);
+        assert_eq!(set.eval_object_slots.capacity(), object_capacity);
+        assert_eq!(
+            set.eval_indices
+                .iter()
+                .map(|tree| tree.nodes.capacity())
+                .collect::<Vec<_>>(),
+            node_capacities
+        );
+        assert!(set.eval_indices.iter().all(|tree| tree.len == 1));
+    }
+
     #[test]
     fn sparse_clause_store_pages_bound_growth_and_preserve_slot_order() {
         let mut store = SparseClauseStore::default();
@@ -3169,29 +3279,35 @@ mod tests {
         }
         assert_eq!(store.first_chunk.capacity(), SPARSE_STORE_CHUNK_SIZE / 2);
         assert!(store.next_push_allocates_clause_page());
+
+        assert!(store.try_reserve_next_push_capacity());
+        assert_eq!(store.first_chunk.capacity(), SPARSE_STORE_CHUNK_SIZE);
+        assert!(!store.next_push_allocates_clause_page());
+
+        for _ in SPARSE_STORE_CHUNK_SIZE / 2..SPARSE_STORE_CHUNK_SIZE {
+            let _ = store.push_back(Clause::empty());
+        }
+        assert!(store.next_push_allocates_clause_page());
+        assert!(store.try_reserve_next_push_capacity());
+        assert_eq!(store.overflow_chunks.len(), 1);
+        assert_eq!(store.overflow_chunks[0].capacity(), SPARSE_STORE_CHUNK_SIZE);
+        assert!(!store.next_push_allocates_clause_page());
+        assert_eq!(store.push_back(Clause::empty()), SPARSE_STORE_CHUNK_SIZE);
     }
 
     #[test]
-    fn clause_page_deadline_tolerance_expands_only_near_the_memory_limit() {
+    fn clause_page_headroom_requires_two_complete_allocation_quanta() {
         let page_bytes = u64::try_from(SPARSE_STORE_CHUNK_BYTES).unwrap();
-        assert_eq!(
-            clause_page_deadline_tolerance_for_headroom(None, page_bytes),
-            CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC
-        );
-        assert_eq!(
-            clause_page_deadline_tolerance_for_headroom(
-                Some(page_bytes.saturating_mul(2).saturating_add(1)),
-                page_bytes,
-            ),
-            CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC
-        );
-        assert_eq!(
-            clause_page_deadline_tolerance_for_headroom(
-                Some(page_bytes.saturating_mul(2)),
-                page_bytes,
-            ),
-            CLAUSE_PAGE_MEMORY_PRESSURE_TOLERANCE_USEC
-        );
+        let required = page_bytes.saturating_mul(CLAUSE_PAGE_MEMORY_HEADROOM_PAGES);
+        assert!(!clause_page_headroom_is_exhausted(None, page_bytes));
+        assert!(!clause_page_headroom_is_exhausted(
+            Some(required.saturating_add(1)),
+            page_bytes,
+        ));
+        assert!(clause_page_headroom_is_exhausted(
+            Some(required),
+            page_bytes,
+        ));
     }
 
     #[cfg(not(target_os = "linux"))]

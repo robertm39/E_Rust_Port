@@ -77,7 +77,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bounded non-POSIX allocation failure on 2026-07-21.
 
 Source files reviewed: `INOUT/cio_signals.h`, `INOUT/cio_signals.c`.
 
@@ -104,7 +104,7 @@ Source files reviewed: `INOUT/cio_signals.h`, `INOUT/cio_signals.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/signals.rs` ports the public signal globals, setup/handler/scheduler-handler outcomes, CPU-limit configuration and deadline checks, soft-timeout latch and rearm behavior, hard-timeout finalizer, unexpected-signal warning text, termination cleanup outcome, Linux normal-build signal trampolines, and test-only non-mutating paths. The executable proof-search path uses the cooperative hard-deadline finalizer where native signal delivery is not available or would bypass C-shaped output. Non-POSIX allocation guards may latch an active deadline slightly early, but their requested lookahead is capped at 5% of the configured CPU window so a one-second limit is not consumed at startup.
+- `src/inout/signals.rs` ports the public signal globals, setup/handler/scheduler-handler outcomes, CPU-limit configuration and deadline checks, soft-timeout latch and rearm behavior, hard-timeout finalizer, unexpected-signal warning text, termination cleanup outcome, Linux normal-build signal trampolines, and test-only non-mutating paths. The executable proof-search path uses the cooperative hard-deadline finalizer where native signal delivery is not available or would bypass C-shaped output. The ordinary non-POSIX allocation lookahead is capped at 5% of the configured CPU window so a one-second limit is not consumed at startup. A separate immediate latch is available only when an active configured deadline exists; bounded non-POSIX insertion paths use it after a fallible capacity reservation is rejected, allowing normal hard-limit `ResourceOut` finalization instead of an allocator abort.
 
 ### Porting Focus
 

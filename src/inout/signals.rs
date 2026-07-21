@@ -231,6 +231,31 @@ pub fn expire_time_limit_if_within(tolerance_usec: u64) -> bool {
         return false;
     }
 
+    expire_configured_time_limit(deadline_kind)
+}
+
+/// Immediately latches the configured cooperative CPU deadline.
+///
+/// Non-POSIX allocation guards use this when bounded process-memory headroom
+/// cannot safely accommodate the next indivisible allocation. This lets the
+/// active search leave through its normal `ResourceOut` path instead of
+/// reaching the infallible allocator. Unlimited configurations are unchanged.
+#[must_use]
+pub fn expire_active_time_limit_now() -> bool {
+    if TIME_IS_UP.load(Ordering::SeqCst) {
+        return true;
+    }
+    let deadline_kind = TIME_LIMIT_DEADLINE_KIND.load(Ordering::SeqCst);
+    if TIME_LIMIT_DEADLINE_USEC.load(Ordering::SeqCst) == i64::MAX
+        || deadline_kind == TIME_LIMIT_KIND_NONE
+    {
+        return false;
+    }
+
+    expire_configured_time_limit(deadline_kind)
+}
+
+fn expire_configured_time_limit(deadline_kind: u8) -> bool {
     TIME_IS_UP.store(true, Ordering::SeqCst);
     TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
     TIME_LIMIT_EXPIRED_KIND.store(deadline_kind, Ordering::SeqCst);
@@ -629,15 +654,15 @@ fn reset_signal_state_for_tests() {
 mod tests {
     use super::{
         configure_time_limits, e_sched_signal_setup, e_sig_term_sched_handler, e_signal_handler,
-        e_signal_setup, expire_time_limit_if_within, finalize_cpu_limit_outcome,
-        finalize_signal_outcome, hard_time_limit, reset_sig_term_caught,
-        reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
-        set_schedule_time_limit, set_signal_global_out_fd, set_silent_time_out,
-        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
-        sig_term_caught, signal_global_out_fd, silent_time_out, soft_time_limit, system_time_limit,
-        time_is_up, time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome,
-        SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
-        SIGXCPU_COMPAT,
+        e_signal_setup, expire_active_time_limit_now, expire_time_limit_if_within,
+        finalize_cpu_limit_outcome, finalize_signal_outcome, hard_time_limit,
+        reset_sig_term_caught, reset_signal_state_for_tests, schedule_time_limit,
+        set_hard_time_limit, set_schedule_time_limit, set_signal_global_out_fd,
+        set_silent_time_out, set_soft_time_limit, set_system_time_limit, set_time_is_up,
+        set_time_limit_is_soft, sig_term_caught, signal_global_out_fd, silent_time_out,
+        soft_time_limit, system_time_limit, time_is_up, time_limit_expired_kind,
+        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, TimeLimitKind,
+        RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::os_wrapper::get_usec_clock;
@@ -754,6 +779,21 @@ mod tests {
         super::TIME_LIMIT_DEADLINE_USEC.store(now.saturating_add(10_000), Ordering::SeqCst);
 
         assert!(expire_time_limit_if_within(1_000_000));
+        assert!(time_is_up());
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
+    }
+
+    #[test]
+    fn immediate_cooperative_expiry_requires_an_active_limit() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        assert!(!expire_active_time_limit_now());
+        assert!(!time_is_up());
+
+        configure_time_limits(60, RLIM_INFINITY_COMPAT, 0);
+        assert!(expire_active_time_limit_now());
         assert!(time_is_up());
         assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
     }

@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"fallible-reserve","1","0x7ff740a00000","8","ResourceOut","60.888865","58.75","2480888","428","eprover: CPU time limit exceeded, terminating"
+"fallible-reserve","2","0x7ff740a00000","8","ResourceOut","57.722035","56.984375","2480316","428","eprover: CPU time limit exceeded, terminating"
+"fallible-reserve","3","0x7ff740a00000","8","ResourceOut","58.758319","57.84375","2480428","428","eprover: CPU time limit exceeded, terminating"
