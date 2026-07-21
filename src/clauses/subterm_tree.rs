@@ -10,6 +10,10 @@ use std::fmt::{self, Write};
 
 #[derive(Clone, Debug)]
 pub struct SubtermOcc {
+    // C orders these cells by pointers allocated from its fixed-size term pool.
+    // Shared-term entry numbers provide a stable surrogate for that order;
+    // identity remains the exact tie-break and lookup key.
+    term_order: i64,
     term_key: usize,
     term: Term,
     rw_rest: BTreeMap<i64, Clause>,
@@ -21,6 +25,7 @@ impl SubtermOcc {
     #[must_use]
     pub fn new(term: &Term) -> Self {
         Self {
+            term_order: term.entry_no(),
             term_key: term_identity_id(term),
             term: term.clone(),
             rw_rest: BTreeMap::new(),
@@ -98,13 +103,15 @@ impl PartialOrd for SubtermOcc {
 
 impl Ord for SubtermOcc {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.term_key.cmp(&other.term_key)
+        self.term_order
+            .cmp(&other.term_order)
+            .then_with(|| self.term_key.cmp(&other.term_key))
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct SubtermTree {
-    entries: BTreeMap<usize, SubtermOcc>,
+    entries: BTreeMap<(i64, usize), SubtermOcc>,
 }
 
 impl SubtermTree {
@@ -126,7 +133,7 @@ impl SubtermTree {
     }
 
     pub fn insert_term(&mut self, term: &Term) -> &mut SubtermOcc {
-        match self.entries.entry(term_identity_id(term)) {
+        match self.entries.entry(subterm_key(term)) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => entry.insert(SubtermOcc::new(term)),
         }
@@ -134,15 +141,15 @@ impl SubtermTree {
 
     #[must_use]
     pub fn find_term(&self, term: &Term) -> Option<&SubtermOcc> {
-        self.entries.get(&term_identity_id(term))
+        self.entries.get(&subterm_key(term))
     }
 
     pub fn find_term_mut(&mut self, term: &Term) -> Option<&mut SubtermOcc> {
-        self.entries.get_mut(&term_identity_id(term))
+        self.entries.get_mut(&subterm_key(term))
     }
 
     pub fn delete_term(&mut self, term: &Term) -> Option<SubtermOcc> {
-        self.entries.remove(&term_identity_id(term))
+        self.entries.remove(&subterm_key(term))
     }
 
     pub fn insert_term_occ(&mut self, term: &Term, clause: &Clause, restricted: bool) -> bool {
@@ -150,7 +157,7 @@ impl SubtermTree {
     }
 
     pub fn delete_term_occ(&mut self, term: &Term, clause: &Clause, restricted: bool) -> bool {
-        let key = term_identity_id(term);
+        let key = subterm_key(term);
         let Some(entry) = self.entries.get_mut(&key) else {
             return false;
         };
@@ -168,7 +175,7 @@ impl SubtermTree {
     }
 
     pub fn delete_clause_pos(&mut self, term: &Term, clause: &Clause, pos: CompactPos) -> bool {
-        let key = term_identity_id(term);
+        let key = subterm_key(term);
         let Some(entry) = self.entries.get_mut(&key) else {
             return false;
         };
@@ -309,7 +316,7 @@ pub fn subterm_occurrences_dot_record_string<'a>(
 
 #[must_use]
 pub fn cmp_subterm_cells(left: &SubtermOcc, right: &SubtermOcc) -> i32 {
-    match left.term_key.cmp(&right.term_key) {
+    match left.cmp(right) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
@@ -324,6 +331,10 @@ fn store_clause(target: &mut BTreeMap<i64, Clause>, clause: &Clause) -> bool {
             true
         }
     }
+}
+
+fn subterm_key(term: &Term) -> (i64, usize) {
+    (term.entry_no(), term_identity_id(term))
 }
 
 #[cfg(test)]
@@ -441,18 +452,24 @@ mod tests {
     }
 
     #[test]
-    fn comparison_and_debug_output_use_identity_order_and_entry_numbers() {
+    fn comparison_uses_entry_order_then_identity_and_debug_prints_entry_numbers() {
         let left = Term::const_cell_alloc(40);
         left.set_entry_no(5);
         let right = Term::const_cell_alloc(41);
+        right.set_entry_no(7);
+        let same_entry = Term::const_cell_alloc(42);
+        same_entry.set_entry_no(5);
         let left_occ = SubtermOcc::new(&left);
         let right_occ = SubtermOcc::new(&right);
+        let same_entry_occ = SubtermOcc::new(&same_entry);
         let mut tree = SubtermTree::new();
+        tree.insert_term(&right);
         tree.insert_term(&left);
 
         assert_eq!(cmp_subterm_cells(&left_occ, &left_occ), 0);
-        assert_ne!(cmp_subterm_cells(&left_occ, &right_occ), 0);
-        assert_eq!(tree.debug_string(), "Key: 5 f_code=40\n");
+        assert_eq!(cmp_subterm_cells(&left_occ, &right_occ), -1);
+        assert_ne!(cmp_subterm_cells(&left_occ, &same_entry_occ), 0);
+        assert_eq!(tree.debug_string(), "Key: 5 f_code=40\nKey: 7 f_code=41\n");
     }
 
     #[test]
