@@ -122,18 +122,8 @@ impl EvalIndexNode {
         (self.left != NO_EVAL_INDEX_NODE).then_some(self.left)
     }
 
-    fn set_left(&mut self, left: Option<usize>) {
-        debug_assert_ne!(left, Some(NO_EVAL_INDEX_NODE));
-        self.left = left.unwrap_or(NO_EVAL_INDEX_NODE);
-    }
-
     fn right(&self) -> Option<usize> {
         (self.right != NO_EVAL_INDEX_NODE).then_some(self.right)
-    }
-
-    fn set_right(&mut self, right: Option<usize>) {
-        debug_assert_ne!(right, Some(NO_EVAL_INDEX_NODE));
-        self.right = right.unwrap_or(NO_EVAL_INDEX_NODE);
     }
 }
 
@@ -164,7 +154,11 @@ impl EvalIndexTree {
 
     fn first(&self) -> Option<&EvalIndexEntry> {
         let mut current = self.root?;
-        while let Some(left) = self.node(current).left() {
+        loop {
+            let left = self.node(current).left;
+            if left == NO_EVAL_INDEX_NODE {
+                break;
+            }
             current = left;
         }
         Some(&self.node(current).entry)
@@ -180,20 +174,20 @@ impl EvalIndexTree {
         self.root = Some(root);
         match entry.cmp(&self.node(root).entry) {
             Ordering::Less => {
-                let left = self.node(root).left();
+                let left = self.node(root).left;
                 let new_root = self.alloc_node(entry);
-                self.node_mut(new_root).set_left(left);
-                self.node_mut(new_root).set_right(Some(root));
-                self.node_mut(root).set_left(None);
+                self.node_mut(new_root).left = left;
+                self.node_mut(new_root).right = root;
+                self.node_mut(root).left = NO_EVAL_INDEX_NODE;
                 self.root = Some(new_root);
                 true
             }
             Ordering::Greater => {
-                let right = self.node(root).right();
+                let right = self.node(root).right;
                 let new_root = self.alloc_node(entry);
-                self.node_mut(new_root).set_right(right);
-                self.node_mut(new_root).set_left(Some(root));
-                self.node_mut(root).set_right(None);
+                self.node_mut(new_root).right = right;
+                self.node_mut(new_root).left = root;
+                self.node_mut(root).right = NO_EVAL_INDEX_NODE;
                 self.root = Some(new_root);
                 true
             }
@@ -212,12 +206,12 @@ impl EvalIndexTree {
         }
 
         let removed = self.nodes[root];
-        self.root = if let Some(left) = removed.left() {
-            let left = self.splay(left, entry);
-            self.node_mut(left).set_right(removed.right());
-            Some(left)
+        self.root = if removed.left == NO_EVAL_INDEX_NODE {
+            (removed.right != NO_EVAL_INDEX_NODE).then_some(removed.right)
         } else {
-            removed.right()
+            let left = self.splay(removed.left, entry);
+            self.node_mut(left).right = removed.right;
+            Some(left)
         };
         self.free.push(root);
         self.len -= 1;
