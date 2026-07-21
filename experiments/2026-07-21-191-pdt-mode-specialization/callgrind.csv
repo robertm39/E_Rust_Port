@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,cursor_exclusive,cursor_delta,cursor_percent,c_rust_ratio
+parent,11588500898,0,0.000000,1488399423,0,0.000000,2.205501
+pdt_mode_specialization,11737912191,149411293,1.289306,1401801730,-86597693,-5.818176,2.233937
