@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::basics::error::Diagnostic;
 use crate::basics::intmap::{IntMap, IntMapKey};
 use crate::basics::objmaps::size_of_obj_map_node_estimate;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::sysdate::SysDate;
 use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn_props::EqnSide;
@@ -98,6 +99,8 @@ pub struct PdtSearchState {
     term: Term,
     // Compatibility collectors still use a flat query, materialized on demand.
     query: Option<Vec<PrefixQueryCell>>,
+    // Captures C's global problem mode once for the hot token-dispatch loop.
+    first_order: bool,
     pub term_weight: i64,
     pub term_date: SysDate,
     pub traversal_order: PdtTraversalOrder,
@@ -609,6 +612,7 @@ impl PdTree {
         *self.search_state.borrow_mut() = Some(PdtSearchState {
             term: term.clone(),
             query: None,
+            first_order: problem_type() == ProblemType::FirstOrder,
             term_weight,
             term_date: age_constraint,
             traversal_order,
@@ -1348,7 +1352,11 @@ impl PdTree {
                         .query_stack
                         .last()
                         .expect("non-terminal PDTree cursor has a query term");
-                    let token = prefix_token(query_term);
+                    let token = if state.first_order {
+                        prefix_token_first_order(query_term)
+                    } else {
+                        prefix_token(query_term)
+                    };
                     if matches!(token, PrefixToken::FreeVar { .. }) {
                         continue;
                     }
@@ -1919,6 +1927,24 @@ fn prefix_token(term: &Term) -> PrefixToken {
     }
 }
 
+fn prefix_token_first_order(term: &Term) -> PrefixToken {
+    let f_code = term.f_code();
+    debug_assert!(!term.is_db_var());
+    debug_assert!(!matches!(
+        f_code,
+        SIG_PHONY_APP_CODE | SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE
+    ));
+    if f_code < 0 {
+        PrefixToken::FreeVar {
+            id: term_identity_id(term),
+            type_uid: term_type_uid(term),
+            weight: term_standard_weight(term),
+        }
+    } else {
+        PrefixToken::Fun(f_code)
+    }
+}
+
 #[cfg(test)]
 fn prefix_query_metadata(term: &Term) -> PrefixQueryMetadata {
     let f_code = term.f_code();
@@ -1995,9 +2021,10 @@ mod tests {
     use super::{
         adjusted_variable_edge_weight, normalize_pd_tree_term, prefix_code_ref_count,
         prefix_compute_term_code, prefix_match_counts, prefix_query_metadata, prefix_token,
-        term_lr_traverse_query, term_type_uid, unpack_variable_child_index, PdTree,
-        PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM,
-        PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
+        prefix_token_first_order, term_lr_traverse_query, term_type_uid,
+        unpack_variable_child_index, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
+        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
+        PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -2337,6 +2364,17 @@ mod tests {
                 usize::from(term.is_lambda() || term.is_applied_db_var())
             );
             assert_eq!(metadata.traverses_arguments, !term.is_top_level_free_var());
+        }
+    }
+
+    #[test]
+    fn first_order_prefix_token_matches_general_term_classification() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let constant = typed_const(&mut bank, "pdt_fo_token_a");
+        let variable = typed_var(&bank, -171);
+
+        for term in [constant, variable] {
+            assert_eq!(prefix_token_first_order(&term), prefix_token(&term));
         }
     }
 
