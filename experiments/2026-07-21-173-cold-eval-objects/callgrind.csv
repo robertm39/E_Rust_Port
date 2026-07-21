@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,splay_exclusive,node_bytes,processed_clauses
+parent,12525374625,0,0.0000,368087119,48,4873
+cold_object_arena,12565960720,40586095,0.3240,378459393,40,4873
