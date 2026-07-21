@@ -103,10 +103,12 @@ impl Substitution {
     /// precondition for `VarBankGetFreshVar`.
     pub fn norm_term(&mut self, term: &Term, vars: &VarBank) -> usize {
         let previous = self.len();
-        let mut stack = std::mem::take(&mut self.norm_stack);
-        debug_assert!(stack.is_empty(), "normalization scratch must be empty");
-        stack.push(term.clone());
-        while let Some(candidate) = stack.pop() {
+        debug_assert!(
+            self.norm_stack.is_empty(),
+            "normalization scratch must be empty"
+        );
+        self.norm_stack.push(term.clone());
+        while let Some(candidate) = self.norm_stack.pop() {
             let mut deref = DerefType::Always;
             let current = term_deref(&candidate, &mut deref);
             if current.is_free_var() {
@@ -119,11 +121,10 @@ impl Substitution {
             } else {
                 let arguments = current.arguments();
                 for argument in arguments.iter().rev().flatten() {
-                    stack.push(argument.clone());
+                    self.norm_stack.push(argument.clone());
                 }
             }
         }
-        self.norm_stack = stack;
         previous
     }
 
