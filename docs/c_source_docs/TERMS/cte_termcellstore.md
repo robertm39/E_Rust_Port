@@ -105,6 +105,7 @@ Source files reviewed: `TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`.
 - Term code. Term sharing, banks, variable conventions, type banks, and substitution/unification behavior are core semantic constraints.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- C `TermCellHash` reads arity and the first two argument pointers directly from the cell. Rust now matches that ownership shape with one immutable argument-slice borrow and borrowed identity reads, rather than repeated `RefCell` borrows plus temporary `Rc` clones. Exact hash, proof, constrained-resource, full-matrix, and 0.9435% Callgrind evidence are retained in [`experiment 174`](../../../experiments/2026-07-21-174-borrowed-term-hash/FINDINGS.md).
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 

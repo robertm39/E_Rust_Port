@@ -170,13 +170,18 @@ impl TermCellStore {
 #[must_use]
 pub fn term_cell_hash(term: &Term) -> usize {
     let mut hash = f_code_hash_bits(term.f_code());
-    if term.arity() >= 1 {
-        let arg = term.argument(0).expect("unary term hash requires arg 0");
-        hash ^= term_identity_id(&arg) >> 3;
+    let arguments = term.arguments();
+    if !arguments.is_empty() {
+        let arg = arguments[0]
+            .as_ref()
+            .expect("unary term hash requires arg 0");
+        hash ^= term_identity_id(arg) >> 3;
     }
-    if term.arity() >= 2 {
-        let arg = term.argument(1).expect("n-ary term hash requires arg 1");
-        hash ^= term_identity_id(&arg) >> 4;
+    if arguments.len() >= 2 {
+        let arg = arguments[1]
+            .as_ref()
+            .expect("n-ary term hash requires arg 1");
+        hash ^= term_identity_id(arg) >> 4;
     }
     hash & TERM_STORE_HASH_MASK
 }
@@ -221,6 +226,15 @@ mod tests {
             term_cell_hash(&unary),
             (4 ^ (crate::terms::termtypes::term_identity_id(&arg) >> 3)) & TERM_STORE_HASH_MASK
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "unary term hash requires arg 0")]
+    fn hashing_rejects_uninitialized_argument_slots() {
+        let types = TypeBank::new();
+        let term = Term::top_alloc(4, 1);
+        term.set_type(Some(types.i_type()));
+        let _ = term_cell_hash(&term);
     }
 
     #[test]
