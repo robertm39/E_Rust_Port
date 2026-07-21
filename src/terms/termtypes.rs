@@ -979,7 +979,14 @@ fn deref_step(term: &Term) -> Option<Term> {
 
 fn deref_always_step(term: &Term) -> Option<Term> {
     if !term.is_free_var() {
-        return deref_step(term);
+        if term.is_applied_free_var()
+            && term
+                .argument(0)
+                .is_some_and(|head| head.binding().is_some())
+        {
+            return Some(deref_applied_free_var_no_cache(term));
+        }
+        return None;
     }
     let binding = term.borrow_binding();
     let next = binding.as_ref()?;
