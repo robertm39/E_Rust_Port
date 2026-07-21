@@ -1416,7 +1416,11 @@ impl PdTree {
                     ) {
                         continue;
                     }
-                    advance_symbol_query(&mut cursor);
+                    if state.first_order {
+                        advance_first_order_symbol_query(&mut cursor);
+                    } else {
+                        advance_symbol_query(&mut cursor);
+                    }
                     let terminal_position = if cursor.query_stack.is_empty() {
                         self.nodes[next_index].terminal_entries.len()
                     } else {
@@ -1712,6 +1716,26 @@ fn advance_symbol_query(cursor: &mut PdtSubstCursor) {
     cursor.query_steps.push(PdtQueryStep {
         term,
         expanded_children,
+    });
+}
+
+fn advance_first_order_symbol_query(cursor: &mut PdtSubstCursor) {
+    let term = cursor
+        .query_stack
+        .pop()
+        .expect("symbol traversal requires a pending query term");
+    let arity = term.arity();
+    let arguments = term.arguments();
+    for index in (0..arity).rev() {
+        let argument = arguments[index]
+            .clone()
+            .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        cursor.query_stack.push(argument);
+    }
+    drop(arguments);
+    cursor.query_steps.push(PdtQueryStep {
+        term,
+        expanded_children: arity,
     });
 }
 
@@ -2070,12 +2094,12 @@ mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        adjusted_variable_edge_weight, normalize_pd_tree_term, prefix_code_ref_count,
-        prefix_compute_term_code, prefix_match_counts, prefix_query_metadata, prefix_token,
-        prefix_token_first_order, term_lr_traverse_query, term_type_uid,
-        unpack_variable_child_index, PdTree, PdtIndexedOccurrence, PdtTraversalOrder, PrefixToken,
-        CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE,
-        PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
+        adjusted_variable_edge_weight, advance_first_order_symbol_query, normalize_pd_tree_term,
+        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
+        prefix_query_metadata, prefix_token, prefix_token_first_order, term_lr_traverse_query,
+        term_type_uid, unpack_variable_child_index, PdTree, PdtIndexedOccurrence, PdtSubstCursor,
+        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
+        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -2644,6 +2668,23 @@ mod tests {
         assert!(cursor.frames.is_empty());
         assert!(cursor.query_steps.is_empty());
         assert_eq!(cursor.query_stack, vec![query]);
+    }
+
+    #[test]
+    fn first_order_symbol_expansion_preserves_left_to_right_stack_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let left = typed_const(&mut bank, "pdt_fo_expand_left");
+        let right = typed_const(&mut bank, "pdt_fo_expand_right");
+        let root = typed_binary(&mut bank, "pdt_fo_expand_root", &left, &right);
+        let mut cursor = PdtSubstCursor::new();
+        cursor.query_stack.push(root.clone());
+
+        advance_first_order_symbol_query(&mut cursor);
+
+        assert_eq!(cursor.query_stack, vec![right, left]);
+        assert_eq!(cursor.query_steps.len(), 1);
+        assert_eq!(cursor.query_steps[0].term, root);
+        assert_eq!(cursor.query_steps[0].expanded_children, 2);
     }
 
     #[test]
