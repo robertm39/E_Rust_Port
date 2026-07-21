@@ -776,6 +776,17 @@ pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
     term_deref_if_changed(term, deref).unwrap_or_else(|| term.clone())
 }
 
+/// Fully dereference a term without routing through the mutable dereference-
+/// mode dispatcher.
+#[must_use]
+pub(crate) fn term_deref_always(term: &Term) -> Term {
+    debug_assert!(
+        term.is_top_level_any_var() || term.binding().is_none(),
+        "only variables may have active bindings"
+    );
+    term_deref_always_if_changed(term).unwrap_or_else(|| term.clone())
+}
+
 /// Dereference an owned term without cloning it when dereferencing makes no
 /// change.
 #[must_use]
@@ -790,11 +801,7 @@ pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Optio
         "only variables may have active bindings"
     );
     if *deref == DerefType::Always {
-        let mut current = deref_always_step(term)?;
-        while let Some(next) = deref_always_step(&current) {
-            current = next;
-        }
-        return Some(current);
+        return term_deref_always_if_changed(term);
     }
 
     if *deref == DerefType::Never {
@@ -808,6 +815,14 @@ pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Optio
     }
 
     *deref = DerefType::Never;
+    Some(current)
+}
+
+fn term_deref_always_if_changed(term: &Term) -> Option<Term> {
+    let mut current = deref_always_step(term)?;
+    while let Some(next) = deref_always_step(&current) {
+        current = next;
+    }
     Some(current)
 }
 
@@ -1328,6 +1343,7 @@ mod tests {
         let mut always = DerefType::Always;
         assert_eq!(super::term_deref(&variables[0], &mut always), terminal);
         assert_eq!(always, DerefType::Always);
+        assert_eq!(super::term_deref_always(&variables[0]), terminal);
 
         let mut once = DerefType::Once;
         assert_eq!(super::term_deref(&variables[0], &mut once), variables[1]);

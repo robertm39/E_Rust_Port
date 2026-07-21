@@ -4,7 +4,7 @@ use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_create_prefix;
 use crate::terms::termtypes::{
-    term_deref, DerefType, Term, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
+    term_deref, term_deref_always, DerefType, Term, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
 };
 use crate::terms::termvars::VarBank;
 
@@ -109,8 +109,7 @@ impl Substitution {
         );
         self.norm_stack.push(term.clone());
         while let Some(candidate) = self.norm_stack.pop() {
-            let mut deref = DerefType::Always;
-            let current = term_deref(&candidate, &mut deref);
+            let current = term_deref_always(&candidate);
             if current.is_free_var() {
                 if !current.query_prop(TP_SPECIAL_FLAG) {
                     let type_ = current.type_().expect("free variable must have a type");
