@@ -1261,12 +1261,15 @@ impl PdTree {
     }
 
     pub fn search_next_matching_occurrence(&self) -> Option<PdtIndexedOccurrence> {
-        if self.search_cursor.borrow().is_none() {
-            let occurrences = self.search_matching_occurrences()?;
-            *self.search_cursor.borrow_mut() = Some(PdtOccurrenceCursor::new(occurrences));
+        if !self.search_state.borrow().as_ref()?.first_order {
+            if self.search_cursor.borrow().is_none() {
+                let occurrences = self.search_matching_occurrences()?;
+                *self.search_cursor.borrow_mut() = Some(PdtOccurrenceCursor::new(occurrences));
+            }
+            return self.search_cursor.borrow_mut().as_mut()?.next();
         }
 
-        self.search_cursor.borrow_mut().as_mut()?.next()
+        self.search_next_matching_occurrence_impl(None)
     }
 
     /// Returns the next first-order indexed match while keeping its bindings
@@ -1275,33 +1278,43 @@ impl PdTree {
     /// # Panics
     ///
     /// Panics if the live `PDTree` variable-edge metadata is internally inconsistent.
+    pub fn search_next_matching_occurrence_with_subst(
+        &self,
+        subst: &mut Substitution,
+    ) -> Option<PdtIndexedOccurrence> {
+        self.search_next_matching_occurrence_impl(Some(subst))
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "Keeps the cursor traversal and backtracking state machine together"
     )]
-    pub fn search_next_matching_occurrence_with_subst(
+    fn search_next_matching_occurrence_impl(
         &self,
-        subst: &mut Substitution,
+        mut subst: Option<&mut Substitution>,
     ) -> Option<PdtIndexedOccurrence> {
         let state = self.search_state.borrow();
         let state = state.as_ref()?;
         let mut cursor = self.search_subst_cursor.borrow_mut();
         if !cursor.initialized {
+            let base_subst = subst.as_deref().map_or(0, Substitution::len);
             cursor.start(
                 &state.term,
                 state.term_weight,
-                subst.len(),
+                base_subst,
                 self.variable_child_heads[0],
             );
             if !self.node_satisfies_constraints(0, state.term_weight, state.term_date) {
                 pop_subst_cursor_frame(&mut cursor);
             }
         }
-        debug_assert!(
-            subst.len() >= cursor.base_subst,
-            "PDTree cursor substitution was externally backtracked"
-        );
-        subst.backtrack_to_pos(cursor.base_subst);
+        if let Some(subst) = subst.as_deref_mut() {
+            debug_assert!(
+                subst.len() >= cursor.base_subst,
+                "PDTree cursor substitution was externally backtracked"
+            );
+            subst.backtrack_to_pos(cursor.base_subst);
+        }
 
         loop {
             let frame_index = cursor.frames.len().checked_sub(1)?;
@@ -1317,17 +1330,19 @@ impl PdTree {
                 if let Some(occurrence) =
                     self.nodes[node_index].terminal_entries[terminal_position - 1].occurrence
                 {
-                    for binding in &cursor.bindings {
-                        let variable = self.variable_children[binding.variable_child]
-                            .variable
-                            .as_ref()
-                            .expect("live PDTree variable edge has a term");
-                        let query_term = &cursor.query_steps[binding.query_step].term;
-                        debug_assert!(
-                            variable.binding().is_none(),
-                            "speculative PDTree binding leaked into the shared term"
-                        );
-                        subst.add_binding(variable, query_term);
+                    if let Some(subst) = subst.as_deref_mut() {
+                        for binding in &cursor.bindings {
+                            let variable = self.variable_children[binding.variable_child]
+                                .variable
+                                .as_ref()
+                                .expect("live PDTree variable edge has a term");
+                            let query_term = &cursor.query_steps[binding.query_step].term;
+                            debug_assert!(
+                                variable.binding().is_none(),
+                                "speculative PDTree binding leaked into the shared term"
+                            );
+                            subst.add_binding(variable, query_term);
+                        }
                     }
                     return Some(occurrence);
                 }
@@ -2488,14 +2503,55 @@ mod tests {
         assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
         assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
         tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        tree.search_state
+            .borrow_mut()
+            .as_mut()
+            .expect("recorded search has state")
+            .first_order = true;
 
         assert_eq!(tree.search_next_matching_occurrence(), Some(general));
+        assert_eq!(variable.binding(), None);
         assert_eq!(tree.search_next_matching_occurrence(), Some(specific));
+        assert_eq!(variable.binding(), None);
         assert_eq!(tree.search_next_matching_occurrence(), None);
 
         tree.record_search_exit();
 
         assert_eq!(tree.search_next_matching_occurrence(), None);
+    }
+
+    #[test]
+    fn matching_occurrence_cursor_respects_existing_indexed_binding() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let query = typed_const(&mut bank, "pdt_cursor_bound_query");
+        let other = typed_const(&mut bank, "pdt_cursor_bound_other");
+        let variable = typed_var(&bank, -127);
+        let specific = PdtIndexedOccurrence::new(102, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(103, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+        let mut existing = Substitution::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
+        let indexed_variable = tree
+            .variable_children
+            .iter()
+            .find_map(|child| child.variable.clone())
+            .expect("variable occurrence creates a live variable edge");
+        existing.add_binding(&indexed_variable, &other);
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        tree.search_state
+            .borrow_mut()
+            .as_mut()
+            .expect("recorded search has state")
+            .first_order = true;
+
+        assert_eq!(tree.search_next_matching_occurrence(), Some(specific));
+        assert_eq!(tree.search_next_matching_occurrence(), None);
+        assert_eq!(indexed_variable.binding(), Some(other));
+
+        tree.record_search_exit();
+        existing.backtrack();
     }
 
     #[test]
