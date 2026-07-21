@@ -207,7 +207,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for term-sharing key verification on 2026-07-13.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for shared-subterm traversal ownership on 2026-07-21.
 
 Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 
@@ -235,6 +235,7 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - `TBPrintTerm` reaches conventional term printing through `TermPrint(..., DEREF_NEVER)`. Rust keeps the compact/DAG bank printers in this module and adds explicit term-bank writers for the currently ported first-order and higher-order conventional term surfaces, including first-order FOOL/`$let` rendering and higher-order FOOL/lambda rendering, rather than reading process-global `problemType`.
 - `TBPrintBankInOrder` is represented by entry-number-ordered Rust writers, including an explicit `TBPrintInternalInfo` property-comment mode used by the ported `term2dag` executable.
 - `TBStorage` estimates one dynamic term-cell block per shared non-variable term plus one term-pointer unit per stored argument under C's constant-memory branch. Rust now exposes this same estimate from the term-bank owner for proof-state cleanup-limit accounting.
+- `TBTermCollectSubterms` marks each new shared node with `TPOpFlag`, pushes its pointer, and recurses directly over `term->args`. Rust now matches that ownership shape with one immutable argument-slice borrow per visited parent and clones only the handle retained by the owned collector. Exact proof, constrained-resource, full-matrix, and 2.2366% Callgrind evidence are retained in [`experiment 176`](../../../experiments/2026-07-21-176-borrowed-subterm-collection/FINDINGS.md).
 - `TBTermTopInsert` treats an applied free variable that `NormalizePatternAppVar` accepts as one variable for `v_count`, `f_count`, and weight, while still setting `TPHasAppVar` and leaving `TPHasNonPatternVar` clear. Rust mirrors this metadata branch for already-normalized applied free variables whose visible arguments are DB variables and pass the C-shaped duplicate check.
 - `tb_termtop_insert` expresses its top-cell, lambda/application, shared-child, inferred-type, computed-weight, groundness, and post-insertion lookup invariants as C assertions. The normal upstream build defines `NDEBUG`, so Rust keeps the corresponding checks as `debug_assert!`; this avoids scanning and cloning arguments plus repeating a term-store lookup on millions of release insertions while retaining the checks in debug builds.
 - `TBInsertOpt` assumes ground terms are already shared and, in higher-order `DEREF_ALWAYS` mode, C reaches dereferencing through `WHNF_deref`. Rust currently keeps the no-WHNF insertion path explicit but shares unshared ground terms exposed by applied-variable dereferencing so the bank invariant still holds for lambda-headed applications.

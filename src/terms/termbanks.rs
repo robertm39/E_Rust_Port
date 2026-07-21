@@ -4225,8 +4225,9 @@ pub fn tb_term_collect_subterms(term: &Term, collector: &mut PStack<Term>) -> i6
     let mut count = 1;
     term.set_prop(TP_OP_FLAG);
     collector.push(term.clone());
-    for arg in term.argument_clones().into_iter().flatten() {
-        count += tb_term_collect_subterms(&arg, collector);
+    let arguments = term.arguments();
+    for arg in arguments.iter().flatten() {
+        count += tb_term_collect_subterms(arg, collector);
     }
     count
 }
@@ -7729,13 +7730,14 @@ mod tests {
 
     #[test]
     fn collect_subterms_sets_op_flag_and_skips_existing_marks() {
-        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let (mut bank, f_code) = bank_with_symbol("f", 2);
         let a_code = bank.signature_mut().insert_id("a", 0, false);
         let i_type = bank.signature().type_bank().i_type();
         bank.signature_mut().declare_type(a_code, i_type).unwrap();
         let a = bank.create_const_term(a_code).unwrap();
-        let f = Term::top_alloc(f_code, 1);
+        let f = Term::top_alloc(f_code, 2);
         f.set_argument(0, a.clone());
+        f.set_argument(1, a.clone());
         let shared = bank.insert(&f, DerefType::Never).unwrap();
         let mut collector = PStack::new();
 
