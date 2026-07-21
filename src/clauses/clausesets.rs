@@ -111,25 +111,29 @@ impl Ord for EvalIndexEntry {
 #[derive(Clone, Copy, Debug)]
 struct EvalIndexNode {
     entry: EvalIndexEntry,
-    left: Option<NonZeroUsize>,
-    right: Option<NonZeroUsize>,
+    left: usize,
+    right: usize,
 }
+
+const NO_EVAL_INDEX_NODE: usize = usize::MAX;
 
 impl EvalIndexNode {
     fn left(&self) -> Option<usize> {
-        self.left.map(unpack_eval_index_node)
+        (self.left != NO_EVAL_INDEX_NODE).then_some(self.left)
     }
 
     fn set_left(&mut self, left: Option<usize>) {
-        self.left = left.map(pack_eval_index_node);
+        debug_assert_ne!(left, Some(NO_EVAL_INDEX_NODE));
+        self.left = left.unwrap_or(NO_EVAL_INDEX_NODE);
     }
 
     fn right(&self) -> Option<usize> {
-        self.right.map(unpack_eval_index_node)
+        (self.right != NO_EVAL_INDEX_NODE).then_some(self.right)
     }
 
     fn set_right(&mut self, right: Option<usize>) {
-        self.right = right.map(pack_eval_index_node);
+        debug_assert_ne!(right, Some(NO_EVAL_INDEX_NODE));
+        self.right = right.unwrap_or(NO_EVAL_INDEX_NODE);
     }
 }
 
@@ -231,8 +235,8 @@ impl EvalIndexTree {
     fn alloc_node(&mut self, entry: EvalIndexEntry) -> usize {
         let node = EvalIndexNode {
             entry,
-            left: None,
-            right: None,
+            left: NO_EVAL_INDEX_NODE,
+            right: NO_EVAL_INDEX_NODE,
         };
         self.len += 1;
         if let Some(index) = self.free.pop() {
@@ -362,17 +366,6 @@ impl<'tree> Iterator for EvalIndexIter<'tree> {
         self.current = self.tree.node(next).right();
         Some(&self.tree.node(next).entry)
     }
-}
-
-fn pack_eval_index_node(index: usize) -> NonZeroUsize {
-    let encoded = index
-        .checked_add(1)
-        .expect("evaluation index handle space exhausted");
-    NonZeroUsize::new(encoded).expect("encoded evaluation index handle must be nonzero")
-}
-
-fn unpack_eval_index_node(index: NonZeroUsize) -> usize {
-    index.get() - 1
 }
 
 type ClauseSlot = usize;
