@@ -216,12 +216,50 @@ struct TermLinks {
 }
 
 #[derive(Debug)]
+enum TermArgs {
+    Empty,
+    One([Option<Term>; 2]),
+    Two([Option<Term>; 2]),
+    Heap(Box<[Option<Term>]>),
+}
+
+impl TermArgs {
+    fn new(arity: usize) -> Self {
+        match arity {
+            0 => Self::Empty,
+            1 => Self::One(std::array::from_fn(|_| None)),
+            2 => Self::Two(std::array::from_fn(|_| None)),
+            _ => Self::Heap(vec![None; arity].into_boxed_slice()),
+        }
+    }
+
+    fn as_slice(&self) -> &[Option<Term>] {
+        match self {
+            Self::Empty => &[],
+            Self::One(args) => &args[..1],
+            Self::Two(args) => args,
+            Self::Heap(args) => args,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [Option<Term>] {
+        match self {
+            Self::Empty => &mut [],
+            Self::One(args) => &mut args[..1],
+            Self::Two(args) => args,
+            Self::Heap(args) => args,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct TermCell {
     f_code: Cell<FunCode>,
     properties: Cell<TermProperties>,
-    // Term arity is fixed after allocation, so a boxed slice avoids Vec's
-    // unused capacity word while retaining the safe mutation boundary.
-    args: RefCell<Box<[Option<Term>]>>,
+    // Term arity is fixed after allocation. The overwhelmingly common unary
+    // and binary cells keep their argument slots in the Rc allocation; larger
+    // cells retain the boxed-slice fallback.
+    args: RefCell<TermArgs>,
     // C stores these five nullable pointers inline in TermCell. One shared
     // interior-mutation boundary preserves that compact shape without unsafe
     // access or one borrow flag per pointer.
@@ -297,7 +335,7 @@ impl Term {
 
     #[must_use]
     pub fn arity(&self) -> usize {
-        self.0.args.borrow().len()
+        self.0.args.borrow().as_slice().len()
     }
 
     #[must_use]
@@ -311,7 +349,13 @@ impl Term {
 
     #[must_use]
     pub fn argument(&self, index: usize) -> Option<Term> {
-        self.0.args.borrow().get(index).cloned().flatten()
+        self.0
+            .args
+            .borrow()
+            .as_slice()
+            .get(index)
+            .cloned()
+            .flatten()
     }
 
     /// Assigns an argument slot.
@@ -333,6 +377,7 @@ impl Term {
     pub fn set_argument_opt(&self, index: usize, arg: Option<Term>) {
         let mut args = self.0.args.borrow_mut();
         let slot = args
+            .as_mut_slice()
             .get_mut(index)
             .unwrap_or_else(|| panic!("term argument index {index} out of bounds"));
         *slot = arg;
@@ -341,17 +386,17 @@ impl Term {
     /// Borrows the argument slots without cloning their reference-counted terms.
     #[must_use]
     pub fn arguments(&self) -> Ref<'_, [Option<Term>]> {
-        Ref::map(self.0.args.borrow(), |args| args.as_ref())
+        Ref::map(self.0.args.borrow(), TermArgs::as_slice)
     }
 
     /// Mutably borrows the argument slots without cloning their terms.
     pub(crate) fn arguments_mut(&self) -> RefMut<'_, [Option<Term>]> {
-        RefMut::map(self.0.args.borrow_mut(), |args| args.as_mut())
+        RefMut::map(self.0.args.borrow_mut(), TermArgs::as_mut_slice)
     }
 
     #[must_use]
     pub fn argument_clones(&self) -> Vec<Option<Term>> {
-        self.0.args.borrow().to_vec()
+        self.0.args.borrow().as_slice().to_vec()
     }
 
     #[must_use]
@@ -690,7 +735,7 @@ impl Term {
         Self(Rc::new(TermCell {
             f_code: Cell::new(0),
             properties: Cell::new(TP_IGNORE_PROPS),
-            args: RefCell::new(vec![None; arity].into_boxed_slice()),
+            args: RefCell::new(TermArgs::new(arity)),
             links: RefCell::new(TermLinks::default()),
             entry_no: Cell::new(0),
             weight: Cell::new(0),
@@ -1146,11 +1191,16 @@ mod tests {
             std::mem::size_of::<Term>()
         );
         assert_eq!(std::mem::size_of::<super::TermLinks>(), 40);
+        assert_eq!(std::mem::size_of::<super::TermArgs>(), 24);
         assert_eq!(
             std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
             48
         );
-        assert_eq!(std::mem::size_of::<super::TermCell>(), 144);
+        assert_eq!(
+            std::mem::size_of::<std::cell::RefCell<super::TermArgs>>(),
+            32
+        );
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 152);
 
         let term = Term::const_cell_alloc(1);
         let binding = Term::const_cell_alloc(2);
@@ -1171,6 +1221,33 @@ mod tests {
         assert_eq!(term.type_(), Some(type_));
         assert_eq!(term.take_left_son(), Some(left));
         assert_eq!(term.take_right_son(), Some(right));
+    }
+
+    #[test]
+    fn term_arguments_use_inline_slots_and_heap_fallback() {
+        for arity in 0..=4 {
+            let term = Term::default_cell_arity_alloc(arity);
+            assert_eq!(term.arity(), arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                term.set_argument(index, Term::const_cell_alloc(code));
+            }
+            assert_eq!(term.arguments().len(), arity);
+            assert_eq!(term.argument_clones().len(), arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                assert_eq!(term.argument(index).unwrap().f_code(), code);
+            }
+
+            let args = term.0.args.borrow();
+            assert!(matches!(
+                (&*args, arity),
+                (super::TermArgs::Empty, 0)
+                    | (super::TermArgs::One(_), 1)
+                    | (super::TermArgs::Two(_), 2)
+                    | (super::TermArgs::Heap(_), 3..)
+            ));
+        }
     }
 
     #[test]
