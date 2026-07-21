@@ -206,8 +206,11 @@ pub struct PdTree {
 
 #[derive(Clone, Debug, PartialEq)]
 struct PdNode {
+    // Mirrors C's split `f_alternatives` and object-map alternatives. Keeping
+    // function edges out of this ordered map avoids duplicating every common
+    // first-order edge in two search structures.
     children: BTreeMap<PrefixToken, usize>,
-    fun_alternatives: IntMap<()>,
+    fun_alternatives: IntMap<usize>,
     ref_count: usize,
     terminal_count: usize,
     terminal_entries: Vec<PdTerminalEntry>,
@@ -374,6 +377,30 @@ impl Default for PdNode {
             size_constr: PDTREE_IGNORE_TERM_WEIGHT,
             age_constr: SysDate::creation_time(),
         }
+    }
+}
+
+impl PdNode {
+    #[inline]
+    fn child_index(&self, token: PrefixToken) -> Option<usize> {
+        match token {
+            PrefixToken::Fun(code) => self
+                .fun_alternatives
+                .get_val_const(fun_code_key(code))
+                .copied(),
+            PrefixToken::FreeVar { .. } | PrefixToken::DbLike(_) => {
+                self.children.get(&token).copied()
+            }
+        }
+    }
+
+    fn child_indices(&self) -> Vec<usize> {
+        self.fun_alternatives
+            .entries()
+            .into_iter()
+            .map(|(_, child_index)| *child_index)
+            .chain(self.children.values().copied())
+            .collect()
     }
 }
 
@@ -847,23 +874,21 @@ impl PdTree {
 
         for (token, indexed_variable) in path {
             let parent_index = node_index;
-            self.select_alt_ref_for_insert(parent_index, token);
-            let next_index =
-                if let Some(existing) = self.nodes[parent_index].children.get(&token).copied() {
-                    existing
-                } else {
-                    let created = self.nodes.len();
-                    self.nodes.push(PdNode::default());
-                    self.variable_child_heads.push(PDT_NO_VARIABLE_CHILD);
-                    self.nodes[parent_index].children.insert(token, created);
-                    self.live_node_count += 1;
-                    self.arr_storage_estimate = self.arr_storage_estimate.saturating_add(
-                        self.nodes[created]
-                            .fun_alternatives
-                            .constant_mem_storage_estimate(),
-                    );
-                    created
-                };
+            let next_index = if let Some(existing) = self.nodes[parent_index].child_index(token) {
+                existing
+            } else {
+                let created = self.nodes.len();
+                self.nodes.push(PdNode::default());
+                self.variable_child_heads.push(PDT_NO_VARIABLE_CHILD);
+                self.insert_child(parent_index, token, created);
+                self.live_node_count += 1;
+                self.arr_storage_estimate = self.arr_storage_estimate.saturating_add(
+                    self.nodes[created]
+                        .fun_alternatives
+                        .constant_mem_storage_estimate(),
+                );
+                created
+            };
             if let Some(variable) = indexed_variable {
                 self.link_variable_child(parent_index, next_index, token, variable);
             }
@@ -1022,7 +1047,7 @@ impl PdTree {
         let mut path = Vec::with_capacity(code.len());
 
         for token in code {
-            let Some(next_index) = self.nodes[node_index].children.get(token).copied() else {
+            let Some(next_index) = self.nodes[node_index].child_index(*token) else {
                 return false;
             };
             path.push((node_index, *token, next_index));
@@ -1078,12 +1103,12 @@ impl PdTree {
                     self.arr_storage_estimate = self
                         .arr_storage_estimate
                         .saturating_sub(size_of_obj_map_node_estimate());
+                    self.nodes[parent_index].children.remove(&token);
                 }
             }
             if matches!(token, PrefixToken::FreeVar { .. }) {
                 self.unlink_variable_child(parent_index, dead_index);
             }
-            self.nodes[parent_index].children.remove(&token);
             self.nodes[dead_index].children.clear();
             self.nodes[dead_index].fun_alternatives = IntMap::new();
             self.nodes[dead_index].terminal_count = 0;
@@ -1107,29 +1132,26 @@ impl PdTree {
         true
     }
 
-    fn select_alt_ref_for_insert(&mut self, node_index: usize, token: PrefixToken) {
+    fn insert_child(&mut self, node_index: usize, token: PrefixToken, child_index: usize) {
         match token {
             PrefixToken::Fun(code) => {
                 let before = self.nodes[node_index]
                     .fun_alternatives
                     .constant_mem_storage_estimate();
-                let slot = self.nodes[node_index]
+                self.nodes[node_index]
                     .fun_alternatives
-                    .get_ref(fun_code_key(code));
-                if slot.is_none() {
-                    *slot = Some(());
-                }
+                    .assign(fun_code_key(code), child_index);
                 let after = self.nodes[node_index]
                     .fun_alternatives
                     .constant_mem_storage_estimate();
                 self.apply_arr_storage_delta(before, after);
             }
             PrefixToken::FreeVar { .. } | PrefixToken::DbLike(_) => {
-                if !self.nodes[node_index].children.contains_key(&token) {
-                    self.arr_storage_estimate = self
-                        .arr_storage_estimate
-                        .saturating_add(size_of_obj_map_node_estimate());
-                }
+                let replaced = self.nodes[node_index].children.insert(token, child_index);
+                debug_assert!(replaced.is_none());
+                self.arr_storage_estimate = self
+                    .arr_storage_estimate
+                    .saturating_add(size_of_obj_map_node_estimate());
             }
         }
     }
@@ -1151,7 +1173,7 @@ impl PdTree {
             }
         }
 
-        let child_indices: Vec<_> = self.nodes[node_index].children.values().copied().collect();
+        let child_indices = self.nodes[node_index].child_indices();
         for child_index in child_indices {
             size_constr = size_constr.min(self.nodes[child_index].size_constr);
             age_constr = age_constr.maximum(self.nodes[child_index].age_constr);
@@ -1218,7 +1240,7 @@ impl PdTree {
                 remains += 1;
                 continue;
             };
-            if let Some(next_index) = self.nodes[node_index].children.get(token).copied() {
+            if let Some(next_index) = self.nodes[node_index].child_index(*token) {
                 matched += 1;
                 current = Some(next_index);
             } else {
@@ -1234,7 +1256,7 @@ impl PdTree {
     pub fn prefix_ref_count(&self, code: &[PrefixToken]) -> usize {
         let mut node_index = 0;
         for token in code {
-            let Some(next_index) = self.nodes[node_index].children.get(token).copied() else {
+            let Some(next_index) = self.nodes[node_index].child_index(*token) else {
                 return 0;
             };
             node_index = next_index;
@@ -1375,8 +1397,7 @@ impl PdTree {
                     if matches!(token, PrefixToken::FreeVar { .. }) {
                         continue;
                     }
-                    let Some(next_index) = self.nodes[node_index].children.get(&token).copied()
-                    else {
+                    let Some(next_index) = self.nodes[node_index].child_index(token) else {
                         continue;
                     };
                     self.record_nodes_visited(1);
@@ -1539,7 +1560,7 @@ impl PdTree {
     ) {
         let token = state.query()[query_index].token();
         if !matches!(token, PrefixToken::FreeVar { .. }) {
-            if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
+            if let Some(next_index) = self.nodes[node_index].child_index(token) {
                 self.record_nodes_visited(1);
                 self.collect_matching_occurrences(
                     next_index,
@@ -1640,10 +1661,9 @@ impl PdTree {
         let token = query[query_index].token();
         if !matches!(token, PrefixToken::FreeVar { .. })
             && self.nodes[node_index]
-                .children
-                .get(&token)
+                .child_index(token)
                 .is_some_and(|next_index| {
-                    self.node_may_have_matchable_path(*next_index, query_index + 1, query)
+                    self.node_may_have_matchable_path(next_index, query_index + 1, query)
                 })
         {
             return true;
@@ -2985,11 +3005,7 @@ mod tests {
         ));
         tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
         let state = tree.search_state().unwrap();
-        let root_child_index = tree.nodes[0]
-            .children
-            .get(&state.query()[0].token())
-            .copied()
-            .unwrap();
+        let root_child_index = tree.nodes[0].child_index(state.query()[0].token()).unwrap();
         let (variable_weight, variable_child_index) = tree.nodes[root_child_index]
             .children
             .iter()
@@ -3074,6 +3090,8 @@ mod tests {
 
         assert_eq!(tree.node_count(), 2);
         assert_eq!(tree.term_count(), 1);
+        assert!(tree.nodes[0].children.is_empty());
+        assert_eq!(tree.nodes[0].child_index(PrefixToken::Fun(1)), Some(1));
         assert_eq!(tree.arr_storage_estimate(), 2 * INTMAPCELL_MEM);
         assert_eq!(
             tree.storage_estimate(),

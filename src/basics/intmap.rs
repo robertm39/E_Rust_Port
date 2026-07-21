@@ -117,6 +117,40 @@ impl<V: Clone> IntMap<V> {
         }
     }
 
+    /// Return the value for `key` without reproducing C's range-array growth
+    /// on a lookup below the current array offset.
+    #[must_use]
+    #[inline]
+    pub fn get_val_const(&self, key: IntMapKey) -> Option<&V> {
+        match &self.repr {
+            IntMapRepr::Empty => None,
+            IntMapRepr::Single {
+                key: single_key,
+                value,
+            } => {
+                if *single_key == key {
+                    value.as_ref()
+                } else {
+                    None
+                }
+            }
+            IntMapRepr::Array(array) => {
+                if key <= self.max_key {
+                    array.existing_element(key).and_then(Option::as_ref)
+                } else {
+                    None
+                }
+            }
+            IntMapRepr::Tree(tree) => {
+                if key <= self.max_key {
+                    tree.get(&key).and_then(Option::as_ref)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Return a mutable slot for `key`, creating an empty slot if needed.
     ///
     /// # Panics
@@ -576,6 +610,23 @@ mod tests {
         assert_eq!(map.get_val(9), None);
 
         assert!(map.storage_estimate() > before_storage);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        assert_eq!(map.entry_count_estimate(), 2);
+    }
+
+    #[test]
+    fn const_lookup_below_array_range_does_not_grow_storage() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        assert_eq!(map.map_type(), IntMapType::Array);
+        let before_storage = map.storage_estimate();
+
+        assert_eq!(map.get_val_const(9), None);
+        assert_eq!(map.get_val_const(10), Some(&"ten"));
+
+        assert_eq!(map.storage_estimate(), before_storage);
         assert_eq!(map.min_key(), Some(10));
         assert_eq!(map.max_key(), Some(11));
         assert_eq!(map.entry_count_estimate(), 2);
