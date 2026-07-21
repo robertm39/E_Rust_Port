@@ -261,7 +261,7 @@ struct PdtTraversalFrame {
     node_index: usize,
     effective_term_weight: i64,
     binding_pos: usize,
-    next_step: usize,
+    next_step: u8,
     next_variable_child: u32,
     terminal_position: usize,
 }
@@ -2427,6 +2427,12 @@ mod tests {
         for term in [constant, variable] {
             assert_eq!(prefix_token_first_order(&term), prefix_token(&term));
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn traversal_frame_keeps_two_state_cursor_compact() {
+        assert_eq!(std::mem::size_of::<super::PdtTraversalFrame>(), 40);
     }
 
     #[test]
