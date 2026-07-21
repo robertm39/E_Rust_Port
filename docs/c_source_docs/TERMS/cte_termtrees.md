@@ -84,7 +84,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for store-owned-link performance review on 2026-07-11.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for store-owned-link performance review on 2026-07-11; updated for direct comparator-result consumption on 2026-07-21.
 
 Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 
@@ -98,6 +98,7 @@ Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- C term-tree callers consume only the sign of `TermTopCompare`. Rust now keeps the public signed-result contract but lets its private find/insert/extract/splay path consume `Ordering` directly, preserving function-code, higher-order type-address, arity, and argument-address order while removing the repeated signed-result comparison. Exact LUSK6 work falls 0.3184%, with comparator, splay, and insertion reductions plus exact proof/resource/full-matrix evidence retained in [`experiment 182`](../../../experiments/2026-07-21-182-term-tree-ordering/FINDINGS.md).
 
 ### Change Later
 

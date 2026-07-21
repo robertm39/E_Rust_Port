@@ -28,7 +28,8 @@ impl TermTree {
         if let Some(root) = self.root.take() {
             let problem_type = problem_type();
             let root = splay_term_tree(root, key, problem_type);
-            let found = (term_top_compare_for_problem(&root, key, problem_type) == 0)
+            let found = term_top_order_for_problem(&root, key, problem_type)
+                .is_eq()
                 .then_some(root.clone());
             self.root = Some(root);
             found
@@ -46,8 +47,7 @@ impl TermTree {
 
         let problem_type = problem_type();
         let root = splay_term_tree(root, &new, problem_type);
-        let cmp = term_top_compare_for_problem(&new, &root, problem_type);
-        match cmp.cmp(&0) {
+        match term_top_order_for_problem(&new, &root, problem_type) {
             Ordering::Less => {
                 new.set_left_son(root.left_son());
                 new.set_right_son(Some(root.clone()));
@@ -73,7 +73,7 @@ impl TermTree {
         let root = self.root.take()?;
         let problem_type = problem_type();
         let root = splay_term_tree(root, key, problem_type);
-        if term_top_compare_for_problem(key, &root, problem_type) != 0 {
+        if !term_top_order_for_problem(key, &root, problem_type).is_eq() {
             self.root = Some(root);
             return None;
         }
@@ -138,16 +138,24 @@ pub fn term_top_compare(left: &Term, right: &Term) -> i64 {
 /// The C function encodes the first-order preconditions as assertions.
 #[must_use]
 pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: ProblemType) -> i64 {
-    let mut result = left.f_code() - right.f_code();
-    if result != 0 {
+    match term_top_order_for_problem(left, right, problem_type) {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+fn term_top_order_for_problem(left: &Term, right: &Term, problem_type: ProblemType) -> Ordering {
+    let mut result = left.f_code().cmp(&right.f_code());
+    if result != Ordering::Equal {
         return result;
     }
 
     if problem_type == ProblemType::HigherOrder {
         let left_type = left.type_().expect("term top comparison requires types");
         let right_type = right.type_().expect("term top comparison requires types");
-        result = i64::from(type_identity_cmp(&left_type, &right_type));
-        if result != 0 {
+        result = type_identity_cmp(&left_type, &right_type).cmp(&0);
+        if result != Ordering::Equal {
             return result;
         }
     } else {
@@ -165,9 +173,8 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
 
     let left_arguments = left.arguments();
     let right_arguments = right.arguments();
-    result = i64::try_from(left_arguments.len()).unwrap_or(i64::MAX)
-        - i64::try_from(right_arguments.len()).unwrap_or(i64::MAX);
-    if result != 0 {
+    result = left_arguments.len().cmp(&right_arguments.len());
+    if result != Ordering::Equal {
         return result;
     }
 
@@ -178,8 +185,8 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
         let right_argument = right_argument
             .as_ref()
             .expect("term top comparison requires initialized arguments");
-        result = i64::from(term_identity_cmp(left_argument, right_argument));
-        if result != 0 {
+        result = term_identity_cmp(left_argument, right_argument).cmp(&0);
+        if result != Ordering::Equal {
             return result;
         }
     }
@@ -193,13 +200,12 @@ fn splay_term_tree(mut tree: Term, key: &Term, problem_type: ProblemType) -> Ter
     let mut right_tail: Option<Term> = None;
 
     loop {
-        let cmp = term_top_compare_for_problem(key, &tree, problem_type);
-        match cmp.cmp(&0) {
+        match term_top_order_for_problem(key, &tree, problem_type) {
             Ordering::Less => {
                 let Some(mut next) = tree.take_left_son() else {
                     break;
                 };
-                if term_top_compare_for_problem(key, &next, problem_type) < 0 {
+                if term_top_order_for_problem(key, &next, problem_type) == Ordering::Less {
                     let tmp = next;
                     tree.set_left_son(tmp.take_right_son());
                     tmp.set_right_son(Some(tree));
@@ -221,7 +227,7 @@ fn splay_term_tree(mut tree: Term, key: &Term, problem_type: ProblemType) -> Ter
                 let Some(mut next) = tree.take_right_son() else {
                     break;
                 };
-                if term_top_compare_for_problem(key, &next, problem_type) > 0 {
+                if term_top_order_for_problem(key, &next, problem_type) == Ordering::Greater {
                     let tmp = next;
                     tree.set_right_son(tmp.take_left_son());
                     tmp.set_left_son(Some(tree));
