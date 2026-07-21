@@ -359,6 +359,11 @@ impl Term {
         self.0.links.borrow().binding.clone()
     }
 
+    #[must_use]
+    fn borrow_binding(&self) -> Ref<'_, Option<Term>> {
+        Ref::map(self.0.links.borrow(), |links| &links.binding)
+    }
+
     pub fn set_binding(&self, binding: Option<Term>) {
         self.0.links.borrow_mut().binding = binding;
     }
@@ -740,8 +745,8 @@ pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Optio
         "only variables may have active bindings"
     );
     if *deref == DerefType::Always {
-        let mut current = deref_step(term)?;
-        while let Some(next) = deref_step(&current) {
+        let mut current = deref_always_step(term)?;
+        while let Some(next) = deref_always_step(&current) {
             current = next;
         }
         return Some(current);
@@ -910,6 +915,19 @@ fn deref_step(term: &Term) -> Option<Term> {
         return Some(deref_applied_free_var_no_cache(term));
     }
     None
+}
+
+fn deref_always_step(term: &Term) -> Option<Term> {
+    if !term.is_free_var() {
+        return deref_step(term);
+    }
+    let binding = term.borrow_binding();
+    let next = binding.as_ref()?;
+    if !next.is_free_var() {
+        return Some(next.clone());
+    }
+    let next_binding = next.borrow_binding();
+    Some(next_binding.as_ref().unwrap_or(next).clone())
 }
 
 fn deref_applied_free_var_no_cache(term: &Term) -> Term {
@@ -1214,6 +1232,29 @@ mod tests {
             Some(binding)
         );
         assert_eq!(deref, DerefType::Always);
+    }
+
+    #[test]
+    fn deref_always_borrows_long_free_variable_chains() {
+        let variables: Vec<_> = (1_i64..=20)
+            .map(|index| Term::const_cell_alloc(-2 * index))
+            .collect();
+        let terminal = Term::const_cell_alloc(5);
+        for pair in variables.windows(2) {
+            pair[0].set_binding(Some(pair[1].clone()));
+        }
+        variables
+            .last()
+            .unwrap()
+            .set_binding(Some(terminal.clone()));
+
+        let mut always = DerefType::Always;
+        assert_eq!(super::term_deref(&variables[0], &mut always), terminal);
+        assert_eq!(always, DerefType::Always);
+
+        let mut once = DerefType::Once;
+        assert_eq!(super::term_deref(&variables[0], &mut once), variables[1]);
+        assert_eq!(once, DerefType::Never);
     }
 
     #[test]
