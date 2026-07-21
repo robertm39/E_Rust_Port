@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,cursor_exclusive,proof_clauses
+parent,12557467650,0,0.0000,1582253858,4873
+inner_variable_scan,12665478810,108011160,0.8601,1689973180,4873
