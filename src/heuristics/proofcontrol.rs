@@ -1773,8 +1773,9 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
             if let Some(indices) = watchlist_indices.as_deref_mut() {
                 indices.insert_clause(&mut handle, terms, control.heuristic_parms().lambda_demod);
             }
-            watchlist.indexed_insert_clause_owned_with_bank(handle, terms)?;
-            simplified += 1;
+            if watchlist.indexed_insert_clause_owned_with_bank(handle, terms)? {
+                simplified += 1;
+            }
         }
     }
 
@@ -4253,14 +4254,21 @@ pub fn proof_state_insert_processed_clause(
 ) -> Result<ProcessedClauseClass, Diagnostic> {
     let fresh_vars = state.fresh_vars().clone();
     clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
-    proof_state_insert_normalized_processed_clause(state, clause, clause_date)
+    proof_state_try_insert_normalized_processed_clause(state, clause, clause_date)?.ok_or_else(
+        || {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "time limit expired before processed-clause insertion",
+            )
+        },
+    )
 }
 
-fn proof_state_insert_normalized_processed_clause(
+fn proof_state_try_insert_normalized_processed_clause(
     state: &mut ProofState,
     mut clause: Clause,
     clause_date: SysDate,
-) -> Result<ProcessedClauseClass, Diagnostic> {
+) -> Result<Option<ProcessedClauseClass>, Diagnostic> {
     clause.set_date(clause_date);
     clause.set_prop(CP_LIMITED_RW);
     clause.set_weight(clause.standard_weight());
@@ -4288,32 +4296,28 @@ fn proof_state_insert_normalized_processed_clause(
     };
 
     let (terms, processed_sets) = state.terms_and_processed_sets_mut();
-    match class {
+    let inserted = match class {
         ProcessedClauseClass::PositiveRule => {
             processed_sets.pos_rules.set_date(clause_date);
             processed_sets
                 .pos_rules
-                .indexed_insert_clause_owned_with_bank(clause, terms)?;
+                .indexed_insert_clause_owned_with_bank(clause, terms)?
         }
         ProcessedClauseClass::PositiveEquation => {
             processed_sets.pos_eqns.set_date(clause_date);
             processed_sets
                 .pos_eqns
-                .indexed_insert_clause_owned_with_bank(clause, terms)?;
+                .indexed_insert_clause_owned_with_bank(clause, terms)?
         }
-        ProcessedClauseClass::NegativeUnit => {
-            processed_sets
-                .neg_units
-                .indexed_insert_clause_owned_with_bank(clause, terms)?;
-        }
-        ProcessedClauseClass::NonUnit => {
-            processed_sets
-                .non_units
-                .indexed_insert_clause_owned_with_bank(clause, terms)?;
-        }
-    }
+        ProcessedClauseClass::NegativeUnit => processed_sets
+            .neg_units
+            .indexed_insert_clause_owned_with_bank(clause, terms)?,
+        ProcessedClauseClass::NonUnit => processed_sets
+            .non_units
+            .indexed_insert_clause_owned_with_bank(clause, terms)?,
+    };
 
-    Ok(class)
+    Ok(inserted.then_some(class))
 }
 
 /// Selects and extracts the next unprocessed clause with the active HCB.
@@ -7578,7 +7582,12 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     renamed_clause.set_ident(clause.ident());
 
     let processed_ident = clause.ident();
-    let class = proof_state_insert_normalized_processed_clause(state, clause, clause_date)?;
+    let Some(class) =
+        proof_state_try_insert_normalized_processed_clause(state, clause, clause_date)?
+    else {
+        debug_assert!(time_is_up());
+        return Ok(ProcessClauseOutcome::ContractedAway);
+    };
     if let Some(indices) = indices.as_deref_mut() {
         proof_state_global_index_processed_clause(
             state,
@@ -18779,6 +18788,34 @@ mod tests {
             assert!(found.query_prop(CP_LIMITED_RW));
             assert_eq!(found.weight(), found.standard_weight());
         }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn processed_clause_page_rejection_reports_time_limit_instead_of_missing_clause() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        for ident in 0..512 {
+            let mut clause = Clause::empty();
+            clause.set_ident(ident);
+            assert!(state.processed_non_units_mut().insert(clause));
+        }
+
+        configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
+        let mut rejected = Clause::empty();
+        rejected.set_ident(4_092);
+        let class = super::proof_state_try_insert_normalized_processed_clause(
+            &mut state,
+            rejected,
+            SysDate::from_raw(29),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(class, None);
+        assert_eq!(state.processed_non_units().members(), 512);
+        assert!(super::time_is_up());
     }
 
     #[test]

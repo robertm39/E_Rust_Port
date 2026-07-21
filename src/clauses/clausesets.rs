@@ -1460,7 +1460,7 @@ impl ClauseSet {
         Ok(count)
     }
 
-    pub fn insert(&mut self, mut clause: Clause) {
+    pub fn insert(&mut self, mut clause: Clause) -> bool {
         self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
         #[cfg(not(target_os = "linux"))]
@@ -1470,20 +1470,20 @@ impl ClauseSet {
                 && ((clause_page_memory_headroom_is_exhausted() && expire_active_time_limit_now())
                     || expire_time_limit_if_within(CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC))
             {
-                return;
+                return false;
             }
             if allocates_page {
                 // Reserve before evaluation indexing can consume the memory
                 // headroom that the allocation guard just measured.
                 if !self.clauses.try_reserve_next_push_capacity() && expire_active_time_limit_now()
                 {
-                    return;
+                    return false;
                 }
             }
             if !self.try_reserve_evaluation_insert_capacity(&clause)
                 && expire_active_time_limit_now()
             {
-                return;
+                return false;
             }
         }
         self.literals += usize_to_i64(clause.literal_number());
@@ -1509,6 +1509,7 @@ impl ClauseSet {
                 .entry(derivation_ref)
                 .or_insert(slot);
         }
+        true
     }
 
     pub fn insert_set(&mut self, source: &mut Self) -> i64 {
@@ -1552,12 +1553,11 @@ impl ClauseSet {
         &mut self,
         clause: Clause,
         bank: &mut TermBank,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<bool, Diagnostic> {
         let mut clause = clause;
         self.index_clause_demodulator_with_bank(&mut clause, bank)?;
         let clause = indexed_clause_for_anchor(clause, self.fv_anchor.as_mut(), bank);
-        self.insert(clause);
-        Ok(())
+        Ok(self.insert(clause))
     }
 
     pub fn indexed_insert_clause_set(
@@ -1599,7 +1599,9 @@ impl ClauseSet {
         let mut moved = 0;
         while let Some(mut clause) = source.extract_first() {
             clause.set_weight(clause.standard_weight());
-            self.indexed_insert_clause_owned_with_bank(clause, bank)?;
+            if !self.indexed_insert_clause_owned_with_bank(clause, bank)? {
+                break;
+            }
             moved += 1;
         }
         Ok(moved)
@@ -3185,7 +3187,7 @@ mod tests {
         assert!(node_capacities.iter().all(|capacity| *capacity > 0));
         assert!(object_capacity > 0);
 
-        set.insert(clause);
+        assert!(set.insert(clause));
 
         assert_eq!(set.eval_object_slots.len(), 1);
         assert_eq!(set.eval_object_slots.capacity(), object_capacity);
@@ -3321,7 +3323,7 @@ mod tests {
         }
 
         configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
-        set.insert(Clause::empty());
+        assert!(!set.insert(Clause::empty()));
 
         assert_eq!(set.len(), SPARSE_STORE_CHUNK_SIZE);
         assert!(time_is_up());

@@ -548,7 +548,9 @@ pub fn clause_set_split_clauses(
             None => clause_split(bank, None, clause, how, fresh_defs),
         }?;
         match outcome {
-            ClauseSplitOutcome::Unsplit(clause) => to_set.insert(*clause),
+            ClauseSplitOutcome::Unsplit(clause) => {
+                to_set.insert(*clause);
+            }
             ClauseSplitOutcome::Split(clauses, count) => {
                 result += usize_to_i64(count);
                 for clause in clauses {
@@ -601,7 +603,9 @@ pub fn clause_set_split_clauses_general(
             None => clause_split_general_search(bank, None, clause, tries, fresh_defs),
         }?;
         match outcome {
-            ClauseSplitOutcome::Unsplit(clause) => to_set.insert(*clause),
+            ClauseSplitOutcome::Unsplit(clause) => {
+                to_set.insert(*clause);
+            }
             ClauseSplitOutcome::Split(clauses, count) => {
                 result += usize_to_i64(count);
                 for clause in clauses {

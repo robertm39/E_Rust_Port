@@ -4102,29 +4102,34 @@ impl TermBank {
         let mut v_count = 0_u32;
         let mut f_count = u32::from(!term.is_phony_app());
         let mut weight = DEFAULT_FWEIGHT * i64::from(f_count);
-        for (index, arg) in term.argument_clones().into_iter().enumerate() {
-            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            term.set_prop(arg.give_props(TP_IS_BETA_REDUCIBLE));
-            term.set_prop(arg.give_props(TP_HAS_DB_SUBTERM));
-            term.set_prop(arg.give_props(TP_HAS_EQ_NEQ_SYM));
-            term.set_prop(arg.give_props(TP_HAS_BOOL_SUBTERM));
-            if arg.type_().is_some_and(|type_| type_.is_bool()) {
-                term.set_prop(TP_HAS_BOOL_SUBTERM);
-            }
-            term.set_prop(arg.give_props(TP_HAS_LAMBDA_SUBTERM));
-            if (!(term.is_phony_app() || term.is_lambda())) || index != 0 {
-                term.set_prop(arg.give_props(TP_HAS_ETA_EXPANDABLE_SUBTERM));
-            }
-            term.set_prop(arg.give_props(TP_HAS_NON_PATTERN_VAR));
-            term.set_prop(arg.give_props(TP_HAS_APP_VAR));
+        {
+            let arguments = term.arguments();
+            for (index, arg) in arguments.iter().enumerate() {
+                let arg = arg
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                term.set_prop(arg.give_props(TP_IS_BETA_REDUCIBLE));
+                term.set_prop(arg.give_props(TP_HAS_DB_SUBTERM));
+                term.set_prop(arg.give_props(TP_HAS_EQ_NEQ_SYM));
+                term.set_prop(arg.give_props(TP_HAS_BOOL_SUBTERM));
+                if arg.type_().is_some_and(|type_| type_.is_bool()) {
+                    term.set_prop(TP_HAS_BOOL_SUBTERM);
+                }
+                term.set_prop(arg.give_props(TP_HAS_LAMBDA_SUBTERM));
+                if (!(term.is_phony_app() || term.is_lambda())) || index != 0 {
+                    term.set_prop(arg.give_props(TP_HAS_ETA_EXPANDABLE_SUBTERM));
+                }
+                term.set_prop(arg.give_props(TP_HAS_NON_PATTERN_VAR));
+                term.set_prop(arg.give_props(TP_HAS_APP_VAR));
 
-            if arg.is_free_var() {
-                v_count += 1;
-                weight += DEFAULT_VWEIGHT;
-            } else {
-                v_count += arg.v_count();
-                f_count += arg.f_count();
-                weight += arg.weight();
+                if arg.is_free_var() {
+                    v_count += 1;
+                    weight += DEFAULT_VWEIGHT;
+                } else {
+                    v_count += arg.v_count();
+                    f_count += arg.f_count();
+                    weight += arg.weight();
+                }
             }
         }
 
@@ -6966,6 +6971,16 @@ mod tests {
         variable.set_type(Some(bank.signature().type_bank().i_type()));
 
         let _ = bank.term_top_insert(variable);
+    }
+
+    #[test]
+    #[should_panic(expected = "term argument 0 is uninitialized")]
+    fn top_insert_metadata_rejects_uninitialized_arguments() {
+        let (bank, f_code) = bank_with_symbol("f", 1);
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bank.signature().type_bank().i_type()));
+
+        bank.set_top_insert_metadata(&term);
     }
 
     #[test]
