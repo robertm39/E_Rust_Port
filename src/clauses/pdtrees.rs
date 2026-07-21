@@ -94,10 +94,21 @@ impl Default for PdtTraversalOrder {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PdtSearchState {
-    query: Vec<PrefixQueryCell>,
+    // C keeps only the query root in `tree->term` and traverses it lazily.
+    term: Term,
+    // Compatibility collectors still use a flat query, materialized on demand.
+    query: Option<Vec<PrefixQueryCell>>,
     pub term_weight: i64,
     pub term_date: SysDate,
     pub traversal_order: PdtTraversalOrder,
+}
+
+impl PdtSearchState {
+    fn query(&self) -> &[PrefixQueryCell] {
+        self.query
+            .as_deref()
+            .expect("PDTree query must be materialized for compatibility traversal")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -220,6 +231,9 @@ struct PdtNormalizedOccurrence {
 struct PdtSubstCursor {
     frames: Vec<PdtTraversalFrame>,
     bindings: Vec<PdtCursorBinding>,
+    // Mirrors C's `term_stack` and `term_proc` without borrowing caller state.
+    query_stack: Vec<Term>,
+    query_steps: Vec<PdtQueryStep>,
     base_subst: usize,
     initialized: bool,
 }
@@ -227,13 +241,18 @@ struct PdtSubstCursor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PdtCursorBinding {
     variable_child: usize,
-    query_index: usize,
+    query_step: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtQueryStep {
+    term: Term,
+    expanded_children: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PdtTraversalFrame {
     node_index: usize,
-    query_index: usize,
     effective_term_weight: i64,
     binding_pos: usize,
     next_step: usize,
@@ -275,14 +294,24 @@ impl PdtSubstCursor {
         Self {
             frames: Vec::new(),
             bindings: Vec::new(),
+            query_stack: Vec::new(),
+            query_steps: Vec::new(),
             base_subst: 0,
             initialized: false,
         }
     }
 
-    fn start(&mut self, term_weight: i64, base_subst: usize, first_variable_child: u32) {
+    fn start(
+        &mut self,
+        term: &Term,
+        term_weight: i64,
+        base_subst: usize,
+        first_variable_child: u32,
+    ) {
+        debug_assert!(self.query_stack.is_empty());
+        debug_assert!(self.query_steps.is_empty());
+        self.query_stack.push(term.clone());
         self.frames.push(PdtTraversalFrame::new(
-            0,
             0,
             term_weight,
             0,
@@ -296,6 +325,8 @@ impl PdtSubstCursor {
     fn reset(&mut self) {
         self.frames.clear();
         self.bindings.clear();
+        self.query_stack.clear();
+        self.query_steps.clear();
         self.initialized = false;
     }
 }
@@ -303,7 +334,6 @@ impl PdtSubstCursor {
 impl PdtTraversalFrame {
     const fn new(
         node_index: usize,
-        query_index: usize,
         effective_term_weight: i64,
         binding_pos: usize,
         first_variable_child: u32,
@@ -311,7 +341,6 @@ impl PdtTraversalFrame {
     ) -> Self {
         Self {
             node_index,
-            query_index,
             effective_term_weight,
             binding_pos,
             next_step: 0,
@@ -518,11 +547,12 @@ impl PdTree {
 
     #[must_use]
     pub fn search_root_may_have_matchable_path(&self) -> bool {
+        self.ensure_search_query();
         let state = self.search_state.borrow();
         let Some(state) = state.as_ref() else {
             return true;
         };
-        self.query_may_have_matchable_path(&state.query)
+        self.query_may_have_matchable_path(state.query())
     }
 
     #[must_use]
@@ -532,6 +562,7 @@ impl PdTree {
 
     #[must_use]
     pub fn search_state(&self) -> Option<PdtSearchState> {
+        self.ensure_search_query();
         self.search_state.borrow().clone()
     }
 
@@ -571,16 +602,13 @@ impl PdTree {
             "PDTreeSearchExit recycles the previous query before the next search"
         );
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
-        let query = self.build_search_query(term);
-        let term_weight = query
-            .first()
-            .expect("PDTree search query contains its root term")
-            .weight();
+        let term_weight = term_standard_weight(term);
         self.search_traversal_order.set(traversal_order);
         self.search_term_weight.set(term_weight);
         self.search_term_date.set(age_constraint);
         *self.search_state.borrow_mut() = Some(PdtSearchState {
-            query,
+            term: term.clone(),
+            query: None,
             term_weight,
             term_date: age_constraint,
             traversal_order,
@@ -589,6 +617,26 @@ impl PdTree {
         self.search_subst_cursor.borrow_mut().reset();
         self.search_active.set(true);
         self.record_search_attempt();
+    }
+
+    fn ensure_search_query(&self) {
+        let term = {
+            let state = self.search_state.borrow();
+            let Some(state) = state.as_ref() else {
+                return;
+            };
+            if state.query.is_some() {
+                return;
+            }
+            state.term.clone()
+        };
+        let query = self.build_search_query(&term);
+        let mut state = self.search_state.borrow_mut();
+        let state = state
+            .as_mut()
+            .expect("active PDTree search state must survive query construction");
+        debug_assert!(state.query.is_none());
+        state.query = Some(query);
     }
 
     /// Initializes a search after applying C's `PDTree` eta-normalization rule.
@@ -670,10 +718,13 @@ impl PdTree {
         let Some(mut state) = self.search_state.borrow_mut().take() else {
             return;
         };
-        state.query.clear();
+        let Some(mut query) = state.query.take() else {
+            return;
+        };
+        query.clear();
         let mut scratch = self.search_query_scratch.borrow_mut();
         debug_assert!(scratch.is_empty(), "PDTree query scratch has one owner");
-        *scratch = state.query;
+        *scratch = query;
     }
 
     #[inline]
@@ -1189,6 +1240,7 @@ impl PdTree {
 
     #[must_use]
     pub fn search_matching_occurrences(&self) -> Option<Vec<PdtIndexedOccurrence>> {
+        self.ensure_search_query();
         let state = self.search_state.borrow();
         let state = state.as_ref()?;
         let mut occurrences = Vec::new();
@@ -1231,7 +1283,12 @@ impl PdTree {
         let state = state.as_ref()?;
         let mut cursor = self.search_subst_cursor.borrow_mut();
         if !cursor.initialized {
-            cursor.start(state.term_weight, subst.len(), self.variable_child_heads[0]);
+            cursor.start(
+                &state.term,
+                state.term_weight,
+                subst.len(),
+                self.variable_child_heads[0],
+            );
             if !self.node_satisfies_constraints(0, state.term_weight, state.term_date) {
                 pop_subst_cursor_frame(&mut cursor);
             }
@@ -1245,9 +1302,8 @@ impl PdTree {
         loop {
             let frame_index = cursor.frames.len().checked_sub(1)?;
             let node_index = cursor.frames[frame_index].node_index;
-            let query_index = cursor.frames[frame_index].query_index;
 
-            if query_index == state.query.len() {
+            if cursor.query_stack.is_empty() {
                 let terminal_position = cursor.frames[frame_index].terminal_position;
                 if terminal_position == 0 {
                     pop_subst_cursor_frame(&mut cursor);
@@ -1262,7 +1318,7 @@ impl PdTree {
                             .variable
                             .as_ref()
                             .expect("live PDTree variable edge has a term");
-                        let query_term = &state.query[binding.query_index].term;
+                        let query_term = &cursor.query_steps[binding.query_step].term;
                         debug_assert!(
                             variable.binding().is_none(),
                             "speculative PDTree binding leaked into the shared term"
@@ -1288,7 +1344,11 @@ impl PdTree {
             match step {
                 PdtTraversalStep::Symbols => {
                     cursor.frames[frame_index].next_step += 1;
-                    let token = state.query[query_index].token();
+                    let query_term = cursor
+                        .query_stack
+                        .last()
+                        .expect("non-terminal PDTree cursor has a query term");
+                    let token = prefix_token(query_term);
                     if matches!(token, PrefixToken::FreeVar { .. }) {
                         continue;
                     }
@@ -1305,8 +1365,8 @@ impl PdTree {
                     ) {
                         continue;
                     }
-                    let next_query_index = query_index + 1;
-                    let terminal_position = if next_query_index == state.query.len() {
+                    advance_symbol_query(&mut cursor);
+                    let terminal_position = if cursor.query_stack.is_empty() {
                         self.nodes[next_index].terminal_entries.len()
                     } else {
                         0
@@ -1314,7 +1374,6 @@ impl PdTree {
                     let binding_pos = cursor.bindings.len();
                     cursor.frames.push(PdtTraversalFrame::new(
                         next_index,
-                        next_query_index,
                         effective_term_weight,
                         binding_pos,
                         self.variable_child_heads[next_index],
@@ -1331,41 +1390,37 @@ impl PdTree {
                     cursor.frames[frame_index].next_variable_child = variable_child.next_sibling;
                     let next_index = variable_child.node_index;
                     let variable = variable_child.variable.as_ref()?;
-                    if state.query[query_index].type_uid() != variable_child.type_uid {
-                        continue;
-                    }
-                    let next_query_index =
-                        query_index.saturating_add(state.query[query_index].span);
-                    if next_query_index > state.query.len() {
+                    let query_term = cursor
+                        .query_stack
+                        .last()
+                        .expect("non-terminal PDTree cursor has a query term");
+                    if term_type_uid(query_term) != variable_child.type_uid {
                         continue;
                     }
                     let binding_pos = cursor.bindings.len();
-                    let query_term = &state.query[query_index].term;
-                    let matched = if let Some(bound_query_index) =
+                    let (matched, adds_binding) = if let Some(bound_query_step) =
                         cursor.bindings.iter().rev().find_map(|binding| {
                             let candidate = self.variable_children[binding.variable_child]
                                 .variable
                                 .as_ref()?;
-                            (candidate == variable).then_some(binding.query_index)
+                            (candidate == variable).then_some(binding.query_step)
                         }) {
-                        state.query[bound_query_index].term == *query_term
+                        (
+                            cursor.query_steps[bound_query_step].term == *query_term,
+                            false,
+                        )
                     } else if let Some(bound) = variable.binding() {
-                        bound == *query_term
+                        (bound == *query_term, false)
                     } else {
-                        cursor.bindings.push(PdtCursorBinding {
-                            variable_child: variable_index,
-                            query_index,
-                        });
-                        true
+                        (true, true)
                     };
                     if !matched {
-                        cursor.bindings.truncate(binding_pos);
                         continue;
                     }
                     self.record_nodes_visited(1);
                     let effective_term_weight = adjusted_variable_edge_weight(
                         cursor.frames[frame_index].effective_term_weight,
-                        state.query[query_index].weight(),
+                        term_standard_weight(query_term),
                         variable_child.weight,
                     );
                     if !self.node_satisfies_constraints(
@@ -1373,17 +1428,22 @@ impl PdTree {
                         effective_term_weight,
                         state.term_date,
                     ) {
-                        cursor.bindings.truncate(binding_pos);
                         continue;
                     }
-                    let terminal_position = if next_query_index == state.query.len() {
+                    let query_step = advance_variable_query(&mut cursor);
+                    if adds_binding {
+                        cursor.bindings.push(PdtCursorBinding {
+                            variable_child: variable_index,
+                            query_step,
+                        });
+                    }
+                    let terminal_position = if cursor.query_stack.is_empty() {
                         self.nodes[next_index].terminal_entries.len()
                     } else {
                         0
                     };
                     cursor.frames.push(PdtTraversalFrame::new(
                         next_index,
-                        next_query_index,
                         effective_term_weight,
                         binding_pos,
                         self.variable_child_heads[next_index],
@@ -1407,7 +1467,7 @@ impl PdTree {
             return;
         }
 
-        if query_index == state.query.len() {
+        if query_index == state.query().len() {
             for occurrence in self.nodes[node_index]
                 .terminal_entries
                 .iter()
@@ -1454,7 +1514,7 @@ impl PdTree {
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let token = state.query[query_index].token();
+        let token = state.query()[query_index].token();
         if !matches!(token, PrefixToken::FreeVar { .. }) {
             if let Some(next_index) = self.nodes[node_index].children.get(&token).copied() {
                 self.record_nodes_visited(1);
@@ -1479,8 +1539,8 @@ impl PdTree {
         bindings: &mut PdtQueryBindings,
         occurrences: &mut Vec<PdtIndexedOccurrence>,
     ) {
-        let next_query_index = query_index.saturating_add(state.query[query_index].span);
-        if next_query_index > state.query.len() {
+        let next_query_index = query_index.saturating_add(state.query()[query_index].span);
+        if next_query_index > state.query().len() {
             return;
         }
         let current = QuerySubtree {
@@ -1503,13 +1563,13 @@ impl PdTree {
                 }
             })
         {
-            if state.query[query_index].type_uid() != variable_type_uid {
+            if state.query()[query_index].type_uid() != variable_type_uid {
                 continue;
             }
             let variable_key = (variable_id, variable_type_uid, variable_weight);
             let next_effective_term_weight = adjusted_variable_edge_weight(
                 effective_term_weight,
-                state.query[query_index].weight(),
+                state.query()[query_index].weight(),
                 variable_weight,
             );
             if let Some(bound) = bindings.get(&variable_key).copied() {
@@ -1580,9 +1640,56 @@ impl PdTree {
     }
 }
 
+fn advance_symbol_query(cursor: &mut PdtSubstCursor) {
+    let term = cursor
+        .query_stack
+        .pop()
+        .expect("symbol traversal requires a pending query term");
+    let expanded_children = if term.is_top_level_free_var() {
+        0
+    } else {
+        let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
+        let arity = term.arity();
+        let arguments = term.arguments();
+        for index in (first_arg..arity).rev() {
+            let argument = arguments[index]
+                .clone()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            cursor.query_stack.push(argument);
+        }
+        arity - first_arg
+    };
+    cursor.query_steps.push(PdtQueryStep {
+        term,
+        expanded_children,
+    });
+}
+
+fn advance_variable_query(cursor: &mut PdtSubstCursor) -> usize {
+    let term = cursor
+        .query_stack
+        .pop()
+        .expect("variable traversal requires a pending query term");
+    let query_step = cursor.query_steps.len();
+    cursor.query_steps.push(PdtQueryStep {
+        term,
+        expanded_children: 0,
+    });
+    query_step
+}
+
 fn pop_subst_cursor_frame(cursor: &mut PdtSubstCursor) {
     if let Some(frame) = cursor.frames.pop() {
         cursor.bindings.truncate(frame.binding_pos);
+        if let Some(step) = cursor.query_steps.pop() {
+            for _ in 0..step.expanded_children {
+                cursor
+                    .query_stack
+                    .pop()
+                    .expect("backtracking symbol traversal restores expanded children");
+            }
+            cursor.query_stack.push(step.term);
+        }
     }
 }
 
@@ -1606,10 +1713,10 @@ fn query_subtrees_match(
     expected: QuerySubtree,
     actual: QuerySubtree,
 ) -> bool {
-    let Some(expected) = state.query.get(expected.start..expected.end) else {
+    let Some(expected) = state.query().get(expected.start..expected.end) else {
         return false;
     };
-    let Some(actual) = state.query.get(actual.start..actual.end) else {
+    let Some(actual) = state.query().get(actual.start..actual.end) else {
         return false;
     };
     expected.len() == actual.len()
@@ -2064,17 +2171,21 @@ mod tests {
         let state = tree.search_state().expect("search init stores state");
         assert_eq!(
             state
-                .query
+                .query()
                 .iter()
                 .map(super::PrefixQueryCell::token)
                 .collect::<Vec<_>>(),
             prefix_compute_term_code(&first)
         );
         assert_eq!(
-            state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
+            state
+                .query()
+                .iter()
+                .map(|cell| cell.span)
+                .collect::<Vec<_>>(),
             vec![2, 1]
         );
-        assert_eq!(state.term_weight, state.query[0].weight());
+        assert_eq!(state.term_weight, state.query()[0].weight());
         assert_eq!(state.traversal_order, PdtTraversalOrder::variables_first());
 
         tree.record_search_exit();
@@ -2104,14 +2215,18 @@ mod tests {
             .expect("search init stores replacement state");
         assert_eq!(
             state
-                .query
+                .query()
                 .iter()
                 .map(super::PrefixQueryCell::token)
                 .collect::<Vec<_>>(),
             prefix_compute_term_code(&second)
         );
         assert_eq!(
-            state.query.iter().map(|cell| cell.span).collect::<Vec<_>>(),
+            state
+                .query()
+                .iter()
+                .map(|cell| cell.span)
+                .collect::<Vec<_>>(),
             vec![3, 1, 1]
         );
         assert_eq!(state.traversal_order, PdtTraversalOrder::symbols_first());
@@ -2128,12 +2243,15 @@ mod tests {
         let tree = PdTree::new();
 
         tree.record_search_init(&large, PDTREE_IGNORE_NF_DATE, false);
+        tree.ensure_search_query();
         let large_capacity = tree
             .search_state
             .borrow()
             .as_ref()
             .expect("search init stores query")
             .query
+            .as_ref()
+            .expect("compatibility query is materialized")
             .capacity();
         tree.record_search_exit();
         assert_eq!(
@@ -2142,12 +2260,15 @@ mod tests {
         );
 
         tree.record_search_init(&small, PDTREE_IGNORE_NF_DATE, false);
+        tree.ensure_search_query();
         assert_eq!(
             tree.search_state
                 .borrow()
                 .as_ref()
                 .expect("next search reuses query storage")
                 .query
+                .as_ref()
+                .expect("compatibility query is materialized")
                 .capacity(),
             large_capacity
         );
@@ -2352,6 +2473,13 @@ mod tests {
         assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
         assert!(tree.insert_term_occurrence(&variable, SysDate::from_raw(7), general));
         tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        assert!(
+            tree.search_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.query.is_none()),
+            "substitution search must not eagerly flatten its query"
+        );
 
         assert_eq!(
             tree.search_next_matching_occurrence_with_subst(&mut subst),
@@ -2369,6 +2497,17 @@ mod tests {
             None
         );
         assert!(subst.is_empty());
+        assert!(
+            tree.search_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.query.is_none()),
+            "substitution traversal must keep the compatibility query lazy"
+        );
+        let cursor = tree.search_subst_cursor.borrow();
+        assert!(cursor.frames.is_empty());
+        assert!(cursor.query_steps.is_empty());
+        assert_eq!(cursor.query_stack, vec![query]);
     }
 
     #[test]
@@ -2754,7 +2893,7 @@ mod tests {
         let state = tree.search_state().unwrap();
         let root_child_index = tree.nodes[0]
             .children
-            .get(&state.query[0].token())
+            .get(&state.query()[0].token())
             .copied()
             .unwrap();
         let (variable_weight, variable_child_index) = tree.nodes[root_child_index]
@@ -2770,12 +2909,12 @@ mod tests {
             .unwrap();
         let adjusted_weight = adjusted_variable_edge_weight(
             state.term_weight,
-            state.query[1].weight(),
+            state.query()[1].weight(),
             variable_weight,
         );
 
         assert_eq!(state.term_weight, term_standard_weight(&query));
-        assert_eq!(state.query[1].weight(), term_standard_weight(&query_head));
+        assert_eq!(state.query()[1].weight(), term_standard_weight(&query_head));
         assert_eq!(variable_weight, term_standard_weight(&variable));
         assert!(tree.node_satisfies_constraints(
             variable_child_index,
