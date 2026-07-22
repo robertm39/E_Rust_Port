@@ -1,5 +1,5 @@
-// Unsafe remains denied by default; standards-compliant DLL/shared-library FFI
-// modules may locally allow it with documented safety invariants.
+// Unsafe remains denied by default; a narrowly scoped implementation with a
+// concrete justification and documented safety invariants may locally allow it.
 #![deny(unsafe_code)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]

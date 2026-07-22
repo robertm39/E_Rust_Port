@@ -39,20 +39,20 @@ Docs-only changes should run the Markdown link checker from `DOCS.md`.
 
 ## Unsafe Rust
 
-Unsafe Rust is prohibited except when it is necessary for interacting with external DLLs or shared libraries. This exception includes native platform libraries reached through FFI, such as libc, Win32, Winsock, Kernel32, or UCRT, when no safe Rust API can preserve the required C-compatible behavior.
+Unsafe Rust is permitted when there is a concrete reason that safe Rust cannot adequately satisfy. Valid reasons include interoperability, compatibility with the original C implementation, correctness requirements that cannot be expressed safely, and measured performance needs. Convenience alone is not sufficient. Prefer a safe design whenever it can meet the same requirements.
 
-Do not add unsafe Rust for ordinary porting work, including:
+This permission covers unsafe blocks and functions, definitions and implementations of unsafe traits, FFI, and calls to unsafe APIs exposed by dependencies. Implementing an unsafe trait is permitted when the implementation satisfies and documents every invariant required by that trait.
 
-- `unsafe` blocks
-- `unsafe fn`
-- `unsafe impl`
-- `unsafe trait`
-- Calls to unsafe APIs through wrapper code
-- Other unsafe Rust constructs
+Keep unsafe implementation details narrowly scoped and contained behind safe APIs. Every externally usable boundary must be safe and must validate, encode, or otherwise uphold the preconditions of the unsafe implementation. Internal unsafe functions may exist only within that contained implementation, with all callers required to uphold their documented contracts.
 
-Unsafe code for external DLL/shared-library interop must be narrowly scoped, document the safety invariants at the unsafe boundary, and be wrapped behind safe Rust APIs wherever practical. Keep `#![deny(unsafe_code)]` at the crate level; modules that genuinely need an external-library boundary may locally allow unsafe code only with comments naming the boundary and per-call `SAFETY:` notes.
+Every use of unsafe Rust must document both why unsafe code is justified and why it cannot result in Undefined Behavior:
 
-If a non-external-library porting task appears to require unsafe Rust, document the blocker and look for a safe design first. Do not add unsafe code outside the external-DLL/shared-library exception without a project-level standards change.
+- Put a `SAFETY:` comment immediately next to each unsafe operation or block. State the applicable invariants and explain how the code establishes them.
+- Put a `SAFETY:` comment next to each unsafe trait implementation that addresses every safety requirement imposed by the trait.
+- Give every unsafe function and unsafe trait a `# Safety` documentation section that states the caller or implementer obligations.
+- Address pointer provenance, validity, alignment, initialization, aliasing, lifetimes, thread safety, ABI contracts, and other relevant sources of Undefined Behavior rather than relying on a generic assurance.
+
+Keep `#![deny(unsafe_code)]` at the crate level. An item or module that genuinely needs unsafe Rust may use the smallest practical local `allow(unsafe_code)`, accompanied by a comment identifying the reason, the safe API boundary, and the documented invariants that make the implementation sound.
 
 ## Panics And Fatal Errors
 
@@ -90,7 +90,7 @@ Prefer the Rust standard library and small, focused crates. Add a dependency onl
 
 Before adding a crate, review and document its license, maintenance status, transitive dependency impact, feature flags, and whether it changes compatibility or deployment assumptions. Use minimal features where practical.
 
-A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. If a crate exposes unsafe APIs, keep their use out of this project unless the use is required for documented external DLL/shared-library interop or the unsafe policy is formally changed.
+A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. Calls to unsafe dependency APIs are permitted only for a concrete reason allowed by the policy above, must remain behind a safe project API, and must document why all safety requirements are upheld and Undefined Behavior cannot occur.
 
 ## Documentation Expectations
 

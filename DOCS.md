@@ -4,7 +4,7 @@ Agent-made documentation belongs in this file and in the documentation locations
 
 ## Rust Port Standards
 
-Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is prohibited except when narrowly required for interacting with external DLLs or shared libraries; this includes runtime-loaded solver libraries and native OS/CRT APIs such as libc, Win32, Winsock, Kernel32, or UCRT when the platform ABI requires FFI. Any such boundary must document its safety invariants and expose safe Rust APIs where practical.
+Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is permitted for a concrete interoperability, compatibility, correctness, or measured performance reason when safe Rust cannot adequately meet the requirement; convenience alone is not sufficient. Keep unsafe implementation details narrowly scoped and behind safe APIs. Unsafe traits and their implementations are permitted, but every unsafe operation, function, trait, and implementation must document the applicable safety invariants and explain why Undefined Behavior cannot occur.
 
 Implemented Rust-port history and compatibility evidence are recorded in [`docs/rust-port-status.md`](docs/rust-port-status.md). Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`; use `bd ready`, `bd list`, and `bd search` to inspect current status.
 

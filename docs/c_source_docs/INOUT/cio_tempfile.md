@@ -99,7 +99,7 @@ Source files reviewed: `INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`.
 ### Compatibility Notes
 
 - C's registry retains caller-owned path pointers and orders them by string content; Rust stores owned `PathBuf` copies in a content-keyed set. Production callers observe registration only through removal or process-wide cleanup, so pointer identity and tree shape are not part of executable behavior.
-- C `mkstemp` and Rust `OpenOptions::create_new` both atomically create and close an empty file before registration. Rust explicitly requests Unix mode `0o600`, matching `mkstemp`'s owner-only contract while avoiding a non-DLL unsafe boundary.
+- C `mkstemp` and Rust `OpenOptions::create_new` both atomically create and close an empty file before registration. Rust explicitly requests Unix mode `0o600`, matching `mkstemp`'s owner-only contract while avoiding an unnecessary unsafe native-API boundary.
 - Explicit removal unlinks first and unregisters only after success in both ports. Registry-wide cleanup removes every registration even after an unlink warning, and the signal layer invokes it once for the first SIGTERM/SIGINT termination outcome.
 - `TempFileCreate` preserves the registered file on copy/open failure so the termination cleanup owner can still attempt removal, matching the C lifetime boundary.
 

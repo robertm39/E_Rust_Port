@@ -111,7 +111,7 @@ Source files reviewed: `INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`.
 
 - C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this in the low-level helper API even on Windows, while scanner file opening now applies a narrow Windows-native path normalization before C-style default-directory/include resolution; keep any broader path-aware behavior at explicit executable or scanner boundaries instead of changing these compatibility helpers.
 - C `FileExists` is a race-prone readability probe implemented by opening the path. Rust keeps the same observable "can open for reading" meaning; avoid replacing it with metadata-only existence checks in compatibility paths.
-- C `InputClose` calls `fclose()` and can turn close-time input errors into fatal diagnostics. Rust currently drops owned input files through safe ownership to stay within the unsafe-Rust policy; if a future `FILE*` bridge or safe descriptor-close API is introduced, re-audit whether close-time read diagnostics are observable enough to preserve.
+- C `InputClose` calls `fclose()` and can turn close-time input errors into fatal diagnostics. Rust currently drops owned input files because safe ownership preserves the required observable behavior without an unsafe `FILE*` bridge; if a future bridge or explicit descriptor-close API is introduced, re-audit whether close-time read diagnostics are observable enough to preserve.
 
 ### Porting Focus
 
