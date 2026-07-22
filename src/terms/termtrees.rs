@@ -49,16 +49,14 @@ impl TermTree {
         let root = splay_term_tree(root, &new, problem_type);
         match term_top_order_for_problem(&new, &root, problem_type) {
             Ordering::Less => {
-                new.set_left_son(root.left_son());
-                new.set_right_son(Some(root.clone()));
-                root.set_left_son(None);
+                new.set_left_son(root.take_left_son());
+                new.set_right_son(Some(root));
                 self.root = Some(new);
                 None
             }
             Ordering::Greater => {
-                new.set_right_son(root.right_son());
-                new.set_left_son(Some(root.clone()));
-                root.set_right_son(None);
+                new.set_right_son(root.take_right_son());
+                new.set_left_son(Some(root));
                 self.root = Some(new);
                 None
             }

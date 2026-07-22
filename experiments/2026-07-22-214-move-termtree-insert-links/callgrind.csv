@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,termtree_insert_exclusive,insert_delta,insert_percent,percent_total_gain_explained,c_rust_ratio,native_executable_bytes
+parent,10644647204,0,0.000000,670392716,0,0.000000,0.000000,2.025869,8645632
+move_termtree_insert_links,10632641385,-12005819,-0.112787,658651917,-11740799,-1.751332,97.792570,2.023584,8645120
