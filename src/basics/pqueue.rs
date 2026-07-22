@@ -144,28 +144,6 @@ impl<T> PQueue<T> {
             .unwrap_or_else(|| panic!("PQueue used head slot was empty"))
     }
 
-    /// Move the newest queue value out, viewing the queue as a stack.
-    ///
-    /// This owned-consumption variant intentionally clears the consumed
-    /// backing slot. The C-compatible [`Self::get_last`] retains that slot so
-    /// callers using absolute queue indices can continue to inspect it.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the queue is empty.
-    pub(crate) fn take_last(&mut self) -> T {
-        assert!(!self.is_empty(), "PQueueTakeLast called on an empty queue");
-
-        self.head = if self.head == 0 {
-            self.size - 1
-        } else {
-            self.head - 1
-        };
-        self.queue[self.head]
-            .take()
-            .unwrap_or_else(|| panic!("PQueue used head slot was empty"))
-    }
-
     #[must_use]
     /// Return the next queue value without extracting it.
     ///
@@ -400,21 +378,6 @@ mod tests {
         assert_eq!(queue.element(0), &1);
         assert_eq!(queue.get_last(), 2);
         assert_eq!(queue.element(1), &2);
-        assert!(queue.is_empty());
-    }
-
-    #[test]
-    fn take_last_moves_value_and_clears_backing_slot() {
-        struct NonClone(&'static str);
-
-        let mut queue = PQueue::with_size(4);
-        queue.store(NonClone("first"));
-        queue.store(NonClone("last"));
-
-        assert_eq!(queue.take_last().0, "last");
-        assert!(queue.queue[1].is_none());
-        assert_eq!(queue.take_last().0, "first");
-        assert!(queue.queue[0].is_none());
         assert!(queue.is_empty());
     }
 

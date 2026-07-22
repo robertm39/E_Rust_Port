@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 #[cfg(feature = "measure-unification")]
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -228,16 +230,15 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
     }
 
     let backtrack = subst.len();
-    let mut jobs = PQueue::new();
-    jobs.store(t1.clone());
-    jobs.store(t2.clone());
+    let mut jobs = VecDeque::new();
+    jobs.push_back((t1.clone(), t2.clone()));
 
     let mut result = true;
-    while !jobs.is_empty() {
+    while let Some((left, right)) = jobs.pop_back() {
         let mut right_deref = DerefType::Always;
-        let mut right = term_deref_owned(jobs.take_last(), &mut right_deref);
+        let mut right = term_deref_owned(right, &mut right_deref);
         let mut left_deref = DerefType::Always;
-        let mut left = term_deref_owned(jobs.take_last(), &mut left_deref);
+        let mut left = term_deref_owned(left, &mut left_deref);
 
         if right.is_free_var() {
             std::mem::swap(&mut left, &mut right);
@@ -271,11 +272,9 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
                 let left_arg = required_arg(&left, index);
                 let right_arg = required_arg(&right, index);
                 if left_arg.is_free_var() || right_arg.is_free_var() {
-                    jobs.bury(right_arg);
-                    jobs.bury(left_arg);
+                    jobs.push_front((left_arg, right_arg));
                 } else {
-                    jobs.store(left_arg);
-                    jobs.store(right_arg);
+                    jobs.push_back((left_arg, right_arg));
                 }
             }
         }
@@ -1004,6 +1003,23 @@ mod tests {
         assert!(!subst_compute_mgu(&x, &containing_x, &mut subst));
         assert!(subst.is_empty());
         assert!(x.binding().is_none());
+    }
+
+    #[test]
+    fn mgu_backtracks_an_earlier_delayed_binding_when_a_later_job_fails() {
+        let type_ = TypeBank::new().i_type();
+        let x = typed_var(-2, &type_);
+        let y = typed_var(-4, &type_);
+        let a = typed_const(10, &type_);
+        let containing_x = typed_term(20, std::slice::from_ref(&x), &type_);
+        let left = typed_term(30, &[x.clone(), a], &type_);
+        let right = typed_term(30, &[containing_x, y.clone()], &type_);
+        let mut subst = Substitution::new();
+
+        assert!(!subst_compute_mgu(&left, &right, &mut subst));
+        assert!(subst.is_empty());
+        assert!(x.binding().is_none());
+        assert!(y.binding().is_none());
     }
 
     #[test]
