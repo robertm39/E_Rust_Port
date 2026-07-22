@@ -1647,7 +1647,8 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
     if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
         return Ok(0);
     }
-    let ac_axiom_parents = state.ac_axiom_parent_refs();
+    let ac_axiom_parents = (control.ac_handling_active() && doc_context.is_some())
+        .then(|| state.ac_axiom_parent_refs());
 
     let ids = {
         let ocb = control.ocb.as_mut().ok_or_else(|| {
@@ -1750,7 +1751,7 @@ fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
                         session,
                         &mut handle,
                         state.terms(),
-                        &ac_axiom_parents,
+                        ac_axiom_parents.as_deref().unwrap_or(&[]),
                     )?;
                 }
                 None => {
@@ -2225,7 +2226,8 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     let prune_args = control.heuristic_parms().prune_args;
     let higher_order = problem_type == ProblemType::HigherOrder;
     let ac_handling_active = control.ac_handling_active();
-    let ac_axiom_parents = state.ac_axiom_parent_refs();
+    let ac_axiom_parents =
+        (ac_handling_active && doc_context.is_some()).then(|| state.ac_axiom_parent_refs());
     let strong_unit_forward_subsumption = control.strong_unit_forward_subsumption();
     let ocb = control.ocb.as_mut().ok_or_else(|| {
         Diagnostic::new(
@@ -2284,7 +2286,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 forward_modify_remove_ac_resolved(
                     terms,
                     clause,
-                    &ac_axiom_parents,
+                    ac_axiom_parents.as_deref().unwrap_or(&[]),
                     &mut doc_context,
                 )?;
             }
