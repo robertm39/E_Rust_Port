@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,termtree_insert_exclusive,subst_norm_exclusive,deref_always_exclusive,subst_deref_aggregate,pdt_cursor_exclusive,c_rust_ratio
+parent,10632641385,0,0.000000,658651917,437245456,0,437245456,1697827541,2.023584
+indexed_term_arg_compare,10786406738,153765353,1.446163,659099457,303784507,276328019,580112526,1709340315,2.052848
