@@ -1,0 +1,5 @@
+"pair","position","variant","wall_seconds","cpu_seconds","exit_code"
+"1","1","parent","3.5521014","2.1875","0"
+"1","2","candidate","3.580892","2.359375","0"
+"2","1","candidate","2.4168929","2.375","0"
+"2","2","parent","2.1107174","2.0625","0"
