@@ -119,6 +119,16 @@ TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
 MAIN_COMPARISON_EXPECTED_MISMATCHES = {
     ("ho", "sledgehammer.p"): ("normalized_stdout",),
 }
+MAIN_COMPARISON_RESOURCE_STRESS_CASES = frozenset(
+    {
+        "BOO020-1.p",
+        "SWV851-1.p",
+    }
+)
+MAIN_COMPARISON_MINIMUM_CPU_LIMITS = {
+    "HEN011-2.p": 90,
+}
+PROCESS_TIMEOUT_GRACE_SECONDS = 30
 PROBLEM_SUFFIXES = {".p", ".lop"}
 DEFAULT_DISTRO = "Ubuntu-24.04"
 REFERENCE_TOOL_BINARIES = {
@@ -2348,6 +2358,14 @@ def common_arguments(timeout: int, memory_limit_mb: int, proof: bool) -> list[st
     return arguments
 
 
+def comparison_cpu_limit(case: dict[str, Any], default: int) -> int:
+    """Return an exact case override or the case/default minimum, in that order."""
+
+    if "cpu_limit" in case:
+        return int(case["cpu_limit"])
+    return max(default, int(case.get("minimum_cpu_limit", 0)))
+
+
 def comparison_cases(
     repo_root: Path,
     corpus: Path | None,
@@ -2523,7 +2541,16 @@ def comparison_cases(
                 "memory_limit_mb": 16,
             }
         )
+    # These cases intentionally consume their full memory/time allowance. Run
+    # them after all functional cases so retained OS/WSL memory cannot turn a
+    # later proof comparison into a spurious resource failure.
+    cases.sort(
+        key=lambda case: case["name"] in MAIN_COMPARISON_RESOURCE_STRESS_CASES
+    )
     for case in cases:
+        minimum_cpu_limit = MAIN_COMPARISON_MINIMUM_CPU_LIMITS.get(case["name"])
+        if minimum_cpu_limit is not None:
+            case["minimum_cpu_limit"] = minimum_cpu_limit
         case["expected_mismatches"] = list(
             MAIN_COMPARISON_EXPECTED_MISMATCHES.get(
                 (case["mode"], case["name"]),
@@ -2577,9 +2604,9 @@ def compare(args: argparse.Namespace) -> None:
         problem: Path = case["path"]
         tptp = tptp_root(repo_root, corpus, problem)
         fixed_arguments = case.get("arguments")
+        case_cpu_limit = comparison_cpu_limit(case, args.timeout)
         if fixed_arguments is None:
             proof = case["scenario"] == "file"
-            case_cpu_limit = case.get("cpu_limit", args.timeout)
             case_memory_limit = case.get("memory_limit_mb", args.memory_limit_mb)
             options = common_arguments(case_cpu_limit, case_memory_limit, proof)
         else:
@@ -2590,7 +2617,7 @@ def compare(args: argparse.Namespace) -> None:
         reference = execute(
             reference_binary,
             reference_args,
-            timeout=args.timeout + 10,
+            timeout=case_cpu_limit + PROCESS_TIMEOUT_GRACE_SECONDS,
             env=reference_env,
             stdin_text=case["stdin"],
             cwd=problem.parent,
@@ -2613,7 +2640,7 @@ def compare(args: argparse.Namespace) -> None:
         candidate = execute(
             candidate_binary,
             candidate_args,
-            timeout=args.timeout + 10,
+            timeout=case_cpu_limit + PROCESS_TIMEOUT_GRACE_SECONDS,
             env=candidate_env,
             stdin_text=case["stdin"],
             cwd=candidate_cwd,

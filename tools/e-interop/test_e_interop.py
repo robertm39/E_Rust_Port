@@ -316,6 +316,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["mode"], "ho")
 
+    def test_comparison_cpu_limit_honors_exact_override_then_minimum(self):
+        self.assertEqual(e_interop.comparison_cpu_limit({}, 60), 60)
+        self.assertEqual(
+            e_interop.comparison_cpu_limit({"minimum_cpu_limit": 90}, 60), 90
+        )
+        self.assertEqual(
+            e_interop.comparison_cpu_limit({"minimum_cpu_limit": 90}, 120), 120
+        )
+        self.assertEqual(
+            e_interop.comparison_cpu_limit(
+                {"cpu_limit": 1, "minimum_cpu_limit": 90}, 60
+            ),
+            1,
+        )
+
     def test_default_comparison_cases_include_syntax_only_socrates(self):
         with tempfile.TemporaryDirectory() as directory:
             repo_root = Path(directory)
@@ -417,6 +432,44 @@ class ComparisonTests(unittest.TestCase):
             declared,
             {("ho", "sledgehammer.p"): ["normalized_stdout"]},
         )
+
+    def test_default_comparison_cases_run_resource_stress_cases_last(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo_root = Path(directory)
+            smoketest = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "SMOKETEST"
+            tptp = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "TPTP"
+            lfhol = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "LFHOL"
+            smoketest.mkdir(parents=True)
+            tptp.mkdir(parents=True)
+            lfhol.mkdir(parents=True)
+            for name in (
+                "BOO020-1.p",
+                "HEN011-2.p",
+                "ordinary.p",
+                "SWV851-1.p",
+            ):
+                (smoketest / name).write_text(
+                    "fof(goal, conjecture, $true).\n", encoding="utf-8"
+                )
+            run_dir = repo_root / "run"
+            run_dir.mkdir()
+
+            cases = e_interop.comparison_cases(repo_root, None, run_dir)
+
+        self.assertEqual(
+            [case["name"] for case in cases[-2:]],
+            ["BOO020-1.p", "SWV851-1.p"],
+        )
+        self.assertLess(
+            next(
+                index
+                for index, case in enumerate(cases)
+                if case["name"] == "ordinary.p"
+            ),
+            len(cases) - 2,
+        )
+        hen = next(case for case in cases if case["name"] == "HEN011-2.p")
+        self.assertEqual(hen["minimum_cpu_limit"], 90)
 
     def test_tool_cases_default_to_help_for_sorted_tools(self):
         cases = e_interop.tool_comparison_cases(
