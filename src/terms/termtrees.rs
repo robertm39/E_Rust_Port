@@ -198,6 +198,11 @@ fn term_top_order_for_problem(left: &Term, right: &Term, problem_type: ProblemTy
     result
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover Callgrind improves when this hot splay is forced inline"
+)]
+#[inline(always)]
 fn splay_term_tree(mut tree: Term, key: &Term, problem_type: ProblemType) -> Term {
     let mut left_root = None;
     let mut left_tail: Option<Term> = None;

@@ -1,0 +1,17 @@
+pair,variant,seconds,exit
+1,parent,2.1072591,0
+1,candidate,2.0043773,0
+2,candidate,2.0035115,0
+2,parent,2.1356761,0
+3,parent,2.2276940,0
+3,candidate,1.9753700,0
+4,candidate,1.9489313,0
+4,parent,1.9773663,0
+5,parent,1.9744155,0
+5,candidate,1.9764225,0
+6,candidate,1.9663077,0
+6,parent,1.9659236,0
+7,parent,2.0276951,0
+7,candidate,1.9821407,0
+8,candidate,2.0171271,0
+8,parent,1.9832017,0
