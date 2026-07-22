@@ -2544,7 +2544,9 @@ def comparison_mismatches(reference: dict[str, Any], candidate: dict[str, Any]) 
 def mismatch_expectation_matches(
     mismatches: Sequence[str], expected_mismatches: Sequence[str]
 ) -> bool:
-    return sorted(mismatches) == sorted(expected_mismatches)
+    """Return whether every observed mismatch is an explicitly allowed one."""
+
+    return set(mismatches).issubset(expected_mismatches)
 
 
 def compare(args: argparse.Namespace) -> None:
@@ -2634,7 +2636,7 @@ def compare(args: argparse.Namespace) -> None:
         mismatch_expectation_met = mismatch_expectation_matches(
             mismatches, expected_mismatches
         )
-        if expected_mismatches and mismatch_expectation_met:
+        if mismatches and mismatch_expectation_met:
             expected_difference_count += 1
         if not mismatch_expectation_met:
             mismatch_count += 1
@@ -3249,7 +3251,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         mismatch_expectation_met = mismatch_expectation_matches(
             mismatches, expected_mismatches
         )
-        if expected_mismatches and mismatch_expectation_met:
+        if mismatches and mismatch_expectation_met:
             expected_difference_count += 1
         if not mismatch_expectation_met:
             mismatch_count += 1

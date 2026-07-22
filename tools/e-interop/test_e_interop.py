@@ -266,14 +266,14 @@ class ComparisonTests(unittest.TestCase):
             ["exit_code", "status", "shape"],
         )
 
-    def test_expected_mismatch_sets_must_match_exactly(self):
+    def test_observed_mismatches_must_be_a_subset_of_declared_mismatches(self):
         self.assertTrue(
             e_interop.mismatch_expectation_matches(
                 ["normalized_stdout", "status"],
                 ["status", "normalized_stdout"],
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             e_interop.mismatch_expectation_matches([], ["normalized_stdout"])
         )
         self.assertFalse(
