@@ -577,10 +577,9 @@ fn term_subterm_rewrite_plain(
         return Ok(false);
     }
 
-    let arity = term.arity();
-    let normalized_args = {
+    let rewritten_term = {
         let source_args = term.arguments();
-        let mut normalized_args: Option<Vec<Term>> = None;
+        let mut rewritten_term: Option<Term> = None;
         for (index, arg) in source_args.iter().enumerate() {
             let arg = arg
                 .as_ref()
@@ -598,28 +597,26 @@ fn term_subterm_rewrite_plain(
                 trace,
             )?;
 
-            if let Some(args) = &mut normalized_args {
-                args.push(normalized);
+            if let Some(new_term) = &rewritten_term {
+                new_term.set_argument(index, normalized);
             } else if normalized != *arg {
-                let mut args = Vec::with_capacity(arity);
-                for (previous, arg) in source_args[..index].iter().enumerate() {
-                    args.push(
-                        arg.clone()
-                            .unwrap_or_else(|| panic!("term argument {previous} is uninitialized")),
-                    );
+                let new_term = Term::top_copy_without_args(term);
+                {
+                    let mut target_args = new_term.arguments_mut();
+                    for (previous, arg) in source_args[..index].iter().enumerate() {
+                        target_args[previous] = Some(arg.clone().unwrap_or_else(|| {
+                            panic!("term argument {previous} is uninitialized")
+                        }));
+                    }
+                    target_args[index] = Some(normalized);
                 }
-                args.push(normalized);
-                normalized_args = Some(args);
+                rewritten_term = Some(new_term);
             }
         }
-        normalized_args
+        rewritten_term
     };
 
-    if let Some(normalized_args) = normalized_args {
-        let new_term = Term::top_copy_without_args(term);
-        for (slot, normalized) in new_term.arguments_mut().iter_mut().zip(normalized_args) {
-            *slot = Some(normalized);
-        }
+    if let Some(new_term) = rewritten_term {
         let replacement = bank.term_top_insert(new_term)?;
         assert_ne!(
             replacement, *term,
@@ -2782,6 +2779,59 @@ mod tests {
         assert!(!h_f_b.is_top_rewritten());
         assert_eq!(h_a.rw_replace_field(), Some(c));
         assert!(h_a.is_top_rewritten());
+    }
+
+    #[test]
+    fn plain_li_normalform_rebuilds_binary_parent_from_either_changed_child() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "li_binary_a");
+        let b = typed_const(&mut bank, "li_binary_b");
+        let c = typed_const(&mut bank, "li_binary_c");
+        let f_x = typed_unary(&mut bank, "li_binary_f", &x);
+        let f_a = typed_unary(&mut bank, "li_binary_f", &a);
+        let f_b = typed_unary(&mut bank, "li_binary_f", &b);
+        let left_changed = typed_binary(&mut bank, "li_binary_p", &f_a, &b);
+        let left_expected = typed_binary(&mut bank, "li_binary_p", &c, &b);
+        let right_changed = typed_binary(&mut bank, "li_binary_q", &a, &f_b);
+        let right_expected = typed_binary(&mut bank, "li_binary_q", &a, &c);
+
+        let mut demod_lit = eqn(&mut bank, &f_x, &c, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let left_normal = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &left_changed,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        let right_normal = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &right_changed,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(left_normal, left_expected);
+        assert_eq!(right_normal, right_expected);
+        assert_eq!(left_changed.rw_replace_field(), Some(left_expected));
+        assert_eq!(right_changed.rw_replace_field(), Some(right_expected));
     }
 
     #[test]

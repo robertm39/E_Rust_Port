@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,recursive_normalizer_exclusive,normalizer_delta,normalizer_percent,rust_alloc_calls,alloc_delta,alloc_percent,c_rust_ratio,native_executable_bytes
+parent,10632641385,0,0.000000,315343713,0,0.000000,6312342,0,0.000000,2.023584,8645120
+direct_rewrite_term,10497884296,-134757089,-1.267391,276321216,-39022497,-12.374592,5845869,-466473,-7.389856,1.997937,8647680
