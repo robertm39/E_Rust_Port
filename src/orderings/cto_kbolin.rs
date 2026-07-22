@@ -216,8 +216,12 @@ fn mfy_vwb_lfho_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) 
 }
 
 fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
-    let mut stack = vec![(term.clone(), deref)];
-    while let Some((candidate, mut current_deref)) = stack.pop() {
+    debug_assert!(
+        ocb.kbo_balance_stack.is_empty(),
+        "KBO balance traversal scratch must be empty on entry"
+    );
+    ocb.kbo_balance_stack.push((term.clone(), deref));
+    while let Some((candidate, mut current_deref)) = ocb.kbo_balance_stack.pop() {
         let current = term_deref(&candidate, &mut current_deref);
         if current.is_free_var() {
             if lhs {
@@ -233,15 +237,20 @@ fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool
             }
             let arguments = current.arguments();
             for arg in arguments.iter().flatten() {
-                stack.push((arg.clone(), current_deref));
+                ocb.kbo_balance_stack.push((arg.clone(), current_deref));
             }
         }
     }
+    debug_assert!(ocb.kbo_balance_stack.is_empty());
 }
 
 fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
-    let mut stack = vec![(term.clone(), deref)];
-    while let Some((candidate, current_deref)) = stack.pop() {
+    debug_assert!(
+        ocb.kbo_balance_stack.is_empty(),
+        "KBO balance traversal scratch must be empty on entry"
+    );
+    ocb.kbo_balance_stack.push((term.clone(), deref));
+    while let Some((candidate, current_deref)) = ocb.kbo_balance_stack.pop() {
         let (current, current_deref, limit) = lfho_deref_for_kbo(&candidate, current_deref);
         if current.is_free_var() {
             if lhs {
@@ -255,12 +264,17 @@ fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs:
             } else {
                 ocb.wb -= ocb.fun_weight(current.f_code());
             }
-            for (index, arg) in current.argument_clones().into_iter().enumerate() {
-                let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-                stack.push((arg, convert_lfho_deref(index, limit, current_deref)));
+            let arguments = current.arguments();
+            for (index, arg) in arguments.iter().enumerate() {
+                let arg = arg
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                ocb.kbo_balance_stack
+                    .push((arg.clone(), convert_lfho_deref(index, limit, current_deref)));
             }
         }
     }
+    debug_assert!(ocb.kbo_balance_stack.is_empty());
 }
 
 fn kbo_lin_cmp(
@@ -512,8 +526,12 @@ fn mfy_vwb_lambda_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType
 }
 
 fn mfy_vwb_lambda(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
-    let mut stack = vec![(term.clone(), deref)];
-    while let Some((candidate, current_deref)) = stack.pop() {
+    debug_assert!(
+        ocb.kbo_balance_stack.is_empty(),
+        "KBO balance traversal scratch must be empty on entry"
+    );
+    ocb.kbo_balance_stack.push((term.clone(), deref));
+    while let Some((candidate, current_deref)) = ocb.kbo_balance_stack.pop() {
         let (current, current_deref) = lambda_deref_for_kbo(&candidate, current_deref);
         if is_fluid_lambda(&current) {
             if lhs {
@@ -530,10 +548,12 @@ fn mfy_vwb_lambda(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lh
             }
 
             for index in usize::from(current.is_lambda())..current.arity() {
-                stack.push((initialized_arg(&current, index), current_deref));
+                ocb.kbo_balance_stack
+                    .push((initialized_arg(&current, index), current_deref));
             }
         }
     }
+    debug_assert!(ocb.kbo_balance_stack.is_empty());
 }
 
 fn lambda_order_term_weight(ocb: &OrderControlBlock, term: &Term) -> i64 {
@@ -1235,7 +1255,7 @@ fn initialized_arg(term: &Term, index: usize) -> Term {
 mod tests {
     use super::{
         kbo6_compare, kbo6_compare_with_bank, kbo6_greater, kbo6_greater_with_bank,
-        kbo6_lambda_order_can_skip_bank_normalization,
+        kbo6_lambda_order_can_skip_bank_normalization, mfy_vwb_lhs, mfy_vwb_rhs,
     };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -1421,6 +1441,31 @@ mod tests {
             CompareResult::Uncomparable,
         );
         assert_matches_classic(&mut ocb, &signature, &f_a, &x, CompareResult::Uncomparable);
+    }
+
+    #[test]
+    fn kbo6_reuses_balance_traversal_scratch() {
+        let mut signature = signature();
+        let f = symbol(&mut signature, "f", 2);
+        let a = Term::const_cell_alloc(symbol(&mut signature, "a", 0));
+        let x = Term::const_cell_alloc(-2);
+        let nested = app(
+            f,
+            &[app(f, &[x.clone(), a.clone()]), app(f, &[a.clone(), x])],
+        );
+        let mut ocb = ocb(&signature);
+
+        mfy_vwb_lhs(&mut ocb, &nested, DerefType::Never);
+        assert!(ocb.kbo_balance_stack.is_empty());
+        let capacity = ocb.kbo_balance_stack.capacity();
+        assert!(capacity > 0);
+
+        mfy_vwb_rhs(&mut ocb, &nested, DerefType::Never);
+        assert!(ocb.kbo_balance_stack.is_empty());
+        assert_eq!(ocb.kbo_balance_stack.capacity(), capacity);
+        assert_eq!(ocb.wb, 0);
+        assert_eq!(ocb.pos_bal, 0);
+        assert_eq!(ocb.neg_bal, 0);
     }
 
     #[test]

@@ -53,6 +53,8 @@ pub struct OrderControlBlock {
     pub ho_order_kind: HoOrderKind,
     min_constants: BTreeMap<TypeUniqueId, FunCode>,
     state_stack: Vec<FunCode>,
+    /// Reusable LIFO workspace for KBO variable-balance traversals.
+    pub(crate) kbo_balance_stack: Vec<(Term, DerefType)>,
 }
 
 impl OrderControlBlock {
@@ -96,6 +98,7 @@ impl OrderControlBlock {
             ho_order_kind,
             min_constants: BTreeMap::new(),
             state_stack: Vec::new(),
+            kbo_balance_stack: Vec::new(),
         };
 
         match ordering_type {
@@ -780,6 +783,7 @@ mod tests {
         assert_eq!(kbo.lit_cmp, LiteralCmp::Normal);
         assert_eq!(kbo.vb_size, 64);
         assert!(kbo.vb.iter().all(|entry| *entry == 0));
+        assert!(kbo.kbo_balance_stack.is_empty());
         assert!(lpo.weights.is_none());
         assert!(lpo.precedence.is_some());
         assert_eq!(lpo.vb_size, 1);
