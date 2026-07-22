@@ -1522,19 +1522,23 @@ impl TermBank {
         term: &Term,
         deref: DerefType,
     ) -> Result<(Option<Term>, DerefType, usize), Diagnostic> {
-        let limit = Self::deref_limit(term, deref);
         if deref == DerefType::Once
             && term.is_applied_free_var()
             && term
                 .argument(0)
                 .is_some_and(|head| head.binding().is_some())
         {
+            let binding = term
+                .argument(0)
+                .and_then(|head| head.binding())
+                .expect("bound applied free variable has a binding");
+            let limit = Self::applied_binding_ignore_args(&binding);
             return Ok((Some(self.deref_applied_free_var_once(term)?), deref, limit));
         }
 
         let mut current_deref = deref;
         let term = term_deref_if_changed(term, &mut current_deref);
-        Ok((term, current_deref, limit))
+        Ok((term, current_deref, 0))
     }
 
     fn deref_limit(term: &Term, deref: DerefType) -> usize {
