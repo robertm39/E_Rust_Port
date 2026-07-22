@@ -1752,6 +1752,11 @@ fn advance_variable_query(cursor: &mut PdtSubstCursor) -> usize {
     query_step
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot frame pop is forced inline"
+)]
+#[inline(always)]
 fn pop_subst_cursor_frame(cursor: &mut PdtSubstCursor) {
     if let Some(frame) = cursor.frames.pop() {
         cursor.bindings.truncate(frame.binding_pos);
