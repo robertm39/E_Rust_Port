@@ -795,6 +795,11 @@ pub(crate) fn term_deref_owned(term: Term, deref: &mut DerefType) -> Term {
 }
 
 #[must_use]
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot dispatcher is forced inline"
+)]
+#[inline(always)]
 pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Option<Term> {
     debug_assert!(
         term.is_top_level_any_var() || term.binding().is_none(),
