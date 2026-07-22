@@ -62,6 +62,18 @@ impl<T> ClausePos<T> {
     }
 
     #[must_use]
+    pub(crate) fn for_indexed_literal(literal: Eqn, literal_index: usize) -> Self {
+        Self {
+            clause: None,
+            literal_index: Some(literal_index),
+            literal: Some(literal),
+            side: EqnSide::LeftSide,
+            pos: TermPos::new(),
+            data: None,
+        }
+    }
+
+    #[must_use]
     pub const fn clause(&self) -> Option<&Clause> {
         self.clause.as_ref()
     }

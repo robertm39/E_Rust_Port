@@ -3,7 +3,7 @@ use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{tptp_types_combine, CP_IS_SOS, CP_NO_GENERATION};
-use crate::clauses::clausecpos::unpack_clause_pos;
+use crate::clauses::clausecpos::{unpack_clause_pos, unpack_clause_pos_literal};
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausepos_tree::{clause_key, ClauseTPos};
 use crate::clauses::clausesets::ClauseSet;
@@ -977,7 +977,7 @@ fn compute_from_position_into_target_clause_entry_with_subst(
         if paramodulation_time_is_up_before_next_insert(store) {
             break;
         }
-        let into_pos = unpack_clause_pos(*into_cpos, target_entry.clause().clone());
+        let into_pos = unpack_clause_pos_literal(*into_cpos, target_entry.clause());
         ensure_indexed_paramodulation_ordering_supported(
             ocb,
             from_pos,

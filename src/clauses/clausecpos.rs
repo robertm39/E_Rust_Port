@@ -166,6 +166,33 @@ pub fn unpack_clause_pos(cpos: CompactPos, clause: Clause) -> ClausePos<()> {
     pos
 }
 
+/// Unpacks a compact position while retaining only the selected literal.
+///
+/// This is used when the owning clause is already passed separately. It
+/// preserves the literal index needed by inference constructors without
+/// cloning the complete clause into the position cursor.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`unpack_clause_pos`].
+#[must_use]
+pub(crate) fn unpack_clause_pos_literal(mut cpos: CompactPos, clause: &Clause) -> ClausePos<()> {
+    let (literal_index, literal) =
+        clause_cpos_split(clause, &mut cpos).expect("compact clause position needs a literal");
+    let left_weight = term_standard_weight(literal.left());
+    let (side, side_term) = if cpos >= left_weight {
+        cpos -= left_weight;
+        (EqnSide::RightSide, literal.right())
+    } else {
+        (EqnSide::LeftSide, literal.left())
+    };
+
+    let mut pos = ClausePos::for_indexed_literal(literal.clone(), literal_index);
+    pos.set_side(side);
+    unpack_term_pos(pos.term_pos_mut(), side_term, cpos);
+    pos
+}
+
 /// Returns the subterm selected by a compact clause position.
 ///
 /// # Panics
@@ -236,7 +263,8 @@ pub fn clause_cpos_split<'clause>(
 mod tests {
     use super::{
         clause_cpos_first_lit, clause_cpos_get_subterm, clause_cpos_next_lit, clause_cpos_split,
-        pack_clause_pos, pack_term_pos, unpack_clause_pos, unpack_term_pos, CompactPos,
+        pack_clause_pos, pack_term_pos, unpack_clause_pos, unpack_clause_pos_literal,
+        unpack_term_pos, CompactPos,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausepos::ClausePos;
@@ -339,6 +367,14 @@ mod tests {
         assert_eq!(unpacked.literal_index(), Some(0));
         assert_eq!(unpacked.side(), EqnSide::LeftSide);
         assert_eq!(unpacked.term_pos().print_string(), "1.0\n");
+
+        let literal_only = unpack_clause_pos_literal(packed_left, &clause);
+        assert!(literal_only.clause().is_none());
+        assert_eq!(literal_only.literal_index(), Some(0));
+        assert_eq!(literal_only.literal(), Some(&first));
+        assert_eq!(literal_only.side(), EqnSide::LeftSide);
+        assert_eq!(literal_only.term_pos().print_string(), "1.0\n");
+        assert_eq!(literal_only.get_subterm(), Some(b.clone()));
 
         pos.set_side(EqnSide::RightSide);
         pos.term_pos_mut().clear();
