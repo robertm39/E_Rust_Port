@@ -145,6 +145,11 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
     }
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover Callgrind improves when this hot comparator is forced inline"
+)]
+#[inline(always)]
 fn term_top_order_for_problem(left: &Term, right: &Term, problem_type: ProblemType) -> Ordering {
     let mut result = left.f_code().cmp(&right.f_code());
     if result != Ordering::Equal {
