@@ -760,11 +760,14 @@ fn compute_from_position_into_occurrence(
         &[&from_term, occurrence.term()],
         || higher_order_paramod_diagnostic_for_type(pm_type),
     )?;
+    let from_clause = from_pos
+        .clause()
+        .expect("indexed source position must be backed by a clause");
 
     let mut subst = Substitution::new();
     let result = (|| {
         if !subst_mgu_complete_with_bank(bank, &from_term, occurrence.term(), &mut subst)?
-            || !indexed_source_allows_under_subst(bank, ocb, from_pos)?
+            || !indexed_source_allows_under_subst(bank, ocb, from_pos, from_clause)?
         {
             return Ok(0);
         }
@@ -900,6 +903,9 @@ fn compute_from_position_into_occurrence_csu(
         &[&from_term, &from_other, occurrence.term()],
         || higher_order_paramod_diagnostic_for_type(pm_type),
     )?;
+    let from_clause = from_pos
+        .clause()
+        .expect("indexed source position must be backed by a clause");
 
     let mut subst = Substitution::new();
     let mut iter = CsuIterator::new(&from_term, occurrence.term(), &subst);
@@ -917,7 +923,7 @@ fn compute_from_position_into_occurrence_csu(
             break;
         }
 
-        if !indexed_source_allows_under_subst(bank, ocb, from_pos)? {
+        if !indexed_source_allows_under_subst(bank, ocb, from_pos, from_clause)? {
             continue;
         }
         let subst_is_ho = subst.has_ho_binding();
@@ -1183,9 +1189,9 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
         if paramodulation_time_is_up_before_next_insert(store) {
             break;
         }
-        let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
+        let source_pos = unpack_clause_pos_literal(*source_cpos, source_entry.clause());
         ensure_indexed_paramodulation_ordering_supported(ocb, &source_pos, into_pos, pm_type)?;
-        if !indexed_source_allows_under_subst(bank, ocb, &source_pos)? {
+        if !indexed_source_allows_under_subst(bank, ocb, &source_pos, source_entry.clause())? {
             continue;
         }
 
@@ -1250,10 +1256,8 @@ fn indexed_source_allows_under_subst(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
+    from_clause: &Clause,
 ) -> Result<bool, Diagnostic> {
-    let from_clause = from_pos
-        .clause()
-        .expect("indexed source position must be backed by a clause");
     let from_index = from_pos
         .literal_index()
         .expect("indexed source position must select a clause literal");
