@@ -818,6 +818,11 @@ pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Optio
     Some(current)
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot loop is forced inline"
+)]
+#[inline(always)]
 fn term_deref_always_if_changed(term: &Term) -> Option<Term> {
     let mut current = deref_always_step(term)?;
     while let Some(next) = deref_always_step(&current) {
