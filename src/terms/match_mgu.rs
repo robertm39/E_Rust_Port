@@ -29,6 +29,7 @@ static UNIFICATION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
 pub const MATCH_FAILED: i32 = -1;
 
 const INLINE_MATCH_JOB_PAIRS: usize = 4;
+const INLINE_MGU_JOB_PAIRS: usize = 4;
 
 struct MatchJobStack {
     inline: [Option<(Term, Term)>; INLINE_MATCH_JOB_PAIRS],
@@ -62,6 +63,87 @@ impl MatchJobStack {
         }
         self.inline_len = self.inline_len.checked_sub(1)?;
         self.inline[self.inline_len].take()
+    }
+}
+
+struct MguJobDeque {
+    inline: [Option<(Term, Term)>; INLINE_MGU_JOB_PAIRS],
+    inline_head: usize,
+    inline_len: usize,
+    overflow: VecDeque<(Term, Term)>,
+}
+
+impl MguJobDeque {
+    fn new(left: Term, right: Term) -> Self {
+        let mut jobs = Self {
+            inline: std::array::from_fn(|_| None),
+            inline_head: 0,
+            inline_len: 1,
+            overflow: VecDeque::new(),
+        };
+        jobs.inline[0] = Some((left, right));
+        jobs
+    }
+
+    fn push_back(&mut self, job: (Term, Term)) {
+        if !self.overflow.is_empty() {
+            self.overflow.push_back(job);
+            return;
+        }
+        if self.inline_len == INLINE_MGU_JOB_PAIRS {
+            self.spill_inline();
+            self.overflow.push_back(job);
+            return;
+        }
+
+        let index = (self.inline_head + self.inline_len) % INLINE_MGU_JOB_PAIRS;
+        debug_assert!(self.inline[index].is_none());
+        self.inline[index] = Some(job);
+        self.inline_len += 1;
+    }
+
+    fn push_front(&mut self, job: (Term, Term)) {
+        if !self.overflow.is_empty() {
+            self.overflow.push_front(job);
+            return;
+        }
+        if self.inline_len == INLINE_MGU_JOB_PAIRS {
+            self.spill_inline();
+            self.overflow.push_front(job);
+            return;
+        }
+
+        self.inline_head = if self.inline_head == 0 {
+            INLINE_MGU_JOB_PAIRS - 1
+        } else {
+            self.inline_head - 1
+        };
+        debug_assert!(self.inline[self.inline_head].is_none());
+        self.inline[self.inline_head] = Some(job);
+        self.inline_len += 1;
+    }
+
+    fn pop_back(&mut self) -> Option<(Term, Term)> {
+        if let Some(job) = self.overflow.pop_back() {
+            return Some(job);
+        }
+        self.inline_len = self.inline_len.checked_sub(1)?;
+        let index = (self.inline_head + self.inline_len) % INLINE_MGU_JOB_PAIRS;
+        self.inline[index].take()
+    }
+
+    fn spill_inline(&mut self) {
+        self.overflow.reserve(INLINE_MGU_JOB_PAIRS + 1);
+        for offset in 0..self.inline_len {
+            let index = (self.inline_head + offset) % INLINE_MGU_JOB_PAIRS;
+            self.overflow.push_back(
+                self.inline[index]
+                    .take()
+                    .expect("inline MGU job slot must be initialized"),
+            );
+        }
+        self.inline_head = 0;
+        self.inline_len = 0;
     }
 }
 
@@ -230,8 +312,7 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
     }
 
     let backtrack = subst.len();
-    let mut jobs = VecDeque::new();
-    jobs.push_back((t1.clone(), t2.clone()));
+    let mut jobs = MguJobDeque::new(t1.clone(), t2.clone());
 
     let mut result = true;
     while let Some((left, right)) = jobs.pop_back() {
@@ -812,8 +893,8 @@ mod tests {
     use super::{
         occur_check, subst_compute_match, subst_compute_match_ho, subst_compute_mgu,
         subst_match_complete, subst_match_complete_with_bank, subst_mgu_complete,
-        subst_mgu_complete_with_bank, unif_failed, verify_match, OracleUnifResult, UnifTermSide,
-        MATCH_FAILED, UNIF_FAILED, UNIF_SUCC,
+        subst_mgu_complete_with_bank, unif_failed, verify_match, MguJobDeque, OracleUnifResult,
+        UnifTermSide, MATCH_FAILED, UNIF_FAILED, UNIF_SUCC,
     };
     #[cfg(feature = "measure-unification")]
     use super::{unification_attempts, unification_successes};
@@ -856,6 +937,30 @@ mod tests {
             term.set_argument(index + 1, arg.clone());
         }
         term
+    }
+
+    #[test]
+    fn mgu_job_deque_preserves_front_back_order_across_inline_spill() {
+        let type_ = TypeBank::new().i_type();
+        let pair = |code| (typed_const(code, &type_), typed_const(code + 100, &type_));
+        let initial = pair(1);
+        let mut jobs = MguJobDeque::new(initial.0, initial.1);
+
+        jobs.push_front(pair(2));
+        jobs.push_back(pair(3));
+        jobs.push_front(pair(4));
+        jobs.push_back(pair(5));
+
+        for expected in [5, 3, 1, 2, 4] {
+            let (left, right) = jobs.pop_back().unwrap();
+            assert_eq!(left.f_code(), expected);
+            assert_eq!(right.f_code(), expected + 100);
+        }
+        assert!(jobs.pop_back().is_none());
+
+        jobs.push_back(pair(6));
+        assert_eq!(jobs.pop_back().unwrap().0.f_code(), 6);
+        assert!(jobs.pop_back().is_none());
     }
 
     #[test]
