@@ -796,6 +796,9 @@ impl EqnList {
     }
 
     pub fn remove_duplicates(&mut self, bank: &TermBank) -> usize {
+        if self.len() < 2 {
+            return 0;
+        }
         let mut seen = BTreeSet::new();
         let old_len = self.len();
         self.literals
@@ -1552,6 +1555,21 @@ mod tests {
         assert_eq!(list.remove_simple_answers(&bank), 1);
         assert_eq!(list.len(), 2);
         assert!(!list.as_slice()[0].literal_equal(&list.as_slice()[1]));
+    }
+
+    #[test]
+    fn duplicate_removal_skips_empty_and_singleton_lists_like_c() {
+        let mut bank = test_bank();
+        let mut empty = EqnList::new();
+        assert_eq!(empty.remove_duplicates(&bank), 0);
+
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let literal = eqn(&mut bank, &a, &b, true);
+        let mut singleton = EqnList::from_vec(vec![literal.clone()]);
+
+        assert_eq!(singleton.remove_duplicates(&bank), 0);
+        assert_eq!(singleton.as_slice(), &[literal]);
     }
 
     #[test]
