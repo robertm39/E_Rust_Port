@@ -977,6 +977,11 @@ fn deref_step(term: &Term) -> Option<Term> {
     None
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot helper is forced inline"
+)]
+#[inline(always)]
 fn deref_always_step(term: &Term) -> Option<Term> {
     if !term.is_free_var() {
         if term.is_applied_free_var()
