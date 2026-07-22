@@ -631,6 +631,17 @@ impl PdTree {
             self.search_state.borrow().is_none(),
             "PDTreeSearchExit recycles the previous query before the next search"
         );
+        debug_assert!(
+            {
+                let cursor = self.search_subst_cursor.borrow();
+                cursor.frames.is_empty()
+                    && cursor.bindings.is_empty()
+                    && cursor.query_stack.is_empty()
+                    && cursor.query_steps.is_empty()
+                    && !cursor.initialized
+            },
+            "PDTreeSearchExit resets the substitution cursor before the next search"
+        );
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
         let term_weight = term_standard_weight(term);
         self.search_traversal_order.set(traversal_order);
@@ -645,7 +656,6 @@ impl PdTree {
             traversal_order,
         });
         *self.search_cursor.borrow_mut() = None;
-        self.search_subst_cursor.borrow_mut().reset();
         self.search_active.set(true);
         self.record_search_attempt();
     }
@@ -2672,7 +2682,29 @@ mod tests {
         let cursor = tree.search_subst_cursor.borrow();
         assert!(cursor.frames.is_empty());
         assert!(cursor.query_steps.is_empty());
-        assert_eq!(cursor.query_stack, vec![query]);
+        assert_eq!(cursor.query_stack, vec![query.clone()]);
+        drop(cursor);
+
+        tree.record_search_exit();
+        {
+            let cursor = tree.search_subst_cursor.borrow();
+            assert!(cursor.frames.is_empty());
+            assert!(cursor.bindings.is_empty());
+            assert!(cursor.query_stack.is_empty());
+            assert!(cursor.query_steps.is_empty());
+            assert!(!cursor.initialized);
+        }
+
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        {
+            let cursor = tree.search_subst_cursor.borrow();
+            assert!(cursor.frames.is_empty());
+            assert!(cursor.bindings.is_empty());
+            assert!(cursor.query_stack.is_empty());
+            assert!(cursor.query_steps.is_empty());
+            assert!(!cursor.initialized);
+        }
+        tree.record_search_exit();
     }
 
     #[test]
