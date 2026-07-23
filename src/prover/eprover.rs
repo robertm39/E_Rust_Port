@@ -6087,6 +6087,13 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         run_main_saturation(output, config, next_doc_ident, &mut state, &mut control)?
     };
+    #[cfg_attr(
+        not(feature = "instrument-perf-ctr"),
+        expect(
+            clippy::drop_non_drop,
+            reason = "the feature-enabled guard records saturation time at this boundary"
+        )
+    )]
     drop(sat_timer);
     next_doc_ident = saturation.next_doc_ident;
     let mut outcome = saturation.outcome;
