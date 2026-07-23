@@ -1301,7 +1301,7 @@ impl PdTree {
             return self.search_cursor.borrow_mut().as_mut()?.next();
         }
 
-        self.search_next_matching_occurrence_impl(None)
+        self.search_next_matching_occurrence_impl::<true>(None)
     }
 
     /// Returns the next first-order indexed match while keeping its bindings
@@ -1314,19 +1314,28 @@ impl PdTree {
         &self,
         subst: &mut Substitution,
     ) -> Option<PdtIndexedOccurrence> {
-        self.search_next_matching_occurrence_impl(Some(subst))
+        let first_order = self.search_state.borrow().as_ref()?.first_order;
+        if first_order {
+            self.search_next_matching_occurrence_impl::<true>(Some(subst))
+        } else {
+            self.search_next_matching_occurrence_impl::<false>(Some(subst))
+        }
     }
 
     #[expect(
         clippy::too_many_lines,
         reason = "Keeps the cursor traversal and backtracking state machine together"
     )]
-    fn search_next_matching_occurrence_impl(
+    fn search_next_matching_occurrence_impl<const FIRST_ORDER: bool>(
         &self,
         mut subst: Option<&mut Substitution>,
     ) -> Option<PdtIndexedOccurrence> {
         let state = self.search_state.borrow();
         let state = state.as_ref()?;
+        debug_assert_eq!(
+            FIRST_ORDER, state.first_order,
+            "PDTree cursor specialization must match the active problem type"
+        );
         let mut cursor = self.search_subst_cursor.borrow_mut();
         if !cursor.initialized {
             let base_subst = subst.as_deref().map_or(0, Substitution::len);
@@ -1399,7 +1408,7 @@ impl PdTree {
                         .query_stack
                         .last()
                         .expect("non-terminal PDTree cursor has a query term");
-                    let next_index = if state.first_order {
+                    let next_index = if FIRST_ORDER {
                         let Some(code) = first_order_function_code(query_term) else {
                             continue;
                         };
@@ -1426,7 +1435,7 @@ impl PdTree {
                     ) {
                         continue;
                     }
-                    if state.first_order {
+                    if FIRST_ORDER {
                         advance_first_order_symbol_query(&mut cursor);
                     } else {
                         advance_symbol_query(&mut cursor);
