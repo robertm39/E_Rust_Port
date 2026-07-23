@@ -81,10 +81,13 @@ Term_p (*deref)(Term_p) =
    problemType == PROBLEM_HO ? WHNF_deref : TermDerefAlways;
 ```
 
-For first-order problems, C's `TermDerefAlways` follows only the ordinary
-binding chain. The Rust normalizer instead calls its higher-order-capable
-`term_deref_always` for every popped term, including all 3,260,660
-nonvariables in this first-order LUSK6 run.
+The maintained performance reference is C's non-LFHO build, where
+`TermDerefAlways` follows only the ordinary binding chain. C's separately
+archived LFHO build compiles an applied-free-variable test into that helper,
+but valid first-order terms do not contain that shape. The unified Rust
+normalizer calls its applied-variable-capable `term_deref_always` for every
+popped term, including all 3,260,660 nonvariables in this first-order LUSK6
+run.
 
 ## Result
 
