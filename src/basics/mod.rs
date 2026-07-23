@@ -28,7 +28,12 @@ pub mod pstacks;
 pub mod ptrees;
 pub mod quadtrees;
 pub mod regmem;
+// Allowed measured-performance boundary: upstream E routes exact-size objects
+// through a process-wide intrusive free list. The global allocator port keeps
+// the required pointer manipulation private behind Rust's allocation API.
 pub mod simple_stuff;
+#[allow(unsafe_code)]
+mod size_class_allocator;
 pub mod stringtrees;
 pub mod sysdate;
 pub mod verbose;
