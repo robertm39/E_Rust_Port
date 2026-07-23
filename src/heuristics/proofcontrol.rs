@@ -9532,9 +9532,10 @@ fn proof_state_document_split_clauses<W: fmt::Write>(
 /// `eval_clause_set`.
 ///
 /// C mutates clauses in place after they have already been inserted into the
-/// eval store. Rust does the same, then rebuilds its safe evaluation roots once
-/// after the batch so clause order and evaluation-object order stay unchanged
-/// without growing the sparse owner as an extract-and-append queue.
+/// eval store. Its evaluation roots therefore remain empty: the clauses are
+/// indexed only when the following queue-transfer inserts them into
+/// `unprocessed`. Rust preserves that lifecycle and likewise defers both
+/// evaluation-object handles and index construction until that insertion.
 ///
 /// # Errors
 ///
@@ -9588,7 +9589,6 @@ pub fn proof_state_eval_clause_set(
         }
         result
     };
-    eval_store.rebuild_eval_indices();
     *state.eval_store_mut() = eval_store;
     evaluation?;
 
@@ -13684,7 +13684,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_eval_clause_set_evaluates_eval_store_and_preserves_order() {
+    fn proof_state_eval_clause_set_defers_indices_and_preserves_order() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (first, second) = {
             let terms = state.terms_mut();
@@ -13738,13 +13738,10 @@ mod tests {
                 .expect("eval-store clause is evaluated");
             assert_eq!(evaluations.eval_no(), 1);
             assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
-            assert!(evaluations.object().is_some());
+            assert!(evaluations.object().is_none());
         }
-        assert_eq!(
-            state.eval_store().find_best(0).map(Clause::ident),
-            Some(4_060)
-        );
-        assert_eq!(state.eval_store().eval_order_cloned(0).len(), 2);
+        assert!(state.eval_store().find_best(0).is_none());
+        assert!(state.eval_store().eval_order_cloned(0).is_empty());
     }
 
     #[test]
@@ -13802,12 +13799,13 @@ mod tests {
 
         assert_eq!(first_weight.to_bits(), 1_124_233_471);
         assert_eq!(second_weight.to_bits(), 1_142_390_271);
-        assert_eq!(
-            state.eval_store().find_best(0).map(Clause::ident),
-            Some(4_063)
-        );
+        assert!(state.eval_store().find_best(0).is_none());
 
         assert_eq!(proof_state_move_eval_store_to_unprocessed(&mut state), 2);
+        assert_eq!(
+            state.unprocessed().find_best(0).map(Clause::ident),
+            Some(4_063)
+        );
         let selected = proof_state_select_unprocessed_clause(&mut state, &mut control)
             .unwrap_or_else(|err| panic!("{err}"))
             .expect("random-weight HCB should select a clause");
