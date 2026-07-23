@@ -247,12 +247,12 @@ impl EqnList {
         self.del_prop(EP_IS_MAXIMAL);
 
         let mut candidates: Vec<usize> = (0..self.len()).collect();
-        let mut maximal = Vec::new();
+        let mut maximal_count = 0;
 
-        while !candidates.is_empty() {
-            let candidate = candidates.remove(0);
+        while maximal_count < candidates.len() {
+            let candidate = candidates[maximal_count];
             let mut candidate_survives = true;
-            let mut step = 0;
+            let mut step = maximal_count + 1;
 
             while step < candidates.len() {
                 let current = candidates[step];
@@ -281,14 +281,16 @@ impl EqnList {
             }
 
             if candidate_survives {
-                maximal.push(candidate);
+                maximal_count += 1;
+            } else {
+                candidates.remove(maximal_count);
             }
         }
 
-        for index in &maximal {
+        for index in &candidates {
             self.literals[*index].set_prop(EP_IS_MAXIMAL);
         }
-        maximal.len()
+        candidates.len()
     }
 
     /// Mark maximal and strictly maximal literals using a bank-backed ordering
@@ -306,12 +308,12 @@ impl EqnList {
         self.del_prop(EP_IS_MAXIMAL);
 
         let mut candidates: Vec<usize> = (0..self.len()).collect();
-        let mut maximal = Vec::new();
+        let mut maximal_count = 0;
 
-        while !candidates.is_empty() {
-            let candidate = candidates.remove(0);
+        while maximal_count < candidates.len() {
+            let candidate = candidates[maximal_count];
             let mut candidate_survives = true;
-            let mut step = 0;
+            let mut step = maximal_count + 1;
 
             while step < candidates.len() {
                 let current = candidates[step];
@@ -344,14 +346,16 @@ impl EqnList {
             }
 
             if candidate_survives {
-                maximal.push(candidate);
+                maximal_count += 1;
+            } else {
+                candidates.remove(maximal_count);
             }
         }
 
-        for index in &maximal {
+        for index in &candidates {
             self.literals[*index].set_prop(EP_IS_MAXIMAL);
         }
-        Ok(maximal.len())
+        Ok(candidates.len())
     }
 
     /// Return whether the literal at `eqn_index` is maximal with respect to
@@ -1356,6 +1360,24 @@ mod tests {
                 .unwrap(),
             Some(false)
         );
+
+        let mut bank_list = EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &a, true),
+            eqn(&mut bank, &f_a, &a, true),
+            eqn(&mut bank, &f_a, &a, true),
+        ]);
+        assert_eq!(
+            bank_list
+                .mark_maximal_literals_with_bank(&mut ocb, &mut bank)
+                .unwrap(),
+            2
+        );
+        assert!(!bank_list.as_slice()[0].is_maximal());
+        assert!(bank_list.as_slice()[1].is_maximal());
+        assert!(bank_list.as_slice()[2].is_maximal());
+        assert!(!bank_list.as_slice()[0].is_strictly_maximal());
+        assert!(!bank_list.as_slice()[1].is_strictly_maximal());
+        assert!(!bank_list.as_slice()[2].is_strictly_maximal());
     }
 
     #[test]
