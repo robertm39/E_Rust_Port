@@ -118,3 +118,7 @@ name = "ekb_ginsert"
 path = "src/bin/ekb_ginsert.rs"
 
 [dependencies]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
