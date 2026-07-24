@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::basics::error::Diagnostic;
+use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
@@ -8,8 +9,7 @@ use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_is_ground;
-use crate::terms::termtypes::{term_identity_id, Term};
+use crate::terms::termtypes::{term_identity_id, Term, TP_OP_FLAG};
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
@@ -31,9 +31,8 @@ pub struct DiversityWeightParam {
 
 #[derive(Clone, Debug, PartialEq)]
 struct DiversityWeightScratch {
-    // C allocates the variable traversal containers per evaluation. The WFCB
-    // owns the Rust equivalents so ordinary clauses can retain their capacity.
-    variable_terms: Vec<Term>,
+    // C allocates the variable set per evaluation. The WFCB owns the Rust
+    // equivalent so ordinary clauses can retain its capacity.
     variable_ids: Vec<usize>,
 }
 
@@ -42,46 +41,67 @@ const MAX_RETAINED_DIVERSITY_SCRATCH: usize = 1_024;
 impl DiversityWeightScratch {
     fn new() -> Self {
         Self {
-            variable_terms: Vec::new(),
             variable_ids: Vec::new(),
         }
     }
 
-    fn count_clause_variables(&mut self, clause: &Clause) -> i64 {
-        debug_assert!(self.variable_terms.is_empty());
+    fn count_clause_diversity(&mut self, clause: &Clause) -> (i64, i64) {
         debug_assert!(self.variable_ids.is_empty());
 
-        // Keep this independent of ClauseReturnFCodes' TP_OP_FLAG walk:
-        // C-shaped term operations may legitimately leave that bit on vars.
+        let mut subterms = PStack::new();
         for literal in clause.literals().as_slice() {
             for root in [literal.left(), literal.right()] {
-                self.variable_terms.push(root.clone());
-                while let Some(term) = self.variable_terms.pop() {
-                    if term.is_free_var() {
-                        self.variable_ids.push(term_identity_id(&term));
-                    } else {
-                        let arguments = term.arguments();
-                        for argument in arguments.iter().flatten() {
-                            if !term_is_ground(argument) {
-                                self.variable_terms.push(argument.clone());
-                            }
-                        }
-                    }
-                }
+                collect_diversity_subterms(root, &mut subterms, &mut self.variable_ids);
             }
         }
+
+        let mut function_codes = BTreeSet::new();
+        for term in subterms.as_slice() {
+            term.del_prop(TP_OP_FLAG);
+            if !term.is_any_var() {
+                function_codes.insert(term.f_code());
+            }
+        }
+        let function_count = i64::try_from(function_codes.len()).unwrap_or(i64::MAX);
+
         self.variable_ids.sort_unstable();
         self.variable_ids.dedup();
         let variable_count = i64::try_from(self.variable_ids.len()).unwrap_or(i64::MAX);
 
         self.variable_ids.clear();
-        if self.variable_terms.capacity() > MAX_RETAINED_DIVERSITY_SCRATCH {
-            self.variable_terms = Vec::new();
-        }
         if self.variable_ids.capacity() > MAX_RETAINED_DIVERSITY_SCRATCH {
             self.variable_ids = Vec::new();
         }
-        variable_count
+        (function_count, variable_count)
+    }
+}
+
+fn collect_diversity_subterms(
+    term: &Term,
+    subterms: &mut PStack<Term>,
+    variable_ids: &mut Vec<usize>,
+) {
+    assert!(
+        term.is_shared(),
+        "diversity collection expects shared terms"
+    );
+    if term.is_free_var() {
+        // ClauseReturnFCodes may encounter a variable whose operation flag was
+        // left set by another C-shaped traversal. Variables do not contribute
+        // function codes, so count them independently without touching that
+        // flag.
+        variable_ids.push(term_identity_id(term));
+        return;
+    }
+    if term.query_prop(TP_OP_FLAG) {
+        return;
+    }
+
+    term.set_prop(TP_OP_FLAG);
+    subterms.push(term.clone());
+    let arguments = term.arguments();
+    for argument in arguments.iter().flatten() {
+        collect_diversity_subterms(argument, subterms, variable_ids);
     }
 }
 
@@ -321,10 +341,7 @@ fn diversity_weight_compute_reusing_scratch(
     bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
-    let mut fcodes = Vec::new();
-    let f_diversity = clause.return_fcodes(&mut fcodes);
-    let v_diversity = param.scratch.count_clause_variables(clause);
-    let diversity = (f_diversity, v_diversity);
+    let diversity = param.scratch.count_clause_diversity(clause);
     diversity_weight_compute_from_counts(param, bank, clause, diversity)
 }
 
@@ -605,17 +622,15 @@ mod tests {
         }
 
         assert_eq!(
-            scratch.count_clause_variables(&clause),
-            expected_variable_count
+            scratch.count_clause_diversity(&clause),
+            (expected_function_count, expected_variable_count)
         );
         assert_eq!((expected_function_count, expected_variable_count), (2, 1));
         let retained_variable_capacity = scratch.variable_ids.capacity();
-        assert!(scratch.variable_terms.is_empty());
         assert!(scratch.variable_ids.is_empty());
 
-        assert_eq!(scratch.count_clause_variables(&clause), 1);
+        assert_eq!(scratch.count_clause_diversity(&clause), (2, 1));
         assert_eq!(scratch.variable_ids.capacity(), retained_variable_capacity);
-        assert!(scratch.variable_terms.is_empty());
         assert!(scratch.variable_ids.is_empty());
     }
 }
