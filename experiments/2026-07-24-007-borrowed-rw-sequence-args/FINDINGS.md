@@ -53,13 +53,17 @@ That is 13,514,744 or 0.150298% below the fresh unchanged-source control and
 14,367,344 or 0.159765% below the archived accepted profile. Its hypothetical
 ratio to the 5,254,361,329-instruction C reference is 1.708761.
 
-The all-feature native executable grows from 8,952,320 to 9,012,224 bytes.
-More importantly, repeated direct native runs expose nondeterministic proof
-output: two of three candidate runs match the parent's stable 10,350-byte
-proof object, while one produces a different 10,208-byte proof object. All
-runs exit zero and prove the expected result. This violates the maintained
-exact proof-object compatibility contract despite the corrected instruction
-win.
+The first repeated native check used an all-feature candidate against the
+default-feature parent and is superseded by Experiment 285's native feature
+audit. A matched default-feature rerun produces an 8,952,320-byte candidate,
+identical in size to the parent, but confirms the substantive incompatibility.
+
+The parent produces one stable 33,636-character proof object. Eight
+default-feature candidate runs emit three distinct hashes: five match the
+parent, two produce the same 34,417-character alternate, and one produces a
+different 33,636-character proof. All runs exit zero and prove the expected
+result. This violates the maintained exact proof-object compatibility
+contract despite the corrected instruction win.
 
 ### Source-only borrowed slice
 
@@ -79,8 +83,9 @@ failed deterministic proof compatibility.
   paired-slice candidate.
 - Corrected default-feature WSL Callgrind for the paired candidate proves
   LUSK6 and exits zero.
-- Three direct native proof comparisons all exit zero; two are byte-identical
-  to the parent and one differs.
+- The matched candidate fingerprint records exactly `features=["default"]`.
+- Three parent and eight candidate direct native proof comparisons all exit
+  zero; the parent is stable while the candidate emits three proof hashes.
 - Native timing and the full maintained compatibility matrix are skipped
   after the repeated direct check rejects deterministic proof compatibility.
 - After rejection, accepted `clausepos.rs` is restored byte-for-byte.

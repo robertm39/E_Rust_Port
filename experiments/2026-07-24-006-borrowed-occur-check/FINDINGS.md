@@ -48,37 +48,53 @@ control of 8,991,960,325 by 39,363,561 or 0.437764%, and improves the archived
 accepted profile by 40,216,161 or 0.447203%. The hypothetical Rust/C ratio is
 1.703841.
 
-### Native timing
+### Native configuration correction and matched timing
 
-The corrected native candidate preserves byte-identical proof-object output,
-but decisively reverses the instruction win. After four alternating warmup
-pairs, 64 alternating measured pairs show:
+The first native correction was also configuration-invalid: its candidate
+fingerprint contained all features while the accepted parent fingerprint
+contains only `features=["default"]`. Experiment 285 measures unchanged
+all-feature source 8.832227% slower in wall time and 8.972648% slower in CPU,
+so the previously recorded seven-percent candidate slowdown is superseded.
 
-- wall and CPU means regress 7.831316% and 7.383242%;
-- wall and CPU medians regress 7.853853% and 7.865169%;
-- mean paired wall and CPU changes regress 7.944031% and 7.487450%;
-- the candidate wins only one wall pair and one CPU pair, with no CPU ties.
+The matched default-feature candidate is 8,983,552 bytes versus 8,952,320 for
+the parent. Three parent and five candidate direct proof runs are
+byte-identical and exit zero.
 
-The final 32 pairs remain negative at 7.098325% wall and 7.105171% CPU by
-aggregate means. The final 16 regress 8.258772% wall and 7.610994% CPU, with
-zero candidate wins. All 128 measured and eight warmup processes exit zero.
-The all-feature native executable grows from 8,952,320 to 9,012,224 bytes.
+Two independent native blocks each exclude four alternating warmup pairs and
+retain 64 alternating measured pairs:
+
+| Block | Wall mean | CPU mean | Wall wins | CPU wins | CPU ties |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| First 64 pairs | +1.131783% | +0.569106% | 24 | 28 | 3 |
+| Second 64 pairs | +0.498696% | +0.545815% | 33 | 26 | 7 |
+| Combined 128 pairs | +0.817666% | +0.557560% | 57 | 54 | 10 |
+
+Positive percentages are candidate regressions. Combined wall and CPU medians
+regress 0.855621% and tie; mean paired wall and CPU changes regress 0.981794%
+and 0.688592%.
+
+The combined final halves remain negative at 0.807451% wall and 0.361011% CPU
+by aggregate means. The second block's final 32 regress 0.344689% wall while
+improving CPU 0.131883%; its final 16 tie wall within 0.006180% and improve CPU
+0.727995%. Those late CPU gains do not overcome both full independent blocks
+and the combined stable-half wall/CPU regressions.
 
 The previously attempted no-inline variant used the invalid all-feature
-Callgrind configuration and is not used in the decision. It is not rerun
-because the original corrected candidate already fails the native gate by
-more than seven percent.
+Callgrind configuration and is not used in the decision.
 
 ## Validation
 
-- All 21 default and 22 all-feature MGU tests pass for the borrowed candidate.
+- All focused MGU tests pass for the borrowed candidate in default and
+  all-feature modes.
 - A focused regression covers a multi-link borrowed binding chain leading
   through an ordinary term argument.
 - Strict all-feature library pedantic Clippy and formatting pass for Variant
   A.
 - The corrected default-feature WSL Callgrind run proves LUSK6 and exits zero.
-- Direct native parent/candidate proof-object output is byte-identical.
-- All corrected native timing processes prove and exit zero.
+- Repeated matched default-feature native parent/candidate proof output is
+  byte-identical.
+- All 256 matched-feature measured timing processes and 16 warmup processes
+  prove and exit zero.
 - Compatibility matrices are skipped after the decisive native rejection.
 - After rejection, the binding borrow visibility, occurrence-check
   implementation, and focused regression are removed and accepted sources
@@ -87,10 +103,10 @@ more than seven percent.
 ## Decision
 
 Reject. Borrow-scoped occurrence checking produces a genuine 0.437764%
-default-feature instruction reduction, but native production slows by more
-than seven percent across the full sample and stable tails. Keep Experiment
-270 as the accepted baseline at 8,992,812,925 instructions, or 1.711495 times
-C.
+default-feature instruction reduction, but matched native production regresses
+wall and CPU means in two independent blocks and their combined stable halves.
+Keep Experiment 270 as the accepted baseline at 8,992,812,925 instructions,
+or 1.711495 times C.
 
 Future first-order MGU work should preserve the accepted occurrence-check
 code shape; the owned queue, specialized dereference, inline job deque, and
@@ -110,7 +126,11 @@ valgrind --tool=callgrind \
 ```powershell
 & .\experiments\2026-07-22-214-move-termtree-insert-links\run-native.ps1 `
   -ParentExe .\target\native-270-borrow-active-pdt-frame\release\eprover.exe `
-  -CandidateExe .\target\native-279-corrected-borrowed-occur-check\release\eprover.exe `
+  -CandidateExe .\target\native-279-default-borrowed-occur-check\release\eprover.exe `
   -Pairs 64 `
-  -OutputCsv .\experiments\2026-07-24-006-borrowed-occur-check\native-lusk-corrected.csv
+  -OutputCsv .\experiments\2026-07-24-006-borrowed-occur-check\native-lusk-default.csv
 ```
+
+Run the native command twice independently; the second retained block is
+`native-lusk-default-2.csv`. The older `native-lusk-corrected.csv` is
+superseded by Experiment 285's native feature audit.

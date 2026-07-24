@@ -54,21 +54,23 @@ That is 3,907,884 or 0.043460% below the fresh unchanged-source control and
 4,760,484 or 0.052937% below the archived accepted profile. Its hypothetical
 ratio to the 5,254,361,329-instruction C reference improves to 1.710589.
 
-The all-feature native executable grows from 8,952,320 to 9,010,176 bytes, an
-increase of 57,856 bytes.
+The first native correction used an all-feature candidate against the
+default-feature parent and is superseded by Experiment 285's native feature
+audit. The matched default-feature candidate is 8,950,272 bytes, 2,048 bytes
+smaller than the 8,952,320-byte parent. Three parent and five candidate direct
+proof runs are all byte-identical and exit zero.
 
 After four alternating warmup pairs, 64 alternating measured native pairs
-decisively reverse the small instruction win:
+reverse the small instruction win:
 
-- wall and CPU means regress 9.347007% and 10.652976%;
-- wall and CPU medians regress 9.588735% and 10.204082%;
-- mean paired wall and CPU changes regress 9.628471% and 10.923009%;
-- the candidate wins only four wall pairs and three CPU pairs, with two CPU
-  ties.
+- wall and CPU means regress 0.918190% and 1.199080%;
+- wall and CPU medians regress 0.545908% and 1.036269%;
+- mean paired wall and CPU changes regress 1.182444% and 1.504408%;
+- the candidate wins 26 wall pairs and 22 CPU pairs, with six CPU ties.
 
-The final 32 pairs remain negative at 9.705597% wall and 10.673235% CPU by
-aggregate means. The final 16 regress 11.273236% wall and 12.248996% CPU.
-All 128 measured and eight warmup processes exit zero.
+The final 32 pairs remain negative at 1.579561% wall and 2.214144% CPU by
+aggregate means. The final 16 regress 0.977337% wall and 1.259947% CPU. All
+128 measured and eight warmup processes exit zero.
 
 ### Out-of-line decision
 
@@ -87,9 +89,10 @@ percent.
   A.
 - Corrected default-feature WSL Callgrind for Variant A proves LUSK6 and exits
   zero.
-- Three parent and five candidate direct native proof runs are all
-  byte-identical and exit zero.
-- All corrected native timing processes prove and exit zero.
+- The matched candidate fingerprint records exactly `features=["default"]`.
+- Three parent and five candidate direct native proof runs are byte-identical
+  and exit zero.
+- All matched-feature native timing processes prove and exit zero.
 - The full maintained compatibility matrix is skipped after the decisive
   native rejection.
 - After rejection, the factored helper and decision-only private return are
@@ -99,9 +102,9 @@ percent.
 
 Reject both variants. Removing the immediately discarded Rust-owned pack is
 proof-exact and improves corrected default-feature instructions by 0.043460%,
-but slows the production native workload by roughly ten percent across the
-full sample and stable tails. Keep Experiment 270 as the accepted baseline at
-8,992,812,925 instructions, or 1.711495 times C.
+but matched native wall and CPU timing regress across the full sample and
+stable tails. Keep Experiment 270 as the accepted baseline at 8,992,812,925
+instructions, or 1.711495 times C.
 
 Forward-subsumption packing should retain the accepted code shape until clause
 ownership can represent C's stable alias directly; helper factoring and forced
@@ -121,7 +124,10 @@ valgrind --tool=callgrind \
 ```powershell
 & .\experiments\2026-07-22-214-move-termtree-insert-links\run-native.ps1 `
   -ParentExe .\target\native-270-borrow-active-pdt-frame\release\eprover.exe `
-  -CandidateExe .\target\native-282-corrected-defer-forward-subsumption-pack\release\eprover.exe `
+  -CandidateExe .\target\native-282-default-defer-forward-subsumption-pack\release\eprover.exe `
   -Pairs 64 `
-  -OutputCsv .\experiments\2026-07-24-009-defer-forward-subsumption-pack\native-lusk-corrected.csv
+  -OutputCsv .\experiments\2026-07-24-009-defer-forward-subsumption-pack\native-lusk-default.csv
 ```
+
+The older `native-lusk-corrected.csv` is superseded by Experiment 285's
+native feature audit.
