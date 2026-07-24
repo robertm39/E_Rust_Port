@@ -779,6 +779,11 @@ pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
 /// Fully dereference a term without routing through the mutable dereference-
 /// mode dispatcher.
 #[must_use]
+#[expect(
+    clippy::inline_always,
+    reason = "whole-prover measurements require this sole-caller boundary with allocation-free clause partitioning"
+)]
+#[inline(always)]
 pub(crate) fn term_deref_always(term: &Term) -> Term {
     debug_assert!(
         term.is_top_level_any_var() || term.binding().is_none(),

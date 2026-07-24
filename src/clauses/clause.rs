@@ -99,6 +99,30 @@ impl ClauseHeader {
     }
 }
 
+/// Stably group positive literals before negative literals in-place.
+///
+/// Recursively partitioning each half and rotating the two middle runs bounds
+/// movement to O(n log n) while retaining the caller's existing allocation.
+#[inline(never)]
+fn stable_partition_clause_literals(literals: &mut [Eqn]) -> usize {
+    if literals.len() < 2 {
+        return usize::from(literals.first().is_some_and(Eqn::is_positive));
+    }
+
+    let midpoint = literals.len() / 2;
+    let (left, right) = literals.split_at_mut(midpoint);
+    let left_positive_count = stable_partition_clause_literals(left);
+    let right_positive_count = stable_partition_clause_literals(right);
+    let left_negative_count = midpoint - left_positive_count;
+
+    if left_negative_count != 0 && right_positive_count != 0 {
+        literals[left_positive_count..midpoint + right_positive_count]
+            .rotate_left(left_negative_count);
+    }
+
+    left_positive_count + right_positive_count
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clause {
     ident: i64,
@@ -138,21 +162,13 @@ impl Clause {
 
     #[must_use]
     pub fn alloc(literals: EqnList) -> Self {
-        let mut positive = Vec::new();
-        let mut negative = Vec::new();
-        for literal in literals.into_vec() {
-            if literal.is_positive() {
-                positive.push(literal);
-            } else {
-                negative.push(literal);
-            }
-        }
+        let mut literals = literals.into_vec();
+        let positive_count = stable_partition_clause_literals(&mut literals);
 
         let mut clause = Self::empty();
         clause.ident = next_clause_ident();
-        clause.header.set_positive_literal_count(positive.len());
-        positive.append(&mut negative);
-        clause.literals = EqnList::from_vec(positive);
+        clause.header.set_positive_literal_count(positive_count);
+        clause.literals = EqnList::from_vec(literals);
         clause
     }
 
@@ -2735,19 +2751,66 @@ mod tests {
         let a = typed_const(&mut bank, "a");
         let b = typed_const(&mut bank, "b");
         let c = typed_const(&mut bank, "c");
-        let negative = eqn(&mut bank, &a, &b, false);
-        let positive = eqn(&mut bank, &b, &c, true);
+        let d = typed_const(&mut bank, "d");
+        let negative_a = eqn(&mut bank, &a, &b, false);
+        let positive_a = eqn(&mut bank, &b, &c, true);
+        let negative_b = eqn(&mut bank, &c, &d, false);
+        let positive_b = eqn(&mut bank, &d, &a, true);
 
-        let clause = Clause::alloc(EqnList::from_vec(vec![negative.clone(), positive.clone()]));
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            negative_a.clone(),
+            positive_a.clone(),
+            negative_b.clone(),
+            positive_b.clone(),
+        ]));
 
-        assert_eq!(clause.positive_literal_count(), 1);
-        assert_eq!(clause.negative_literal_count(), 1);
+        assert_eq!(clause.positive_literal_count(), 2);
+        assert_eq!(clause.negative_literal_count(), 2);
         assert!(clause.literals().as_slice()[0].is_positive());
-        assert!(clause.literals().as_slice()[1].is_negative());
-        assert_eq!(clause.literals().as_slice(), &[positive, negative]);
+        assert!(clause.literals().as_slice()[1].is_positive());
+        assert!(clause.literals().as_slice()[2].is_negative());
+        assert!(clause.literals().as_slice()[3].is_negative());
+        assert_eq!(
+            clause.literals().as_slice(),
+            &[positive_a, positive_b, negative_a, negative_b]
+        );
         assert!(clause.ident() > i64::MIN);
         assert_eq!(clause.date(), SysDate::creation_time());
         assert!(clause.evaluations().is_none());
+    }
+
+    #[test]
+    fn allocation_stably_partitions_long_alternating_literal_sequence() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let positive_template = eqn(&mut bank, &a, &b, true);
+        let negative_template = eqn(&mut bank, &a, &b, false);
+        let mut input = Vec::new();
+        let mut expected_positive = Vec::new();
+        let mut expected_negative = Vec::new();
+
+        for position in 0..64 {
+            let mut literal = if position % 2 == 0 {
+                negative_template.clone()
+            } else {
+                positive_template.clone()
+            };
+            literal.set_position(position);
+            input.push(literal.clone());
+            if literal.is_positive() {
+                expected_positive.push(literal);
+            } else {
+                expected_negative.push(literal);
+            }
+        }
+
+        let clause = Clause::alloc(EqnList::from_vec(input));
+        expected_positive.append(&mut expected_negative);
+
+        assert_eq!(clause.positive_literal_count(), 32);
+        assert_eq!(clause.negative_literal_count(), 32);
+        assert_eq!(clause.literals().as_slice(), expected_positive);
     }
 
     #[test]
