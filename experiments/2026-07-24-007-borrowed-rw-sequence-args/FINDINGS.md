@@ -14,7 +14,9 @@ without cloning two `Rc<TermCell>` handles per child edge?
 
 - Parent source: commit `25ba7155` (`perf: reject borrowed occurrence
   traversal`); executable source remains accepted Experiment 270.
-- Accepted compact profile: 8,992,812,925 instructions.
+- Fresh unchanged-source default-feature control: 8,991,960,325
+  instructions.
+- Archived accepted default-feature profile: 8,992,812,925 instructions.
 - Representative optimized line profile:
   `.artifacts/experiments/2026-07-23-033-pdt-cursor-after-active-frame/rust-callgrind-pdt-cursor-after-active-frame.out`.
 - Parent native executable:
@@ -38,28 +40,34 @@ argument arrays.
 
 ### Paired borrowed slices
 
-The candidate preserves the expected unsatisfiable result and produces a
-byte-identical native proof object. The intended recursive owner improves in
-directly comparable optimized line-table profiles: 284,810 recursive
-`term_compute_rw_sequence` calls fall from 126,109,659 to 116,240,734
-instructions, a reduction of 9,868,925 or 7.825669%.
+The original compact and line-table candidate profiles were accidentally
+built with `--all-features` and are not comparable with the default-feature
+accepted baseline. A configuration audit measured the unchanged source at
+9,078,864,096 instructions with all features versus 8,991,960,325 with
+default features, a build-configuration penalty of 86,903,771 instructions
+or 0.966461%. Those original whole-program and line-owner comparisons are
+therefore superseded.
 
-The local saving reverses at whole-program scope. Compact instructions rise
-from 8,992,812,925 to 9,063,556,057, a regression of 70,743,132 or 0.786663%.
-The line-table build likewise rises from 8,994,036,876 to 9,062,705,468
-instructions, or 0.763490%. The all-feature native executable grows from
-8,952,320 to 9,012,224 bytes.
+The corrected default-feature candidate executes 8,978,445,581 instructions.
+That is 13,514,744 or 0.150298% below the fresh unchanged-source control and
+14,367,344 or 0.159765% below the archived accepted profile. Its hypothetical
+ratio to the 5,254,361,329-instruction C reference is 1.708761.
 
-Holding both argument-array `RefCell` guards across recursive calls therefore
-costs more through guard traffic and broader code layout than it saves in
-child-handle clone/drop work.
+The all-feature native executable grows from 8,952,320 to 9,012,224 bytes.
+More importantly, repeated direct native runs expose nondeterministic proof
+output: two of three candidate runs match the parent's stable 10,350-byte
+proof object, while one produces a different 10,208-byte proof object. All
+runs exit zero and prove the expected result. This violates the maintained
+exact proof-object compatibility contract despite the corrected instruction
+win.
 
 ### Source-only borrowed slice
 
 Variant B borrows only the source argument array while retaining the accepted
-owned replacement child. It also proves the expected result, but rises further
-to 9,073,151,795 instructions: 80,338,870 or 0.893368% above the parent and
-9,595,738 instructions above the paired-slice candidate.
+owned replacement child. Its original 9,073,151,795-instruction result was
+also built with all features and is invalid as a comparison to the accepted
+default-feature baseline. It was not rerun after the paired-slice candidate
+failed deterministic proof compatibility.
 
 ## Validation
 
@@ -69,31 +77,31 @@ to 9,073,151,795 instructions: 80,338,870 or 0.893368% above the parent and
   link and records the exact injected operation/demodulator stack order.
 - Strict all-feature library pedantic Clippy and formatting pass for the
   paired-slice candidate.
-- Compact and line-table WSL Callgrind for the paired candidate plus compact
-  Callgrind for the source-only variant all prove LUSK6 and exit zero.
-- Direct native parent/candidate proof-object output is byte-identical.
-- Native timing and compatibility matrices are skipped after both exact
-  instruction profiles reject the performance-only change.
+- Corrected default-feature WSL Callgrind for the paired candidate proves
+  LUSK6 and exits zero.
+- Three direct native proof comparisons all exit zero; two are byte-identical
+  to the parent and one differs.
+- Native timing and the full maintained compatibility matrix are skipped
+  after the repeated direct check rejects deterministic proof compatibility.
 - After rejection, accepted `clausepos.rs` is restored byte-for-byte.
 
 ## Decision
 
-Reject both variants. Borrowing the paired arrays reduces the recursive
-rewrite-sequence owner by 7.825669%, but retaining one or two recursive
-`RefCell` guards causes decisive whole-program regressions. Keep Experiment
+Reject both variants. The paired-array candidate improves corrected
+default-feature whole-program instructions by 0.150298%, but intermittently
+changes the exact proof object on the maintained LUSK6 gate. Keep Experiment
 270 as the accepted baseline at 8,992,812,925 instructions, or 1.711495 times
 C.
 
-Rewrite-sequence child ownership is now exhausted at this representation
-boundary: cloning both owned handles is faster overall than either paired or
-single-side borrowed traversal.
+Rewrite-sequence child ownership remains exhausted at this representation
+boundary because the borrowed traversal is not proof-reproducible.
 
 ## Reproduction
 
 ```bash
 valgrind --tool=callgrind \
-  --callgrind-out-file=.artifacts/experiments/2026-07-24-007-borrowed-rw-sequence-args/rust-callgrind-borrowed-rw-sequence-args.out \
-  target-wsl-280-borrowed-rw-sequence-args/release/eprover \
+  --callgrind-out-file=.artifacts/experiments/2026-07-24-007-borrowed-rw-sequence-args/rust-callgrind-borrowed-rw-sequence-args-default-corrected.out \
+  target-wsl-280-corrected-borrowed-rw-sequence-args/release/eprover \
   eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6.lop \
   --auto --silent --cpu-limit=600 --memory-limit=2048 \
   --detsort-rw --detsort-new
