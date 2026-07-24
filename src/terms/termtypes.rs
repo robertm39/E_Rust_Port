@@ -999,10 +999,10 @@ fn deref_step(term: &Term) -> Option<Term> {
 #[inline(always)]
 fn deref_always_step(term: &Term) -> Option<Term> {
     if !term.is_free_var() {
-        if term.is_applied_free_var()
+        if term.is_phony_app()
             && term
                 .argument(0)
-                .is_some_and(|head| head.binding().is_some())
+                .is_some_and(|head| head.is_free_var() && head.binding().is_some())
         {
             return Some(deref_applied_free_var_no_cache(term));
         }
