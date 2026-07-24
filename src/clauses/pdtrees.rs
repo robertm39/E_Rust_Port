@@ -1356,18 +1356,20 @@ impl PdTree {
             );
             subst.backtrack_to_pos(cursor.base_subst);
         }
+        let cursor = &mut *cursor;
 
         loop {
-            let frame_index = cursor.frames.len().checked_sub(1)?;
-            let node_index = cursor.frames[frame_index].node_index;
+            let query_stack_is_empty = cursor.query_stack.is_empty();
+            let frame = cursor.frames.last_mut()?;
+            let node_index = frame.node_index;
 
-            if cursor.query_stack.is_empty() {
-                let terminal_position = cursor.frames[frame_index].terminal_position;
+            if query_stack_is_empty {
+                let terminal_position = frame.terminal_position;
                 if terminal_position == 0 {
-                    pop_subst_cursor_frame(&mut cursor);
+                    pop_subst_cursor_frame(cursor);
                     continue;
                 }
-                cursor.frames[frame_index].terminal_position -= 1;
+                frame.terminal_position -= 1;
                 if let Some(occurrence) =
                     self.nodes[node_index].terminal_entries[terminal_position - 1].occurrence
                 {
@@ -1390,9 +1392,9 @@ impl PdTree {
                 continue;
             }
 
-            let step_index = cursor.frames[frame_index].next_step;
+            let step_index = frame.next_step;
             if step_index >= 2 {
-                pop_subst_cursor_frame(&mut cursor);
+                pop_subst_cursor_frame(cursor);
                 continue;
             }
             let step = if step_index == 0 {
@@ -1403,7 +1405,8 @@ impl PdTree {
 
             match step {
                 PdtTraversalStep::Symbols => {
-                    cursor.frames[frame_index].next_step += 1;
+                    frame.next_step += 1;
+                    let effective_term_weight = frame.effective_term_weight;
                     let query_term = cursor
                         .query_stack
                         .last()
@@ -1427,7 +1430,6 @@ impl PdTree {
                         continue;
                     };
                     self.record_nodes_visited(1);
-                    let effective_term_weight = cursor.frames[frame_index].effective_term_weight;
                     if !self.node_satisfies_constraints(
                         next_index,
                         effective_term_weight,
@@ -1436,9 +1438,9 @@ impl PdTree {
                         continue;
                     }
                     if FIRST_ORDER {
-                        advance_first_order_symbol_query(&mut cursor);
+                        advance_first_order_symbol_query(cursor);
                     } else {
-                        advance_symbol_query(&mut cursor);
+                        advance_symbol_query(cursor);
                     }
                     let terminal_position = if cursor.query_stack.is_empty() {
                         self.nodes[next_index].terminal_entries.len()
@@ -1455,13 +1457,14 @@ impl PdTree {
                     ));
                 }
                 PdtTraversalStep::Variables => {
-                    let variable_link = cursor.frames[frame_index].next_variable_child;
+                    let variable_link = frame.next_variable_child;
                     let Some(variable_index) = unpack_variable_child_index(variable_link) else {
-                        cursor.frames[frame_index].next_step += 1;
+                        frame.next_step += 1;
                         continue;
                     };
                     let variable_child = &self.variable_children[variable_index];
-                    cursor.frames[frame_index].next_variable_child = variable_child.next_sibling;
+                    frame.next_variable_child = variable_child.next_sibling;
+                    let effective_term_weight = frame.effective_term_weight;
                     let next_index = variable_child.node_index;
                     let variable = variable_child.variable.as_ref()?;
                     let query_term = cursor
@@ -1493,7 +1496,7 @@ impl PdTree {
                     }
                     self.record_nodes_visited(1);
                     let effective_term_weight = adjusted_variable_edge_weight(
-                        cursor.frames[frame_index].effective_term_weight,
+                        effective_term_weight,
                         term_standard_weight(query_term),
                         variable_child.weight,
                     );
@@ -1504,7 +1507,7 @@ impl PdTree {
                     ) {
                         continue;
                     }
-                    let query_step = advance_variable_query(&mut cursor);
+                    let query_step = advance_variable_query(cursor);
                     if adds_binding {
                         cursor.bindings.push(PdtCursorBinding {
                             variable_child: variable_index,
