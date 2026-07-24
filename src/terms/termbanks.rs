@@ -1382,6 +1382,20 @@ impl TermBank {
         old: &Term,
         repl: &Term,
     ) -> Result<Term, Diagnostic> {
+        if problem_type() == ProblemType::FirstOrder {
+            self.insert_repl_for_problem::<true>(term, deref, old, repl)
+        } else {
+            self.insert_repl_for_problem::<false>(term, deref, old, repl)
+        }
+    }
+
+    fn insert_repl_for_problem<const FIRST_ORDER: bool>(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+        old: &Term,
+        repl: &Term,
+    ) -> Result<Term, Diagnostic> {
         if term == old {
             debug_assert!(
                 self.find(repl).is_some(),
@@ -1390,8 +1404,16 @@ impl TermBank {
             return Ok(repl.clone());
         }
 
-        let (dereferenced, current_deref, limit) =
-            self.deref_root_no_whnf_if_changed(term, deref)?;
+        let (dereferenced, current_deref, limit) = if FIRST_ORDER {
+            let mut current_deref = deref;
+            (
+                term_deref_if_changed(term, &mut current_deref),
+                current_deref,
+                0,
+            )
+        } else {
+            self.deref_root_no_whnf_if_changed(term, deref)?
+        };
         let term = dereferenced.as_ref().unwrap_or(term);
         if term.is_free_var() {
             let type_ = term.type_().expect("free variable must have a type");
@@ -1410,12 +1432,13 @@ impl TermBank {
             let arg = arg
                 .as_ref()
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_repl(
-                arg,
-                Self::convert_lfho_deref(index, limit, current_deref),
-                old,
-                repl,
-            )?;
+            let child_deref = if FIRST_ORDER {
+                current_deref
+            } else {
+                Self::convert_lfho_deref(index, limit, current_deref)
+            };
+            let shared =
+                self.insert_repl_for_problem::<FIRST_ORDER>(arg, child_deref, old, repl)?;
             copy_arguments[index] = Some(shared);
         }
         drop(copy_arguments);
@@ -7178,6 +7201,37 @@ mod tests {
             .unwrap();
 
         assert_expanded_with_bank_var(&fixture, &inserted);
+    }
+
+    #[test]
+    fn replacement_insertion_specializes_first_order_recursion() {
+        let _state_guard = global_state_lock();
+        let _problem_type_reset = set_problem_type_for_test(ProblemType::FirstOrder);
+        let (mut bank, f_code) = bank_with_symbol("fo_repl_f", 1);
+        let old_code = bank.signature_mut().insert_id("fo_repl_old", 0, false);
+        let repl_code = bank.signature_mut().insert_id("fo_repl_new", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(old_code, i_type.clone())
+            .unwrap();
+        bank.signature_mut()
+            .declare_type(repl_code, i_type.clone())
+            .unwrap();
+        let old = bank.create_const_term(old_code).unwrap();
+        let repl = bank.create_const_term(repl_code).unwrap();
+        let binding = Term::top_alloc(f_code, 1);
+        binding.set_argument(0, old.clone());
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        var.set_binding(Some(binding));
+
+        let inserted = bank
+            .insert_repl(&var, DerefType::Once, &old, &repl)
+            .unwrap();
+
+        assert_eq!(inserted.f_code(), f_code);
+        assert_eq!(inserted.argument(0), Some(repl));
+        assert!(inserted.is_shared());
     }
 
     #[test]
