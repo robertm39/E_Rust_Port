@@ -145,8 +145,9 @@ use crate::inout::scanner::{
 };
 use crate::inout::signals::{
     configure_time_limits, e_sched_signal_setup, e_signal_setup, finalize_cpu_limit_outcome,
-    reset_sig_term_caught, set_signal_global_out_fd, sig_term_caught, silent_time_out,
-    time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
+    reset_sig_term_caught, set_signal_global_out_fd, sig_term_caught, signal_pending_output_append,
+    signal_pending_output_clear, silent_time_out, time_limit_expired_kind, SignalOutcome,
+    TimeLimitKind, RLIM_INFINITY_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY, SIGXCPU_COMPAT,
 };
 use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
@@ -2465,7 +2466,7 @@ enum ConfiguredOutput<'a, W: Write + ?Sized> {
     },
 }
 
-const STDIO_COMPAT_BUFFER_CAPACITY: usize = 8 * 1024;
+const STDIO_COMPAT_BUFFER_CAPACITY: usize = SIGNAL_PENDING_OUTPUT_CAPACITY;
 
 fn write_with_stdio_buffer<W: Write + ?Sized>(
     writer: &mut W,
@@ -2484,6 +2485,7 @@ fn write_with_stdio_buffer<W: Write + ?Sized>(
         writer.write_all(buffer)
     } else {
         pending.extend_from_slice(buffer);
+        signal_pending_output_append(buffer);
         Ok(())
     }
 }
@@ -2492,6 +2494,7 @@ fn flush_stdio_buffer<W: Write + ?Sized>(writer: &mut W, pending: &mut Vec<u8>) 
     if !pending.is_empty() {
         writer.write_all(pending)?;
         pending.clear();
+        signal_pending_output_clear();
     }
     writer.flush()
 }
@@ -2527,6 +2530,7 @@ impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
 impl<W: Write + ?Sized> Drop for ConfiguredOutput<'_, W> {
     fn drop(&mut self) {
         let _ = self.flush();
+        signal_pending_output_clear();
         let _ = set_signal_global_out_fd(1);
     }
 }
@@ -2577,17 +2581,18 @@ fn open_configured_output<'a, W: Write + ?Sized>(
     stdout: &'a mut W,
     output_file: Option<&str>,
 ) -> Result<ConfiguredOutput<'a, W>, Diagnostic> {
+    signal_pending_output_clear();
     let _ = set_signal_global_out_fd(1);
     let Some(name) = output_file else {
         return Ok(ConfiguredOutput::Writer {
             writer: stdout,
-            buffer: Vec::new(),
+            buffer: Vec::with_capacity(STDIO_COMPAT_BUFFER_CAPACITY),
         });
     };
     if name == "-" {
         return Ok(ConfiguredOutput::Writer {
             writer: stdout,
-            buffer: Vec::new(),
+            buffer: Vec::with_capacity(STDIO_COMPAT_BUFFER_CAPACITY),
         });
     }
 
@@ -2600,7 +2605,7 @@ fn open_configured_output<'a, W: Write + ?Sized>(
             }
             ConfiguredOutput::File {
                 file,
-                buffer: Vec::new(),
+                buffer: Vec::with_capacity(STDIO_COMPAT_BUFFER_CAPACITY),
                 stdout,
             }
         })

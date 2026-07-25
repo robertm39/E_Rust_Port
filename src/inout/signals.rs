@@ -19,6 +19,7 @@ const USEC_PER_SEC: u64 = 1_000_000;
 const TIME_LIMIT_KIND_NONE: u8 = 0;
 const TIME_LIMIT_KIND_SOFT: u8 = 1;
 const TIME_LIMIT_KIND_HARD: u8 = 2;
+pub const SIGNAL_PENDING_OUTPUT_CAPACITY: usize = 8 * 1024;
 
 static SCHEDULE_TIME_LIMIT: AtomicU64 = AtomicU64::new(0);
 static SYSTEM_TIME_LIMIT: AtomicU64 = AtomicU64::new(RLIM_INFINITY_COMPAT);
@@ -34,6 +35,78 @@ static SIG_TERM_CAUGHT: AtomicUsize = AtomicUsize::new(0);
 static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
 static SIGNAL_GLOBAL_OUT_FD: AtomicI32 = AtomicI32::new(1);
+
+#[cfg(any(test, all(target_os = "linux", not(test))))]
+struct SignalPendingOutput {
+    // SIGXCPU can interrupt an append at any instruction. Atomic bytes avoid
+    // aliasing the mutable configured-output Vec, and publishing the length
+    // last makes an interrupted append invisible until every byte is stored.
+    bytes: [AtomicU8; SIGNAL_PENDING_OUTPUT_CAPACITY],
+    committed_len: AtomicUsize,
+}
+
+#[cfg(any(test, all(target_os = "linux", not(test))))]
+impl SignalPendingOutput {
+    const fn new() -> Self {
+        Self {
+            bytes: [const { AtomicU8::new(0) }; SIGNAL_PENDING_OUTPUT_CAPACITY],
+            committed_len: AtomicUsize::new(0),
+        }
+    }
+
+    fn append(&self, buffer: &[u8]) -> bool {
+        let start = self.committed_len.load(Ordering::SeqCst);
+        let Some(end) = start.checked_add(buffer.len()) else {
+            return false;
+        };
+        let Some(destination) = self.bytes.get(start..end) else {
+            return false;
+        };
+
+        for (byte, value) in destination.iter().zip(buffer) {
+            byte.store(*value, Ordering::Relaxed);
+        }
+        self.committed_len.store(end, Ordering::SeqCst);
+        true
+    }
+
+    fn clear(&self) {
+        self.committed_len.store(0, Ordering::SeqCst);
+    }
+
+    fn copy_from(&self, start: usize, destination: &mut [u8]) -> usize {
+        let committed_len = self.committed_len.load(Ordering::SeqCst);
+        let end = start.saturating_add(destination.len()).min(committed_len);
+        let Some(source) = self.bytes.get(start..end) else {
+            return 0;
+        };
+
+        for (destination, byte) in destination.iter_mut().zip(source) {
+            *destination = byte.load(Ordering::Relaxed);
+        }
+        source.len()
+    }
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+static SIGNAL_PENDING_OUTPUT: SignalPendingOutput = SignalPendingOutput::new();
+
+#[cfg(all(target_os = "linux", not(test)))]
+pub fn signal_pending_output_append(buffer: &[u8]) {
+    let appended = SIGNAL_PENDING_OUTPUT.append(buffer);
+    debug_assert!(appended);
+}
+
+#[cfg(not(all(target_os = "linux", not(test))))]
+pub const fn signal_pending_output_append(_buffer: &[u8]) {}
+
+#[cfg(all(target_os = "linux", not(test)))]
+pub fn signal_pending_output_clear() {
+    SIGNAL_PENDING_OUTPUT.clear();
+}
+
+#[cfg(not(all(target_os = "linux", not(test))))]
+pub const fn signal_pending_output_clear() {}
 
 #[cfg(unix)]
 #[must_use]
@@ -534,6 +607,7 @@ mod posix_process_signal {
 mod linux_signal {
     use super::{
         e_sig_term_sched_handler, e_signal_handler, signal_global_out_fd, ErrorCode, SignalOutcome,
+        SIGNAL_PENDING_OUTPUT,
     };
     use std::ffi::c_void;
 
@@ -599,14 +673,29 @@ mod linux_signal {
         }
     }
 
+    fn write_pending_output(fd: i32) {
+        let mut offset = 0;
+        let mut buffer = [0_u8; 256];
+        loop {
+            let copied = SIGNAL_PENDING_OUTPUT.copy_from(offset, &mut buffer);
+            if copied == 0 {
+                break;
+            }
+            write_fd_all(fd, &buffer[..copied]);
+            offset += copied;
+        }
+    }
+
     fn finalize_hard_cpu_signal_and_exit(outcome: &SignalOutcome) -> ! {
+        let global_out_fd = signal_global_out_fd();
         if matches!(
             outcome,
             SignalOutcome::CpuLimitExceeded { silent: false, .. }
         ) {
-            write_fd_all(signal_global_out_fd(), HARD_CPU_TIMEOUT_OUTPUT);
+            write_fd_all(global_out_fd, HARD_CPU_TIMEOUT_OUTPUT);
             write_fd_all(STDERR_FILENO_COMPAT, HARD_CPU_TIMEOUT_ERROR);
         }
+        write_pending_output(global_out_fd);
         // SAFETY: exit is libc's process-termination API. C `ESignalHandler`
         // calls exit directly for silent hard CPU timeouts and reaches it via
         // Error(...) for non-silent hard CPU timeouts.
@@ -661,8 +750,9 @@ mod tests {
         set_silent_time_out, set_soft_time_limit, set_system_time_limit, set_time_is_up,
         set_time_limit_is_soft, sig_term_caught, signal_global_out_fd, silent_time_out,
         soft_time_limit, system_time_limit, time_is_up, time_limit_expired_kind,
-        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, TimeLimitKind,
-        RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, SignalPendingOutput,
+        TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY,
+        SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::os_wrapper::get_usec_clock;
@@ -685,6 +775,42 @@ mod tests {
         assert_eq!(sig_term_caught(), 0);
         assert!(!silent_time_out());
         assert_eq!(signal_global_out_fd(), 1);
+    }
+
+    #[test]
+    fn pending_signal_output_publishes_only_complete_appends_and_clears() {
+        let pending = SignalPendingOutput::new();
+        let mut snapshot = [0_u8; 16];
+
+        assert_eq!(pending.copy_from(0, &mut snapshot), 0);
+        assert!(pending.append(b"config"));
+        assert!(pending.append(b"uration"));
+        assert_eq!(pending.copy_from(0, &mut snapshot), 13);
+        assert_eq!(&snapshot[..13], b"configuration");
+        assert_eq!(pending.copy_from(6, &mut snapshot[..4]), 4);
+        assert_eq!(&snapshot[..4], b"urat");
+
+        let oversized = [0_u8; SIGNAL_PENDING_OUTPUT_CAPACITY];
+        assert!(!pending.append(&oversized));
+        assert_eq!(pending.copy_from(0, &mut snapshot), 13);
+
+        pending.clear();
+        assert_eq!(pending.copy_from(0, &mut snapshot), 0);
+    }
+
+    #[test]
+    fn pending_signal_output_accepts_the_complete_stdio_buffer() {
+        let pending = SignalPendingOutput::new();
+        let complete = [b'x'; SIGNAL_PENDING_OUTPUT_CAPACITY];
+        let mut tail = [0_u8; 17];
+
+        assert!(pending.append(&complete));
+        assert_eq!(
+            pending.copy_from(SIGNAL_PENDING_OUTPUT_CAPACITY - tail.len(), &mut tail),
+            tail.len()
+        );
+        assert_eq!(tail, [b'x'; 17]);
+        assert!(!pending.append(b"x"));
     }
 
     #[test]
