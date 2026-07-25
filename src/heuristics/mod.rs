@@ -25,6 +25,8 @@ pub mod proofcontrol;
 pub mod random;
 pub mod rawspecfeatures;
 pub mod refinedweight;
+#[cfg(test)]
+pub(crate) mod schedule_vars_parser;
 pub mod simweight;
 pub mod specsigfeatures;
 pub mod strucweight;

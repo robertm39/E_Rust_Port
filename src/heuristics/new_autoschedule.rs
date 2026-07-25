@@ -1,15 +1,13 @@
 //! Predefined strategy lookup from C `che_new_autoschedule`.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::heuristics::hcb::{
     heuristic_parms_parse_into, heuristic_parms_print_string, HeuristicParmsCell,
 };
-use crate::heuristics::to_params::{TermOrdering, TERM_ORDERING_NAMES};
+use crate::heuristics::to_params::TermOrdering;
 use crate::inout::scanner::{Scanner, TokenType};
 
+#[cfg(test)]
 const SCHEDULE_VARS: &str = include_str!("../../eprover/HEURISTICS/schedule.vars");
 pub const DEFAULT_MASK: &str = "aaaaa-aaaaaa-aaaaaaaaa";
 pub const DEFAULT_SCHED_TIME_LIMIT: u64 = 300;
@@ -19,10 +17,20 @@ pub const RETRY_DEFAULT_SCHEDULE_THRESHOLD: f64 = 2.0;
 const PLACEHOLDER_STRATEGY: &str = "<placeholder>";
 const PREPROCESSING_INSERT_RATIO: f64 = 0.1;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PredefinedStrategy {
-    name: String,
-    definition: String,
+    name: &'static str,
+    definition: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StaticScheduleCell {
+    heuristic_name: &'static str,
+    ordering: TermOrdering,
+    sine: Option<&'static str>,
+    time_fraction: f64,
+    time_absolute: u64,
+    cores: i32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,11 +43,18 @@ pub struct ScheduleCell {
     pub cores: i32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ScheduleClass {
-    key: String,
-    schedule_name: String,
+    key: &'static str,
+    schedule: &'static [StaticScheduleCell],
     class_size: i32,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StaticNamedSchedule {
+    name: &'static str,
+    cells: &'static [StaticScheduleCell],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,17 +73,7 @@ pub struct ScheduleMultiCoreInitReport {
     pub total_time: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-struct AutoSchedules {
-    schedules: HashMap<String, Vec<ScheduleCell>>,
-    preprocessing_map: Vec<ScheduleClass>,
-    search_map: Vec<ScheduleClass>,
-    default_schedule: Vec<ScheduleCell>,
-}
-
-static PREDEFINED_STRATEGIES: OnceLock<Result<Vec<PredefinedStrategy>, Diagnostic>> =
-    OnceLock::new();
-static AUTO_SCHEDULES: OnceLock<Result<AutoSchedules, Diagnostic>> = OnceLock::new();
+include!(concat!(env!("OUT_DIR"), "/schedule_tables.rs"));
 
 /// Parses a named predefined strategy into `target`, matching C
 /// `GetHeuristicWithName`.
@@ -81,13 +86,13 @@ pub fn get_heuristic_with_name(
     name: &str,
     target: &mut HeuristicParmsCell,
 ) -> Result<(), Diagnostic> {
-    let Some(definition) = predefined_strategy_definition(name)? else {
+    let Some(definition) = predefined_strategy_definition(name) else {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             format!("Error: Configuration name {name} not found."),
         ));
     };
-    let mut scanner = Scanner::from_internal_string(&definition, true)?;
+    let mut scanner = Scanner::from_internal_string(definition, true)?;
     heuristic_parms_parse_into(&mut scanner, target, false)?;
     scanner.check_tok(TokenType::NO_TOKEN)
 }
@@ -98,21 +103,19 @@ pub fn get_heuristic_with_name(
 ///
 /// Returns a diagnostic if the embedded C schedule table cannot be parsed.
 pub fn strategies_print_predefined_string(names_only: bool) -> Result<String, Diagnostic> {
-    with_predefined_strategies(|strategies| {
-        let mut result = String::new();
-        for strategy in strategies {
-            if names_only {
-                result.push_str(&strategy.name);
-                result.push('\n');
-            } else {
-                result.push_str(&strategy.name);
-                result.push_str(" = \n");
-                result.push_str(&strategy.definition);
-                result.push('\n');
-            }
+    let mut result = String::new();
+    for strategy in PREDEFINED_STRATEGIES {
+        if names_only {
+            result.push_str(strategy.name);
+            result.push('\n');
+        } else {
+            result.push_str(strategy.name);
+            result.push_str(" = \n");
+            result.push_str(strategy.definition);
+            result.push('\n');
         }
-        result
-    })
+    }
+    Ok(result)
 }
 
 /// Returns C `GetPreprocessingSchedule(problem_category)`.
@@ -125,9 +128,7 @@ pub fn strategies_print_predefined_string(names_only: bool) -> Result<String, Di
 /// Returns a diagnostic if the embedded generated schedule table cannot be
 /// parsed or references an unknown schedule array.
 pub fn get_preprocessing_schedule(problem_category: &str) -> Result<ResolvedSchedule, Diagnostic> {
-    with_auto_schedules(|schedules| {
-        resolve_schedule(problem_category, &schedules.preprocessing_map, schedules)
-    })?
+    resolve_schedule(problem_category, PREPROCESSING_MAP)
 }
 
 /// Returns C `GetSearchSchedule(problem_category)`.
@@ -137,9 +138,7 @@ pub fn get_preprocessing_schedule(problem_category: &str) -> Result<ResolvedSche
 /// Returns a diagnostic if the embedded generated schedule table cannot be
 /// parsed or references an unknown schedule array.
 pub fn get_search_schedule(problem_category: &str) -> Result<ResolvedSchedule, Diagnostic> {
-    with_auto_schedules(|schedules| {
-        resolve_schedule(problem_category, &schedules.search_map, schedules)
-    })?
+    resolve_schedule(problem_category, SEARCH_MAP)
 }
 
 /// Returns C `GetDefaultSchedule()`.
@@ -149,7 +148,7 @@ pub fn get_search_schedule(problem_category: &str) -> Result<ResolvedSchedule, D
 /// Returns a diagnostic if the embedded generated schedule table cannot be
 /// parsed or the default schedule array is missing.
 pub fn get_default_schedule() -> Result<Vec<ScheduleCell>, Diagnostic> {
-    with_auto_schedules(|schedules| schedules.default_schedule.clone())
+    Ok(owned_schedule(DEFAULT_SCHEDULE))
 }
 
 /// C `StrDistance`: positional character mismatches plus length difference.
@@ -365,29 +364,29 @@ pub fn get_filtered_default_schedule(
     filtered
 }
 
-fn predefined_strategy_definition(name: &str) -> Result<Option<String>, Diagnostic> {
-    with_predefined_strategies(|strategies| {
-        strategies
-            .iter()
-            .find(|strategy| strategy.name == name)
-            .map(|strategy| strategy.definition.clone())
-    })
+fn predefined_strategy_definition(name: &str) -> Option<&'static str> {
+    PREDEFINED_STRATEGIES
+        .iter()
+        .find(|strategy| strategy.name == name)
+        .map(|strategy| strategy.definition)
 }
 
-fn with_predefined_strategies<R>(
-    callback: impl FnOnce(&[PredefinedStrategy]) -> R,
-) -> Result<R, Diagnostic> {
-    match PREDEFINED_STRATEGIES.get_or_init(parse_predefined_strategies) {
-        Ok(strategies) => Ok(callback(strategies)),
-        Err(error) => Err(error.clone()),
-    }
+fn schedule_parse_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, message)
 }
 
-fn with_auto_schedules<R>(callback: impl FnOnce(&AutoSchedules) -> R) -> Result<R, Diagnostic> {
-    match AUTO_SCHEDULES.get_or_init(parse_auto_schedules) {
-        Ok(schedules) => Ok(callback(schedules)),
-        Err(error) => Err(error.clone()),
-    }
+fn owned_schedule(schedule: &[StaticScheduleCell]) -> Vec<ScheduleCell> {
+    schedule
+        .iter()
+        .map(|cell| ScheduleCell {
+            heuristic_name: cell.heuristic_name.to_owned(),
+            ordering: cell.ordering,
+            sine: cell.sine.map(str::to_owned),
+            time_fraction: cell.time_fraction,
+            time_absolute: cell.time_absolute,
+            cores: cell.cores,
+        })
+        .collect()
 }
 
 fn remaining_time(limit: f64, time_used: f64) -> u64 {
@@ -451,85 +450,18 @@ fn usize_from_nonnegative_i32(value: i32) -> usize {
     usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
-fn parse_auto_schedules() -> Result<AutoSchedules, Diagnostic> {
-    let schedules = parse_schedule_cell_arrays()?;
-    let preprocessing_map = parse_schedule_class_map("preproc_sched_map")?;
-    let search_map = parse_schedule_class_map("search_sched_map")?;
-    validate_schedule_map(&schedules, &preprocessing_map)?;
-    validate_schedule_map(&schedules, &search_map)?;
-    let default_schedule = schedules
-        .get("_DEFAULT_SCHEDULE")
-        .cloned()
-        .ok_or_else(|| schedule_parse_error("Cannot find _DEFAULT_SCHEDULE in schedule.vars"))?;
-
-    Ok(AutoSchedules {
-        schedules,
-        preprocessing_map,
-        search_map,
-        default_schedule,
-    })
-}
-
-fn parse_schedule_cell_arrays() -> Result<HashMap<String, Vec<ScheduleCell>>, Diagnostic> {
-    let mut parser = ScheduleVarsParser::new(SCHEDULE_VARS, 0);
-    let mut arrays = HashMap::new();
-    while let Some(position) = parser.find_from("ScheduleCell ") {
-        parser.position = position + "ScheduleCell ".len();
-        let (name, cells) = parser.parse_schedule_cell_array_after_keyword()?;
-        arrays.insert(name, cells);
-    }
-    Ok(arrays)
-}
-
-fn parse_schedule_class_map(name: &str) -> Result<Vec<ScheduleClass>, Diagnostic> {
-    let start = SCHEDULE_VARS
-        .find(&format!("StrSchedPair {name}[]"))
-        .ok_or_else(|| schedule_parse_error(format!("Cannot find {name} in schedule.vars")))?;
-    let open_offset = SCHEDULE_VARS[start..]
-        .find('{')
-        .ok_or_else(|| schedule_parse_error(format!("Cannot find opening brace for {name}")))?;
-    let mut parser = ScheduleVarsParser::new(SCHEDULE_VARS, start + open_offset + 1);
-    parser.parse_schedule_class_entries()
-}
-
-fn validate_schedule_map(
-    schedules: &HashMap<String, Vec<ScheduleCell>>,
-    entries: &[ScheduleClass],
-) -> Result<(), Diagnostic> {
-    for entry in entries {
-        if !schedules.contains_key(&entry.schedule_name) {
-            return Err(schedule_parse_error(format!(
-                "Schedule map references unknown array {}",
-                entry.schedule_name
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn resolve_schedule(
     problem_category: &str,
     entries: &[ScheduleClass],
-    schedules: &AutoSchedules,
 ) -> Result<ResolvedSchedule, Diagnostic> {
     let (entry, distance) = select_schedule_class(problem_category, entries)
-        .ok_or_else(|| schedule_parse_error("Schedule class map is empty"))?;
-    let schedule = schedules
-        .schedules
-        .get(&entry.schedule_name)
-        .cloned()
-        .ok_or_else(|| {
-            schedule_parse_error(format!(
-                "Schedule map references unknown array {}",
-                entry.schedule_name
-            ))
-        })?;
+        .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "Schedule class map is empty"))?;
 
     Ok(ResolvedSchedule {
-        matched_class: entry.key.clone(),
+        matched_class: entry.key.to_owned(),
         distance,
         class_size: entry.class_size,
-        schedule,
+        schedule: owned_schedule(entry.schedule),
     })
 }
 
@@ -542,7 +474,7 @@ fn select_schedule_class<'a>(
     let mut max_class_size = i32::MIN;
 
     for entry in entries {
-        let distance = schedule_string_distance(&entry.key, problem_category);
+        let distance = schedule_string_distance(entry.key, problem_category);
         if distance == 0 {
             return Some((entry, distance));
         }
@@ -558,355 +490,6 @@ fn select_schedule_class<'a>(
     selected.map(|entry| (entry, min_distance))
 }
 
-fn parse_predefined_strategies() -> Result<Vec<PredefinedStrategy>, Diagnostic> {
-    let start = SCHEDULE_VARS.find("StrStrPair conf_map[]").ok_or_else(|| {
-        schedule_parse_error("Cannot find predefined strategy table conf_map in schedule.vars")
-    })?;
-    let open_offset = SCHEDULE_VARS[start..].find('{').ok_or_else(|| {
-        schedule_parse_error("Cannot find opening brace for predefined strategy table")
-    })?;
-    let mut parser = ScheduleVarsParser::new(SCHEDULE_VARS, start + open_offset + 1);
-    parser.parse_conf_map_entries()
-}
-
-fn schedule_parse_error(message: impl Into<String>) -> Diagnostic {
-    Diagnostic::new(ErrorCode::OTHER_ERROR, message)
-}
-
-struct ScheduleVarsParser<'a> {
-    input: &'a str,
-    position: usize,
-}
-
-impl<'a> ScheduleVarsParser<'a> {
-    const fn new(input: &'a str, position: usize) -> Self {
-        Self { input, position }
-    }
-
-    fn parse_conf_map_entries(&mut self) -> Result<Vec<PredefinedStrategy>, Diagnostic> {
-        let mut result = Vec::new();
-        loop {
-            self.skip_separators();
-            self.expect_byte(b'{')?;
-            self.skip_whitespace();
-            if self.consume_identifier("NULL") {
-                self.skip_until_entry_close()?;
-                break;
-            }
-            let name = self.parse_c_string()?;
-            self.skip_whitespace();
-            self.expect_byte(b',')?;
-            self.skip_whitespace();
-            let definition = self.parse_c_string()?;
-            self.skip_whitespace();
-            self.expect_byte(b'}')?;
-            result.push(PredefinedStrategy { name, definition });
-        }
-        Ok(result)
-    }
-
-    fn parse_schedule_cell_array_after_keyword(
-        &mut self,
-    ) -> Result<(String, Vec<ScheduleCell>), Diagnostic> {
-        let name = self.parse_identifier()?;
-        self.skip_whitespace();
-        self.expect_byte(b'[')?;
-        self.expect_byte(b']')?;
-        self.skip_whitespace();
-        self.expect_byte(b'=')?;
-        self.skip_whitespace();
-        self.expect_byte(b'{')?;
-
-        let mut cells = Vec::new();
-        loop {
-            self.skip_separators();
-            if self.consume_byte(b'}') {
-                break;
-            }
-            self.expect_byte(b'{')?;
-            if let Some(cell) = self.parse_schedule_cell_entry()? {
-                cells.push(cell);
-            }
-            self.skip_whitespace();
-            self.expect_byte(b'}')?;
-        }
-        self.skip_whitespace();
-        self.expect_byte(b';')?;
-        Ok((name, cells))
-    }
-
-    fn parse_schedule_cell_entry(&mut self) -> Result<Option<ScheduleCell>, Diagnostic> {
-        let heuristic_name = self.parse_optional_c_string_or_null()?;
-        self.expect_comma()?;
-        let ordering = self.parse_term_ordering()?;
-        self.expect_comma()?;
-        let sine = self.parse_optional_c_string_or_null()?;
-        self.expect_comma()?;
-        let time_fraction = self.parse_float()?;
-        self.expect_comma()?;
-        let time_absolute = self.parse_u64()?;
-        self.expect_comma()?;
-        let cores = self.parse_i32()?;
-
-        Ok(heuristic_name.map(|heuristic_name| ScheduleCell {
-            heuristic_name,
-            ordering,
-            sine,
-            time_fraction,
-            time_absolute,
-            cores,
-        }))
-    }
-
-    fn parse_schedule_class_entries(&mut self) -> Result<Vec<ScheduleClass>, Diagnostic> {
-        let mut result = Vec::new();
-        loop {
-            self.skip_separators();
-            self.expect_byte(b'{')?;
-            self.skip_whitespace();
-            if self.consume_identifier("NULL") {
-                self.skip_until_entry_close()?;
-                break;
-            }
-            let key = self.parse_c_string()?;
-            self.expect_comma()?;
-            let schedule_name = self.parse_identifier()?;
-            self.expect_comma()?;
-            let class_size = self.parse_i32()?;
-            self.skip_whitespace();
-            self.expect_byte(b'}')?;
-            result.push(ScheduleClass {
-                key,
-                schedule_name,
-                class_size,
-            });
-        }
-        Ok(result)
-    }
-
-    fn skip_separators(&mut self) {
-        while let Some(byte) = self.current_byte() {
-            if byte.is_ascii_whitespace() || byte == b',' {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn skip_whitespace(&mut self) {
-        while let Some(byte) = self.current_byte() {
-            if byte.is_ascii_whitespace() {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn expect_comma(&mut self) -> Result<(), Diagnostic> {
-        self.skip_whitespace();
-        self.expect_byte(b',')
-    }
-
-    fn skip_until_entry_close(&mut self) -> Result<(), Diagnostic> {
-        while let Some(byte) = self.current_byte() {
-            self.position += 1;
-            if byte == b'}' {
-                return Ok(());
-            }
-        }
-        Err(schedule_parse_error(
-            "Unterminated predefined strategy table terminator",
-        ))
-    }
-
-    fn consume_identifier(&mut self, expected: &str) -> bool {
-        let remaining = &self.input[self.position..];
-        if !remaining.starts_with(expected) {
-            return false;
-        }
-        let end = self.position + expected.len();
-        if self
-            .input
-            .as_bytes()
-            .get(end)
-            .is_some_and(|byte| is_identifier_continuation(*byte))
-        {
-            return false;
-        }
-        self.position = end;
-        true
-    }
-
-    fn consume_byte(&mut self, expected: u8) -> bool {
-        self.skip_whitespace();
-        if self.current_byte() == Some(expected) {
-            self.position += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn parse_identifier(&mut self) -> Result<String, Diagnostic> {
-        self.skip_whitespace();
-        let start = self.position;
-        while let Some(byte) = self.current_byte() {
-            if is_identifier_continuation(byte) {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-        if self.position == start {
-            return Err(schedule_parse_error(
-                "Expected identifier in predefined schedule table",
-            ));
-        }
-        Ok(self.input[start..self.position].to_owned())
-    }
-
-    fn parse_optional_c_string_or_null(&mut self) -> Result<Option<String>, Diagnostic> {
-        self.skip_whitespace();
-        if self.consume_identifier("NULL") {
-            Ok(None)
-        } else {
-            self.parse_c_string().map(Some)
-        }
-    }
-
-    fn parse_term_ordering(&mut self) -> Result<TermOrdering, Diagnostic> {
-        let name = self.parse_identifier()?;
-        let Some(index) = TERM_ORDERING_NAMES
-            .iter()
-            .position(|candidate| *candidate == name)
-        else {
-            return Err(schedule_parse_error(format!(
-                "Unknown term ordering {name} in schedule.vars"
-            )));
-        };
-        let value = i32::try_from(index)
-            .map_err(|_| schedule_parse_error("Term-ordering index does not fit C enum"))?;
-        TermOrdering::from_c_value(value)
-            .ok_or_else(|| schedule_parse_error(format!("Invalid term ordering {name}")))
-    }
-
-    fn parse_float(&mut self) -> Result<f64, Diagnostic> {
-        let token = self.parse_number_token()?;
-        token.parse::<f64>().map_err(|_| {
-            schedule_parse_error(format!(
-                "Invalid floating-point value {token} in schedule.vars"
-            ))
-        })
-    }
-
-    fn parse_i32(&mut self) -> Result<i32, Diagnostic> {
-        let token = self.parse_number_token()?;
-        token.parse::<i32>().map_err(|_| {
-            schedule_parse_error(format!(
-                "Invalid signed integer value {token} in schedule.vars"
-            ))
-        })
-    }
-
-    fn parse_u64(&mut self) -> Result<u64, Diagnostic> {
-        let token = self.parse_number_token()?;
-        token.parse::<u64>().map_err(|_| {
-            schedule_parse_error(format!(
-                "Invalid unsigned integer value {token} in schedule.vars"
-            ))
-        })
-    }
-
-    fn parse_number_token(&mut self) -> Result<String, Diagnostic> {
-        self.skip_whitespace();
-        let start = self.position;
-        while let Some(byte) = self.current_byte() {
-            if byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'+' | b'e' | b'E') {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-        if self.position == start {
-            return Err(schedule_parse_error(
-                "Expected numeric value in predefined schedule table",
-            ));
-        }
-        Ok(self.input[start..self.position].to_owned())
-    }
-
-    fn parse_c_string(&mut self) -> Result<String, Diagnostic> {
-        self.expect_byte(b'"')?;
-        let mut result = String::new();
-        loop {
-            let Some(byte) = self.take_byte() else {
-                return Err(schedule_parse_error(
-                    "Unterminated C string in predefined strategy table",
-                ));
-            };
-            match byte {
-                b'"' => return Ok(result),
-                b'\\' => result.push(self.parse_c_escape()?),
-                _ => result.push(char::from(byte)),
-            }
-        }
-    }
-
-    fn parse_c_escape(&mut self) -> Result<char, Diagnostic> {
-        let Some(byte) = self.take_byte() else {
-            return Err(schedule_parse_error(
-                "Unterminated C escape in predefined strategy table",
-            ));
-        };
-        Ok(match byte {
-            b'n' => '\n',
-            b'r' => '\r',
-            b't' => '\t',
-            b'\\' => '\\',
-            b'"' => '"',
-            b'0' => '\0',
-            _ => char::from(byte),
-        })
-    }
-
-    fn expect_byte(&mut self, expected: u8) -> Result<(), Diagnostic> {
-        match self.take_byte() {
-            Some(byte) if byte == expected => Ok(()),
-            Some(byte) => Err(schedule_parse_error(format!(
-                "Expected '{}' in predefined strategy table, read '{}'",
-                char::from(expected),
-                char::from(byte)
-            ))),
-            None => Err(schedule_parse_error(format!(
-                "Expected '{}' in predefined strategy table, reached end of file",
-                char::from(expected)
-            ))),
-        }
-    }
-
-    fn current_byte(&self) -> Option<u8> {
-        self.input.as_bytes().get(self.position).copied()
-    }
-
-    fn take_byte(&mut self) -> Option<u8> {
-        let byte = self.current_byte()?;
-        self.position += 1;
-        Some(byte)
-    }
-
-    fn find_from(&self, needle: &str) -> Option<usize> {
-        self.input[self.position..]
-            .find(needle)
-            .map(|offset| self.position + offset)
-    }
-}
-
-const fn is_identifier_continuation(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
 /// Prints a single heuristic parameter block.
 #[must_use]
 pub fn heuristic_parms_strategy_print_string(handle: &HeuristicParmsCell) -> String {
@@ -919,11 +502,16 @@ mod tests {
         get_default_schedule, get_filtered_default_schedule, get_heuristic_with_name,
         get_preprocessing_schedule, get_search_schedule, initialize_placeholder_search_schedule,
         schedule_string_distance, schedule_times_init, schedule_times_init_multi_core,
-        select_schedule_class, strategies_print_predefined_string, with_predefined_strategies,
-        ScheduleCell, ScheduleClass, DEFAULT_SCHED_TIME_LIMIT,
+        select_schedule_class, strategies_print_predefined_string, ScheduleCell, ScheduleClass,
+        StaticScheduleCell, DEFAULT_SCHED_TIME_LIMIT, GENERATED_PREPROCESSING_SCHEDULE_NAMES,
+        GENERATED_SCHEDULES, GENERATED_SEARCH_SCHEDULE_NAMES, PREDEFINED_STRATEGIES,
+        PREPROCESSING_MAP, SCHEDULE_VARS, SEARCH_MAP,
     };
     use crate::basics::error::ErrorCode;
     use crate::heuristics::hcb::HeuristicParmsCell;
+    use crate::heuristics::schedule_vars_parser::{
+        parse_schedule_vars, ParsedSchedule, ParsedScheduleClass,
+    };
     use crate::heuristics::to_params::TermOrdering;
     use crate::terms::termtypes::RewriteLevel;
 
@@ -931,17 +519,41 @@ mod tests {
 
     #[test]
     fn predefined_strategy_table_reads_conf_map_only() {
-        let names = with_predefined_strategies(|strategies| {
-            strategies
-                .iter()
-                .map(|strategy| strategy.name.clone())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|error| panic!("{error}"));
+        let names = PREDEFINED_STRATEGIES
+            .iter()
+            .map(|strategy| strategy.name)
+            .collect::<Vec<_>>();
 
-        assert_eq!(names.first().map(String::as_str), Some(FIRST_STRATEGY));
+        assert_eq!(names.first().copied(), Some(FIRST_STRATEGY));
         assert!(names.len() > 400);
-        assert!(!names.iter().any(|name| name == "HGHSM-FSLF31-MHSFFSBC"));
+        assert!(!names.contains(&"HGHSM-FSLF31-MHSFFSBC"));
+    }
+
+    #[test]
+    fn generated_static_tables_exactly_match_schedule_vars() {
+        let parsed = parse_schedule_vars(SCHEDULE_VARS)
+            .unwrap_or_else(|error| panic!("cannot parse schedule.vars: {error}"));
+
+        assert_eq!(PREDEFINED_STRATEGIES.len(), parsed.strategies.len());
+        for (actual, expected) in PREDEFINED_STRATEGIES.iter().zip(&parsed.strategies) {
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.definition, expected.definition);
+        }
+
+        assert_eq!(GENERATED_SCHEDULES.len(), parsed.schedules.len());
+        for (actual, expected) in GENERATED_SCHEDULES.iter().zip(&parsed.schedules) {
+            assert_static_schedule_matches(actual.name, actual.cells, expected);
+        }
+        assert_schedule_map_matches(
+            PREPROCESSING_MAP,
+            GENERATED_PREPROCESSING_SCHEDULE_NAMES,
+            &parsed.preprocessing_map,
+        );
+        assert_schedule_map_matches(
+            SEARCH_MAP,
+            GENERATED_SEARCH_SCHEDULE_NAMES,
+            &parsed.search_map,
+        );
     }
 
     #[test]
@@ -998,32 +610,33 @@ mod tests {
 
     #[test]
     fn class_selection_uses_c_exact_and_largest_same_distance_tie_breaks() {
+        const EMPTY_SCHEDULE: &[StaticScheduleCell] = &[];
         let classes = vec![
             ScheduleClass {
-                key: "AAAA".to_owned(),
-                schedule_name: "small".to_owned(),
+                key: "AAAA",
+                schedule: EMPTY_SCHEDULE,
                 class_size: 1,
             },
             ScheduleClass {
-                key: "AAAB".to_owned(),
-                schedule_name: "large".to_owned(),
+                key: "AAAB",
+                schedule: EMPTY_SCHEDULE,
                 class_size: 5,
             },
             ScheduleClass {
-                key: "AAAC".to_owned(),
-                schedule_name: "exact".to_owned(),
+                key: "AAAC",
+                schedule: EMPTY_SCHEDULE,
                 class_size: 0,
             },
         ];
 
         let (partial, distance) =
             select_schedule_class("AAAD", &classes).expect("non-empty schedule map");
-        assert_eq!(partial.schedule_name, "large");
+        assert_eq!(partial.key, "AAAB");
         assert_eq!(distance, 1);
 
         let (exact, distance) =
             select_schedule_class("AAAC", &classes).expect("non-empty schedule map");
-        assert_eq!(exact.schedule_name, "exact");
+        assert_eq!(exact.key, "AAAC");
         assert_eq!(distance, 0);
     }
 
@@ -1208,5 +821,41 @@ mod tests {
 
     fn assert_float_eq_msg(actual: f64, expected: f64, message: &str) {
         assert!((actual - expected).abs() < f64::EPSILON, "{message}");
+    }
+
+    fn assert_static_schedule_matches(
+        actual_name: &str,
+        actual_cells: &[StaticScheduleCell],
+        expected: &ParsedSchedule,
+    ) {
+        assert_eq!(actual_name, expected.name);
+        assert_eq!(actual_cells.len(), expected.cells.len());
+        for (actual, expected) in actual_cells.iter().zip(&expected.cells) {
+            assert_eq!(actual.heuristic_name, expected.heuristic_name);
+            assert_eq!(actual.ordering.name(), expected.ordering);
+            assert_eq!(actual.sine, expected.sine.as_deref());
+            assert_eq!(
+                actual.time_fraction.to_bits(),
+                expected.time_fraction.to_bits()
+            );
+            assert_eq!(actual.time_absolute, expected.time_absolute);
+            assert_eq!(actual.cores, expected.cores);
+        }
+    }
+
+    fn assert_schedule_map_matches(
+        actual: &[ScheduleClass],
+        actual_schedule_names: &[&str],
+        expected: &[ParsedScheduleClass],
+    ) {
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual_schedule_names.len(), expected.len());
+        for ((actual, actual_schedule_name), expected) in
+            actual.iter().zip(actual_schedule_names).zip(expected)
+        {
+            assert_eq!(actual.key, expected.key);
+            assert_eq!(*actual_schedule_name, expected.schedule_name);
+            assert_eq!(actual.class_size, expected.class_size);
+        }
     }
 }
