@@ -14,6 +14,12 @@ or Callgrind on the local computer. Local PowerShell only orchestrates the
 worker; lightweight Python controller tests, PowerShell parsing, Git, and
 documentation checks may remain local.
 
+There are no exceptions for quick smoke tests, focused reproductions, or an
+already-installed local toolchain. WSL, local containers, and local virtual
+machines are not supported substitutes. Any command that formats, compiles,
+links, tests, starts, compares, benchmarks, or profiles the Rust port or C
+reference must execute on the Linode.
+
 The normal `run` workflow creates a Cloud Firewall and Linode, installs the
 complete Linux and Windows-cross toolchain, uploads a fresh snapshot of the
 current worktree, performs every required validation phase, downloads the
@@ -91,7 +97,8 @@ All project code runs on native Ubuntu 24.04. The workload:
 
 Linux is the runtime, behavioral-compatibility, and performance authority.
 Windows GNU x64 is compile-only; MSVC and Windows runtime behavior are not
-supported validation targets.
+supported validation targets. Generated Windows binaries are inspected and
+hashed but never executed through Wine, emulation, or any other mechanism.
 
 Each run uploads a new archive made directly from the current filesystem. It
 therefore includes tracked modifications, untracked source files, and the
@@ -129,18 +136,42 @@ current public IPv4 explicitly:
 
 For work that requires several remote Rust/C commands, keep one runner only as
 long as needed. This is the only supported way to issue Cargo or compiled-code
-commands interactively:
+commands interactively. Always put teardown in a PowerShell `finally` block:
 
 ```powershell
 .\linode-runner.ps1 up
-.\linode-runner.ps1 sync
-.\linode-runner.ps1 exec -- "cd /opt/e-rust-port/source && cargo test"
-.\linode-runner.ps1 down
+try {
+    .\linode-runner.ps1 sync
+    .\linode-runner.ps1 exec -- `
+        "cd /opt/e-rust-port/source && cargo test --locked --all-targets --all-features"
+}
+finally {
+    .\linode-runner.ps1 down
+}
 ```
 
 Run `sync` again whenever the local files change. It replaces the remote source
 directory with a fresh immutable upload; no Git pull or remote working-branch
 maintenance is involved.
+
+For a focused Rust build and prover smoke run, replace the `exec` command inside
+that same guarded lifecycle with:
+
+```powershell
+.\linode-runner.ps1 exec -- `
+    "cd /opt/e-rust-port/source && cargo build --locked --release --bin eprover && target/release/eprover eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p --auto --silent --cpu-limit=10"
+```
+
+For an isolated C reference build and prover smoke run, use:
+
+```powershell
+.\linode-runner.ps1 exec -- `
+    "cd /opt/e-rust-port/source && python3 tools/linode-runner/linux_compat.py build-reference --repo-root /opt/e-rust-port/source --eprover-commit worktree-snapshot && /root/.cache/e-rust-port/bin/worktree-snapshot/fol/eprover /root/.cache/e-rust-port/sources/worktree-snapshot/fol/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p --auto --silent --cpu-limit=10"
+```
+
+These examples are remote `exec` payloads, not commands to copy into a local
+shell. Keep the surrounding `try`/`finally` lifecycle and run `down` even when
+an `exec` command fails.
 
 If the controller's public IP changes while a runner is active, update only the
 SSH firewall rule:

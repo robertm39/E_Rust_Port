@@ -17,6 +17,22 @@ binaries, WSL, Valgrind, or Callgrind on the local computer. Local work is
 limited to editing, orchestration, Git operations, documentation validation,
 PowerShell parsing, and Python controller/compatibility unit tests.
 
+This is a command-routing rule, not a preference:
+
+| Work | Required environment |
+| --- | --- |
+| Edit files; use Git or Beads; inspect documentation; parse PowerShell; run Markdown checks or Python controller/compatibility unit tests | Local computer is allowed |
+| Provision, synchronize, execute, collect artifacts, and tear down through `linode-runner.ps1` | Local PowerShell controller |
+| Run Rustfmt, Cargo, `rustc`, Clippy, Rust builds/tests, or any Rust project binary | Linode only |
+| Run `configure`, Make, GCC, any C build, or any C reference/support binary | Linode only |
+| Run Rust/C comparisons, smoke tests, benchmarks, Valgrind, or Callgrind | Linode only |
+| Cross-compile `x86_64-pc-windows-gnu` binaries and tests | Linode only; compile but never execute |
+
+There are no local smoke-test exceptions. WSL, local containers, virtual
+machines, and locally installed toolchains are not substitutes for the Linode.
+If a command formats, compiles, links, tests, starts, benchmarks, or profiles
+the Rust port or upstream C prover, route it through the Linode controller.
+
 Native Linux is the runtime, behavioral-compatibility, and performance
 authority. The Rust port must also compile for `x86_64-pc-windows-gnu` on the
 Linode, but Windows is compile-only: do not execute Windows binaries or claim
@@ -32,6 +48,10 @@ G8 Dedicated runner, synchronizes the exact current worktree without depending
 on a pushed branch, runs every Linux Rust/C quality and parity check,
 cross-compiles Windows GNU x64 without executing it, collects timing and
 Callgrind evidence, and guarantees guarded teardown.
+
+Use `.\linode-runner.ps1 run` for normal validation. Use the guarded
+`up`/`sync`/`exec`/`down` lifecycle documented in the runbook only when an
+exceptional task needs individual remote commands.
 
 ## Runtime PicoSAT Selection
 

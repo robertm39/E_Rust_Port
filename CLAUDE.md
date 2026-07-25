@@ -63,7 +63,9 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 All Rust and C formatting, compilation, tests, execution, compatibility
 comparisons, benchmarks, and profiles run on the ephemeral Ubuntu Linode. Do
 not invoke Cargo, Rust binaries, the C build, C binaries, WSL, Valgrind, or
-Callgrind on the local computer.
+Callgrind on the local computer. This includes quick smoke tests and commands
+inside local containers or virtual machines: they are not supported
+substitutes for the Linode.
 
 From local PowerShell, orchestrate the complete remote lifecycle:
 
@@ -75,6 +77,12 @@ The command uploads the exact worktree, performs every required check on the
 Linode, collects artifacts, and deletes the Linode and firewall. Linux is the
 runtime compatibility authority. Windows GNU x64 is compile-only and is never
 executed. See `DOCS.md` and `docs/linode-runner.md`.
+
+For an exceptional individual Rust or C command, use only the runbook's
+guarded `up`/`sync`/`exec`/`down` lifecycle. Put `down` in a PowerShell
+`finally` block so a failed remote command cannot leave paid resources running.
+Do not issue a direct local Cargo, compiler, prover, benchmark, Valgrind, or
+Callgrind command first.
 
 ## Architecture Overview
 

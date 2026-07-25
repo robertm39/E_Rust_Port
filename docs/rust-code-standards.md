@@ -23,6 +23,13 @@ benchmarks, and Callgrind. It also compiles all binaries and test targets for
 as design feedback and prefer small, explicit fixes that keep the port close to
 the original implementation model.
 
+This rule also prohibits quick local smoke tests and running the toolchain in
+WSL, a local container, or another local virtual machine. Normal validation
+must use `.\linode-runner.ps1 run`. If focused work needs an individual remote
+command, use the runbook's guarded `up`/`sync`/`exec`/`down` lifecycle and put
+`down` in a PowerShell `finally` block. Never use a direct local Cargo, Rust,
+C, prover, benchmark, Valgrind, or Callgrind command as a preliminary check.
+
 Docs-only changes should run the Markdown link checker from `DOCS.md`.
 
 ## Platform Support
@@ -30,8 +37,9 @@ Docs-only changes should run the Markdown link checker from `DOCS.md`.
 Native Linux is the only supported execution platform and the authority for
 behavioral and performance comparisons with upstream E. Windows GNU x64 is a
 compile-only portability target. Windows executables must never be run as part
-of project validation, and the project makes no Windows runtime, behavioral,
-performance, or MSVC guarantee.
+of project validation, including on the Linode through Wine or another
+emulator, and the project makes no Windows runtime, behavioral, performance,
+or MSVC guarantee.
 
 Keep the `x86_64-pc-windows-gnu` build working, including Windows-gated code,
 but do not add Windows-specific behavior solely to mimic results that are not
