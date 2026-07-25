@@ -134,13 +134,12 @@ impl TermCellStore {
 
     pub fn gc_sweep(&mut self, gc_state: TermProperties) -> i64 {
         let mut recovered = 0;
+        let mut delete = Vec::new();
         for index in 0..self.store.len() {
-            let delete = self.store[index]
-                .terms()
-                .into_iter()
-                .filter(|term| term.give_props(TP_GARBAGE_FLAG) == gc_state)
-                .collect::<Vec<_>>();
-            for term in delete {
+            self.store[index].collect_matching(&mut delete, |term| {
+                term.give_props(TP_GARBAGE_FLAG) == gc_state
+            });
+            while let Some(term) = delete.pop() {
                 if self.delete(&term) {
                     recovered += 1;
                 }
@@ -317,5 +316,31 @@ mod tests {
 
         assert_eq!(store.gc_sweep(TP_IGNORE_PROPS), 1);
         assert_eq!(store.entries(), 0);
+    }
+
+    #[test]
+    fn gc_sweep_deletes_multiple_candidates_from_one_bucket() {
+        let types = TypeBank::new();
+        let mut store = TermCellStore::new();
+        let one = typed_const(1, &types.i_type());
+        let two = typed_const(
+            1 + i64::try_from(TERM_STORE_HASH_SIZE).unwrap(),
+            &types.i_type(),
+        );
+        let three = typed_const(
+            1 + 2 * i64::try_from(TERM_STORE_HASH_SIZE).unwrap(),
+            &types.i_type(),
+        );
+        assert_eq!(term_cell_hash(&one), term_cell_hash(&two));
+        assert_eq!(term_cell_hash(&two), term_cell_hash(&three));
+        store.insert(one.clone());
+        store.insert(two.clone());
+        store.insert(three.clone());
+        one.set_prop(TP_GARBAGE_FLAG);
+        three.set_prop(TP_GARBAGE_FLAG);
+
+        assert_eq!(store.gc_sweep(TP_GARBAGE_FLAG), 2);
+        assert_eq!(store.entries(), 1);
+        assert_eq!(store.find(&two), Some(two));
     }
 }

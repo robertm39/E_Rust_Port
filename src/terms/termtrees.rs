@@ -113,6 +113,18 @@ impl TermTree {
         walk_tree(self.root.as_ref(), |term| terms.push(term.clone()));
         terms
     }
+
+    pub(crate) fn collect_matching(
+        &self,
+        result: &mut Vec<Term>,
+        mut predicate: impl FnMut(&Term) -> bool,
+    ) {
+        walk_tree(self.root.as_ref(), |term| {
+            if predicate(term) {
+                result.push(term.clone());
+            }
+        });
+    }
 }
 
 /// Compares top-level term cells by the C term-tree key.
@@ -289,7 +301,9 @@ mod tests {
     use super::{term_top_compare, term_top_compare_for_problem, TermTree};
     use crate::basics::simple_stuff::ProblemType;
     use crate::terms::simpletypes::alloc_simple_sort;
-    use crate::terms::termtypes::{term_identity_cmp, Term, TP_CHECK_FLAG, TP_TOP_POS};
+    use crate::terms::termtypes::{
+        term_identity_cmp, Term, TP_CHECK_FLAG, TP_GARBAGE_FLAG, TP_TOP_POS,
+    };
     use crate::terms::typebanks::TypeBank;
 
     fn typed_const(f_code: i64, type_: &crate::terms::simpletypes::Type) -> Term {
@@ -376,5 +390,27 @@ mod tests {
         assert!(one.query_prop(TP_CHECK_FLAG));
         assert!(!one.query_prop(TP_TOP_POS));
         assert_eq!(tree.terms().len(), 2);
+    }
+
+    #[test]
+    fn matching_collection_clones_only_selected_terms() {
+        let types = TypeBank::new();
+        let mut term_tree = TermTree::new();
+        let one = typed_const(1, &types.i_type());
+        let two = typed_const(2, &types.i_type());
+        let three = typed_const(3, &types.i_type());
+        term_tree.insert(one.clone());
+        term_tree.insert(two.clone());
+        term_tree.insert(three.clone());
+        one.set_prop(TP_GARBAGE_FLAG);
+        three.set_prop(TP_GARBAGE_FLAG);
+
+        let mut matching = Vec::new();
+        term_tree.collect_matching(&mut matching, |term| term.query_prop(TP_GARBAGE_FLAG));
+
+        assert_eq!(matching.len(), 2);
+        assert!(matching.contains(&one));
+        assert!(matching.contains(&three));
+        assert!(!matching.contains(&two));
     }
 }
