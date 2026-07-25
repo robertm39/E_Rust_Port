@@ -39,6 +39,23 @@ class OutputParsingTests(unittest.TestCase):
             "<TPTP>/Axioms/SET001.ax",
         )
 
+    def test_tool_binary_replacements_cover_reference_and_candidate(self):
+        reference = Path("reference-bin") / "termprops"
+        candidate = Path("candidate-bin") / "termprops"
+        replacements = e_interop.tool_binary_path_replacements(
+            reference,
+            candidate,
+            "termprops",
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(
+                f"{reference.resolve()}: first\n{candidate.resolve()}: second",
+                replacements,
+            ),
+            "termprops: first\ntermprops: second",
+        )
+
     def test_normalization_canonicalizes_platform_error_and_nan_spellings(self):
         linux = (
             "direct_examples: No such file or directory\n"
@@ -1355,11 +1372,19 @@ class ComparisonTests(unittest.TestCase):
             e_axfilter_generated_case["output_files"],
             ["global.out", "problem_tiny.p"],
         )
+        self.assertEqual(
+            e_axfilter_generated_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr", "output_files"],
+        )
         e_axfilter_gsine_case = cases_by_name["e_axfilter/tstp-gsine-formulas"]
         self.assertIn("fof(goal, conjecture", e_axfilter_gsine_case["workdir_files"]["problem.p"])
         self.assertEqual(
             e_axfilter_gsine_case["output_files"],
             ["global.out", "problem_formulas.p"],
+        )
+        self.assertEqual(
+            e_axfilter_gsine_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr", "output_files"],
         )
         e_axfilter_lambda_case = cases_by_name["e_axfilter/tstp-lambda-def-formulas"]
         self.assertIn(
@@ -1370,6 +1395,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             e_axfilter_lambda_case["output_files"],
             ["global.out", "problem_defs.p"],
+        )
+        self.assertEqual(
+            e_axfilter_lambda_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr", "output_files"],
         )
         e_axfilter_seeded_case = cases_by_name["e_axfilter/tstp-seeded-all-methods"]
         self.assertEqual(
@@ -1384,6 +1413,16 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn(
             "GSinE(CountTerms,hypos",
             e_axfilter_seeded_case["workdir_files"]["filters.axf"],
+        )
+        self.assertEqual(
+            e_axfilter_seeded_case["expected_mismatches"],
+            [
+                "exit_code",
+                "shape",
+                "normalized_stdout",
+                "normalized_stderr",
+                "output_files",
+            ],
         )
         e_axfilter_output_error_case = cases_by_name[
             "e_axfilter/output-open-missing-parent"
@@ -1430,12 +1469,20 @@ class ComparisonTests(unittest.TestCase):
             ["kb/FILES/keep", "kb/problems", "kb/clausepatterns"],
         )
         self.assertEqual(ekb_delete_case["output_absent_files"], ["kb/FILES/drop"])
+        self.assertEqual(
+            ekb_delete_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr"],
+        )
         middle_case = cases_by_name["ekb_delete/drop-middle-example"]
         self.assertIn('2: "middle"', middle_case["workdir_files"]["kb/problems"])
         self.assertEqual(
             middle_case["output_absent_files"], ["kb/FILES/middle"]
         )
         self.assertEqual(len(middle_case["output_files"]), 5)
+        self.assertEqual(
+            middle_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr"],
+        )
         ekb_ginsert_case = cases_by_name["ekb_ginsert/stdin-protocol"]
         self.assertIn(
             "1 : : [++p(a)] : initial : 'proof'",
@@ -1464,6 +1511,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             ekb_insert_case["output_files"],
             ["kb/FILES/__problem__1", "kb/problems", "kb/clausepatterns"],
+        )
+        self.assertEqual(
+            ekb_insert_case["expected_mismatches"],
+            ["exit_code", "shape", "normalized_stderr"],
         )
         e_stratpar_case = cases_by_name["e_stratpar/usage-missing-problem"]
         self.assertIsNone(e_stratpar_case["stdin"])
@@ -1810,11 +1861,51 @@ class ComparisonTests(unittest.TestCase):
                     "normalized_stdout",
                     "normalized_stderr",
                 ],
+                "e_axfilter/tstp-threshold-file": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "e_axfilter/tstp-gsine-formulas": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "e_axfilter/tstp-lambda-def-formulas": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "e_axfilter/tstp-seeded-all-methods": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                    "output_files",
+                ],
+                "ekb_delete/drop-example": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                ],
+                "ekb_delete/drop-middle-example": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                ],
                 "ekb_ginsert/stdin-protocol": [
                     "exit_code",
                     "shape",
                     "normalized_stderr",
                     "output_files",
+                ],
+                "ekb_insert/stdin-example": [
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
                 ],
                 "epatternize/multi-file-output": [
                     "exit_code",

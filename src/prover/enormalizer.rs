@@ -1,5 +1,5 @@
 use crate::basics::defines::MEGA;
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
     RLimResult,
@@ -1240,7 +1240,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn enormalizer_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
-use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, check_option_letter_string, Diagnostic, ErrorCode};
 #[cfg(not(test))]
 use crate::basics::os_wrapper::set_memory_limit;
 #[cfg(target_os = "linux")]
@@ -2617,7 +2617,11 @@ fn open_configured_output<'a, W: Write + ?Sized>(
 fn eprover_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

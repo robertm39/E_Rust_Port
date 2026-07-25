@@ -1,5 +1,5 @@
 use crate::basics::dstrings::DynamicString;
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::inout::output::{out_close, out_open};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -58,7 +58,11 @@ pub fn input_open(name: Option<&Path>, fail: bool) -> Result<Option<InputSource>
         Err(error) => {
             return maybe_fail(
                 fail,
-                io_diagnostic(format!("Cannot stat file {}: {error}", path.display())),
+                io_diagnostic(format!(
+                    "Cannot stat file {}: {}",
+                    path.display(),
+                    c_io_error_message(&error)
+                )),
             );
         }
     }
@@ -67,8 +71,9 @@ pub fn input_open(name: Option<&Path>, fail: bool) -> Result<Option<InputSource>
         .map(|file| Some(InputSource::File(file)))
         .map_err(|error| {
             io_diagnostic(format!(
-                "Cannot open file {} for reading: {error}",
-                path.display()
+                "Cannot open file {} for reading: {}",
+                path.display(),
+                c_io_error_message(&error)
             ))
         })
         .or_else(|diagnostic| maybe_fail(fail, diagnostic))

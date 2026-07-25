@@ -1,4 +1,4 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -90,16 +90,30 @@ impl InputStream {
     }
 
     pub fn from_file(path: &Path) -> Result<Self, Diagnostic> {
-        fs::metadata(path).map_err(|error| {
+        let metadata = fs::metadata(path).map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
-                format!("Cannot stat file {}: {error}", path.display()),
+                format!(
+                    "Cannot stat file {}: {}",
+                    path.display(),
+                    c_io_error_message(&error)
+                ),
             )
         })?;
+        if !metadata.is_file() {
+            return Err(Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("{} it is not a regular file", path.display()),
+            ));
+        }
         let data = fs::read(path).map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
-                format!("Cannot open file {} for reading: {error}", path.display()),
+                format!(
+                    "Cannot open file {} for reading: {}",
+                    path.display(),
+                    c_io_error_message(&error)
+                ),
             )
         })?;
         Ok(Self::from_file_content(&path.to_string_lossy(), data))
@@ -373,6 +387,24 @@ mod tests {
         assert_eq!(stream.current_char(), Some(b'o'));
 
         remove_if_present(&path);
+    }
+
+    #[test]
+    fn file_stream_rejects_directories_like_c_input_open() {
+        let path = temp_path("directory");
+        remove_if_present(&path);
+        _ = std::fs::remove_dir(&path);
+        std::fs::create_dir(&path).unwrap();
+
+        let error = InputStream::from_file(&path).unwrap_err();
+
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::FILE_ERROR);
+        assert_eq!(
+            error.message(),
+            format!("{} it is not a regular file", path.display())
+        );
+
+        std::fs::remove_dir(&path).unwrap();
     }
 
     #[test]

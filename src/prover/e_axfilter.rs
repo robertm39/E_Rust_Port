@@ -1,10 +1,10 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
 use crate::basics::dstrings::DynamicString;
-use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{
     jkiss_rand_double, sort_weighted_objects, ProblemType, WeightedObject,
 };
@@ -927,15 +927,6 @@ fn load_filters(filter_file: Option<&Path>) -> Result<AxFilterSet, Diagnostic> {
     let Some(path) = filter_file else {
         return AxFilterSet::default_set();
     };
-    let metadata = fs::metadata(path).map_err(|error| {
-        e_axfilter_sys_error_diagnostic(format!("Cannot stat file {}", path.display()), &error)
-    })?;
-    if !metadata.is_file() {
-        return Err(io_diagnostic(format!(
-            "{} it is not a regular file",
-            path.display()
-        )));
-    }
     let mut scanner = Scanner::from_file(path, true).map_err(e_axfilter_scanner_open_diagnostic)?;
     let mut filters = AxFilterSet::new();
     filters.parse(&mut scanner)?;
@@ -1069,7 +1060,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn e_axfilter_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

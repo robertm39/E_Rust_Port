@@ -1,4 +1,4 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::reset_problem_type;
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
@@ -6,6 +6,7 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::streams::InputStream;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::TP_TOP_POS;
@@ -201,7 +202,9 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         return Scanner::from_file_content("<stdin>", data, true);
     }
-    Scanner::from_file(Path::new(name), true).map_err(term2dag_scanner_open_diagnostic)
+    let stream =
+        InputStream::from_file(Path::new(name)).map_err(term2dag_scanner_open_diagnostic)?;
+    Scanner::from_stream(stream, true)
 }
 
 #[must_use]
@@ -274,7 +277,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn term2dag_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

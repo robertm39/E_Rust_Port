@@ -1,12 +1,11 @@
 use crate::basics::defines::MEGA;
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit, RLimResult};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::{set_verbose_level, verbose_level};
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
-use crate::inout::fileops::input_open;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner};
@@ -323,15 +322,7 @@ fn scanner_for_input(
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         Scanner::from_file_content("<stdin>", data, true)?
     } else {
-        let path = Path::new(name);
-        let mut source = input_open(Some(path), true)
-            .map_err(edpll_scanner_open_diagnostic)?
-            .ok_or_else(|| io_diagnostic(format!("Cannot open file {name} for reading")))?;
-        let mut data = Vec::new();
-        source.read_to_end(&mut data).map_err(|error| {
-            edpll_sys_error_diagnostic(format!("Cannot read file {name}"), &error)
-        })?;
-        Scanner::from_file_content(name, data, true)?
+        Scanner::from_file(Path::new(name), true).map_err(edpll_scanner_open_diagnostic)?
     };
     scanner.set_format(format);
     Ok(scanner)
@@ -536,7 +527,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn edpll_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

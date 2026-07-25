@@ -1,4 +1,4 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
@@ -129,7 +129,11 @@ pub fn out_open(name: Option<&Path>) -> Result<OutputDestination, Diagnostic> {
         .map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
-                format!("Cannot open file {}: {error}", path.display()),
+                format!(
+                    "Cannot open file {}: {}",
+                    path.display(),
+                    c_io_error_message(&error)
+                ),
             )
         })
 }

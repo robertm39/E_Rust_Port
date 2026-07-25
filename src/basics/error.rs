@@ -175,6 +175,17 @@ pub fn c_runtime_error_message(error_code: i32) -> String {
 }
 
 #[must_use]
+/// Render an I/O error with the same C-runtime text used by `SysError`.
+///
+/// Real operating-system errors are translated from their raw code through
+/// `strerror`; synthetic Rust errors retain their supplied display text.
+pub fn c_io_error_message(error: &io::Error) -> String {
+    error
+        .raw_os_error()
+        .map_or_else(|| error.to_string(), c_runtime_error_message)
+}
+
+#[must_use]
 pub fn render_error_message(program_name: &str, message: &str) -> String {
     format!("{program_name}: {message}\n")
 }
@@ -191,7 +202,7 @@ pub fn render_sys_message(program_name: &str, message: &str, system_message: &st
 
 #[must_use]
 pub fn render_sys_error_message(program_name: &str, message: &str, error: &io::Error) -> String {
-    render_sys_message(program_name, message, &error.to_string())
+    render_sys_message(program_name, message, &c_io_error_message(error))
 }
 
 #[must_use]
@@ -199,7 +210,7 @@ pub fn render_sys_warning_message(program_name: &str, message: &str, error: &io:
     render_sys_message(
         program_name,
         &format!("Warning: {message}"),
-        &error.to_string(),
+        &c_io_error_message(error),
     )
 }
 
@@ -346,7 +357,7 @@ pub fn check_option_letter_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        c_runtime_error_message, check_option_letter_string, elog_file_name,
+        c_io_error_message, c_runtime_error_message, check_option_letter_string, elog_file_name,
         elog_in_dir_with_stderr, init_error, program_name, render_elog_record,
         render_error_message, render_sys_error_message, render_sys_warning_message,
         render_tmp_errno_error_message, render_tmp_errno_warning_message, render_warning_message,
@@ -395,6 +406,7 @@ mod tests {
     #[test]
     fn diagnostics_render_c_shaped_error_warning_and_syserror_text() {
         let system_error = io::Error::from_raw_os_error(2);
+        let c_system_error = c_runtime_error_message(2);
         let diagnostic = Diagnostic::new(ErrorCode::FILE_ERROR, "cannot open input");
 
         assert_eq!(
@@ -407,19 +419,27 @@ mod tests {
         );
         assert_eq!(
             diagnostic.render_sys_error("eprover", &system_error),
-            format!("eprover: cannot open input\neprover: {system_error}\n")
+            format!("eprover: cannot open input\neprover: {c_system_error}\n")
         );
         assert_eq!(
             diagnostic.render_sys_warning("eprover", &system_error),
-            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+            format!("eprover: Warning: cannot open input\neprover: {c_system_error}\n")
         );
         assert_eq!(
             render_sys_error_message("eprover", "cannot open input", &system_error),
-            format!("eprover: cannot open input\neprover: {system_error}\n")
+            format!("eprover: cannot open input\neprover: {c_system_error}\n")
         );
         assert_eq!(
             render_sys_warning_message("eprover", "cannot open input", &system_error),
-            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+            format!("eprover: Warning: cannot open input\neprover: {c_system_error}\n")
+        );
+        assert_eq!(c_io_error_message(&system_error), c_system_error);
+        assert!(!c_io_error_message(&system_error).contains("(os error 2)"));
+
+        let synthetic_error = io::Error::other("synthetic I/O failure");
+        assert_eq!(
+            c_io_error_message(&synthetic_error),
+            "synthetic I/O failure"
         );
     }
 
@@ -463,6 +483,7 @@ mod tests {
     #[test]
     fn write_helpers_emit_the_rendered_c_shapes() {
         let system_error = io::Error::from_raw_os_error(2);
+        let c_system_error = c_io_error_message(&system_error);
         let mut output = Vec::new();
 
         write_error_message(&mut output, "eprover", "fatal").unwrap();
@@ -473,7 +494,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).unwrap(),
             format!(
-                "eprover: fatal\neprover: Warning: warn\neprover: sys\neprover: {system_error}\neprover: Warning: syswarn\neprover: {system_error}\n"
+                "eprover: fatal\neprover: Warning: warn\neprover: sys\neprover: {c_system_error}\neprover: Warning: syswarn\neprover: {c_system_error}\n"
             )
         );
     }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::BatchSpec;
 use crate::control::esession::descriptor_from_tcp_stream;
@@ -794,7 +794,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn e_server_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 

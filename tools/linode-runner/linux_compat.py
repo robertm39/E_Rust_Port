@@ -724,6 +724,15 @@ TOOL_FUNCTIONAL_CASES = {
                     "problem.p": "fof(a, axiom, p(a)).\n",
                 },
                 "output_files": ("global.out", "problem_tiny.p"),
+                # The authoritative optimized C binary aborts after producing
+                # partial output; the memory-safe Rust implementation must not
+                # reproduce that double-free behavior.
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ),
             },
         ),
         (
@@ -745,6 +754,12 @@ TOOL_FUNCTIONAL_CASES = {
                     ),
                 },
                 "output_files": ("global.out", "problem_formulas.p"),
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ),
             },
         ),
         (
@@ -770,6 +785,12 @@ TOOL_FUNCTIONAL_CASES = {
                 },
                 "output_files": ("global.out", "problem_defs.p"),
                 "reference_mode": "ho",
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                    "output_files",
+                ),
             },
         ),
         (
@@ -801,6 +822,13 @@ TOOL_FUNCTIONAL_CASES = {
                     "problem_SA_P1_24_seed.p",
                     "problem_SL_P1_24_seed.p",
                     "problem_SD_P1_24_seed.p",
+                ),
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stdout",
+                    "normalized_stderr",
+                    "output_files",
                 ),
             },
         ),
@@ -861,6 +889,13 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/clausepatterns",
                 ),
                 "output_absent_files": ("kb/FILES/drop",),
+                # The authoritative optimized C binary aborts while updating
+                # this valid knowledge base; Rust completes the update safely.
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                ),
             },
         ),
         (
@@ -906,6 +941,11 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/clausepatterns",
                 ),
                 "output_absent_files": ("kb/FILES/middle",),
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
+                ),
             },
         ),
     ),
@@ -982,6 +1022,13 @@ TOOL_FUNCTIONAL_CASES = {
                     "kb/FILES/__problem__1",
                     "kb/problems",
                     "kb/clausepatterns",
+                ),
+                # The authoritative optimized C binary aborts on this valid
+                # insertion after corrupting its heap; Rust completes safely.
+                "expected_mismatches": (
+                    "exit_code",
+                    "shape",
+                    "normalized_stderr",
                 ),
             },
         ),
@@ -2065,6 +2112,17 @@ def cross_platform_path_replacements(
     return [
         (form, placeholder)
         for form in sorted(unique_forms, key=len, reverse=True)
+    ]
+
+
+def tool_binary_path_replacements(
+    reference_binary: Path,
+    candidate_binary: Path,
+    tool: str,
+) -> list[tuple[str, str]]:
+    return [
+        *cross_platform_path_replacements(reference_binary, tool),
+        *cross_platform_path_replacements(candidate_binary, tool),
     ]
 
 
@@ -3170,7 +3228,11 @@ def compare_tools(args: argparse.Namespace) -> None:
         mismatches = comparison_mismatches(reference, candidate)
         fixture_replacements: list[tuple[str, str]] = []
         fixture_replacements.extend(
-            cross_platform_path_replacements(reference_binary, tool)
+            tool_binary_path_replacements(
+                reference_binary,
+                candidate_binary,
+                tool,
+            )
         )
         for fixture_path in fixture_paths.values():
             fixture_replacements.extend(

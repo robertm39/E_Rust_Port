@@ -1,5 +1,5 @@
 use crate::basics::dstrings::DynamicString;
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 #[cfg(any(test, target_os = "linux"))]
 use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
 #[cfg(target_os = "linux")]
@@ -998,7 +998,11 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 fn e_ltb_runner_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
-        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+        format!(
+            "{}\n{PROGRAM_NAME}: {}",
+            prefix.into(),
+            c_io_error_message(error)
+        ),
     )
 }
 
