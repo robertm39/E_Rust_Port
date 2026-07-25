@@ -12,6 +12,13 @@ Implemented Rust-port history and compatibility evidence are recorded in [`docs/
 
 Build the upstream C references, compare the Windows Rust executable against them, and run the WSL-native benchmark with [`docs/windows-wsl-comparison.md`](docs/windows-wsl-comparison.md). That runbook also records the per-Windows-user WSL distro caveat that matters for Codex sandbox sessions.
 
+## Ephemeral Linode Compute
+
+Provision a short-lived G8 Dedicated runner, synchronize the exact current
+worktree without depending on a pushed branch, build and run the Rust and C
+implementations, collect Callgrind profiles, and guarantee guarded teardown with
+[`docs/linode-runner.md`](docs/linode-runner.md).
+
 ## Runtime PicoSAT Selection
 
 The Rust executable selects a runtime-loaded PicoSAT backend when `E_RUST_PORT_PICOSAT_LIBRARY` names a PicoSAT DLL/shared-library path. When that environment variable is unset or empty, the executable also looks for a bundled PicoSAT library next to `eprover`, under `lib/` next to the executable, and under `../lib/` relative to the executable directory. If no library is found, the port falls back to the internal solver.
