@@ -120,7 +120,11 @@ impl<V: Clone> IntMap<V> {
     /// Return the value for `key` without reproducing C's range-array growth
     /// on a lookup below the current array offset.
     #[must_use]
-    #[inline]
+    #[allow(
+        clippy::inline_always,
+        reason = "pinned whole-prover and native measurements improve this hot PD-tree lookup"
+    )]
+    #[inline(always)]
     pub fn get_val_const(&self, key: IntMapKey) -> Option<&V> {
         match &self.repr {
             IntMapRepr::Empty => None,
