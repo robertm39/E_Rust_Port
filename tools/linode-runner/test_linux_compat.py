@@ -1,10 +1,12 @@
 import math
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
-import e_interop
+import linux_compat
+
+e_interop = linux_compat
 
 
 class OutputParsingTests(unittest.TestCase):
@@ -23,22 +25,15 @@ class OutputParsingTests(unittest.TestCase):
             "problem <PROBLEM>\nproof",
         )
 
-    def test_cross_platform_path_replacements_cover_windows_separator_forms(self):
+    def test_path_replacements_cover_relative_and_resolved_forms(self):
         path = Path("reference-root")
-        with patch.object(e_interop, "wslpath", return_value=r"C:\work\TPTP"):
-            replacements = e_interop.cross_platform_path_replacements(path, "<TPTP>")
+        replacements = e_interop.cross_platform_path_replacements(path, "<TPTP>")
 
-        self.assertEqual(
-            set(replacements),
-            {
-                (r"C:\work\TPTP", "<TPTP>"),
-                ("C:/work/TPTP", "<TPTP>"),
-                (str(path), "<TPTP>"),
-            },
-        )
+        self.assertIn((str(path), "<TPTP>"), replacements)
+        self.assertIn((str(path.resolve()), "<TPTP>"), replacements)
         self.assertEqual(
             e_interop.normalize_output(
-                "C:/work/TPTP/Axioms/SET001.ax",
+                f"{path.resolve()}/Axioms/SET001.ax",
                 replacements,
             ),
             "<TPTP>/Axioms/SET001.ax",
@@ -2202,6 +2197,46 @@ class ComparisonTests(unittest.TestCase):
             "in = CreateScanner(StreamTypeFile, state->argv[i], true, NULL, true);\n",
         )
         self.assertEqual(first, second)
+
+
+class LinodeNativeTests(unittest.TestCase):
+    def test_prepare_reference_source_is_disposable_and_linux_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / ".git").mkdir()
+            (source / ".git" / "config").write_text("secret", encoding="utf-8")
+            configure = source / "configure"
+            configure.write_bytes(b"#!/bin/sh\r\necho ok\r\n")
+            destination = root / "build"
+
+            e_interop.prepare_reference_source(source, destination)
+
+            self.assertEqual(configure.read_bytes(), b"#!/bin/sh\r\necho ok\r\n")
+            self.assertEqual(
+                (destination / "configure").read_bytes(),
+                b"#!/bin/sh\necho ok\n",
+            )
+            self.assertFalse((destination / ".git").exists())
+            if os.name != "nt":
+                self.assertTrue((destination / "configure").stat().st_mode & 0o100)
+
+    def test_parser_uses_native_linux_candidates_and_report_only_mode(self):
+        arguments = e_interop.parser().parse_args(
+            [
+                "compare",
+                "--repo-root",
+                "/opt/e-rust-port/source",
+                "--rust-bin",
+                "/opt/e-rust-port/source/target/release/eprover",
+                "--report-only",
+            ]
+        )
+
+        self.assertEqual(arguments.command, "compare")
+        self.assertEqual(arguments.rust_bin.name, "eprover")
+        self.assertTrue(arguments.report_only)
 
 
 if __name__ == "__main__":

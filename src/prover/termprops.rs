@@ -108,7 +108,12 @@ where
     S: Into<String>,
 {
     let _problem_type_guard = ProblemTypeRunGuard::new();
-    init_io(PROGRAM_NAME);
+    let mut argv = argv.into_iter().map(Into::into).peekable();
+    let invoked_name = argv
+        .peek()
+        .cloned()
+        .unwrap_or_else(|| PROGRAM_NAME.to_owned());
+    init_io(&invoked_name);
     set_problem_type(crate::basics::simple_stuff::ProblemType::FirstOrder)?;
     set_verbose_level(0);
     let result = run_inner(argv, stdin, stdout, stderr);

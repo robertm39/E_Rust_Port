@@ -603,24 +603,33 @@ def wait_for_ssh(state: dict[str, Any], timeout: int = 600) -> None:
     raise RunnerError(f"Timed out waiting for SSH: {last_error}")
 
 
-def bootstrap(state: dict[str, Any]) -> None:
-    script = r"""
+def bootstrap_script() -> str:
+    return r"""
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl gawk git pkg-config python3 time valgrind
+    build-essential ca-certificates curl file gawk gcc-mingw-w64-x86-64 \
+    git pkg-config python3 time valgrind
 if ! command -v cargo >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
         sh -s -- -y --profile minimal --default-toolchain stable
 fi
+/root/.cargo/bin/rustup component add rustfmt clippy
+/root/.cargo/bin/rustup target add x86_64-pc-windows-gnu
 /root/.cargo/bin/rustc --version
 /root/.cargo/bin/cargo --version
+/root/.cargo/bin/cargo fmt --version
+/root/.cargo/bin/cargo clippy --version
 gcc --version | head -n 1
+x86_64-w64-mingw32-gcc --version | head -n 1
 valgrind --version
 install -d -m 0755 /opt/e-rust-port
 """
-    ssh_command(state, script, timeout=1800)
+
+
+def bootstrap(state: dict[str, Any]) -> None:
+    ssh_command(state, bootstrap_script(), timeout=1800)
 
 
 def provision(
@@ -770,7 +779,7 @@ def run_remote_workload(state: dict[str, Any]) -> None:
     )
     state["phase"] = "running-workload"
     save_current(state)
-    ssh_command(state, command, timeout=7200)
+    ssh_command(state, command, timeout=14400)
     state["remote_artifact_path"] = artifact_path
     state["phase"] = "workload-complete"
     save_current(state)

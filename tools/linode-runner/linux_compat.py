@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build upstream E in WSL and compare it with the Rust port.
+"""Build Linux E references and compare them with the native Linux Rust port.
 
-This program is intentionally standard-library-only.  It runs inside WSL; the
-PowerShell wrapper is the supported Windows entry point.
+This program is intentionally standard-library-only and runs on the ephemeral
+Linode worker.
 """
 
 from __future__ import annotations
@@ -1798,36 +1798,18 @@ def run_checked(
     return result
 
 
-def git(source: Path, *arguments: str) -> str:
-    command = [
-        "git",
-        "-c",
-        f"safe.directory={source}",
-        # The checked-in upstream source lives on the Windows filesystem.  Windows
-        # Git may materialize it with CRLF line endings, while the WSL build
-        # driver runs Linux Git with LF defaults.  Use the Windows normalization
-        # policy only when inspecting that original checkout; cloned build trees
-        # on WSL/ext4 keep normal Linux line endings.
-        "-c",
-        "core.autocrlf=true",
-        "-C",
-        str(source),
-        *arguments,
-    ]
-    return run_checked(command).stdout.strip()
-
-
-def assert_original_clean(source: Path) -> None:
-    status = git(source, "status", "--porcelain=v1", "--untracked-files=all")
-    if status:
-        raise InteropError(
-            "The original eprover repository is not clean. Refusing to build because "
-            "the reference source must remain untouched:\n" + status
-        )
-
-
 def cache_root() -> Path:
+    configured = os.environ.get("E_RUST_PORT_COMPAT_ROOT")
+    if configured:
+        return Path(configured)
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "e-rust-port"
+
+
+def artifact_root() -> Path:
+    configured = os.environ.get("E_RUST_PORT_COMPAT_ARTIFACT_ROOT")
+    if configured:
+        return Path(configured)
+    return Path.cwd() / ".artifacts" / "e-compare"
 
 
 def reference_manifest_path() -> Path:
@@ -1874,6 +1856,28 @@ def rust_tool_environment() -> dict[str, str]:
     return environment_with_path_prefix(Path.home() / ".cargo" / "bin")
 
 
+def prepare_reference_source(source: Path, destination: Path) -> None:
+    """Copy the uploaded C source and normalize only the disposable build tree."""
+
+    shutil.copytree(
+        source,
+        destination,
+        ignore=shutil.ignore_patterns(".git", ".dolt", "__pycache__"),
+    )
+    for candidate in destination.rglob("*"):
+        if not candidate.is_file():
+            continue
+        try:
+            data = candidate.read_bytes()
+        except OSError:
+            continue
+        if b"\0" not in data and b"\r\n" in data:
+            candidate.write_bytes(data.replace(b"\r\n", b"\n"))
+            data = data.replace(b"\r\n", b"\n")
+        if data.startswith(b"#!"):
+            candidate.chmod(candidate.stat().st_mode | 0o100)
+
+
 def build_one(source: Path, commit: str, mode: str) -> dict[str, Any]:
     build_dir = cache_root() / "sources" / commit / mode
     binary_name = "eprover-ho" if mode == "ho" else "eprover"
@@ -1882,24 +1886,14 @@ def build_one(source: Path, commit: str, mode: str) -> dict[str, Any]:
     if build_dir.exists():
         safe_remove_cache_path(build_dir)
     build_dir.parent.mkdir(parents=True, exist_ok=True)
-    run_checked(
-        [
-            "git",
-            "-c",
-            f"safe.directory={source}",
-            "clone",
-            "--no-hardlinks",
-            "--no-checkout",
-            str(source),
-            str(build_dir),
-        ],
-        capture=False,
-    )
-    run_checked(["git", "-C", str(build_dir), "checkout", "--detach", commit])
+    prepare_reference_source(source, build_dir)
 
     configure = ["./configure"] + (["--enable-ho"] if mode == "ho" else [])
     run_checked(configure, cwd=build_dir, capture=False)
-    run_checked(["make", "commit_id"], cwd=build_dir, capture=False)
+    (build_dir / "PROVER" / "e_gitcommit.h").write_text(
+        f'#define ECOMMITID "{commit}"\n',
+        encoding="utf-8",
+    )
     jobs = str(max(1, os.cpu_count() or 1))
     run_checked(["make", "-j", jobs], cwd=build_dir, capture=False)
 
@@ -1999,23 +1993,20 @@ def apply_archived_reference_tool_source_patches(build_dir: Path, name: str) -> 
 def build_reference(args: argparse.Namespace) -> None:
     repo_root = args.repo_root.resolve()
     source = repo_root / "eprover"
-    if not (source / ".git").exists():
-        raise InteropError(f"Expected the upstream repository at {source}")
+    if not (source / "configure").is_file():
+        raise InteropError(f"Expected the uploaded upstream source at {source}")
+    commit = args.eprover_commit
+    if re.fullmatch(r"[A-Za-z0-9._-]+", commit) is None:
+        raise InteropError(f"Invalid upstream commit identifier: {commit}")
 
-    assert_original_clean(source)
-    before_commit = git(source, "rev-parse", "HEAD")
-    print(f"Building E reference commit {before_commit} in {cache_root()}", flush=True)
-    builds = [build_one(source, before_commit, mode) for mode in ("fol", "ho")]
-    assert_original_clean(source)
-    after_commit = git(source, "rev-parse", "HEAD")
-    if after_commit != before_commit:
-        raise InteropError("The original eprover HEAD changed during the build")
+    print(f"Building E reference commit {commit} in {cache_root()}", flush=True)
+    builds = [build_one(source, commit, mode) for mode in ("fol", "ho")]
 
     release = os_release()
     manifest = {
         "schema_version": 1,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "upstream_commit": before_commit,
+        "upstream_commit": commit,
         "upstream_source": str(source),
         "compiler": first_line(["gcc", "--version"]),
         "make": first_line(["make", "--version"]),
@@ -2066,16 +2057,10 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def wslpath(path: Path, windows: bool = False) -> str:
-    option = "-w" if windows else "-a"
-    return run_checked(["wslpath", option, str(path)]).stdout.strip()
-
-
 def cross_platform_path_replacements(
     path: Path, placeholder: str
 ) -> list[tuple[str, str]]:
-    windows_path = wslpath(path, windows=True)
-    forms = (str(path), windows_path, windows_path.replace("\\", "/"))
+    forms = (str(path), str(path.resolve()))
     unique_forms = (form for form in dict.fromkeys(forms) if form)
     return [
         (form, placeholder)
@@ -2542,7 +2527,7 @@ def comparison_cases(
             }
         )
     # These cases intentionally consume their full memory/time allowance. Run
-    # them after all functional cases so retained OS/WSL memory cannot turn a
+    # them after all functional cases so retained worker memory cannot turn a
     # later proof comparison into a spurious resource failure.
     cases.sort(
         key=lambda case: case["name"] in MAIN_COMPARISON_RESOURCE_STRESS_CASES
@@ -2579,7 +2564,7 @@ def mismatch_expectation_matches(
 def compare(args: argparse.Namespace) -> None:
     manifest = load_manifest()
     repo_root = args.repo_root.resolve()
-    output_root = repo_root / ".artifacts" / "e-compare"
+    output_root = artifact_root() / "main"
     run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -2588,12 +2573,12 @@ def compare(args: argparse.Namespace) -> None:
 
     if args.self_test:
         candidate_kind = "linux-reference"
-        rust_windows = None
+        rust_binary = None
     else:
-        rust_windows = args.rust_windows.resolve()
-        if not rust_windows.is_file() or rust_windows.suffix.lower() != ".exe":
-            raise InteropError(f"Windows Rust executable not found: {rust_windows}")
-        candidate_kind = "windows-rust"
+        rust_binary = args.rust_bin.resolve()
+        if not rust_binary.is_file():
+            raise InteropError(f"Native Linux Rust executable not found: {rust_binary}")
+        candidate_kind = "linux-rust"
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
@@ -2629,12 +2614,13 @@ def compare(args: argparse.Namespace) -> None:
             candidate_env = reference_env
             candidate_cwd = problem.parent
         else:
-            assert rust_windows is not None
-            candidate_binary = rust_windows
-            windows_problem = wslpath(problem, windows=True)
-            candidate_args = options if case["stdin"] is not None else [windows_problem, *options]
+            assert rust_binary is not None
+            candidate_binary = rust_binary
+            candidate_args = (
+                options if case["stdin"] is not None else [str(problem), *options]
+            )
             candidate_env = os.environ.copy()
-            candidate_env["TPTP"] = wslpath(tptp, windows=True)
+            candidate_env["TPTP"] = str(tptp)
             candidate_cwd = problem.parent
 
         candidate = execute(
@@ -2728,7 +2714,7 @@ def compare(args: argparse.Namespace) -> None:
         f"Cases: {len(records)}; mismatches: {mismatch_count}; "
         f"expected differences: {expected_difference_count}"
     )
-    if mismatch_count:
+    if mismatch_count and not args.report_only:
         raise InteropError("Compatibility mismatches were found")
 
 
@@ -2920,15 +2906,12 @@ def materialize_tool_workdir_directories(case: dict[str, Any], workdir: Path) ->
 def substitute_tool_fixture_arguments(
     arguments: Sequence[str],
     fixture_paths: dict[str, Path],
-    *,
-    windows_paths: bool = False,
 ) -> list[str]:
     def replacement(match: re.Match[str]) -> str:
         name = match.group(1)
         if name not in fixture_paths:
             raise InteropError(f"Unknown fixture placeholder: {name}")
-        path = fixture_paths[name]
-        return wslpath(path, windows=True) if windows_paths else str(path)
+        return str(fixture_paths[name])
 
     return [FIXTURE_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
 
@@ -2936,8 +2919,6 @@ def substitute_tool_fixture_arguments(
 def substitute_tool_companion_arguments(
     arguments: Sequence[str],
     companion_paths: dict[str, Path],
-    *,
-    windows_paths: bool = False,
 ) -> list[str]:
     def replacement(match: re.Match[str]) -> str:
         name = match.group(1)
@@ -2946,7 +2927,7 @@ def substitute_tool_companion_arguments(
         path = companion_paths[name]
         if not path.is_file():
             raise InteropError(f"Companion binary is missing: {path}")
-        return wslpath(path, windows=True) if windows_paths else str(path)
+        return str(path)
 
     return [COMPANION_ARGUMENT_RE.sub(replacement, argument) for argument in arguments]
 
@@ -3086,7 +3067,7 @@ def compare_tools(args: argparse.Namespace) -> None:
     if unknown:
         raise InteropError("Unknown reference tool(s): " + ", ".join(unknown))
 
-    output_root = repo_root / ".artifacts" / "e-compare"
+    output_root = artifact_root() / "tools"
     run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-tools"
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -3095,10 +3076,10 @@ def compare_tools(args: argparse.Namespace) -> None:
         candidate_kind = "linux-reference-tools"
         rust_bin_dir = None
     else:
-        rust_bin_dir = args.rust_windows_bin_dir.resolve()
+        rust_bin_dir = args.rust_bin_dir.resolve()
         if not rust_bin_dir.is_dir():
-            raise InteropError(f"Windows Rust bin directory not found: {rust_bin_dir}")
-        candidate_kind = "windows-rust-tools"
+            raise InteropError(f"Native Linux Rust bin directory not found: {rust_bin_dir}")
+        candidate_kind = "linux-rust-tools"
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
@@ -3107,7 +3088,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         "eprover": Path(manifest["builds"]["fol"]["binary"]),
     }
     candidate_companions = reference_companions if args.self_test else {
-        "eprover": rust_bin_dir / "eprover.exe",
+        "eprover": rust_bin_dir / "eprover",
     }
     cases = tool_comparison_cases(selected)
     for index, case in enumerate(cases, 1):
@@ -3167,16 +3148,15 @@ def compare_tools(args: argparse.Namespace) -> None:
             candidate_binary = reference_binary
         else:
             assert rust_bin_dir is not None
-            candidate_binary = rust_bin_dir / f"{tool}.exe"
+            candidate_binary = rust_bin_dir / tool
             if not candidate_binary.is_file():
-                raise InteropError(f"Windows Rust tool executable not found: {candidate_binary}")
+                raise InteropError(f"Native Linux Rust tool executable not found: {candidate_binary}")
         candidate_arguments = substitute_tool_fixture_arguments(
-            case["arguments"], fixture_paths, windows_paths=not args.self_test
+            case["arguments"], fixture_paths
         )
         candidate_arguments = substitute_tool_companion_arguments(
             candidate_arguments,
             candidate_companions,
-            windows_paths=not args.self_test,
         )
 
         candidate = execute(
@@ -3381,7 +3361,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         f"Cases: {len(records)}; mismatches: {mismatch_count}; "
         f"expected differences: {expected_difference_count}"
     )
-    if mismatch_count:
+    if mismatch_count and not args.report_only:
         raise InteropError("Support-tool compatibility mismatches were found")
 
 
@@ -3416,41 +3396,7 @@ def stage_benchmark_corpus(
         staged = destination / "EXAMPLE_PROBLEMS"
         shutil.copytree(source, staged)
         cases = enumerate_problems(repo_root, staged / "SMOKETEST")
-    if str(staged.resolve()).startswith("/mnt/"):
-        raise InteropError("Benchmark corpus must be staged on WSL's Linux filesystem")
     return staged, cases
-
-
-def build_rust_linux(repo_root: Path, commit: str) -> tuple[Path, dict[str, str]]:
-    if not (repo_root / "Cargo.toml").is_file():
-        raise InteropError(
-            "Cargo.toml does not exist yet. The benchmark command is ready, but it "
-            "requires the Rust port with a binary target named 'eprover'."
-        )
-    environment = rust_tool_environment()
-    if shutil.which("cargo", path=environment.get("PATH")) is None:
-        raise InteropError(
-            "cargo is not installed in WSL. Install Rust with rustup, then rerun benchmark."
-        )
-    target_dir = cache_root() / "rust-target" / commit
-    environment["CARGO_TARGET_DIR"] = str(target_dir)
-    run_checked(
-        ["cargo", "build", "--locked", "--release", "--bin", "eprover"],
-        cwd=repo_root,
-        env=environment,
-        capture=False,
-    )
-    binary = target_dir / "release" / "eprover"
-    if not binary.is_file():
-        raise InteropError(f"Cargo did not produce the required binary: {binary}")
-    if str(binary.resolve()).startswith("/mnt/"):
-        raise InteropError("Rust benchmark binary must reside on WSL's Linux filesystem")
-    metadata = {
-        "cargo": first_line(["cargo", "--version"], env=environment),
-        "rustc": first_line(["rustc", "--version"], env=environment),
-        "sha256": sha256_file(binary),
-    }
-    return binary, metadata
 
 
 def timed_execution(
@@ -3524,10 +3470,18 @@ def benchmark(args: argparse.Namespace) -> None:
     manifest = load_manifest()
     repo_root = args.repo_root.resolve()
     commit = manifest["upstream_commit"]
-    rust_binary, rust_metadata = build_rust_linux(repo_root, commit)
+    rust_binary = args.rust_bin.resolve()
+    if not rust_binary.is_file():
+        raise InteropError(f"Native Linux Rust executable not found: {rust_binary}")
+    rust_environment = rust_tool_environment()
+    rust_metadata = {
+        "cargo": first_line(["cargo", "--version"], env=rust_environment),
+        "rustc": first_line(["rustc", "--version"], env=rust_environment),
+        "sha256": sha256_file(rust_binary),
+    }
     corpus = args.corpus.resolve() if args.corpus else None
     staged_root, cases = stage_benchmark_corpus(repo_root, corpus, commit)
-    output_root = repo_root / ".artifacts" / "e-compare"
+    output_root = artifact_root() / "benchmark"
     run_dir = output_root / (
         dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-benchmark"
     )
@@ -3668,7 +3622,7 @@ def doctor(_: argparse.Namespace) -> None:
     ]
     release = os_release()
     if missing:
-        raise InteropError("Missing WSL dependencies: " + ", ".join(missing))
+        raise InteropError("Missing Linode worker dependencies: " + ", ".join(missing))
     print(f"Distribution: {release.get('PRETTY_NAME', 'unknown')}")
     if release.get("ID") != "ubuntu" or release.get("VERSION_ID") != "24.04":
         print(
@@ -3688,29 +3642,35 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subparsers = result.add_subparsers(dest="command", required=True)
 
-    doctor_parser = subparsers.add_parser("doctor", help="validate WSL build dependencies")
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="validate native Linux worker dependencies"
+    )
     doctor_parser.set_defaults(function=doctor)
 
     build_parser = subparsers.add_parser("build-reference", help="build FOL and HO E references")
     build_parser.add_argument("--repo-root", type=path_argument, required=True)
+    build_parser.add_argument("--eprover-commit", required=True)
     build_parser.set_defaults(function=build_reference)
 
-    compare_parser = subparsers.add_parser("compare", help="compare WSL E with the Windows Rust EXE")
+    compare_parser = subparsers.add_parser(
+        "compare", help="compare native Linux C and Rust eprover binaries"
+    )
     compare_parser.add_argument("--repo-root", type=path_argument, required=True)
     candidate = compare_parser.add_mutually_exclusive_group(required=True)
-    candidate.add_argument("--rust-windows", type=path_argument)
+    candidate.add_argument("--rust-bin", type=path_argument)
     candidate.add_argument("--self-test", action="store_true")
     compare_parser.add_argument("--corpus", type=path_argument)
     compare_parser.add_argument("--timeout", type=int, default=60)
     compare_parser.add_argument("--memory-limit-mb", type=int, default=2048)
+    compare_parser.add_argument("--report-only", action="store_true")
     compare_parser.set_defaults(function=compare)
 
     compare_tools_parser = subparsers.add_parser(
-        "compare-tools", help="compare WSL support tools with Windows Rust tool EXEs"
+        "compare-tools", help="compare native Linux C and Rust support tools"
     )
     compare_tools_parser.add_argument("--repo-root", type=path_argument, required=True)
     tool_candidate = compare_tools_parser.add_mutually_exclusive_group(required=True)
-    tool_candidate.add_argument("--rust-windows-bin-dir", type=path_argument)
+    tool_candidate.add_argument("--rust-bin-dir", type=path_argument)
     tool_candidate.add_argument("--self-test", action="store_true")
     compare_tools_parser.add_argument(
         "--tool",
@@ -3718,10 +3678,12 @@ def parser() -> argparse.ArgumentParser:
         help="support tool to compare; may be repeated; defaults to all archived tools",
     )
     compare_tools_parser.add_argument("--timeout", type=int, default=30)
+    compare_tools_parser.add_argument("--report-only", action="store_true")
     compare_tools_parser.set_defaults(function=compare_tools)
 
     benchmark_parser = subparsers.add_parser("benchmark", help="benchmark native Linux C and Rust binaries")
     benchmark_parser.add_argument("--repo-root", type=path_argument, required=True)
+    benchmark_parser.add_argument("--rust-bin", type=path_argument, required=True)
     benchmark_parser.add_argument("--corpus", type=path_argument)
     benchmark_parser.add_argument("--runs", type=int, default=5)
     benchmark_parser.add_argument("--timeout", type=int, default=60)

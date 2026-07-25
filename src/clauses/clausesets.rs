@@ -372,7 +372,7 @@ const SPARSE_STORE_CHUNK_MASK: usize = SPARSE_STORE_CHUNK_SIZE - 1;
 #[cfg(any(test, not(target_os = "linux")))]
 const SPARSE_STORE_CHUNK_BYTES: usize =
     SPARSE_STORE_CHUNK_SIZE * std::mem::size_of::<Option<Clause>>();
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 const CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC: u64 = 1_000_000;
 #[cfg(any(test, not(target_os = "linux")))]
 const CLAUSE_PAGE_MEMORY_HEADROOM_PAGES: u64 = 2;
@@ -584,7 +584,7 @@ impl SparseClauseStore {
         slot
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(test, not(target_os = "linux")))]
     fn next_push_allocates_clause_page(&self) -> bool {
         let Some(tail) = self.chunk(self.tail_chunk) else {
             return false;
@@ -595,7 +595,7 @@ impl SparseClauseStore {
         self.tail_chunk >= self.overflow_chunks.len()
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(test, not(target_os = "linux")))]
     fn try_reserve_next_push_capacity(&mut self) -> bool {
         let tail = self
             .chunk(self.tail_chunk)

@@ -1173,7 +1173,15 @@ mod linux_resource {
 
     #[cfg(target_os = "linux")]
     pub(super) fn clock_ticks_per_second() -> Option<i64> {
-        i64::try_from(sysconf_positive(SC_CLK_TCK_COMPAT)?).ok()
+        let ticks = sysconf_positive(SC_CLK_TCK_COMPAT)?;
+        #[cfg(target_pointer_width = "64")]
+        {
+            Some(ticks)
+        }
+        #[cfg(target_pointer_width = "32")]
+        {
+            Some(i64::from(ticks))
+        }
     }
 
     #[cfg(target_os = "linux")]

@@ -8,10 +8,16 @@ workers. Its default is the Akamai Cloud `G8 Dedicated 8x4` plan in Chicago:
 - image: `linode/ubuntu24.04`
 - resources: 8 GiB RAM, 4 dedicated CPUs, and 82 GiB storage
 
+This worker is the project's sole Rust/C execution environment. Do not run
+Cargo, `rustc`, Rust project binaries, the C build, C binaries, WSL, Valgrind,
+or Callgrind on the local computer. Local PowerShell only orchestrates the
+worker; lightweight Python controller tests, PowerShell parsing, Git, and
+documentation checks may remain local.
+
 The normal `run` workflow creates a Cloud Firewall and Linode, installs the
-toolchain, uploads a fresh snapshot of the current worktree, builds and runs
-both implementations, profiles both with Callgrind, downloads the artifacts,
-and deletes the paid resources in a `finally` cleanup.
+complete Linux and Windows-cross toolchain, uploads a fresh snapshot of the
+current worktree, performs every required validation phase, downloads the
+artifacts, and deletes the paid resources in a `finally` cleanup.
 
 ## One-time account preparation
 
@@ -55,9 +61,10 @@ The `check` command is read-only: it validates the token scopes, selected plan,
 Chicago capacity, Ubuntu image, public source IP, and local OpenSSH tools
 without creating a billable resource.
 
-## One-shot build and Callgrind validation
+## Comprehensive remote validation
 
-Run the complete lifecycle from the repository root:
+Run the complete required project-validation lifecycle from the repository
+root:
 
 ```powershell
 .\linode-runner.ps1 run
@@ -67,6 +74,24 @@ The controller detects the machine's current public IPv4 address and creates an
 ephemeral firewall that accepts only TCP port 22 from that `/32`. Outbound
 traffic is allowed so Ubuntu, Rust, and Cargo dependencies can be installed.
 No other inbound traffic is accepted.
+
+All project code runs on native Ubuntu 24.04. The workload:
+
+1. runs Rustfmt, all-target/all-feature tests, pedantic Clippy, and release
+   builds for every Rust binary;
+2. cross-compiles every Rust binary and test target for
+   `x86_64-pc-windows-gnu`, records PE metadata and hashes, and never executes
+   a Windows binary;
+3. builds disposable FOL and HO copies of the upstream C reference plus all
+   support tools without modifying `eprover/`;
+4. runs the maintained main-prover and support-tool C/Rust compatibility
+   matrices natively on Linux;
+5. runs the seeded five-trial native timing benchmark, smoke tests, and
+   Callgrind profiles for Rust and C.
+
+Linux is the runtime, behavioral-compatibility, and performance authority.
+Windows GNU x64 is compile-only; MSVC and Windows runtime behavior are not
+supported validation targets.
 
 Each run uploads a new archive made directly from the current filesystem. It
 therefore includes tracked modifications, untracked source files, and the
@@ -80,9 +105,18 @@ The retained results are written to:
 .artifacts/linode/<run-id>/
 ```
 
-They include build logs and timings, native smoke output, raw Callgrind data,
-annotated Callgrind reports, binary hashes, and instruction summaries for both
-Rust and C. A successful complete workload contains a `SUCCESS` file.
+They include Linux Rust quality-gate logs, FOL/HO C build metadata, Windows GNU
+cross-compile logs and PE hashes, main and tool compatibility reports, timing
+benchmark samples, native smoke output, raw and annotated Callgrind data, Linux
+binary hashes, and instruction summaries.
+
+`VALIDATION_COMPLETE` means every phase ran and its reports were collected.
+`SUCCESS` additionally means no unexpected main or support-tool compatibility
+difference was found. If real compatibility gaps remain, the command returns
+nonzero after writing `COMPATIBILITY_MISMATCHES`; partial and complete artifacts
+are still downloaded and the paid resources are still deleted. Benchmark
+ratios above the documented threshold remain warnings rather than lifecycle
+failures.
 
 If automatic public-IP detection is unsuitable, provide the controller's
 current public IPv4 explicitly:
@@ -93,8 +127,9 @@ current public IPv4 explicitly:
 
 ## Interactive lifecycle
 
-For work that requires several remote commands, keep one runner only as long as
-needed:
+For work that requires several remote Rust/C commands, keep one runner only as
+long as needed. This is the only supported way to issue Cargo or compiled-code
+commands interactively:
 
 ```powershell
 .\linode-runner.ps1 up
@@ -158,19 +193,22 @@ Garbage collection considers only resources whose labels start with
 least one hour old. It should be a recovery mechanism, not the normal cleanup
 path.
 
-## Local validation
+## Controller-only local validation
 
-The controller uses only the Python standard library and the Windows-bundled
-OpenSSH and `tar` tools. Run its unit tests with:
+The controller and compatibility-report code use only the Python standard
+library and the Windows-bundled OpenSSH and `tar` tools. Their lightweight
+Python tests may run locally:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover `
     -s tools\linode-runner -p "test_*.py" -v
 ```
 
-The tests pin the requested Linode and firewall settings, source-archive
-exclusions, safe artifact extraction, stale-resource selection, and
-label-matching deletion guards.
+The tests pin the requested Linode and firewall settings, remote-only quality
+gates, Windows cross-toolchain bootstrap, source-archive exclusions, safe
+artifact extraction, stale-resource selection, label-matching deletion guards,
+compatibility matrices, report normalization, and disposable C-source
+preparation. They do not compile or execute Rust or C.
 
 Current Akamai references:
 

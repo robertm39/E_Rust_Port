@@ -1,5 +1,14 @@
 # Interop harness inventory closure
 
+## Retirement note
+
+On 2026-07-25 the active Windows/WSL harness was retired when build, runtime,
+compatibility, benchmark, and Callgrind validation moved to the ephemeral
+Linode. The wrapper is retained here only as
+[`retired-e-interop.ps1.txt`](retired-e-interop.ps1.txt), an inert input to the
+historical inventory audit. Commands below document the completed experiment;
+they are not current project instructions.
+
 ## Status
 
 Completed for Bead `E_Rust_Port-j76.2.9`. The maintained Windows/WSL harness

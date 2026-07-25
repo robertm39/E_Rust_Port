@@ -2,7 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 #[cfg(any(test, target_os = "linux"))]
 use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 use crate::basics::os_wrapper::{set_soft_rlimit_with_error, RLIMIT_CPU_COMPAT};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{

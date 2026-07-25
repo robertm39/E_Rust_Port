@@ -60,17 +60,27 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
+All Rust and C formatting, compilation, tests, execution, compatibility
+comparisons, benchmarks, and profiles run on the ephemeral Ubuntu Linode. Do
+not invoke Cargo, Rust binaries, the C build, C binaries, WSL, Valgrind, or
+Callgrind on the local computer.
 
-```bash
-# Example:
-# npm install
-# npm test
+From local PowerShell, orchestrate the complete remote lifecycle:
+
+```powershell
+.\linode-runner.ps1 run
 ```
+
+The command uploads the exact worktree, performs every required check on the
+Linode, collects artifacts, and deletes the Linode and firewall. Linux is the
+runtime compatibility authority. Windows GNU x64 is compile-only and is never
+executed. See `DOCS.md` and `docs/linode-runner.md`.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+The Rust port and unchanged upstream C reference are compared natively on the
+same Linux worker. The local machine is limited to editing, orchestration, Git,
+documentation checks, PowerShell parsing, and Python controller tests.
 
 ## Conventions & Patterns
 

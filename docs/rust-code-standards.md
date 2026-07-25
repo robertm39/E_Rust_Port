@@ -6,36 +6,37 @@ This file is the canonical Rust standards document for the port. Do not add a se
 
 ## Required Checks
 
-Once a Rust crate exists, all Rust code changes must pass:
+Do not format, compile, test, execute, benchmark, or profile Rust or C on the
+local computer or under WSL. Every Rust code change must use the comprehensive
+ephemeral-Linode lifecycle:
 
 ```powershell
-cargo fmt --check
-cargo test --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
+.\linode-runner.ps1 run
 ```
 
-Treat clippy pedantic findings as design feedback. Prefer small, explicit fixes that keep the port close to the original implementation model.
-
-Executable changes must also build the release binary once the `eprover` target exists:
-
-```powershell
-cargo build --locked --release --bin eprover
-```
-
-Drop-in compatibility work must compare the Rust executable with the C reference:
-
-```powershell
-.\e-interop.ps1 build-reference
-.\e-interop.ps1 compare -RustExe .\target\release\eprover.exe
-```
-
-Performance-sensitive or executable-path work must also run the benchmark harness when the Linux Rust toolchain is available:
-
-```powershell
-.\e-interop.ps1 benchmark -Runs 5
-```
+The local PowerShell command only provisions, uploads, orchestrates, downloads
+artifacts, and tears down. On Ubuntu 24.04 the worker runs Rustfmt, all-target
+and all-feature tests, Clippy with warnings and pedantic findings denied,
+release builds for every binary, native C/Rust compatibility matrices, timing
+benchmarks, and Callgrind. It also compiles all binaries and test targets for
+`x86_64-pc-windows-gnu` without executing them. Treat Clippy pedantic findings
+as design feedback and prefer small, explicit fixes that keep the port close to
+the original implementation model.
 
 Docs-only changes should run the Markdown link checker from `DOCS.md`.
+
+## Platform Support
+
+Native Linux is the only supported execution platform and the authority for
+behavioral and performance comparisons with upstream E. Windows GNU x64 is a
+compile-only portability target. Windows executables must never be run as part
+of project validation, and the project makes no Windows runtime, behavioral,
+performance, or MSVC guarantee.
+
+Keep the `x86_64-pc-windows-gnu` build working, including Windows-gated code,
+but do not add Windows-specific behavior solely to mimic results that are not
+tested. Cross-platform abstractions should preserve the upstream Linux
+contract first.
 
 ## Unsafe Rust
 
@@ -73,7 +74,7 @@ When the C executable reports an observable fatal error, the Rust port should ma
 ## Compatibility Rules
 
 - Preserve stdout/stderr structure, SZS status output, proof-output order, parser diagnostics, include handling, stdin behavior, and line-ending normalization.
-- Preserve CLI option parsing, environment-variable behavior, resource-limit handling, timeout behavior, and file path semantics closely enough for `.\e-interop.ps1 compare` to pass.
+- Preserve CLI option parsing, environment-variable behavior, resource-limit handling, timeout behavior, and file path semantics closely enough for the native-Linux Linode compatibility matrices to pass.
 - Keep deterministic ordering explicit. Do not rely on hash-map iteration order, filesystem traversal order, pointer addresses, or thread scheduling when output or proof search can observe the result.
 - Choose integer widths and conversions deliberately. Match the C contract for overflow, truncation, signedness, sentinel values, and boundary checks; use checked, saturating, or wrapping operations only when they match the original behavior.
 - Preserve proof-search state transitions and mutation order when they affect clause selection, simplification, indexing, ordering, scheduling, or proof objects.

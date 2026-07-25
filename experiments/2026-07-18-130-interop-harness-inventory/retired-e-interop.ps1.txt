@@ -1,3 +1,4 @@
+# RETIRED: inert historical text retained only for experiment 130's inventory audit.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]

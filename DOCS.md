@@ -8,16 +8,30 @@ Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-c
 
 Implemented Rust-port history and compatibility evidence are recorded in [`docs/rust-port-status.md`](docs/rust-port-status.md). Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`; use `bd ready`, `bd list`, and `bd search` to inspect current status.
 
-## WSL C/Rust Comparison
+## Execution And Platform Policy
 
-Build the upstream C references, compare the Windows Rust executable against them, and run the WSL-native benchmark with [`docs/windows-wsl-comparison.md`](docs/windows-wsl-comparison.md). That runbook also records the per-Windows-user WSL distro caveat that matters for Codex sandbox sessions.
+All Rust and C formatting, compilation, tests, execution, compatibility
+comparisons, benchmarks, and profiling must run on the ephemeral Ubuntu 24.04
+Linode. Do not invoke Cargo, `rustc`, Rust project binaries, the C build, C
+binaries, WSL, Valgrind, or Callgrind on the local computer. Local work is
+limited to editing, orchestration, Git operations, documentation validation,
+PowerShell parsing, and Python controller/compatibility unit tests.
+
+Native Linux is the runtime, behavioral-compatibility, and performance
+authority. The Rust port must also compile for `x86_64-pc-windows-gnu` on the
+Linode, but Windows is compile-only: do not execute Windows binaries or claim
+Windows runtime, behavioral, performance, or MSVC compatibility. Historical
+Windows/WSL commands in completed experiments and status records are evidence
+of earlier work, not current instructions.
 
 ## Ephemeral Linode Compute
 
-Provision a short-lived G8 Dedicated runner, synchronize the exact current
-worktree without depending on a pushed branch, build and run the Rust and C
-implementations, collect Callgrind profiles, and guarantee guarded teardown with
-[`docs/linode-runner.md`](docs/linode-runner.md).
+Use the single required workflow in
+[`docs/linode-runner.md`](docs/linode-runner.md). It provisions a short-lived
+G8 Dedicated runner, synchronizes the exact current worktree without depending
+on a pushed branch, runs every Linux Rust/C quality and parity check,
+cross-compiles Windows GNU x64 without executing it, collects timing and
+Callgrind evidence, and guarantees guarded teardown.
 
 ## Runtime PicoSAT Selection
 

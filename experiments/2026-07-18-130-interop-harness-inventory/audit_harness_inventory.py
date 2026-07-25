@@ -15,8 +15,8 @@ from typing import Any
 
 EXPECTED_UPSTREAM_COMMIT = "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "tools" / "e-interop"))
-e_interop = importlib.import_module("e_interop")
+sys.path.insert(0, str(REPO_ROOT / "tools" / "linode-runner"))
+e_interop = importlib.import_module("linux_compat")
 
 
 def driver_commands() -> list[str]:
@@ -29,10 +29,12 @@ def driver_commands() -> list[str]:
 
 
 def wrapper_commands() -> list[str]:
-    source = (REPO_ROOT / "e-interop.ps1").read_text(encoding="utf-8")
+    source = (
+        Path(__file__).with_name("retired-e-interop.ps1.txt")
+    ).read_text(encoding="utf-8")
     match = re.search(r"\[ValidateSet\(([^)]+)\)\]", source)
     if match is None:
-        raise SystemExit("could not find e-interop.ps1 command ValidateSet")
+        raise SystemExit("could not find retired wrapper command ValidateSet")
     return sorted(re.findall(r"'([^']+)'", match.group(1)))
 
 

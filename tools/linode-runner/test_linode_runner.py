@@ -80,6 +80,27 @@ class PayloadTests(unittest.TestCase):
             "linode/ubuntu24.04",
         )
 
+    def test_bootstrap_installs_remote_quality_and_cross_compile_toolchain(self):
+        script = runner.bootstrap_script()
+
+        self.assertIn("gcc-mingw-w64-x86-64", script)
+        self.assertIn("rustup component add rustfmt clippy", script)
+        self.assertIn("rustup target add x86_64-pc-windows-gnu", script)
+        self.assertIn("x86_64-w64-mingw32-gcc --version", script)
+
+    def test_remote_workload_contains_comprehensive_remote_only_gates(self):
+        script = MODULE_PATH.with_name("remote_run.sh").read_text(encoding="utf-8")
+
+        self.assertIn("cargo test --locked --all-targets --all-features", script)
+        self.assertIn("cargo clippy --locked --all-targets --all-features", script)
+        self.assertIn("--target x86_64-pc-windows-gnu", script)
+        self.assertIn('"$compat_driver" compare', script)
+        self.assertIn('"$compat_driver" compare-tools', script)
+        self.assertIn('"$compat_driver" benchmark', script)
+        self.assertIn("VALIDATION_COMPLETE", script)
+        self.assertIn("SUCCESS", script)
+        self.assertIn("no Windows binary was executed", script)
+
 
 class SafetyTests(unittest.TestCase):
     def test_rejects_live_resource_with_different_label(self):
