@@ -156,7 +156,6 @@ pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
 const IMMEDIATE_CLAUSIFICATION_RENAMING_LIMIT: i64 = 24;
 const IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT: i64 = 100;
 const TMPBANK_GC_LIMIT: i64 = 256;
-#[cfg(not(target_os = "linux"))]
 const EVAL_CLAUSE_TIME_CHECK_INTERVAL: usize = 64;
 
 pub const DEFAULT_HEURISTICS: &str = concat!(
@@ -3828,7 +3827,6 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
         .tmp_store_mut()
         .extract_first_reclaiming_sparse_pages()
     {
-        #[cfg(not(target_os = "linux"))]
         if time_is_up() {
             state.tmp_store_mut().clear();
             state.eval_store_mut().clear();
@@ -3943,7 +3941,6 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     }
 
     proof_state_eval_clause_set(state, control)?;
-    #[cfg(not(target_os = "linux"))]
     if time_is_up() {
         state.eval_store_mut().clear();
         return Ok(None);
@@ -7685,13 +7682,8 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         let _ = state.tmp_terms_mut().gc_sweep();
     }
 
-    // Linux receives C-compatible asynchronous SIGXCPU delivery.  Other
-    // platforms poll inside large paramodulation batches; once that poll
-    // expires, the process-visible result is ResourceOut, so do not spend more
-    // memory sorting and admitting a partial generated batch.
-    #[cfg(target_os = "linux")]
-    let generation_timed_out = false;
-    #[cfg(not(target_os = "linux"))]
+    // Once a cooperative poll or fallible allocation guard expires the active
+    // limit, do not spend more memory sorting and admitting a partial batch.
     let generation_timed_out = time_is_up();
 
     if generation_timed_out {
@@ -9574,9 +9566,6 @@ pub fn proof_state_eval_clause_set(
 
         let mut result = Ok(());
         for (index, clause) in eval_store.iter_mut().enumerate() {
-            #[cfg(target_os = "linux")]
-            let _ = index;
-            #[cfg(not(target_os = "linux"))]
             if index.is_multiple_of(EVAL_CLAUSE_TIME_CHECK_INTERVAL) && time_is_up() {
                 break;
             }

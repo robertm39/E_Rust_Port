@@ -32,8 +32,9 @@ use crate::clauses::pdtrees::{
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::{IoFormat, Scanner};
+use crate::inout::signals::expire_active_time_limit_now;
 #[cfg(not(target_os = "linux"))]
-use crate::inout::signals::{expire_active_time_limit_now, expire_time_limit_if_within};
+use crate::inout::signals::expire_time_limit_if_within;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -242,7 +243,6 @@ impl EvalIndexTree {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn try_reserve_insert_capacity(&mut self) -> bool {
         !self.free.is_empty()
             || self.nodes.len() < self.nodes.capacity()
@@ -369,15 +369,15 @@ const SPARSE_STORE_COMPACT_MIN_HOLES: usize = 64;
 const SPARSE_STORE_CHUNK_BITS: usize = 10;
 const SPARSE_STORE_CHUNK_SIZE: usize = 1 << SPARSE_STORE_CHUNK_BITS;
 const SPARSE_STORE_CHUNK_MASK: usize = SPARSE_STORE_CHUNK_SIZE - 1;
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, windows))]
 const SPARSE_STORE_CHUNK_BYTES: usize =
     SPARSE_STORE_CHUNK_SIZE * std::mem::size_of::<Option<Clause>>();
 #[cfg(not(target_os = "linux"))]
 const CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC: u64 = 1_000_000;
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, windows))]
 const CLAUSE_PAGE_MEMORY_HEADROOM_PAGES: u64 = 2;
 
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, windows))]
 const fn clause_page_headroom_is_exhausted(headroom: Option<u64>, page_bytes: u64) -> bool {
     matches!(
         headroom,
@@ -391,8 +391,18 @@ fn clause_page_memory_headroom_is_exhausted() -> bool {
     clause_page_headroom_is_exhausted(process_memory_limit_headroom(), page_bytes)
 }
 
-#[cfg(all(not(target_os = "linux"), not(windows)))]
+#[cfg(not(windows))]
 const fn clause_page_memory_headroom_is_exhausted() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clause_page_deadline_is_exhausted() -> bool {
+    expire_time_limit_if_within(CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC)
+}
+
+#[cfg(target_os = "linux")]
+const fn clause_page_deadline_is_exhausted() -> bool {
     false
 }
 
@@ -584,7 +594,6 @@ impl SparseClauseStore {
         slot
     }
 
-    #[cfg(any(test, not(target_os = "linux")))]
     fn next_push_allocates_clause_page(&self) -> bool {
         let Some(tail) = self.chunk(self.tail_chunk) else {
             return false;
@@ -595,7 +604,6 @@ impl SparseClauseStore {
         self.tail_chunk >= self.overflow_chunks.len()
     }
 
-    #[cfg(any(test, not(target_os = "linux")))]
     fn try_reserve_next_push_capacity(&mut self) -> bool {
         let tail = self
             .chunk(self.tail_chunk)
@@ -1446,28 +1454,22 @@ impl ClauseSet {
     pub fn insert(&mut self, mut clause: Clause) -> bool {
         self.demod_index_coverage.set(None);
         self.compact_clause_store_if_sparse();
-        #[cfg(not(target_os = "linux"))]
+        let allocates_page = self.clauses.next_push_allocates_clause_page();
+        if allocates_page
+            && ((clause_page_memory_headroom_is_exhausted() && expire_active_time_limit_now())
+                || clause_page_deadline_is_exhausted())
         {
-            let allocates_page = self.clauses.next_push_allocates_clause_page();
-            if allocates_page
-                && ((clause_page_memory_headroom_is_exhausted() && expire_active_time_limit_now())
-                    || expire_time_limit_if_within(CLAUSE_PAGE_DEADLINE_TOLERANCE_USEC))
-            {
+            return false;
+        }
+        if allocates_page {
+            // Reserve before evaluation indexing can consume the memory
+            // headroom that the allocation guard just measured.
+            if !self.clauses.try_reserve_next_push_capacity() && expire_active_time_limit_now() {
                 return false;
             }
-            if allocates_page {
-                // Reserve before evaluation indexing can consume the memory
-                // headroom that the allocation guard just measured.
-                if !self.clauses.try_reserve_next_push_capacity() && expire_active_time_limit_now()
-                {
-                    return false;
-                }
-            }
-            if !self.try_reserve_evaluation_insert_capacity(&clause)
-                && expire_active_time_limit_now()
-            {
-                return false;
-            }
+        }
+        if !self.try_reserve_evaluation_insert_capacity(&clause) && expire_active_time_limit_now() {
+            return false;
         }
         self.literals += usize_to_i64(clause.literal_number());
         index_clause_evaluations(
@@ -2431,7 +2433,6 @@ impl ClauseSet {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn try_reserve_evaluation_insert_capacity(&mut self, clause: &Clause) -> bool {
         let Some(evaluations) = clause.evaluations() else {
             return true;
@@ -3066,7 +3067,8 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     #[cfg(not(target_os = "linux"))]
-    use crate::inout::signals::{configure_time_limits, time_is_up, RLIM_INFINITY_COMPAT};
+    use crate::inout::signals::time_is_up;
+    use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::Signature;
@@ -3148,7 +3150,6 @@ mod tests {
         assert!(tree.free.is_empty());
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn evaluation_insert_reserves_each_infallible_vector_growth() {
         let _guard = global_state_lock();

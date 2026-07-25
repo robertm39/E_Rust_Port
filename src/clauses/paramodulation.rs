@@ -19,8 +19,7 @@ use crate::clauses::overlap_index::{
 };
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::heuristics::to_params::TermOrdering;
-#[cfg(not(target_os = "linux"))]
-use crate::inout::signals::{time_is_up, time_limit_expired_kind};
+use crate::inout::signals::time_is_up;
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
@@ -38,24 +37,12 @@ use crate::terms::termvars::VarBank;
 use std::{collections::BTreeMap, fmt};
 
 pub const PARAMOD_OVERLAP_NON_EQ_LITERALS: bool = true;
-#[cfg(not(target_os = "linux"))]
 const PARAMODULATION_TIME_CHECK_INTERVAL: usize = 64;
 
 #[inline]
 fn paramodulation_time_is_up_before_next_insert(store: &ClauseSet) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let _ = store;
-        false
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if time_limit_expired_kind().is_some() {
-            return true;
-        }
-        let next_len = store.len().saturating_add(1);
-        next_len.is_multiple_of(PARAMODULATION_TIME_CHECK_INTERVAL) && time_is_up()
-    }
+    let next_len = store.len().saturating_add(1);
+    next_len.is_multiple_of(PARAMODULATION_TIME_CHECK_INTERVAL) && time_is_up()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1061,7 +1048,9 @@ fn compute_from_position_into_target_clause_entry_with_subst(
             Some(target_entry.clause()),
             Some(parent_alias),
         );
-        store.insert(paramodulant);
+        if !store.insert(paramodulant) {
+            break;
+        }
         if is_simultaneous {
             break;
         }
@@ -1247,7 +1236,9 @@ fn compute_indexed_sources_from_clause_entry_with_subst(
             Some(parent_alias),
             Some(source_entry.clause()),
         );
-        store.insert(paramodulant);
+        if !store.insert(paramodulant) {
+            break;
+        }
     }
     Ok(paramod_count)
 }
@@ -2539,7 +2530,9 @@ fn compute_directed_clause_paramodulants(
         // C ComputeClauseClauseParamodulants pushes this derivation onto its
         // temporary selected-clause copy, which is freed after generation.
         // Leaving the child without that entry is observable in orphan filtering.
-        store.insert(paramodulant);
+        if !store.insert(paramodulant) {
+            break;
+        }
     }
     Ok(paramod_count)
 }

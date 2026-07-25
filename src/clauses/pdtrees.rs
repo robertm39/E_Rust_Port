@@ -198,6 +198,7 @@ pub struct PdTree {
     search_term_date: Cell<SysDate>,
     search_active: Cell<bool>,
     search_state: RefCell<Option<PdtSearchState>>,
+    prefix_match_stack: RefCell<Vec<Term>>,
     search_query_scratch: RefCell<Vec<PrefixQueryCell>>,
     search_query_build_stack: RefCell<Vec<PrefixQueryBuildFrame>>,
     search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
@@ -496,6 +497,7 @@ impl PdTree {
             search_term_date: Cell::new(PDTREE_IGNORE_NF_DATE),
             search_active: Cell::new(false),
             search_state: RefCell::new(None),
+            prefix_match_stack: RefCell::new(Vec::new()),
             search_query_scratch: RefCell::new(Vec::new()),
             search_query_build_stack: RefCell::new(Vec::new()),
             search_cursor: RefCell::new(None),
@@ -1233,10 +1235,51 @@ impl PdTree {
         deleted
     }
 
+    /// Matches the term's left-to-right prefix against the indexed PD-tree path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a function term contains an uninitialized argument cell.
     #[must_use]
     pub fn match_prefix(&self, term: &Term) -> PrefixMatch {
-        let code = term_lr_traverse_code(term);
-        self.match_code_prefix(&code)
+        let mut stack = self.prefix_match_stack.borrow_mut();
+        debug_assert!(
+            stack.is_empty(),
+            "PDTree prefix-match scratch is empty between traversals"
+        );
+        stack.push(term.clone());
+        let mut current = Some(0);
+        let mut matched = 0;
+        let mut remains = 0;
+
+        while let Some(term) = stack.pop() {
+            if let Some(node_index) = current {
+                if let Some(next_index) = self.nodes[node_index].child_index(prefix_token(&term)) {
+                    matched += 1;
+                    current = Some(next_index);
+                } else {
+                    remains += 1;
+                    current = None;
+                }
+            } else {
+                remains += 1;
+            }
+
+            if term.is_top_level_free_var() {
+                continue;
+            }
+            let start = usize::from(term.is_lambda() || term.is_applied_db_var());
+            let arguments = term.arguments();
+            for index in (start..arguments.len()).rev() {
+                stack.push(
+                    arguments[index]
+                        .clone()
+                        .unwrap_or_else(|| panic!("term argument {index} is uninitialized")),
+                );
+            }
+        }
+
+        PrefixMatch { matched, remains }
     }
 
     #[must_use]
@@ -2229,6 +2272,31 @@ mod tests {
         assert_eq!((result.matched, result.remains), (2, 1));
         assert_eq!(tree.term_count(), 2);
         assert_eq!(tree.prefix_ref_count(&prefix), 2);
+    }
+
+    #[test]
+    fn prefix_match_streams_terms_and_reuses_its_traversal_stack() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let stored = parse_in_bank(
+            &mut bank,
+            "pdt_stream_f(pdt_stream_g(a,b),pdt_stream_h(c,d),pdt_stream_i(e,f))",
+        );
+        let query = parse_in_bank(
+            &mut bank,
+            "pdt_stream_f(pdt_stream_g(a,b),pdt_stream_h(c,pdt_stream_x),pdt_stream_i(e,f))",
+        );
+        let mut tree = PdTree::new();
+        assert!(tree.insert_term(&stored));
+        let code = prefix_compute_term_code(&query);
+
+        assert_eq!(tree.match_prefix(&query), tree.match_code_prefix(&code));
+        let capacity = tree.prefix_match_stack.borrow().capacity();
+        assert!(capacity > 0);
+        assert!(tree.prefix_match_stack.borrow().is_empty());
+
+        assert_eq!(tree.match_prefix(&query), tree.match_code_prefix(&code));
+        assert_eq!(tree.prefix_match_stack.borrow().capacity(), capacity);
+        assert!(tree.prefix_match_stack.borrow().is_empty());
     }
 
     #[test]
