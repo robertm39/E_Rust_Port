@@ -144,11 +144,13 @@ use crate::inout::scanner::{
     test_tok as scanner_test_tok, token_pos_rep, IoFormat, Scanner, TokenType, MAX_TOKEN_LOOKAHEAD,
 };
 use crate::inout::signals::{
-    configure_time_limits, e_sched_signal_setup, e_signal_setup, finalize_cpu_limit_outcome,
-    reset_sig_term_caught, set_signal_global_out_fd, sig_term_caught, signal_pending_output_append,
-    signal_pending_output_clear, silent_time_out, time_limit_expired_kind, SignalOutcome,
-    TimeLimitKind, RLIM_INFINITY_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY, SIGXCPU_COMPAT,
+    configure_time_limits, e_sched_signal_setup, e_signal_setup, reset_sig_term_caught,
+    set_signal_global_out_fd, sig_term_caught, signal_pending_output_append,
+    signal_pending_output_clear, time_limit_expired_kind, SignalOutcome, TimeLimitKind,
+    RLIM_INFINITY_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY, SIGXCPU_COMPAT,
 };
+#[cfg(any(test, not(target_os = "linux")))]
+use crate::inout::signals::{finalize_cpu_limit_outcome, silent_time_out};
 use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
@@ -2547,6 +2549,7 @@ impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
         Ok(())
     }
 
+    #[cfg(any(test, not(target_os = "linux")))]
     fn write_direct_global_out(&mut self, buffer: &[u8]) -> io::Result<()> {
         match self {
             Self::Writer { writer, .. } => writer.write_all(buffer),
@@ -6180,22 +6183,33 @@ fn finalize_hard_time_limit_stop<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     stderr: &mut Option<&mut dyn Write>,
 ) -> Result<u8, EProverError> {
-    let silent = silent_time_out();
-    let diagnostic = (!silent).then(hard_time_limit_diagnostic);
-    let outcome = SignalOutcome::CpuLimitExceeded {
-        silent,
-        diagnostic: diagnostic.clone(),
-    };
-    let mut direct_output = Vec::new();
-    let status = finalize_cpu_limit_outcome(&mut direct_output, &outcome)?
-        .expect("hard CPU-limit signal outcomes always finalize");
-    output.write_direct_global_out(&direct_output)?;
-    if let (Some(stderr), Some(diagnostic)) = (stderr.as_mut(), diagnostic) {
-        stderr.write_all(diagnostic.render_error(PROGRAM_NAME).as_bytes())?;
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let _ = output;
+        let _ = stderr;
+        crate::inout::signals::finalize_cooperative_hard_cpu_limit();
     }
-    Ok(status)
+
+    #[cfg(any(test, not(target_os = "linux")))]
+    {
+        let silent = silent_time_out();
+        let diagnostic = (!silent).then(hard_time_limit_diagnostic);
+        let outcome = SignalOutcome::CpuLimitExceeded {
+            silent,
+            diagnostic: diagnostic.clone(),
+        };
+        let mut direct_output = Vec::new();
+        let status = finalize_cpu_limit_outcome(&mut direct_output, &outcome)?
+            .expect("hard CPU-limit signal outcomes always finalize");
+        output.write_direct_global_out(&direct_output)?;
+        if let (Some(stderr), Some(diagnostic)) = (stderr.as_mut(), diagnostic) {
+            stderr.write_all(diagnostic.render_error(PROGRAM_NAME).as_bytes())?;
+        }
+        Ok(status)
+    }
 }
 
+#[cfg(any(test, not(target_os = "linux")))]
 fn hard_time_limit_diagnostic() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::CPU_LIMIT_ERROR,

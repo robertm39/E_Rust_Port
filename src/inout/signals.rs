@@ -488,6 +488,18 @@ pub fn finalize_signal_outcome(
     finalize_cpu_limit_outcome(output, outcome)
 }
 
+/// Transfers a cooperatively detected hard timeout to the native Linux signal
+/// finalizer.
+///
+/// The signal trampoline is the sole native-Linux owner of the hard-timeout
+/// banner, pending-output replay, diagnostic, and process exit. Raising
+/// `SIGXCPU` also blocks another delivery of that signal while the trampoline
+/// is active, so a kernel timeout cannot duplicate the cooperative report.
+#[cfg(all(target_os = "linux", not(test)))]
+pub fn finalize_cooperative_hard_cpu_limit() -> ! {
+    linux_signal::raise_hard_cpu_limit_and_exit()
+}
+
 fn handle_cpu_limit() -> SignalOutcome {
     if TIME_LIMIT_IS_SOFT.swap(false, Ordering::SeqCst) {
         TIME_IS_UP.store(true, Ordering::SeqCst);
@@ -655,6 +667,18 @@ mod linux_signal {
         // comes from the active C signal trampoline and mirrors C
         // `ESignalHandler` after resetting the handler to SIG_DFL.
         let _ = unsafe { raise(signal_number) };
+    }
+
+    pub(super) fn raise_hard_cpu_limit_and_exit() -> ! {
+        // SAFETY: SIGXCPU is the fixed POSIX CPU-limit signal, and its handler
+        // was installed before resource-limit configuration. A delivered
+        // signal enters `signal_trampoline`, which does not return for a hard
+        // timeout. If SIGXCPU is inherited as blocked or raise fails, the
+        // fallback below performs the same finalization before any pending
+        // delivery can run.
+        let _ = unsafe { raise(super::SIGXCPU_COMPAT) };
+        let outcome = e_signal_handler(super::SIGXCPU_COMPAT);
+        finalize_hard_cpu_signal_and_exit(&outcome)
     }
 
     fn write_fd_all(fd: i32, mut buffer: &[u8]) {
