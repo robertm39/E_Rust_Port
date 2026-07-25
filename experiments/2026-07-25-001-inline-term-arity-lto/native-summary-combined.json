@@ -1,0 +1,62 @@
+{
+  "all": {
+    "cpu_seconds": {
+      "candidate_mean": 1.5097387578125,
+      "candidate_median": 1.507916,
+      "candidate_wins": 59,
+      "mean_delta_percent": 0.036254922796663536,
+      "median_delta_percent": 0.1418201391238716,
+      "paired_mean_delta_percent": 0.043065623343214926,
+      "paired_median_delta_percent": 0.1148074239670005,
+      "parent_mean": 1.5091916015625,
+      "parent_median": 1.5057805,
+      "ties": 0
+    },
+    "pair_count": 128,
+    "proof_hashes": [
+      "b50bfb29a2fa3728792a422be2bd83a54c436fa1536c79b8d95c1c1f8c7f427d"
+    ],
+    "wall_seconds": {
+      "candidate_mean": 1.510170892046875,
+      "candidate_median": 1.508376707,
+      "candidate_wins": 59,
+      "mean_delta_percent": 0.035710033580027556,
+      "median_delta_percent": 0.14537084584740345,
+      "paired_mean_delta_percent": 0.042520085699375695,
+      "paired_median_delta_percent": 0.12312285971850523,
+      "parent_mean": 1.5096318020234376,
+      "parent_median": 1.5061871500000001,
+      "ties": 0
+    }
+  },
+  "final": {
+    "cpu_seconds": {
+      "candidate_mean": 1.505535,
+      "candidate_median": 1.5053155,
+      "candidate_wins": 36,
+      "mean_delta_percent": -0.13207172575223636,
+      "median_delta_percent": -0.10392323483963128,
+      "paired_mean_delta_percent": -0.12561312564025423,
+      "paired_median_delta_percent": -0.13834563974014502,
+      "parent_mean": 1.5075260156249999,
+      "parent_median": 1.5068815,
+      "ties": 0
+    },
+    "pair_count": 64,
+    "proof_hashes": [
+      "b50bfb29a2fa3728792a422be2bd83a54c436fa1536c79b8d95c1c1f8c7f427d"
+    ],
+    "wall_seconds": {
+      "candidate_mean": 1.505969322765625,
+      "candidate_median": 1.5057924100000002,
+      "candidate_wins": 36,
+      "mean_delta_percent": -0.1328747428700372,
+      "median_delta_percent": -0.10510607220590718,
+      "paired_mean_delta_percent": -0.12642195689639824,
+      "paired_median_delta_percent": -0.1397053581243035,
+      "parent_mean": 1.5079730380625,
+      "parent_median": 1.5073767545,
+      "ties": 0
+    }
+  }
+}
