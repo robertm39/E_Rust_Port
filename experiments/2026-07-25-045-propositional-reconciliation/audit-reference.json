@@ -1,0 +1,16 @@
+{
+  "content_hashes_verified": 5,
+  "decision_count": 5,
+  "decision_digest": "25949cc257f331c655b1799814da18e4a6e68f19daef13f15835b0fc5ff22dae",
+  "evidence_checks": {
+    "deterministic_normalization_replaces_nonportable_c_comparator": true,
+    "exact_edpll_and_full_port_validation_are_current": true,
+    "explicit_parser_bank_preserves_borrowed_signature_behavior": true,
+    "normalization_retains_allocated_literal_storage": true,
+    "safe_owned_propositional_names_preserve_bimap_behavior": true,
+    "undefined_retraction_is_outside_the_reference_contract": true
+  },
+  "schema_version": 1,
+  "source_digest": "277c1a1654634721389a4c36b31bed8bf675fa985d2e759b83dce6a844bcdf47",
+  "source_file_count": 12
+}
