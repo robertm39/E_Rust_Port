@@ -1,0 +1,36 @@
+{
+  "all_exact": true,
+  "c": {
+    "completion": [
+      "% Clause set closed under restricted calculus!"
+    ],
+    "exit_code": 10,
+    "status": [
+      "% SZS status GaveUp"
+    ],
+    "stderr": "",
+    "stdout_sha256": "7796f8bd44934eb469cb700a7678838e38cf3caff1e33befbd099bbd69dc206c"
+  },
+  "expected": {
+    "completion": [
+      "% Clause set closed under restricted calculus!"
+    ],
+    "exit_code": 10,
+    "status": [
+      "% SZS status GaveUp"
+    ],
+    "stderr": ""
+  },
+  "rust": {
+    "completion": [
+      "% Clause set closed under restricted calculus!"
+    ],
+    "exit_code": 10,
+    "status": [
+      "% SZS status GaveUp"
+    ],
+    "stderr": "",
+    "stdout_sha256": "7796f8bd44934eb469cb700a7678838e38cf3caff1e33befbd099bbd69dc206c"
+  },
+  "schema_version": 1
+}
