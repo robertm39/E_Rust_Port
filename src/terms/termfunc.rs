@@ -818,7 +818,26 @@ pub fn term_struct_prefix_equal(
 }
 
 #[must_use]
+#[allow(
+    unsafe_code,
+    reason = "measured private comparison over immutable shared term allocations"
+)]
 pub fn term_struct_weight_compare(left: &Term, right: &Term) -> i64 {
+    if left.is_shared() && right.is_shared() {
+        // SAFETY: Shared term roots retain their complete structural graphs.
+        // This synchronous single-threaded comparison invokes no user code
+        // and performs no argument, type, or shared/DB-property mutation. No
+        // caller can retain a mutable argument guard through this public
+        // entry, and all internal call sites pass completed equation terms.
+        return unsafe {
+            left.borrowed_cell()
+                .compare_shared_struct_weight(right.borrowed_cell())
+        };
+    }
+    term_struct_weight_compare_unshared(left, right)
+}
+
+fn term_struct_weight_compare_unshared(left: &Term, right: &Term) -> i64 {
     if left.f_code() == SIG_TRUE_CODE {
         return if right.f_code() == SIG_TRUE_CODE {
             0
@@ -856,7 +875,7 @@ pub fn term_struct_weight_compare(left: &Term, right: &Term) -> i64 {
     let right_args = right.arguments();
     for (left, right) in left_args.iter().zip(right_args.iter()) {
         if let Some((left, right)) = left.as_ref().zip(right.as_ref()) {
-            let cmp = term_struct_weight_compare(left, right);
+            let cmp = term_struct_weight_compare_unshared(left, right);
             if cmp != 0 {
                 return cmp;
             }
@@ -1904,8 +1923,8 @@ mod tests {
         term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
         term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
         term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_trim_implications, term_weight, term_weight_compute,
-        var_print_string, VarNormStyle,
+        term_struct_weight_compare_unshared, term_sym_type_weight, term_trim_implications,
+        term_weight, term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -2675,6 +2694,55 @@ mod tests {
         assert!(!term_is_def_term(&Term::top_alloc(21, 0), 1));
         assert!(x.query_prop(TP_OP_FLAG));
         assert!(y.query_prop(TP_OP_FLAG));
+    }
+
+    #[test]
+    fn shared_struct_weight_cursor_matches_owned_comparison_boundaries() {
+        fn mark_shared(term: &Term, v_count: u32, f_count: u32, weight: i64) {
+            term.set_v_count(v_count);
+            term.set_f_count(f_count);
+            term.set_weight(weight);
+            term.set_prop(TP_IS_SHARED);
+        }
+
+        let bank = TypeBank::new();
+        let i_type = bank.i_type();
+        let bool_type = bank.bool_type();
+        let x = typed_var(-2, &i_type);
+        let y = typed_var(-4, &bool_type);
+        mark_shared(&x, 1, 0, DEFAULT_VWEIGHT);
+        mark_shared(&y, 1, 0, DEFAULT_VWEIGHT);
+
+        let unary = Term::top_alloc(20, 1);
+        unary.set_argument(0, Term::const_cell_alloc(21));
+        let unary_child = unary.argument(0).unwrap();
+        mark_shared(&unary_child, 0, 1, DEFAULT_FWEIGHT);
+        mark_shared(&unary, 0, 2, 2 * DEFAULT_FWEIGHT);
+
+        let binary = Term::top_alloc(22, 2);
+        binary.set_argument(0, x.clone());
+        binary.set_argument(1, x.clone());
+        mark_shared(&binary, 2, 1, DEFAULT_FWEIGHT + 2 * DEFAULT_VWEIGHT);
+
+        let left = Term::top_alloc(23, 1);
+        left.set_argument(0, x.clone());
+        mark_shared(&left, 1, 1, DEFAULT_FWEIGHT + DEFAULT_VWEIGHT);
+        let right = Term::top_alloc(24, 1);
+        right.set_argument(0, y.clone());
+        mark_shared(&right, 1, 1, DEFAULT_FWEIGHT + DEFAULT_VWEIGHT);
+
+        for (left, right) in [
+            (&x, &y),
+            (&unary, &binary),
+            (&binary, &unary),
+            (&left, &right),
+            (&right, &left),
+        ] {
+            assert_eq!(
+                term_struct_weight_compare(left, right),
+                term_struct_weight_compare_unshared(left, right)
+            );
+        }
     }
 
     #[test]

@@ -3,8 +3,9 @@ use crate::basics::sysdate::SysDate;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{
     SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
+    SIG_TRUE_CODE,
 };
-use crate::terms::simpletypes::{sort_is_interpreted, Type, TypeUniqueId};
+use crate::terms::simpletypes::{sort_is_interpreted, types_cmp, Type, TypeUniqueId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -451,6 +452,10 @@ impl Term {
 
     /// Mutably borrows the argument slots without cloning their terms.
     pub(crate) fn arguments_mut(&self) -> RefMut<'_, [Option<Term>]> {
+        assert!(
+            !self.is_shared(),
+            "shared term arguments are structurally immutable"
+        );
         RefMut::map(self.0.args.borrow_mut(), TermArgs::as_mut_slice)
     }
 
@@ -1006,6 +1011,88 @@ impl BorrowedTermCell {
         }
     }
 
+    /// Compares two shared terms by standard weight, variable/type shape,
+    /// arity, and recursive argument shape without acquiring argument or type
+    /// owners.
+    ///
+    /// # Safety
+    ///
+    /// Both cursors and all structural descendants must satisfy `cell`'s
+    /// contract and remain shared for the complete call. No argument, type, or
+    /// shared/DB-variable metadata may be mutated, and no argument or type
+    /// `RefMut` may be live or created until the comparison returns.
+    pub(crate) unsafe fn compare_shared_struct_weight(self, other: Self) -> i64 {
+        // SAFETY: Forwarded from this method's caller contract.
+        let left = unsafe { self.cell() };
+        // SAFETY: Forwarded from this method's caller contract.
+        let right = unsafe { other.cell() };
+        debug_assert!(left.properties.get().query(TP_IS_SHARED));
+        debug_assert!(right.properties.get().query(TP_IS_SHARED));
+
+        if left.f_code.get() == SIG_TRUE_CODE {
+            return if right.f_code.get() == SIG_TRUE_CODE {
+                0
+            } else {
+                -1
+            };
+        }
+        if right.f_code.get() == SIG_TRUE_CODE {
+            return 1;
+        }
+
+        let weight_cmp = left.weight.get() - right.weight.get();
+        if weight_cmp != 0 {
+            return weight_cmp;
+        }
+
+        if left.f_code.get() < 0 {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            return unsafe { compare_borrowed_cell_types(left, right) };
+        }
+
+        let left_db = left.properties.get().query(TP_IS_DB_VAR);
+        let right_db = right.properties.get().query(TP_IS_DB_VAR);
+        let db_cmp = i64::from(!left_db) - i64::from(!right_db);
+        if db_cmp != 0 {
+            return db_cmp;
+        }
+        if left_db {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            return unsafe { compare_borrowed_cell_types(left, right) };
+        }
+
+        // SAFETY: The caller excludes structural mutation and active mutable
+        // argument borrows. `RefCell::as_ptr` preserves the allocation and
+        // interior-value provenance without changing the borrow flag.
+        let left_args = unsafe { &*left.args.as_ptr() }.as_slice();
+        // SAFETY: Identical argument for the right cursor.
+        let right_args = unsafe { &*right.args.as_ptr() }.as_slice();
+        let arity_cmp = i64::from(left_args.len() > right_args.len())
+            - i64::from(left_args.len() < right_args.len());
+        if arity_cmp != 0 {
+            return arity_cmp;
+        }
+
+        for (left_arg, right_arg) in left_args.iter().zip(right_args) {
+            let Some((left_arg, right_arg)) = left_arg.as_ref().zip(right_arg.as_ref()) else {
+                continue;
+            };
+            // SAFETY: Shared terms retain every structural descendant, and
+            // the caller forbids structural/type mutation for the traversal.
+            let cmp = unsafe {
+                left_arg
+                    .borrowed_cell()
+                    .compare_shared_struct_weight(right_arg.borrowed_cell())
+            };
+            if cmp != 0 {
+                return cmp;
+            }
+        }
+        0
+    }
+
     /// Acquires one owned `Term` handle for the addressed allocation.
     ///
     /// # Safety
@@ -1020,6 +1107,24 @@ impl BorrowedTermCell {
             Rc::increment_strong_count(self.0);
             Term(Rc::from_raw(self.0))
         }
+    }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "read-only comparison behind a scoped shared-term cursor"
+)]
+unsafe fn compare_borrowed_cell_types(left: &TermCell, right: &TermCell) -> i64 {
+    // SAFETY: The caller guarantees that no mutable link borrow or type
+    // mutation can overlap these shared reads.
+    let left_links = unsafe { &*left.links.as_ptr() };
+    // SAFETY: Identical argument for the right cell.
+    let right_links = unsafe { &*right.links.as_ptr() };
+    match (left_links.type_.as_ref(), right_links.type_.as_ref()) {
+        (Some(left_type), Some(right_type)) => i64::from(types_cmp(left_type, right_type)),
+        (None, Some(_)) => -1,
+        (Some(_), None) => 1,
+        (None, None) => 0,
     }
 }
 
@@ -1572,6 +1677,14 @@ mod tests {
                     | (super::TermArgs::Heap(_), 3..)
             ));
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "shared term arguments are structurally immutable")]
+    fn shared_term_arguments_reject_mutable_borrows() {
+        let term = Term::top_alloc(1, 1);
+        term.set_prop(TP_IS_SHARED);
+        drop(term.arguments_mut());
     }
 
     #[test]
