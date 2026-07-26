@@ -1,0 +1,26 @@
+{
+  "c_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "cases": {
+    "invalid_input_precedes_strategy": {
+      "exit": 3,
+      "stderr_bytes": 167,
+      "stderr_sha256": "2b9d9b7dbe33926d0546b3c5a11e07dfa741e367d5985e55488d10d230d64ad0",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "post_cnf_print": {
+      "exit": 0,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 4569,
+      "stdout_sha256": "105adb60bc456451d5c06142a7180122544d989c5944fbf1277f9593ca9d6aca"
+    },
+    "syntax_only_precedence": {
+      "exit": 0,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 44,
+      "stdout_sha256": "bb7d977f5245f233931f3e44859eb247f620ab78817645d4607d13e0465afdcf"
+    }
+  }
+}

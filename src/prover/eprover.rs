@@ -5418,11 +5418,6 @@ fn run_config_action<W: Write + ?Sized>(
     config: &EProverConfig,
     runtime_config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
-    if config.print_strategy.is_some() {
-        run_print_strategy(output, stderr, config)?;
-        return finish_run_config(output, stderr, config, ErrorCode::NO_ERROR.exit_status());
-    }
-
     if config.flags.contains(EProverFlag::SyntaxOnly) {
         run_syntax_only(output, stderr, runtime_config)?;
         if !runtime_config.flags.contains(EProverFlag::PrintFormulas) {
@@ -5470,27 +5465,14 @@ fn schedule_worker_suppresses_resource_footer(config: &EProverConfig) -> bool {
     matches!(worker.mode, InternalScheduleWorkerMode::Search { .. })
 }
 
-fn run_print_strategy<W: Write + ?Sized>(
+fn write_requested_strategy<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    stderr: &mut Option<&mut dyn Write>,
     config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
 ) -> Result<(), EProverError> {
     let Some(print_strategy) = config.print_strategy.as_deref() else {
         return Ok(());
     };
-    let mut params = heuristic_parms_from_config(config)?;
-    write_preprocessing_params_debug_line(output, &params)?;
-    if params.bce {
-        output.write_stdout_side_channel(b"% BCE start: 0\n% BCE eliminated: 0.\n")?;
-    }
-    if params.pred_elim {
-        output.write_stdout_side_channel(b"% PE start: 0\n% PE eliminated: 0\n")?;
-    }
-    if let Some(stderr) = stderr.as_mut() {
-        let _ = apply_strategy_io_to_params_with_warning_output(config, &mut params, *stderr)?;
-    } else {
-        let _ = apply_strategy_io_to_params(config, &mut params)?;
-    }
     match print_strategy {
         ">all-strats<" => {
             output.write_all(strategies_print_predefined_string(false)?.as_bytes())?;
@@ -5500,9 +5482,9 @@ fn run_print_strategy<W: Write + ?Sized>(
         }
         strategy_name => {
             if strategy_name != ">current-strategy<" {
-                get_heuristic_with_name(strategy_name, &mut params)?;
+                get_heuristic_with_name(strategy_name, params)?;
             }
-            output.write_all(heuristic_parms_strategy_print_string(&params).as_bytes())?;
+            output.write_all(heuristic_parms_strategy_print_string(params).as_bytes())?;
         }
     }
     Ok(())
@@ -5996,6 +5978,10 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         apply_strategy_io_to_params(config, &mut heuristic_params)?
     };
+    if config.print_strategy.is_some() {
+        write_requested_strategy(output, config, &mut heuristic_params)?;
+        return Ok(ErrorCode::NO_ERROR.exit_status());
+    }
     if matches!(
         heuristic_params.order_params.ordertype,
         to_params::TermOrdering::Kbo | to_params::TermOrdering::Kbo6
@@ -20511,22 +20497,47 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn run_print_strategy_reports_final_outclose_flush_failure_like_c() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-flush");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = FlushFailOnNthWriter::new(2);
         let mut stderr = Vec::new();
 
-        let error = run(["eprover", "--print-strategy"], &mut stdout, &mut stderr).unwrap_err();
+        let error = run(
+            [
+                "eprover".to_owned(),
+                "--print-strategy".to_owned(),
+                problem_arg,
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
-    fn run_print_strategy_prints_current_parameters_without_input() {
+    fn run_print_strategy_prints_current_parameters_after_empty_input() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-current");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", "--print-strategy"], &mut stdout, &mut stderr).unwrap();
+        let status = run(
+            [
+                "eprover".to_owned(),
+                "--print-strategy".to_owned(),
+                problem_arg,
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(stderr.is_empty());
@@ -20534,20 +20545,82 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.starts_with(&format!("{}{{\n", default_preprocessing_debug_line())));
         assert!(output.contains("heuristic_name:                Default"));
         assert!(output.contains("selection_strategy:             NoSelection"));
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
-    fn run_print_strategy_preserves_empty_fo_preprocessing_output() {
+    fn run_print_strategy_parses_input_before_strategy_io_like_c() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-invalid-input");
+        std::fs::write(&problem_path, "fof(bad, axiom, p(a) => => q(a)).\n").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover".to_owned(),
+                "--print-strategy".to_owned(),
+                problem_arg,
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(!String::from_utf8(stdout)
+            .unwrap()
+            .contains("heuristic_name:"));
+        std::fs::remove_file(problem_path).unwrap();
+    }
+
+    #[test]
+    fn syntax_only_exits_before_requested_strategy_print_like_c() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("syntax-only-print-strategy");
+        std::fs::write(&problem_path, "p(a).\n").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let status = run(
             [
-                "eprover",
-                "--print-strategy",
-                "--bce=true",
-                "--pred-elim=true",
+                "eprover".to_owned(),
+                "--lop-in".to_owned(),
+                "--syntax-only".to_owned(),
+                "--print-strategy".to_owned(),
+                problem_arg,
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.contains("Parsing successful!"));
+        assert!(!output.contains("heuristic_name:"));
+        std::fs::remove_file(problem_path).unwrap();
+    }
+
+    #[test]
+    fn run_print_strategy_preserves_empty_fo_preprocessing_output() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-empty-preprocessing");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover".to_owned(),
+                "--print-strategy".to_owned(),
+                "--bce=true".to_owned(),
+                "--pred-elim=true".to_owned(),
+                problem_arg,
             ],
             &mut stdout,
             &mut stderr,
@@ -20561,13 +20634,17 @@ input_clause(c2,axiom,[++q(X)]).
             "{}% BCE start: 0\n% BCE eliminated: 0.\n% PE start: 0\n% PE eliminated: 0\n{{\n",
             default_preprocessing_debug_line()
         )));
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
     fn run_print_strategy_emits_parse_warnings_before_later_selection_errors() {
         let _guard = global_state_lock();
         let strategy_path = write_temp_strategy_file_missing_order_fields("strategy-warning-print");
+        let problem_path = temp_path("strategy-warning-print-problem");
+        std::fs::write(&problem_path, "").unwrap();
         let strategy_arg = format!("--parse-strategy={}", strategy_path.to_string_lossy());
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let expected = concat!(
             "eprover: Warning: Config misses ordertype\n\n",
             "eprover: Warning: Config misses db_w\n\n"
@@ -20581,6 +20658,7 @@ input_clause(c2,axiom,[++q(X)]).
                 strategy_arg,
                 "--select-strategy=Missing".to_owned(),
                 "--print-strategy".to_owned(),
+                problem_arg,
             ],
             &mut stdout,
             &mut stderr,
@@ -20594,6 +20672,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert_eq!(String::from_utf8(stderr).unwrap(), expected);
         std::fs::remove_file(strategy_path).unwrap();
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
@@ -20634,13 +20713,20 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_print_strategy_prints_predefined_names_without_input() {
+    fn run_print_strategy_prints_predefined_names_after_empty_input() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-names");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-strategy=>all-names<"],
+            [
+                "eprover".to_owned(),
+                "--print-strategy=>all-names<".to_owned(),
+                problem_arg,
+            ],
             &mut stdout,
             &mut stderr,
         )
@@ -20658,19 +20744,24 @@ input_clause(c2,axiom,[++q(X)]).
             .strip_prefix(&default_preprocessing_debug_line())
             .expect("debug line should prefix the strategy names");
         assert!(!names.contains(" = "));
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
     fn run_print_strategy_validates_selected_strategy_before_all_names() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-invalid-selection");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let error = run(
             [
-                "eprover",
-                "--select-strategy=Missing",
-                "--print-strategy=>all-names<",
+                "eprover".to_owned(),
+                "--select-strategy=Missing".to_owned(),
+                "--print-strategy=>all-names<".to_owned(),
+                problem_arg,
             ],
             &mut stdout,
             &mut stderr,
@@ -20687,18 +20778,23 @@ input_clause(c2,axiom,[++q(X)]).
             default_preprocessing_debug_line()
         );
         assert!(stderr.is_empty());
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
-    fn run_print_strategy_prints_named_predefined_strategy_without_input() {
+    fn run_print_strategy_prints_named_predefined_strategy_after_empty_input() {
         let _guard = global_state_lock();
+        let problem_path = temp_path("print-strategy-named");
+        std::fs::write(&problem_path, "").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let status = run(
             [
-                "eprover",
-                "--print-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN",
+                "eprover".to_owned(),
+                "--print-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN".to_owned(),
+                problem_arg,
             ],
             &mut stdout,
             &mut stderr,
@@ -20711,6 +20807,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(output.starts_with(&format!("{}{{\n", default_preprocessing_debug_line())));
         assert!(output.contains("selection_strategy:             PSelectComplexExceptUniqMaxHorn"));
         assert!(output.contains("pm_type:                        ParamodSim"));
+        std::fs::remove_file(problem_path).unwrap();
     }
 
     #[test]
