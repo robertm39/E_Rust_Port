@@ -2,8 +2,12 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::termtypes::{Term, TermProperties};
 use std::cmp::Ordering;
 
-#[derive(Clone, Debug, Default)]
-pub struct TermTree {
+// Intrusive left/right links live in each `Term`, so independently cloned or
+// externally assembled trees could alias and relink the same cells. Keep the
+// owner crate-private and non-cloneable; production construction is confined
+// to `TermCellStore`, which assigns each shared term to exactly one bucket.
+#[derive(Debug, Default)]
+pub(crate) struct TermTree {
     root: Option<Term>,
 }
 
@@ -13,8 +17,9 @@ impl TermTree {
         Self { root: None }
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn root(&self) -> Option<Term> {
+    fn root(&self) -> Option<Term> {
         self.root.clone()
     }
 
