@@ -1,0 +1,17 @@
+{
+  "content_hashes_verified": 6,
+  "decision_count": 6,
+  "decision_digest": "b5411e50fcac84d779f530bc15879c817a33a19c18ce1b3e5d69acfee8a78673",
+  "evidence_checks": {
+    "classic_kbo_retains_the_unchecked_hot_weight_path": true,
+    "classic_kbo_variable_condition_follows_the_implementation": true,
+    "debug_lpo_preserves_intended_results_without_out_of_bounds_indexing": true,
+    "first_order_kbo6_unordered_heads_keep_the_production_equal_result": true,
+    "full_ordering_and_port_compatibility_evidence_is_current": true,
+    "higher_order_kbo6_dispatches_from_problem_type_and_order_kind": true,
+    "missing_c_minimum_constant_setter_is_an_explicit_source_inconsistency": true
+  },
+  "schema_version": 1,
+  "source_digest": "a84e8ba252f2e494b3d958657fb51737e88cfd95e174a8319664dc428925658c",
+  "source_file_count": 16
+}
