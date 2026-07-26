@@ -135,6 +135,7 @@ impl CsscpaLoopResult {
 #[derive(Debug)]
 pub struct CsscpaState {
     terms: TermBank,
+    tmp_terms: TermBank,
     pos_units: ClauseSet,
     neg_units: ClauseSet,
     non_units: ClauseSet,
@@ -152,8 +153,10 @@ impl CsscpaState {
         // mistaken for lambda/application cells once the signature grows.
         signature.insert_internal_codes()?;
         let terms = TermBank::new(signature)?;
+        let tmp_terms = TermBank::new(terms.signature().clone())?;
         Ok(Self {
             terms,
+            tmp_terms,
             pos_units: ClauseSet::new(),
             neg_units: ClauseSet::new(),
             non_units: ClauseSet::new(),
@@ -416,9 +419,15 @@ impl CsscpaState {
         })
     }
 
-    fn clause_is_tautology(&self, clause: &Clause) -> Result<bool, Diagnostic> {
-        let mut work_bank = TermBank::new(self.terms.signature().clone())?;
-        clause_is_tautology(&mut work_bank, clause)
+    fn clause_is_tautology(&mut self, clause: &Clause) -> Result<bool, Diagnostic> {
+        let main_signature = self.terms.signature();
+        let tmp_signature = self.tmp_terms.signature();
+        if main_signature.f_count() != tmp_signature.f_count()
+            || main_signature.type_bank().types_count() != tmp_signature.type_bank().types_count()
+        {
+            *self.tmp_terms.signature_mut() = main_signature.clone();
+        }
+        clause_is_tautology(&mut self.tmp_terms, clause)
     }
 
     fn subsuming_clause_id(&mut self, clause: &Clause) -> Result<Option<i64>, Diagnostic> {
@@ -807,6 +816,37 @@ mod tests {
         assert!(result
             .trace()
             .contains(&format!("% Clause {ident} accepted from 3 (forced)\n")));
+    }
+
+    #[test]
+    fn tautology_checks_reuse_a_signature_synchronized_scratch_bank() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let first = parse_clause(&mut state, "cnf(csscpa_tautology_1,axiom,(p(a)|~p(a))).");
+
+        assert!(!state
+            .process_clause(first, true, 0.0, 0.0)
+            .expect("first tautology check succeeds"));
+        assert_eq!(
+            state.tmp_terms.signature().f_count(),
+            state.terms.signature().f_count()
+        );
+        let repeated_nodes = state.tmp_terms.non_var_term_nodes();
+
+        let repeated = parse_clause(&mut state, "cnf(csscpa_tautology_2,axiom,(p(a)|~p(a))).");
+        assert!(!state
+            .process_clause(repeated, true, 0.0, 0.0)
+            .expect("repeated tautology check succeeds"));
+        assert_eq!(state.tmp_terms.non_var_term_nodes(), repeated_nodes);
+
+        let new_symbols = parse_clause(&mut state, "cnf(csscpa_tautology_3,axiom,(q(b)|~q(b))).");
+        assert!(!state
+            .process_clause(new_symbols, true, 0.0, 0.0)
+            .expect("new-symbol tautology check succeeds"));
+        assert_eq!(
+            state.tmp_terms.signature().f_count(),
+            state.terms.signature().f_count()
+        );
+        assert!(state.tmp_terms.non_var_term_nodes() > repeated_nodes);
     }
 
     #[test]

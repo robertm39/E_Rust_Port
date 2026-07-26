@@ -31,7 +31,10 @@ impl StreamType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputStream {
     source: Arc<[u8]>,
-    data: Arc<[u8]>,
+    // Keep the original vector allocation behind the shared handle. Converting
+    // `Vec<u8>` to `Arc<[u8]>` must allocate an Arc header next to a new slice
+    // and temporarily duplicates large file inputs.
+    data: Arc<Vec<u8>>,
     stream_type: StreamType,
     string_pos: usize,
     eof_seen: bool,
@@ -74,7 +77,7 @@ impl InputStream {
     fn from_data(stream_type: StreamType, source: Vec<u8>, data: Vec<u8>) -> Self {
         let mut stream = Self {
             source: source.into(),
-            data: data.into(),
+            data: Arc::new(data),
             stream_type,
             string_pos: 0,
             eof_seen: false,
@@ -463,6 +466,16 @@ mod tests {
         stream.next_char();
         assert_eq!((stream.line(), stream.column()), (2, 1));
         assert_eq!(stream.current_char(), Some(b'c'));
+    }
+
+    #[test]
+    fn file_content_stream_reuses_the_input_vector_allocation() {
+        let data = vec![b'x'; 1_048_576];
+        let original = data.as_ptr();
+
+        let stream = InputStream::from_file_content("large.csscpa", data);
+
+        assert_eq!(stream.data.as_ptr(), original);
     }
 
     #[test]
