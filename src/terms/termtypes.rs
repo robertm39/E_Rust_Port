@@ -262,6 +262,58 @@ impl TermArgs {
             Self::Heap(args) => args,
         }
     }
+
+    #[expect(
+        clippy::match_same_arms,
+        reason = "explicit variant-order arms keep the hot arity comparison auditable"
+    )]
+    fn compare_initialized_identity_order(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => Ordering::Equal,
+            (Self::Empty, _) => Ordering::Less,
+            (_, Self::Empty) => Ordering::Greater,
+            (Self::One(left), Self::One(right)) => {
+                initialized_term_identity_order(left[0].as_ref(), right[0].as_ref())
+            }
+            (Self::One(_), _) => Ordering::Less,
+            (_, Self::One(_)) => Ordering::Greater,
+            (Self::Two(left), Self::Two(right)) => {
+                let first = initialized_term_identity_order(left[0].as_ref(), right[0].as_ref());
+                if first == Ordering::Equal {
+                    initialized_term_identity_order(left[1].as_ref(), right[1].as_ref())
+                } else {
+                    first
+                }
+            }
+            (Self::Two(_), Self::Heap(_)) => Ordering::Less,
+            (Self::Heap(_), Self::Two(_)) => Ordering::Greater,
+            (Self::Heap(left), Self::Heap(right)) => {
+                let length_order = left.len().cmp(&right.len());
+                if length_order != Ordering::Equal {
+                    return length_order;
+                }
+                for (left_arg, right_arg) in left.iter().zip(right) {
+                    let order =
+                        initialized_term_identity_order(left_arg.as_ref(), right_arg.as_ref());
+                    if order != Ordering::Equal {
+                        return order;
+                    }
+                }
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::inline_always,
+    reason = "the un-inlined helper added 92 million instructions in the pinned LUSK6 profile"
+)]
+#[inline(always)]
+fn initialized_term_identity_order(left: Option<&Term>, right: Option<&Term>) -> Ordering {
+    let left = left.expect("term top comparison requires initialized arguments");
+    let right = right.expect("term top comparison requires initialized arguments");
+    term_identity_cmp(left, right).cmp(&0)
 }
 
 #[derive(Debug)]
@@ -1209,28 +1261,12 @@ impl BorrowedTermCell {
         }
 
         // SAFETY: The caller excludes structural mutation and active mutable
-        // argument borrows for the complete comparison.
-        let left_args = unsafe { &*left.args.as_ptr() }.as_slice();
+        // argument borrows for the complete comparison. Pairwise dispatch
+        // preserves arity ordering and unrolls the dominant inline shapes.
+        let left_args = unsafe { &*left.args.as_ptr() };
         // SAFETY: Identical argument for the right cursor.
-        let right_args = unsafe { &*right.args.as_ptr() }.as_slice();
-        result = left_args.len().cmp(&right_args.len());
-        if result != Ordering::Equal {
-            return result;
-        }
-
-        for (left_arg, right_arg) in left_args.iter().zip(right_args) {
-            let left_arg = left_arg
-                .as_ref()
-                .expect("term top comparison requires initialized arguments");
-            let right_arg = right_arg
-                .as_ref()
-                .expect("term top comparison requires initialized arguments");
-            result = term_identity_cmp(left_arg, right_arg).cmp(&0);
-            if result != Ordering::Equal {
-                return result;
-            }
-        }
-        result
+        let right_args = unsafe { &*right.args.as_ptr() };
+        left_args.compare_initialized_identity_order(right_args)
     }
 
     /// Acquires one owned `Term` handle for the addressed allocation.

@@ -358,6 +358,16 @@ mod tests {
         binary.set_type(Some(i_type.clone()));
         binary.set_argument(0, one.clone());
         binary.set_argument(1, two.clone());
+        let ternary_left = Term::top_alloc(3, 3);
+        ternary_left.set_type(Some(i_type.clone()));
+        ternary_left.set_argument(0, one.clone());
+        ternary_left.set_argument(1, two.clone());
+        ternary_left.set_argument(2, one.clone());
+        let ternary_right = Term::top_alloc(3, 3);
+        ternary_right.set_type(Some(i_type.clone()));
+        ternary_right.set_argument(0, one.clone());
+        ternary_right.set_argument(1, two.clone());
+        ternary_right.set_argument(2, two.clone());
 
         for (left, right) in [
             (&one, &two),
@@ -365,6 +375,11 @@ mod tests {
             (&right, &left),
             (&left, &binary),
             (&binary, &left),
+            (&binary, &ternary_left),
+            (&ternary_left, &binary),
+            (&ternary_left, &ternary_right),
+            (&ternary_right, &ternary_left),
+            (&ternary_left, &ternary_left),
             (&left, &left),
         ] {
             let expected = owned_top_order(left, right, ProblemType::FirstOrder);
