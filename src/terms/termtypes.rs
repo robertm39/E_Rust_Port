@@ -6,6 +6,7 @@ use crate::terms::signature::{
 };
 use crate::terms::simpletypes::{sort_is_interpreted, Type, TypeUniqueId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 use std::rc::Rc;
@@ -211,8 +212,15 @@ struct TermLinks {
     binding: Option<Term>,
     rw_replace: Option<Term>,
     type_: Option<Type>,
-    left: Option<Term>,
-    right: Option<Term>,
+}
+
+#[derive(Default)]
+struct TermTreeLink(Cell<Option<Term>>);
+
+impl fmt::Debug for TermTreeLink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermTreeLink(..)")
+    }
 }
 
 #[derive(Debug)]
@@ -261,9 +269,13 @@ struct TermCell {
     // cells retain the boxed-slice fallback.
     args: RefCell<TermArgs>,
     // C stores these five nullable pointers inline in TermCell. One shared
-    // interior-mutation boundary preserves that compact shape without unsafe
-    // access or one borrow flag per pointer.
+    // interior-mutation boundary covers the colder binding/rewrite/type
+    // metadata. The two hot intrusive tree links use `Cell` so splaying does
+    // not pay dynamic borrow bookkeeping; the split retains the same compact
+    // aggregate layout without unsafe access or per-link `RefCell` flags.
     links: RefCell<TermLinks>,
+    left: TermTreeLink,
+    right: TermTreeLink,
     entry_no: Cell<i64>,
     weight: Cell<i64>,
     v_count: Cell<u32>,
@@ -341,6 +353,8 @@ impl Term {
             *argument = None;
         }
         *cell.links.get_mut() = TermLinks::default();
+        *cell.left.0.get_mut() = None;
+        *cell.right.0.get_mut() = None;
         cell.entry_no.set(0);
         cell.weight.set(0);
         cell.v_count.set(0);
@@ -511,30 +525,36 @@ impl Term {
 
     #[must_use]
     pub fn left_son(&self) -> Option<Term> {
-        self.0.links.borrow().left.clone()
+        let left = self.0.left.0.take();
+        let result = left.clone();
+        self.0.left.0.set(left);
+        result
     }
 
     pub fn set_left_son(&self, term: Option<Term>) {
-        self.0.links.borrow_mut().left = term;
+        self.0.left.0.set(term);
     }
 
     #[must_use]
     pub fn right_son(&self) -> Option<Term> {
-        self.0.links.borrow().right.clone()
+        let right = self.0.right.0.take();
+        let result = right.clone();
+        self.0.right.0.set(right);
+        result
     }
 
     pub fn set_right_son(&self, term: Option<Term>) {
-        self.0.links.borrow_mut().right = term;
+        self.0.right.0.set(term);
     }
 
     #[must_use]
     pub fn take_left_son(&self) -> Option<Term> {
-        self.0.links.borrow_mut().left.take()
+        self.0.left.0.take()
     }
 
     #[must_use]
     pub fn take_right_son(&self) -> Option<Term> {
-        self.0.links.borrow_mut().right.take()
+        self.0.right.0.take()
     }
 
     pub fn clear_tree_links(&self) {
@@ -783,6 +803,8 @@ impl Term {
             properties: Cell::new(TP_IGNORE_PROPS),
             args: RefCell::new(TermArgs::new(arity)),
             links: RefCell::new(TermLinks::default()),
+            left: TermTreeLink::default(),
+            right: TermTreeLink::default(),
             entry_no: Cell::new(0),
             weight: Cell::new(0),
             v_count: Cell::new(0),
@@ -1407,17 +1429,21 @@ mod tests {
 
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn term_links_share_one_compact_interior_mutation_boundary() {
+    fn term_links_retain_compact_split_mutation_boundaries() {
         assert_eq!(std::mem::size_of::<Term>(), std::mem::size_of::<usize>());
         assert_eq!(
             std::mem::size_of::<Option<Term>>(),
             std::mem::size_of::<Term>()
         );
-        assert_eq!(std::mem::size_of::<super::TermLinks>(), 40);
+        assert_eq!(std::mem::size_of::<super::TermLinks>(), 24);
         assert_eq!(std::mem::size_of::<super::TermArgs>(), 24);
         assert_eq!(
             std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
-            48
+            32
+        );
+        assert_eq!(
+            std::mem::size_of::<super::TermTreeLink>(),
+            std::mem::size_of::<Term>()
         );
         assert_eq!(
             std::mem::size_of::<std::cell::RefCell<super::TermArgs>>(),
@@ -1442,6 +1468,11 @@ mod tests {
         assert_eq!(term.rw_replace_field(), Some(replacement));
         assert_eq!(term.type_uid(), Some(type_.type_uid()));
         assert_eq!(term.type_(), Some(type_));
+        assert_eq!(term.left_son(), Some(left.clone()));
+        assert_eq!(term.right_son(), Some(right.clone()));
+        assert!(format!("{term:?}").contains("TermTreeLink(..)"));
+        assert_eq!(term.left_son(), Some(left.clone()));
+        assert_eq!(term.right_son(), Some(right.clone()));
         assert_eq!(term.take_left_son(), Some(left));
         assert_eq!(term.take_right_son(), Some(right));
     }
