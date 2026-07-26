@@ -600,6 +600,17 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "non-free terms in variable distribution require positive f-codes")]
+    fn variable_distribution_rejects_zero_code_db_variable_like_c_assertion() {
+        let mut bank = term_bank();
+        let type_ = individual(&bank);
+        let db0 = bank.request_db_var(&type_, 0);
+        let mut dist = PDIntArray::new_int(2, 2);
+
+        let _ = term_add_var_distribution(&db0, &mut dist);
+    }
+
+    #[test]
     fn variable_set_and_singleton_counts_use_variable_codes_not_identity() {
         let mut bank = term_bank();
         let x1 = typed_var(&bank, -2);
