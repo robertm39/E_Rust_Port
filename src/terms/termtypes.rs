@@ -8,7 +8,7 @@ use crate::terms::signature::{
 use crate::terms::simpletypes::{
     sort_is_interpreted, type_identity_cmp, types_cmp, Type, TypeUniqueId,
 };
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
 use std::cmp::Ordering;
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -212,10 +212,99 @@ impl RewriteDemodulator {
 pub struct Term(Rc<TermCell>);
 
 #[derive(Debug, Default)]
-struct TermLinks {
+struct TermLinkData {
     binding: Option<Term>,
     rw_replace: Option<Term>,
     type_: Option<Type>,
+}
+
+#[derive(Default)]
+struct TermLinks(UnsafeCell<TermLinkData>);
+
+impl fmt::Debug for TermLinks {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermLinks(..)")
+    }
+}
+
+// `Term` uses `Rc`, so metadata access is confined to one thread. Safe
+// accessors clone or copy their result before returning and never expose a
+// reference into the cell. Borrowed traversal has a separate unsafe accessor
+// whose callers prohibit overlapping mutation.
+#[allow(
+    unsafe_code,
+    reason = "measured compact single-threaded metadata storage behind non-borrowing safe APIs"
+)]
+impl TermLinks {
+    fn get_mut(&mut self) -> &mut TermLinkData {
+        self.0.get_mut()
+    }
+
+    fn binding(&self) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).binding.clone() }
+    }
+
+    fn has_binding(&self) -> bool {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).binding.is_some() }
+    }
+
+    fn set_binding(&self, binding: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).binding = binding;
+        }
+    }
+
+    fn type_(&self) -> Option<Type> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).type_.clone() }
+    }
+
+    fn type_uid(&self) -> Option<TypeUniqueId> {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).type_.as_ref().map(Type::type_uid) }
+    }
+
+    fn set_type(&self, type_: Option<Type>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).type_ = type_;
+        }
+    }
+
+    fn rw_replace(&self) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).rw_replace.clone() }
+    }
+
+    fn set_rw_replace(&self, replacement: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).rw_replace = replacement;
+        }
+    }
+
+    /// Borrows all metadata without dynamic borrow bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// No metadata setter may run until the returned reference is dead. The
+    /// containing `Rc<TermCell>` and every owner reached through the reference
+    /// must remain live for the complete borrow.
+    unsafe fn shared(&self) -> &TermLinkData {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &*self.0.get() }
+    }
 }
 
 #[derive(Default)]
@@ -324,12 +413,12 @@ struct TermCell {
     // and binary cells keep their argument slots in the Rc allocation; larger
     // cells retain the boxed-slice fallback.
     args: RefCell<TermArgs>,
-    // C stores these five nullable pointers inline in TermCell. One shared
-    // interior-mutation boundary covers the colder binding/rewrite/type
-    // metadata. The two hot intrusive tree links use `Cell` so splaying does
-    // not pay dynamic borrow bookkeeping; the split retains the same compact
-    // aggregate layout without unsafe access or per-link `RefCell` flags.
-    links: RefCell<TermLinks>,
+    // C stores these five nullable pointers inline in TermCell. One compact
+    // single-threaded mutation boundary covers the colder binding/rewrite/type
+    // metadata without per-node dynamic borrow state. Safe accessors expose
+    // only cloned owners or copied values. The two hot intrusive tree links
+    // use `Cell` so splaying does not pay dynamic borrow bookkeeping.
+    links: TermLinks,
     left: TermTreeLink,
     right: TermTreeLink,
     entry_no: Cell<i64>,
@@ -408,7 +497,7 @@ impl Term {
         for argument in cell.args.get_mut().as_mut_slice() {
             *argument = None;
         }
-        *cell.links.get_mut() = TermLinks::default();
+        *cell.links.get_mut() = TermLinkData::default();
         *cell.left.0.get_mut() = None;
         *cell.right.0.get_mut() = None;
         cell.entry_no.set(0);
@@ -521,16 +610,11 @@ impl Term {
 
     #[must_use]
     pub fn binding(&self) -> Option<Term> {
-        self.0.links.borrow().binding.clone()
-    }
-
-    #[must_use]
-    fn borrow_binding(&self) -> Ref<'_, Option<Term>> {
-        Ref::map(self.0.links.borrow(), |links| &links.binding)
+        self.0.links.binding()
     }
 
     pub fn set_binding(&self, binding: Option<Term>) {
-        self.0.links.borrow_mut().binding = binding;
+        self.0.links.set_binding(binding);
     }
 
     #[must_use]
@@ -571,16 +655,16 @@ impl Term {
 
     #[must_use]
     pub fn type_(&self) -> Option<Type> {
-        self.0.links.borrow().type_.clone()
+        self.0.links.type_()
     }
 
     #[must_use]
     pub fn type_uid(&self) -> Option<TypeUniqueId> {
-        self.0.links.borrow().type_.as_ref().map(Type::type_uid)
+        self.0.links.type_uid()
     }
 
     pub fn set_type(&self, type_: Option<Type>) {
-        self.0.links.borrow_mut().type_ = type_;
+        self.0.links.set_type(type_);
     }
 
     #[must_use]
@@ -639,11 +723,11 @@ impl Term {
 
     #[must_use]
     pub fn rw_replace_field(&self) -> Option<Term> {
-        self.0.links.borrow().rw_replace.clone()
+        self.0.links.rw_replace()
     }
 
     pub fn set_rw_replace_field(&self, replacement: Option<Term>) {
-        self.0.links.borrow_mut().rw_replace = replacement;
+        self.0.links.set_rw_replace(replacement);
     }
 
     #[must_use]
@@ -862,7 +946,7 @@ impl Term {
             f_code: Cell::new(0),
             properties: Cell::new(TP_IGNORE_PROPS),
             args: RefCell::new(TermArgs::new(arity)),
-            links: RefCell::new(TermLinks::default()),
+            links: TermLinks::default(),
             left: TermTreeLink::default(),
             right: TermTreeLink::default(),
             entry_no: Cell::new(0),
@@ -915,7 +999,9 @@ impl BorrowedTermCell {
             // SAFETY: Forwarded from this method's caller contract.
             let cell = unsafe { current.cell() };
             if cell.f_code.get() < 0 {
-                let links = cell.links.borrow();
+                // SAFETY: The traversal contract prohibits binding mutation,
+                // and the addressed graph remains owned for the whole walk.
+                let links = unsafe { cell.links.shared() };
                 let Some(binding) = links.binding.as_ref() else {
                     return current;
                 };
@@ -932,9 +1018,7 @@ impl BorrowedTermCell {
                     .as_slice()
                     .first()
                     .and_then(Option::as_ref)
-                    .is_some_and(|head| {
-                        head.f_code() < 0 && head.0.links.borrow().binding.is_some()
-                    });
+                    .is_some_and(|head| head.f_code() < 0 && head.0.links.has_binding());
             if !bound_applied_free_var {
                 return current;
             }
@@ -967,14 +1051,16 @@ impl BorrowedTermCell {
             // SAFETY: Forwarded from this method's caller contract.
             let cell = unsafe { current.cell() };
             debug_assert!(
-                cell.f_code.get() < 0 || cell.links.borrow().binding.is_none(),
+                cell.f_code.get() < 0 || !cell.links.has_binding(),
                 "only variables may have active bindings"
             );
             if cell.f_code.get() >= 0 {
                 return current;
             }
 
-            let links = cell.links.borrow();
+            // SAFETY: The traversal contract prohibits binding mutation, and
+            // the addressed graph remains owned for the whole walk.
+            let links = unsafe { cell.links.shared() };
             let Some(binding) = links.binding.as_ref() else {
                 return current;
             };
@@ -1022,9 +1108,8 @@ impl BorrowedTermCell {
     ///
     /// The cursor must satisfy `cell`'s contract.
     pub(crate) unsafe fn type_(self) -> Option<Type> {
-        // SAFETY: Forwarded from this method's caller contract. The scoped
-        // RefCell borrow is released before returning the cloned type handle.
-        unsafe { self.cell() }.links.borrow().type_.clone()
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.links.type_()
     }
 
     /// Returns the addressed term's type UID without cloning its type owner.
@@ -1033,14 +1118,8 @@ impl BorrowedTermCell {
     ///
     /// The cursor must satisfy `cell`'s contract.
     pub(crate) unsafe fn type_uid(self) -> Option<TypeUniqueId> {
-        // SAFETY: Forwarded from this method's caller contract. The scoped
-        // RefCell borrow remains active while the type UID is copied.
-        unsafe { self.cell() }
-            .links
-            .borrow()
-            .type_
-            .as_ref()
-            .map(Type::type_uid)
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.links.type_uid()
     }
 
     /// Returns cached standard weight for a shared term, or the fixed
@@ -1327,11 +1406,11 @@ impl BorrowedTermCell {
     reason = "read-only comparison behind a scoped shared-term cursor"
 )]
 unsafe fn compare_borrowed_cell_types(left: &TermCell, right: &TermCell) -> i64 {
-    // SAFETY: The caller guarantees that no mutable link borrow or type
+    // SAFETY: The caller guarantees that no metadata mutation or type
     // mutation can overlap these shared reads.
-    let left_links = unsafe { &*left.links.as_ptr() };
+    let left_links = unsafe { left.links.shared() };
     // SAFETY: Identical argument for the right cell.
-    let right_links = unsafe { &*right.links.as_ptr() };
+    let right_links = unsafe { right.links.shared() };
     match (left_links.type_.as_ref(), right_links.type_.as_ref()) {
         (Some(left_type), Some(right_type)) => i64::from(types_cmp(left_type, right_type)),
         (None, Some(_)) => -1,
@@ -1345,9 +1424,9 @@ unsafe fn compare_borrowed_cell_types(left: &TermCell, right: &TermCell) -> i64 
     reason = "read-only type access behind a scoped term-cell cursor"
 )]
 unsafe fn borrowed_cell_type(cell: &TermCell) -> Option<&Type> {
-    // SAFETY: The caller guarantees that no mutable link borrow or type
+    // SAFETY: The caller guarantees that no metadata mutation or type
     // mutation can overlap this shared read.
-    unsafe { &*cell.links.as_ptr() }.type_.as_ref()
+    unsafe { cell.links.shared() }.type_.as_ref()
 }
 
 #[must_use]
@@ -1596,6 +1675,10 @@ fn deref_step(term: &Term) -> Option<Term> {
     clippy::inline_always,
     reason = "pinned whole-prover and native measurements improve when this hot helper is forced inline"
 )]
+#[allow(
+    unsafe_code,
+    reason = "bounded binding-window reads retain owners and prohibit mutation until the cloned result leaves"
+)]
 #[inline(always)]
 fn deref_always_step(term: &Term) -> Option<Term> {
     if !term.is_free_var() {
@@ -1608,13 +1691,17 @@ fn deref_always_step(term: &Term) -> Option<Term> {
         }
         return None;
     }
-    let binding = term.borrow_binding();
-    let next = binding.as_ref()?;
+    // SAFETY: `term` owns this cell, the helper performs no metadata mutation,
+    // and no borrowed reference escapes the cloned return value.
+    let links = unsafe { term.0.links.shared() };
+    let next = links.binding.as_ref()?;
     if !next.is_free_var() {
         return Some(next.clone());
     }
-    let next_binding = next.borrow_binding();
-    Some(next_binding.as_ref().unwrap_or(next).clone())
+    // SAFETY: The first link keeps `next` owned, the helper performs no
+    // metadata mutation, and the selected result is cloned before returning.
+    let next_links = unsafe { next.0.links.shared() };
+    Some(next_links.binding.as_ref().unwrap_or(next).clone())
 }
 
 fn deref_applied_free_var_no_cache(term: &Term) -> Term {
@@ -1826,17 +1913,18 @@ mod tests {
 
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn term_links_retain_compact_split_mutation_boundaries() {
+    fn term_links_retain_compact_single_threaded_mutation_boundary() {
         assert_eq!(std::mem::size_of::<Term>(), std::mem::size_of::<usize>());
         assert_eq!(
             std::mem::size_of::<Option<Term>>(),
             std::mem::size_of::<Term>()
         );
+        assert_eq!(std::mem::size_of::<super::TermLinkData>(), 24);
         assert_eq!(std::mem::size_of::<super::TermLinks>(), 24);
         assert_eq!(std::mem::size_of::<super::TermArgs>(), 24);
         assert_eq!(
-            std::mem::size_of::<std::cell::RefCell<super::TermLinks>>(),
-            32
+            std::mem::size_of::<std::cell::UnsafeCell<super::TermLinkData>>(),
+            std::mem::size_of::<super::TermLinks>()
         );
         assert_eq!(
             std::mem::size_of::<super::TermTreeLink>(),
@@ -1846,7 +1934,7 @@ mod tests {
             std::mem::size_of::<std::cell::RefCell<super::TermArgs>>(),
             32
         );
-        assert_eq!(std::mem::size_of::<super::TermCell>(), 152);
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 144);
 
         let term = Term::const_cell_alloc(1);
         let binding = Term::const_cell_alloc(2);
@@ -1867,11 +1955,41 @@ mod tests {
         assert_eq!(term.type_(), Some(type_));
         assert_eq!(term.left_son(), Some(left.clone()));
         assert_eq!(term.right_son(), Some(right.clone()));
-        assert!(format!("{term:?}").contains("TermTreeLink(..)"));
+        let debug = format!("{term:?}");
+        assert!(debug.contains("TermLinks(..)"));
+        assert!(debug.contains("TermTreeLink(..)"));
         assert_eq!(term.left_son(), Some(left.clone()));
         assert_eq!(term.right_son(), Some(right.clone()));
         assert_eq!(term.take_left_son(), Some(left));
         assert_eq!(term.take_right_son(), Some(right));
+    }
+
+    #[test]
+    fn term_metadata_reads_clone_owners_before_replacement() {
+        let term = Term::const_cell_alloc(1);
+        let binding = Term::const_cell_alloc(2);
+        let binding_weak = Rc::downgrade(&binding.0);
+        term.set_binding(Some(binding.clone()));
+        drop(binding);
+
+        let retained_binding = term.binding().expect("binding remains installed");
+        term.set_binding(None);
+        assert!(binding_weak.upgrade().is_some());
+        drop(retained_binding);
+        assert!(binding_weak.upgrade().is_none());
+
+        let replacement = Term::const_cell_alloc(3);
+        let replacement_weak = Rc::downgrade(&replacement.0);
+        term.set_rw_replace_field(Some(replacement.clone()));
+        drop(replacement);
+
+        let retained_replacement = term
+            .rw_replace_field()
+            .expect("rewrite replacement remains installed");
+        term.set_rw_replace_field(None);
+        assert!(replacement_weak.upgrade().is_some());
+        drop(retained_replacement);
+        assert!(replacement_weak.upgrade().is_none());
     }
 
     #[test]
