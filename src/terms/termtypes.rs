@@ -975,6 +975,44 @@ impl BorrowedTermCell {
         unsafe { self.cell() }.links.borrow().type_.clone()
     }
 
+    /// Returns the addressed term's type UID without cloning its type owner.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn type_uid(self) -> Option<TypeUniqueId> {
+        // SAFETY: Forwarded from this method's caller contract. The scoped
+        // RefCell borrow remains active while the type UID is copied.
+        unsafe { self.cell() }
+            .links
+            .borrow()
+            .type_
+            .as_ref()
+            .map(Type::type_uid)
+    }
+
+    /// Returns cached standard weight for a shared term, or the fixed
+    /// standard variable weight for a free variable.
+    ///
+    /// `None` indicates an unshared compound term whose weight must be
+    /// computed structurally.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract. Cached shared metadata must
+    /// be complete and immutable.
+    pub(crate) unsafe fn cached_standard_weight(self) -> Option<i64> {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        if cell.properties.get().query(TP_IS_SHARED) {
+            Some(cell.weight.get())
+        } else if cell.f_code.get() < 0 {
+            Some(DEFAULT_VWEIGHT)
+        } else {
+            None
+        }
+    }
+
     /// Pushes initialized arguments from right to left without acquiring
     /// reference-counted ownership.
     ///
@@ -990,6 +1028,29 @@ impl BorrowedTermCell {
         for argument in arguments.as_slice().iter().rev().flatten() {
             stack.push(argument.borrowed_cell());
         }
+    }
+
+    /// Pushes every argument from right to left without acquiring
+    /// reference-counted ownership and returns the arity.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has either been consumed or retained by an owner.
+    /// Every argument slot must be initialized.
+    pub(crate) unsafe fn push_initialized_arguments_reversed(self, stack: &mut Vec<Self>) -> usize {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        let arguments = cell.args.borrow();
+        let arity = arguments.as_slice().len();
+        for (index, argument) in arguments.as_slice().iter().enumerate().rev() {
+            let argument = argument
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            stack.push(argument.borrowed_cell());
+        }
+        arity
     }
 
     /// Pushes initialized first-order arguments from right to left with one

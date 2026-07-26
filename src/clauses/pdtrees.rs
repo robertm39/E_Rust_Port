@@ -18,7 +18,7 @@ use crate::terms::simpletypes::{TypeUniqueId, INVALID_TYPE_UID};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
-use crate::terms::termtypes::{term_identity_id, Term};
+use crate::terms::termtypes::{term_identity_id, BorrowedTermCell, Term};
 
 pub const PDTREE_CELL_MEM: usize = 16;
 pub const PDTNODE_MEM: usize = 52;
@@ -203,6 +203,7 @@ pub struct PdTree {
     search_query_build_stack: RefCell<Vec<PrefixQueryBuildFrame>>,
     search_cursor: RefCell<Option<PdtOccurrenceCursor>>,
     search_subst_cursor: RefCell<PdtSubstCursor>,
+    search_borrowed_subst_cursor: RefCell<PdtBorrowedSubstCursor>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,6 +246,19 @@ struct PdtSubstCursor {
     initialized: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PdtBorrowedSubstCursor {
+    frames: Vec<PdtTraversalFrame>,
+    bindings: Vec<PdtCursorBinding>,
+    query_stack: Vec<BorrowedTermCell>,
+    query_steps: Vec<PdtBorrowedQueryStep>,
+    parked_query_terms: Vec<Term>,
+    parked_query_terms_scratch: Vec<Term>,
+    root: Option<BorrowedTermCell>,
+    base_subst: usize,
+    initialized: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PdtCursorBinding {
     variable_child: usize,
@@ -254,6 +268,12 @@ struct PdtCursorBinding {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PdtQueryStep {
     term: Term,
+    expanded_children: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PdtBorrowedQueryStep {
+    term: BorrowedTermCell,
     expanded_children: usize,
 }
 
@@ -335,6 +355,118 @@ impl PdtSubstCursor {
         self.query_stack.clear();
         self.query_steps.clear();
         self.initialized = false;
+    }
+}
+
+impl PdtBorrowedSubstCursor {
+    const fn new() -> Self {
+        Self {
+            frames: Vec::new(),
+            bindings: Vec::new(),
+            query_stack: Vec::new(),
+            query_steps: Vec::new(),
+            parked_query_terms: Vec::new(),
+            parked_query_terms_scratch: Vec::new(),
+            root: None,
+            base_subst: 0,
+            initialized: false,
+        }
+    }
+
+    fn start(
+        &mut self,
+        term: &Term,
+        term_weight: i64,
+        base_subst: usize,
+        first_variable_child: u32,
+    ) {
+        debug_assert!(self.query_stack.is_empty());
+        debug_assert!(self.query_steps.is_empty());
+        debug_assert!(self.parked_query_terms.is_empty());
+        let root = term.borrowed_cell();
+        self.root = Some(root);
+        self.query_stack.push(root);
+        self.frames.push(PdtTraversalFrame::new(
+            0,
+            term_weight,
+            0,
+            first_variable_child,
+            0,
+        ));
+        self.base_subst = base_subst;
+        self.initialized = true;
+    }
+
+    /// Retains one owner for every raw query cursor before control returns to
+    /// a safe caller. Building the replacement owner set before releasing the
+    /// previous one also covers query structure changed between search calls.
+    #[allow(
+        unsafe_code,
+        reason = "parks owners for private cursors with live Rc provenance"
+    )]
+    fn park_query_terms(&mut self) {
+        let required = self.query_stack.len() + self.query_steps.len();
+        let mut replacement = std::mem::take(&mut self.parked_query_terms_scratch);
+        replacement.clear();
+        replacement.reserve(required.saturating_sub(replacement.capacity()));
+        for term in self
+            .query_stack
+            .iter()
+            .copied()
+            .chain(self.query_steps.iter().map(|step| step.term))
+        {
+            if Some(term) == self.root {
+                continue;
+            }
+            // SAFETY: Every cursor came from `Term::borrowed_cell`. On entry,
+            // the current parked owners or the search root retain it. Cursors
+            // pushed during this call remain owned by the live parent cell.
+            replacement.push(unsafe { term.to_owned() });
+        }
+        let mut previous = std::mem::replace(&mut self.parked_query_terms, replacement);
+        previous.clear();
+        self.parked_query_terms_scratch = previous;
+    }
+
+    fn reset(&mut self) {
+        self.frames.clear();
+        self.bindings.clear();
+        self.query_stack.clear();
+        self.query_steps.clear();
+        self.parked_query_terms.clear();
+        self.parked_query_terms_scratch.clear();
+        self.root = None;
+        self.initialized = false;
+    }
+}
+
+struct PdtBorrowedCursorGuard<'a> {
+    cursor: &'a mut PdtBorrowedSubstCursor,
+}
+
+impl<'a> PdtBorrowedCursorGuard<'a> {
+    fn new(cursor: &'a mut PdtBorrowedSubstCursor) -> Self {
+        Self { cursor }
+    }
+}
+
+impl std::ops::Deref for PdtBorrowedCursorGuard<'_> {
+    type Target = PdtBorrowedSubstCursor;
+
+    fn deref(&self) -> &Self::Target {
+        self.cursor
+    }
+}
+
+impl std::ops::DerefMut for PdtBorrowedCursorGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cursor
+    }
+}
+
+impl Drop for PdtBorrowedCursorGuard<'_> {
+    fn drop(&mut self) {
+        self.cursor.park_query_terms();
     }
 }
 
@@ -502,6 +634,7 @@ impl PdTree {
             search_query_build_stack: RefCell::new(Vec::new()),
             search_cursor: RefCell::new(None),
             search_subst_cursor: RefCell::new(PdtSubstCursor::new()),
+            search_borrowed_subst_cursor: RefCell::new(PdtBorrowedSubstCursor::new()),
         }
     }
 
@@ -644,6 +777,19 @@ impl PdTree {
             },
             "PDTreeSearchExit resets the substitution cursor before the next search"
         );
+        debug_assert!(
+            {
+                let cursor = self.search_borrowed_subst_cursor.borrow();
+                cursor.frames.is_empty()
+                    && cursor.bindings.is_empty()
+                    && cursor.query_stack.is_empty()
+                    && cursor.query_steps.is_empty()
+                    && cursor.parked_query_terms.is_empty()
+                    && cursor.root.is_none()
+                    && !cursor.initialized
+            },
+            "PDTreeSearchExit resets the borrowed substitution cursor before the next search"
+        );
         let traversal_order = PdtTraversalOrder::from_prefer_general(prefer_general);
         let term_weight = term_standard_weight(term);
         self.search_traversal_order.set(traversal_order);
@@ -706,9 +852,10 @@ impl PdTree {
 
     pub fn record_search_exit(&self) {
         self.search_active.set(false);
+        self.search_subst_cursor.borrow_mut().reset();
+        self.search_borrowed_subst_cursor.borrow_mut().reset();
         self.recycle_search_query();
         *self.search_cursor.borrow_mut() = None;
-        self.search_subst_cursor.borrow_mut().reset();
     }
 
     fn build_search_query(&self, term: &Term) -> Vec<PrefixQueryCell> {
@@ -1379,6 +1526,9 @@ impl PdTree {
             FIRST_ORDER, state.first_order,
             "PDTree cursor specialization must match the active problem type"
         );
+        if FIRST_ORDER {
+            return self.search_next_borrowed_first_order_occurrence(state, subst);
+        }
         let mut cursor = self.search_subst_cursor.borrow_mut();
         if !cursor.initialized {
             let base_subst = subst.as_deref().map_or(0, Substitution::len);
@@ -1551,6 +1701,221 @@ impl PdTree {
                         continue;
                     }
                     let query_step = advance_variable_query(cursor);
+                    if adds_binding {
+                        cursor.bindings.push(PdtCursorBinding {
+                            variable_child: variable_index,
+                            query_step,
+                        });
+                    }
+                    let terminal_position = if cursor.query_stack.is_empty() {
+                        self.nodes[next_index].terminal_entries.len()
+                    } else {
+                        0
+                    };
+                    cursor.frames.push(PdtTraversalFrame::new(
+                        next_index,
+                        effective_term_weight,
+                        binding_pos,
+                        self.variable_child_heads[next_index],
+                        terminal_position,
+                    ));
+                }
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keeps the borrowed cursor traversal and backtracking state machine together"
+    )]
+    #[allow(
+        unsafe_code,
+        reason = "private cursor parks Rc owners across every safe call boundary"
+    )]
+    fn search_next_borrowed_first_order_occurrence(
+        &self,
+        state: &PdtSearchState,
+        mut subst: Option<&mut Substitution>,
+    ) -> Option<PdtIndexedOccurrence> {
+        let mut cursor_ref = self.search_borrowed_subst_cursor.borrow_mut();
+        if !cursor_ref.initialized {
+            let base_subst = subst.as_deref().map_or(0, Substitution::len);
+            cursor_ref.start(
+                &state.term,
+                state.term_weight,
+                base_subst,
+                self.variable_child_heads[0],
+            );
+            if !self.node_satisfies_constraints(0, state.term_weight, state.term_date) {
+                pop_borrowed_subst_cursor_frame(&mut cursor_ref);
+            }
+        }
+        if let Some(subst) = subst.as_deref_mut() {
+            debug_assert!(
+                subst.len() >= cursor_ref.base_subst,
+                "PDTree cursor substitution was externally backtracked"
+            );
+            subst.backtrack_to_pos(cursor_ref.base_subst);
+        }
+        let mut cursor = PdtBorrowedCursorGuard::new(&mut cursor_ref);
+
+        loop {
+            let query_stack_is_empty = cursor.query_stack.is_empty();
+            let frame = cursor.frames.last_mut()?;
+            let node_index = frame.node_index;
+
+            if query_stack_is_empty {
+                let terminal_position = frame.terminal_position;
+                if terminal_position == 0 {
+                    pop_borrowed_subst_cursor_frame(&mut cursor);
+                    continue;
+                }
+                frame.terminal_position -= 1;
+                if let Some(occurrence) =
+                    self.nodes[node_index].terminal_entries[terminal_position - 1].occurrence
+                {
+                    if let Some(subst) = subst.as_deref_mut() {
+                        for binding in &cursor.bindings {
+                            let variable = self.variable_children[binding.variable_child]
+                                .variable
+                                .as_ref()
+                                .expect("live PDTree variable edge has a term");
+                            let query_term = cursor.query_steps[binding.query_step].term;
+                            debug_assert!(
+                                variable.binding().is_none(),
+                                "speculative PDTree binding leaked into the shared term"
+                            );
+                            // SAFETY: The cursor guard retains every query
+                            // step before returning. The current owner set or
+                            // the live query structure retains this step now.
+                            let query_term = unsafe { query_term.to_owned() };
+                            subst.add_binding(variable, &query_term);
+                        }
+                    }
+                    return Some(occurrence);
+                }
+                continue;
+            }
+
+            let step_index = frame.next_step;
+            if step_index >= 2 {
+                pop_borrowed_subst_cursor_frame(&mut cursor);
+                continue;
+            }
+            let step = if step_index == 0 {
+                state.traversal_order.first
+            } else {
+                state.traversal_order.second
+            };
+
+            match step {
+                PdtTraversalStep::Symbols => {
+                    frame.next_step += 1;
+                    let effective_term_weight = frame.effective_term_weight;
+                    let query_term = *cursor
+                        .query_stack
+                        .last()
+                        .expect("non-terminal PDTree cursor has a query term");
+                    // SAFETY: The cursor guard's owner set retains query terms
+                    // from earlier calls. New cursors remain owned by a live
+                    // parent until the guard parks them.
+                    let Some(code) = (unsafe { borrowed_first_order_function_code(query_term) })
+                    else {
+                        continue;
+                    };
+                    let Some(next_index) = self.nodes[node_index]
+                        .fun_alternatives
+                        .get_val_const(fun_code_key(code))
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    self.record_nodes_visited(1);
+                    if !self.node_satisfies_constraints(
+                        next_index,
+                        effective_term_weight,
+                        state.term_date,
+                    ) {
+                        continue;
+                    }
+                    // SAFETY: Identical retained-query argument. The scoped
+                    // argument borrow detects any overlapping mutable guard.
+                    unsafe { advance_borrowed_first_order_symbol_query(&mut cursor) };
+                    let terminal_position = if cursor.query_stack.is_empty() {
+                        self.nodes[next_index].terminal_entries.len()
+                    } else {
+                        0
+                    };
+                    let binding_pos = cursor.bindings.len();
+                    cursor.frames.push(PdtTraversalFrame::new(
+                        next_index,
+                        effective_term_weight,
+                        binding_pos,
+                        self.variable_child_heads[next_index],
+                        terminal_position,
+                    ));
+                }
+                PdtTraversalStep::Variables => {
+                    let variable_link = frame.next_variable_child;
+                    let Some(variable_index) = unpack_variable_child_index(variable_link) else {
+                        frame.next_step += 1;
+                        continue;
+                    };
+                    let variable_child = &self.variable_children[variable_index];
+                    frame.next_variable_child = variable_child.next_sibling;
+                    let effective_term_weight = frame.effective_term_weight;
+                    let next_index = variable_child.node_index;
+                    let variable = variable_child.variable.as_ref()?;
+                    let query_term = *cursor
+                        .query_stack
+                        .last()
+                        .expect("non-terminal PDTree cursor has a query term");
+                    // SAFETY: The parked owner/query-parent contract described
+                    // above retains the cursor. The scoped type borrow cannot
+                    // overlap a mutable link guard.
+                    if unsafe { query_term.type_uid() }.unwrap_or(INVALID_TYPE_UID)
+                        != variable_child.type_uid
+                    {
+                        continue;
+                    }
+                    let binding_pos = cursor.bindings.len();
+                    let (matched, adds_binding) = if let Some(bound_query_step) =
+                        cursor.bindings.iter().rev().find_map(|binding| {
+                            let candidate = self.variable_children[binding.variable_child]
+                                .variable
+                                .as_ref()?;
+                            (candidate == variable).then_some(binding.query_step)
+                        }) {
+                        (
+                            cursor.query_steps[bound_query_step].term == query_term,
+                            false,
+                        )
+                    } else if let Some(bound) = variable.binding() {
+                        (bound.borrowed_cell() == query_term, false)
+                    } else {
+                        (true, true)
+                    };
+                    if !matched {
+                        continue;
+                    }
+                    self.record_nodes_visited(1);
+                    // SAFETY: The live cursor either has complete cached
+                    // shared metadata, is a fixed-weight free variable, or is
+                    // temporarily owned for the structural fallback.
+                    let query_weight = unsafe { borrowed_term_standard_weight(query_term) };
+                    let effective_term_weight = adjusted_variable_edge_weight(
+                        effective_term_weight,
+                        query_weight,
+                        variable_child.weight,
+                    );
+                    if !self.node_satisfies_constraints(
+                        next_index,
+                        effective_term_weight,
+                        state.term_date,
+                    ) {
+                        continue;
+                    }
+                    let query_step = advance_borrowed_variable_query(&mut cursor);
                     if adds_binding {
                         cursor.bindings.push(PdtCursorBinding {
                             variable_child: variable_index,
@@ -1804,6 +2169,24 @@ fn advance_first_order_symbol_query(cursor: &mut PdtSubstCursor) {
     });
 }
 
+#[allow(
+    unsafe_code,
+    reason = "private first-order query cursor with parked Rc owners"
+)]
+unsafe fn advance_borrowed_first_order_symbol_query(cursor: &mut PdtBorrowedSubstCursor) {
+    let term = cursor
+        .query_stack
+        .pop()
+        .expect("symbol traversal requires a pending query term");
+    // SAFETY: The caller retains the addressed cell and every initialized
+    // argument until the cursor guard parks newly pushed children.
+    let arity = unsafe { term.push_initialized_arguments_reversed(&mut cursor.query_stack) };
+    cursor.query_steps.push(PdtBorrowedQueryStep {
+        term,
+        expanded_children: arity,
+    });
+}
+
 fn advance_variable_query(cursor: &mut PdtSubstCursor) -> usize {
     let term = cursor
         .query_stack
@@ -1817,12 +2200,45 @@ fn advance_variable_query(cursor: &mut PdtSubstCursor) -> usize {
     query_step
 }
 
+fn advance_borrowed_variable_query(cursor: &mut PdtBorrowedSubstCursor) -> usize {
+    let term = cursor
+        .query_stack
+        .pop()
+        .expect("variable traversal requires a pending query term");
+    let query_step = cursor.query_steps.len();
+    cursor.query_steps.push(PdtBorrowedQueryStep {
+        term,
+        expanded_children: 0,
+    });
+    query_step
+}
+
 #[expect(
     clippy::inline_always,
     reason = "pinned whole-prover and native measurements improve when this hot frame pop is forced inline"
 )]
 #[inline(always)]
 fn pop_subst_cursor_frame(cursor: &mut PdtSubstCursor) {
+    if let Some(frame) = cursor.frames.pop() {
+        cursor.bindings.truncate(frame.binding_pos);
+        if let Some(step) = cursor.query_steps.pop() {
+            for _ in 0..step.expanded_children {
+                cursor
+                    .query_stack
+                    .pop()
+                    .expect("backtracking symbol traversal restores expanded children");
+            }
+            cursor.query_stack.push(step.term);
+        }
+    }
+}
+
+#[expect(
+    clippy::inline_always,
+    reason = "mirrors the measured hot owned-cursor frame pop"
+)]
+#[inline(always)]
+fn pop_borrowed_subst_cursor_frame(cursor: &mut PdtBorrowedSubstCursor) {
     if let Some(frame) = cursor.frames.pop() {
         cursor.bindings.truncate(frame.binding_pos);
         if let Some(step) = cursor.query_steps.pop() {
@@ -2090,6 +2506,32 @@ fn first_order_function_code(term: &Term) -> Option<FunCode> {
     }
 }
 
+#[allow(
+    unsafe_code,
+    reason = "private first-order query cursor with parked Rc owners"
+)]
+unsafe fn borrowed_first_order_function_code(term: BorrowedTermCell) -> Option<FunCode> {
+    // SAFETY: Forwarded from this helper's caller contract.
+    let f_code = unsafe { term.f_code() };
+    if f_code < 0 {
+        None
+    } else {
+        Some(f_code)
+    }
+}
+
+#[allow(unsafe_code, reason = "private query cursor with parked Rc owners")]
+unsafe fn borrowed_term_standard_weight(term: BorrowedTermCell) -> i64 {
+    // SAFETY: Forwarded from this helper's caller contract.
+    if let Some(weight) = unsafe { term.cached_standard_weight() } {
+        return weight;
+    }
+    // SAFETY: The caller retains the cursor allocation, which originated
+    // from this exact `Rc<TermCell>`.
+    let owned = unsafe { term.to_owned() };
+    term_standard_weight(&owned)
+}
+
 #[cfg(test)]
 fn prefix_query_metadata(term: &Term) -> PrefixQueryMetadata {
     let f_code = term.f_code();
@@ -2164,12 +2606,13 @@ mod tests {
     #[cfg(feature = "pdt-count-nodes")]
     use super::pdt_node_counter;
     use super::{
-        adjusted_variable_edge_weight, advance_first_order_symbol_query, normalize_pd_tree_term,
-        prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
-        prefix_query_metadata, prefix_token, prefix_token_first_order, term_lr_traverse_query,
-        term_type_uid, unpack_variable_child_index, PdTree, PdtIndexedOccurrence, PdtSubstCursor,
-        PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM, PDTREE_CELL_MEM,
-        PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
+        adjusted_variable_edge_weight, advance_borrowed_first_order_symbol_query,
+        advance_first_order_symbol_query, normalize_pd_tree_term, prefix_code_ref_count,
+        prefix_compute_term_code, prefix_match_counts, prefix_query_metadata, prefix_token,
+        prefix_token_first_order, term_lr_traverse_query, term_type_uid,
+        unpack_variable_child_index, PdTree, PdtBorrowedSubstCursor, PdtIndexedOccurrence,
+        PdtSubstCursor, PdtTraversalOrder, PrefixToken, CLAUSEPOSCELL_MEM, PDTNODE_MEM,
+        PDTREE_CELL_MEM, PDTREE_IGNORE_NF_DATE, PDTREE_IGNORE_TERM_WEIGHT, PDT_NO_VARIABLE_CHILD,
     };
     use crate::basics::intmap::{INTMAPCELL_MEM, INTORP_MEM, PDARRAYCELL_MEM};
     use crate::basics::objmaps::size_of_obj_map_node_estimate;
@@ -2759,19 +3202,29 @@ mod tests {
                 .is_some_and(|state| state.query.is_none()),
             "substitution traversal must keep the compatibility query lazy"
         );
-        let cursor = tree.search_subst_cursor.borrow();
+        let cursor = tree.search_borrowed_subst_cursor.borrow();
         assert!(cursor.frames.is_empty());
         assert!(cursor.query_steps.is_empty());
-        assert_eq!(cursor.query_stack, vec![query.clone()]);
+        assert_eq!(
+            cursor.parked_query_terms.len(),
+            cursor
+                .query_stack
+                .iter()
+                .copied()
+                .chain(cursor.query_steps.iter().map(|step| step.term))
+                .filter(|term| Some(*term) != cursor.root)
+                .count()
+        );
         drop(cursor);
 
         tree.record_search_exit();
         {
-            let cursor = tree.search_subst_cursor.borrow();
+            let cursor = tree.search_borrowed_subst_cursor.borrow();
             assert!(cursor.frames.is_empty());
             assert!(cursor.bindings.is_empty());
             assert!(cursor.query_stack.is_empty());
             assert!(cursor.query_steps.is_empty());
+            assert!(cursor.parked_query_terms.is_empty());
             assert!(!cursor.initialized);
         }
 
@@ -2784,6 +3237,68 @@ mod tests {
             assert!(cursor.query_steps.is_empty());
             assert!(!cursor.initialized);
         }
+        tree.record_search_exit();
+    }
+
+    #[test]
+    fn borrowed_cursor_parks_expanded_terms_across_safe_search_calls() {
+        let types = TypeBank::new();
+        let default_type = types.default_type();
+        let a = Term::const_cell_alloc(70);
+        a.set_type(Some(default_type.clone()));
+        let b = Term::const_cell_alloc(71);
+        b.set_type(Some(default_type.clone()));
+        let variable = Term::const_cell_alloc(-72);
+        variable.set_type(Some(default_type.clone()));
+        let query = Term::top_alloc(73, 1);
+        query.set_type(Some(default_type.clone()));
+        query.set_argument(0, a.clone());
+        let general_pattern = Term::top_alloc(73, 1);
+        general_pattern.set_type(Some(default_type));
+        general_pattern.set_argument(0, variable.clone());
+        let specific = PdtIndexedOccurrence::new(115, EqnSide::LeftSide);
+        let general = PdtIndexedOccurrence::new(116, EqnSide::LeftSide);
+        let mut tree = PdTree::new();
+        let mut subst = Substitution::new();
+
+        assert!(tree.insert_term_occurrence(&query, SysDate::from_raw(7), specific));
+        assert!(tree.insert_term_occurrence(&general_pattern, SysDate::from_raw(7), general));
+        tree.record_search_init(&query, PDTREE_IGNORE_NF_DATE, false);
+        tree.search_state
+            .borrow_mut()
+            .as_mut()
+            .expect("recorded search has state")
+            .first_order = true;
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(general)
+        );
+        assert_eq!(variable.binding(), Some(a.clone()));
+        {
+            let cursor = tree.search_borrowed_subst_cursor.borrow();
+            assert_eq!(cursor.root, Some(query.borrowed_cell()));
+            assert_eq!(
+                cursor
+                    .query_steps
+                    .iter()
+                    .map(|step| step.term)
+                    .collect::<Vec<_>>(),
+                vec![query.borrowed_cell(), a.borrowed_cell()]
+            );
+            assert_eq!(cursor.parked_query_terms, vec![a.clone()]);
+        }
+        query.set_argument(0, b);
+        drop(a);
+
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            Some(specific)
+        );
+        assert!(subst.is_empty());
+        assert_eq!(
+            tree.search_next_matching_occurrence_with_subst(&mut subst),
+            None
+        );
         tree.record_search_exit();
     }
 
@@ -2801,6 +3316,29 @@ mod tests {
         assert_eq!(cursor.query_stack, vec![right, left]);
         assert_eq!(cursor.query_steps.len(), 1);
         assert_eq!(cursor.query_steps[0].term, root);
+        assert_eq!(cursor.query_steps[0].expanded_children, 2);
+    }
+
+    #[test]
+    #[allow(unsafe_code, reason = "focused private-cursor stack-order regression")]
+    fn borrowed_first_order_symbol_expansion_preserves_stack_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let left = typed_const(&mut bank, "pdt_borrowed_expand_left");
+        let right = typed_const(&mut bank, "pdt_borrowed_expand_right");
+        let root = typed_binary(&mut bank, "pdt_borrowed_expand_root", &left, &right);
+        let mut cursor = PdtBorrowedSubstCursor::new();
+        cursor.query_stack.push(root.borrowed_cell());
+
+        // SAFETY: `root`, `left`, and `right` stay owned and immutable for the
+        // complete focused expansion.
+        unsafe { advance_borrowed_first_order_symbol_query(&mut cursor) };
+
+        assert_eq!(
+            cursor.query_stack,
+            vec![right.borrowed_cell(), left.borrowed_cell()]
+        );
+        assert_eq!(cursor.query_steps.len(), 1);
+        assert_eq!(cursor.query_steps[0].term, root.borrowed_cell());
         assert_eq!(cursor.query_steps[0].expanded_children, 2);
     }
 
