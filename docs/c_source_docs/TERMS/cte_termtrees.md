@@ -84,7 +84,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for store-owned-link performance review on 2026-07-11; updated for direct comparator-result consumption on 2026-07-21 and split intrusive-link mutation on 2026-07-25.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for store-owned-link performance review on 2026-07-11; updated for direct comparator-result consumption on 2026-07-21 and split intrusive-link mutation and buffered-chain review on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 
@@ -100,6 +100,7 @@ Source files reviewed: `TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - C term-tree callers consume only the sign of `TermTopCompare`. Rust now keeps the public signed-result contract but lets its private find/insert/extract/splay path consume `Ordering` directly, preserving function-code, higher-order type-address, arity, and argument-address order while removing the repeated signed-result comparison. Exact LUSK6 work falls 0.3184%, with comparator, splay, and insertion reductions plus exact proof/resource/full-matrix evidence retained in [`experiment 182`](../../../experiments/2026-07-21-182-term-tree-ordering/FINDINGS.md).
 - C mutates its inline owning `lson`/`rson` pointers directly during every splay rotation and tail extension. Rust retains the same owning intrusive topology but stores those two hot links in pointer-sized `Cell<Option<Term>>` wrappers, separate from the colder binding/rewrite/type `RefCell`. This layout-neutral split removes dynamic borrow checks without raw pointers: reads take, clone, and restore synchronously; link transfers move the owner with `Cell::take`; and formatting is opaque and mutation-free. The intended insertion boundary falls 7.45%, exact whole-prover work falls 1.18%, and two native blocks agree; layout, topology, extraction, proof, and compatibility evidence is retained in [`experiment 313`](../../../experiments/2026-07-25-012-split-term-tree-links/FINDINGS.md).
+- A safe store-reused pair of `Vec<Term>` chains moved traversed splay nodes instead of cloning tail owners, reducing exact whole-prover work 0.4362% and the intended `term_top_insert` owner 3.2072%. Native timing falsified the layout: the complete 64-pair wall/CPU means regress 0.2449%/0.2434%, and the final 32 pairs regress 0.2885%/0.2845%. Production therefore retains immediate direct-link assembly; the rejected design and exact proof evidence are retained in [`experiment 315`](../../../experiments/2026-07-25-014-buffered-term-splay-chains/FINDINGS.md).
 
 ### Change Later
 

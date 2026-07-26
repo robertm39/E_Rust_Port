@@ -94,7 +94,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for reusable splay-chain review on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`.
 
@@ -115,6 +115,11 @@ Source files reviewed: `TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`.
   4.53 million, while the same-bucket regression covers multiple candidates
   and a survivor. Evidence and native timing are retained in
   [`experiment 308`](../../../experiments/2026-07-25-007-termstore-gc-candidate-collection/FINDINGS.md).
+- Reusing two owned `Vec<Term>` splay chains across all store buckets reduces
+  exact LUSK6 work 0.4362%, but consistent complete-block and final-half native
+  regressions reject the delayed push/pop link-rebuild shape. The store
+  therefore retains the accepted direct-link splay path; evidence is retained
+  in [`experiment 315`](../../../experiments/2026-07-25-014-buffered-term-splay-chains/FINDINGS.md).
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
