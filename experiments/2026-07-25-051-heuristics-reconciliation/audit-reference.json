@@ -1,0 +1,19 @@
+{
+  "content_hashes_verified": 42,
+  "decision_count": 42,
+  "decision_digest": "23033fe439ea0353680bf4ccf1d4992e85684d30323b4d6941d5a243a7567278",
+  "evidence_checks": {
+    "autoschedule_static_tables_and_parser_quirks_are_exact": true,
+    "autoselect_safe_initialization_preserves_observable_search": true,
+    "axfilter_parser_defaults_and_live_owner_are_reconciled": true,
+    "banked_scorer_lifecycle_covers_every_marking_family": true,
+    "current_full_port_validation_is_green": true,
+    "hcb_selection_uses_stable_liveness_and_banked_dispatch": true,
+    "literal_selection_surface_and_edge_cases_are_exact": true,
+    "proof_control_initialization_sat_and_ho_bank_surface_are_owned": true,
+    "rendering_scalars_noop_and_priority_quirk_are_explicit": true
+  },
+  "schema_version": 1,
+  "source_digest": "163f644c588b0022bfea7bfaebdf7a2581e74a4acbba0bdd458c58832c76fa42",
+  "source_file_count": 89
+}
