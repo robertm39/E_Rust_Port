@@ -1,0 +1,22 @@
+{
+  "content_hashes_verified": 19,
+  "decision_count": 19,
+  "decision_digest": "11761165a1c8c0ca6ba03532f18ce52178074231628fdf03625e7a61fa8ca1d8",
+  "evidence_checks": {
+    "commandline_float_and_typed_option_tables_are_explicit": true,
+    "eager_stream_bytes_make_close_time_file_errors_unobservable": true,
+    "file_readability_and_safe_close_ownership_are_retained": true,
+    "filevars_boolean_strcmp_bug_is_intentionally_exact": true,
+    "full_inout_and_port_compatibility_evidence_is_current": true,
+    "global_output_descriptor_and_flush_boundaries_are_owned": true,
+    "hard_timeout_output_and_windows_cooperation_preserve_diagnostics": true,
+    "initio_persistence_and_program_name_ownership_are_covered": true,
+    "scanner_compatibility_shims_are_narrow_and_regression_tested": true,
+    "server_socket_reuse_precedes_bind_on_supported_targets": true,
+    "tcp_message_debug_empty_and_nul_surfaces_are_safe_and_exact": true,
+    "temporary_file_creation_preserves_security_and_lifecycle": true
+  },
+  "schema_version": 1,
+  "source_digest": "5b57348d1266200164317e234508c9e2be6c28e247443ed3cc12cf740b5941b0",
+  "source_file_count": 40
+}
