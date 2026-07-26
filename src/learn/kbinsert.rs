@@ -48,10 +48,7 @@ impl KbParseExampleFileResult {
 /// Parse one knowledge-base example clause into an annotated recursive clause
 /// representation.
 ///
-/// C returns `NULL` if pattern computation is too expensive. The currently
-/// ported pattern helper does not expose that cutoff, so this function returns
-/// `Some` for every successfully parsed clause while keeping the `Option`
-/// boundary for the later compatibility hook.
+/// C returns `NULL` if pattern computation is too expensive.
 pub fn parse_example_clause(
     scanner: &mut Scanner,
     parse_terms: &mut TermBank,
@@ -66,6 +63,9 @@ pub fn parse_example_clause(
         &clause,
         PatternSubst::default_subst(parse_terms.signature()),
     );
+    if pattern.tries() == 0 {
+        return Ok(None);
+    }
     let clauserep = rec_encode_clause_list_rep(parse_terms, pattern.listrep())?;
     let old_sig = parse_terms.signature().clone();
     let internal_vars = internal_terms.vars().clone();
@@ -201,7 +201,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::inout::scanner::{Scanner, TokenType};
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::learn::annoterms::AnnoSet;
     use crate::learn::examplerep::{ExampleRep, ExampleSet};
     use crate::terms::signature::Signature;
@@ -438,5 +438,28 @@ a=b.
         assert_eq!(annotation.length(), 3);
         assert_close(annotation.value(1).expect("proof count"), 0.0);
         assert_close(annotation.value(2).expect("proof distance"), 7.0);
+    }
+
+    #[test]
+    fn parse_example_clause_skips_pattern_search_over_branch_limit() {
+        let mut parse_terms = test_bank();
+        let mut internal_terms = test_bank();
+        let mut scanner = Scanner::from_user_string("9:(0): cnf(skip, axiom, (a=b | c=d)).", false)
+            .expect("scanner allocation");
+        scanner.set_format(IoFormat::Tstp);
+        let destination_nodes = internal_terms.non_var_term_nodes();
+
+        let parsed = parse_example_clause(
+            &mut scanner,
+            &mut parse_terms,
+            &mut internal_terms,
+            42,
+            ProblemType::FirstOrder,
+        )
+        .expect("example clause parse");
+
+        assert!(parsed.is_none());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        assert_eq!(internal_terms.non_var_term_nodes(), destination_nodes);
     }
 }
