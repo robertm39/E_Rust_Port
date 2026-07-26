@@ -1,0 +1,16 @@
+{
+  "content_hashes_verified": 5,
+  "decision_count": 5,
+  "decision_digest": "fc25b2af679350d291f3d79d9e77689ccd2ce98b02fbc4b8a97a0feb6bceb6cb",
+  "evidence_checks": {
+    "grouped_cnf_is_a_standalone_parser": true,
+    "latest_full_validation_covers_internal_fallback": true,
+    "runtime_and_bundled_discovery_policy_is_explicit": true,
+    "rust_wrapper_exposes_only_e_used_reentrant_api": true,
+    "solver_lifecycle_and_failure_paths_are_tested": true,
+    "vendored_utility_shell_and_forwarding_boundaries_are_real": true
+  },
+  "schema_version": 1,
+  "source_digest": "b1aafb3747e46292433378158397fc2b100c7560ada28bd6cdfd7f805b4f237e",
+  "source_file_count": 9
+}
