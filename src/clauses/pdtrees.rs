@@ -253,7 +253,6 @@ struct PdtBorrowedSubstCursor {
     query_stack: Vec<BorrowedTermCell>,
     query_steps: Vec<PdtBorrowedQueryStep>,
     parked_query_terms: Vec<Term>,
-    parked_query_terms_scratch: Vec<Term>,
     root: Option<BorrowedTermCell>,
     base_subst: usize,
     initialized: bool,
@@ -366,7 +365,6 @@ impl PdtBorrowedSubstCursor {
             query_stack: Vec::new(),
             query_steps: Vec::new(),
             parked_query_terms: Vec::new(),
-            parked_query_terms_scratch: Vec::new(),
             root: None,
             base_subst: 0,
             initialized: false,
@@ -397,18 +395,14 @@ impl PdtBorrowedSubstCursor {
         self.initialized = true;
     }
 
-    /// Retains one owner for every raw query cursor before control returns to
-    /// a safe caller. Building the replacement owner set before releasing the
-    /// previous one also covers query structure changed between search calls.
+    /// Retains one owner for every discovered raw query cursor before control
+    /// returns to a safe caller. Owners remain parked until search exit, so
+    /// query structure changed between calls cannot detach an old cursor.
     #[allow(
         unsafe_code,
         reason = "parks owners for private cursors with live Rc provenance"
     )]
     fn park_query_terms(&mut self) {
-        let required = self.query_stack.len() + self.query_steps.len();
-        let mut replacement = std::mem::take(&mut self.parked_query_terms_scratch);
-        replacement.clear();
-        replacement.reserve(required.saturating_sub(replacement.capacity()));
         for term in self
             .query_stack
             .iter()
@@ -418,14 +412,19 @@ impl PdtBorrowedSubstCursor {
             if Some(term) == self.root {
                 continue;
             }
+            if self
+                .parked_query_terms
+                .iter()
+                .any(|owner| owner.borrowed_cell() == term)
+            {
+                continue;
+            }
             // SAFETY: Every cursor came from `Term::borrowed_cell`. On entry,
-            // the current parked owners or the search root retain it. Cursors
-            // pushed during this call remain owned by the live parent cell.
-            replacement.push(unsafe { term.to_owned() });
+            // an earlier parked owner or the search root retains it. Cursors
+            // first pushed during this call remain owned by the live parent
+            // cell until this owner is appended.
+            self.parked_query_terms.push(unsafe { term.to_owned() });
         }
-        let mut previous = std::mem::replace(&mut self.parked_query_terms, replacement);
-        previous.clear();
-        self.parked_query_terms_scratch = previous;
     }
 
     fn reset(&mut self) {
@@ -434,7 +433,6 @@ impl PdtBorrowedSubstCursor {
         self.query_stack.clear();
         self.query_steps.clear();
         self.parked_query_terms.clear();
-        self.parked_query_terms_scratch.clear();
         self.root = None;
         self.initialized = false;
     }
@@ -3246,6 +3244,7 @@ mod tests {
         let default_type = types.default_type();
         let a = Term::const_cell_alloc(70);
         a.set_type(Some(default_type.clone()));
+        let a_cursor = a.borrowed_cell();
         let b = Term::const_cell_alloc(71);
         b.set_type(Some(default_type.clone()));
         let variable = Term::const_cell_alloc(-72);
@@ -3283,7 +3282,7 @@ mod tests {
                     .iter()
                     .map(|step| step.term)
                     .collect::<Vec<_>>(),
-                vec![query.borrowed_cell(), a.borrowed_cell()]
+                vec![query.borrowed_cell(), a_cursor]
             );
             assert_eq!(cursor.parked_query_terms, vec![a.clone()]);
         }
@@ -3295,6 +3294,11 @@ mod tests {
             Some(specific)
         );
         assert!(subst.is_empty());
+        {
+            let cursor = tree.search_borrowed_subst_cursor.borrow();
+            assert_eq!(cursor.parked_query_terms.len(), 1);
+            assert_eq!(cursor.parked_query_terms[0].borrowed_cell(), a_cursor);
+        }
         assert_eq!(
             tree.search_next_matching_occurrence_with_subst(&mut subst),
             None
