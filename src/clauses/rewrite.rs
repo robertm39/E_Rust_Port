@@ -600,7 +600,7 @@ fn term_subterm_rewrite_plain(
             if let Some(new_term) = &rewritten_term {
                 new_term.set_argument(index, normalized);
             } else if normalized != *arg {
-                let new_term = Term::top_copy_without_args(term);
+                let new_term = bank.alloc_top_copy_without_args(term);
                 {
                     let mut target_args = new_term.arguments_mut();
                     for (previous, arg) in source_args[..index].iter().enumerate() {

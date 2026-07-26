@@ -45,6 +45,8 @@ const TERMCELL_MEM: i64 = 48;
 const TERMARG_MEM: i64 = 4;
 const TERMP_MEM: i64 = 4;
 const TERMCELL_DYN_MEM: i64 = TERMCELL_MEM + 4 * TERMARG_MEM;
+const REUSABLE_TOP_CELL_ARITIES: usize = 3;
+const REUSABLE_TOP_CELLS_PER_ARITY: usize = 8;
 
 #[derive(Debug)]
 pub struct TermBank {
@@ -60,6 +62,7 @@ pub struct TermBank {
     garbage_state: TermProperties,
     gc: GcAdmin,
     term_store: TermCellStore,
+    reusable_top_cells: [Vec<Term>; REUSABLE_TOP_CELL_ARITIES],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,6 +103,7 @@ impl TermBank {
             garbage_state: TP_IGNORE_PROPS,
             gc: GcAdmin::new(),
             term_store: TermCellStore::new(),
+            reusable_top_cells: std::array::from_fn(|_| Vec::new()),
         };
 
         true_term.set_type(Some(bank.sig.type_bank().bool_type()));
@@ -219,6 +223,33 @@ impl TermBank {
     #[must_use]
     pub(crate) fn stored_terms(&self) -> Vec<Term> {
         self.term_store.terms()
+    }
+
+    /// Allocates a top-copy shell, reusing a bounded uniquely owned duplicate
+    /// cell for the common zero-, one-, and two-argument shapes when possible.
+    #[must_use]
+    pub(crate) fn alloc_top_copy_without_args(&mut self, source: &Term) -> Term {
+        let arity = source.arity();
+        let copy = self
+            .reusable_top_cells
+            .get_mut(arity)
+            .and_then(Vec::pop)
+            .unwrap_or_else(|| Term::default_cell_arity_alloc(arity));
+        copy.initialize_top_copy_without_args(source);
+        copy
+    }
+
+    fn recycle_top_cell(&mut self, mut term: Term) {
+        let arity = term.arity();
+        let Some(pool) = self.reusable_top_cells.get_mut(arity) else {
+            return;
+        };
+        if pool.len() == REUSABLE_TOP_CELLS_PER_ARITY {
+            return;
+        }
+        if term.try_reset_top_cell_for_reuse() {
+            pool.push(term);
+        }
     }
 
     /// Returns non-variable term nodes plus bank-owned variables.
@@ -1424,7 +1455,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let arguments = term.arguments();
         let mut copy_arguments = copy.arguments_mut();
@@ -1468,7 +1499,7 @@ impl TermBank {
             return Ok(term.clone());
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let mut changed = false;
         let arguments = term.arguments();
@@ -1513,7 +1544,7 @@ impl TermBank {
             return Ok(term);
         }
 
-        let copy = Term::top_copy_without_args(&term);
+        let copy = self.alloc_top_copy_without_args(&term);
         copy.set_properties(TP_IGNORE_PROPS);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
@@ -1620,7 +1651,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let arguments = term.arguments();
         let mut copy_arguments = copy.arguments_mut();
@@ -1700,7 +1731,7 @@ impl TermBank {
             return Ok(term);
         }
 
-        let copy = Term::top_copy_without_args(&term);
+        let copy = self.alloc_top_copy_without_args(&term);
         copy.set_properties(TP_IGNORE_PROPS);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
@@ -1791,7 +1822,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
             let shared = self.insert_disjoint(&arg)?;
@@ -1843,6 +1874,7 @@ impl TermBank {
         self.insertions += 1;
         if let Some(existing) = self.term_store.insert(term.clone()) {
             existing.set_prop(term.properties());
+            self.recycle_top_cell(term);
             return Ok(existing);
         }
 
@@ -3822,7 +3854,7 @@ impl TermBank {
             return Ok(term.clone());
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         let mut changed = false;
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
@@ -3984,7 +4016,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         if mode == InsertMode::NoProperties {
             copy.set_properties(TP_IGNORE_PROPS);
         }
@@ -4025,7 +4057,7 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = self.alloc_top_copy_without_args(term);
         let arguments = term.arguments();
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
@@ -4087,7 +4119,7 @@ impl TermBank {
             let type_ = term.type_().expect("DB variable must have a type");
             self.db_vars.request_db_var(&type_, term.f_code())
         } else {
-            let copy = Term::top_copy_without_args(&term);
+            let copy = self.alloc_top_copy_without_args(&term);
             copy.set_properties(TP_IGNORE_PROPS);
             for (index, arg) in term.argument_clones().into_iter().enumerate() {
                 let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
@@ -4429,9 +4461,9 @@ mod tests {
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
-        DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_GARBAGE_FLAG,
-        TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG,
-        TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
+        term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG,
+        TP_GARBAGE_FLAG, TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR, TP_IS_GROUND, TP_IS_SHARED,
+        TP_OP_FLAG, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
     };
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -6987,6 +7019,53 @@ mod tests {
         assert_eq!(bank.in_count(), 3);
         assert_eq!(bank.non_var_term_nodes(), 3);
         assert!(shared_duplicate.query_prop(TP_PRED_POS));
+    }
+
+    #[test]
+    fn duplicate_top_shell_is_reset_and_reused_by_arity() {
+        let mut bank = unary_i_arg_bank("reuse_shell_f");
+        let a_code = declare_i_const(&mut bank, "reuse_shell_a");
+        let a = bank.create_const_term(a_code).unwrap();
+        let f_code = bank.signature().find_f_code("reuse_shell_f");
+        assert_ne!(f_code, 0);
+        let source = Term::top_alloc(f_code, 1);
+        source.set_type(Some(bank.signature().type_bank().i_type()));
+        source.set_argument(0, a.clone());
+        let shared = bank.term_top_insert(source).unwrap();
+
+        let duplicate = Term::top_copy_without_args(&shared);
+        duplicate.set_argument(0, a);
+        duplicate.set_prop(TP_CHECK_FLAG | TP_OUTPUT_FLAG);
+        let duplicate_id = term_identity_id(&duplicate);
+
+        assert_eq!(bank.term_top_insert(duplicate).unwrap(), shared);
+        assert_eq!(bank.reusable_top_cells[1].len(), 1);
+
+        let reused = bank.alloc_top_copy_without_args(&shared);
+        assert_eq!(term_identity_id(&reused), duplicate_id);
+        assert_eq!(reused.arity(), 1);
+        assert!(reused.argument(0).is_none());
+        assert!(!reused.query_prop(TP_CHECK_FLAG | TP_OUTPUT_FLAG | TP_IS_SHARED));
+        assert_eq!(reused.f_code(), shared.f_code());
+        assert_eq!(reused.type_(), shared.type_());
+        assert!(bank.reusable_top_cells[1].is_empty());
+    }
+
+    #[test]
+    fn externally_owned_duplicate_top_shell_is_not_recycled() {
+        let (mut bank, a_code) = bank_with_symbol("owned_duplicate_a", 0);
+        let first = Term::const_cell_alloc(a_code);
+        first.set_type(Some(bank.signature().type_bank().i_type()));
+        let shared = bank.term_top_insert(first).unwrap();
+        let duplicate = Term::top_copy_without_args(&shared);
+        duplicate.set_prop(TP_CHECK_FLAG);
+        let retained = duplicate.clone();
+
+        assert_eq!(bank.term_top_insert(duplicate).unwrap(), shared);
+        assert!(bank.reusable_top_cells[0].is_empty());
+        assert_eq!(retained.f_code(), a_code);
+        assert!(retained.query_prop(TP_CHECK_FLAG));
+        assert_eq!(retained.type_(), shared.type_());
     }
 
     #[cfg(debug_assertions)]

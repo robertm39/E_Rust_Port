@@ -308,11 +308,44 @@ impl Term {
     #[must_use]
     pub fn top_copy_without_args(source: &Self) -> Self {
         let copy = Self::default_cell_arity_alloc(source.arity());
-        copy.set_properties(source.properties() & (TP_PRED_POS | TP_IS_DB_VAR));
-        copy.del_prop(TP_OUTPUT_FLAG);
-        copy.set_f_code(source.f_code());
-        copy.set_type(source.type_());
+        copy.initialize_top_copy_without_args(source);
         copy
+    }
+
+    pub(crate) fn initialize_top_copy_without_args(&self, source: &Self) {
+        debug_assert_eq!(
+            self.arity(),
+            source.arity(),
+            "top-copy shell arity must match its source"
+        );
+        self.set_properties(source.properties() & (TP_PRED_POS | TP_IS_DB_VAR));
+        self.set_f_code(source.f_code());
+        self.set_type(source.type_());
+    }
+
+    /// Clears a uniquely owned temporary top cell for bounded bank-local reuse.
+    ///
+    /// Returns `false` without mutation when another handle still owns the
+    /// cell. The arity representation and its allocation are retained.
+    pub(crate) fn try_reset_top_cell_for_reuse(&mut self) -> bool {
+        let Some(cell) = Rc::get_mut(&mut self.0) else {
+            return false;
+        };
+
+        cell.f_code.set(0);
+        cell.properties.set(TP_IGNORE_PROPS);
+        for argument in cell.args.get_mut().as_mut_slice() {
+            *argument = None;
+        }
+        *cell.links.get_mut() = TermLinks::default();
+        cell.entry_no.set(0);
+        cell.weight.set(0);
+        cell.v_count.set(0);
+        cell.f_count.set(0);
+        cell.nf_date[0].set(SysDate::creation_time());
+        cell.nf_date[1].set(SysDate::creation_time());
+        cell.rw_demod.set(None);
+        true
     }
 
     #[must_use]

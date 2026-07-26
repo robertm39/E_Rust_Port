@@ -207,7 +207,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for shared-subterm traversal ownership on 2026-07-21.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for shared-subterm traversal ownership on 2026-07-21 and duplicate top-shell reuse on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 
@@ -239,6 +239,7 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - `TBTermTopInsert` propagates child properties and computes variable count, function count, and weight by traversing `term->args` directly. Rust now holds one scoped immutable argument-slice borrow for the same loop instead of allocating a vector of cloned child handles; the borrow ends before the computed metadata is stored. Exact proof, constrained-resource, full-matrix, and 1.1212% Callgrind evidence are retained in [`experiment 177`](../../../experiments/2026-07-21-177-borrowed-insert-metadata/FINDINGS.md).
 - `TBTermTopInsert` treats an applied free variable that `NormalizePatternAppVar` accepts as one variable for `v_count`, `f_count`, and weight, while still setting `TPHasAppVar` and leaving `TPHasNonPatternVar` clear. Rust mirrors this metadata branch for already-normalized applied free variables whose visible arguments are DB variables and pass the C-shaped duplicate check.
 - `tb_termtop_insert` expresses its top-cell, lambda/application, shared-child, inferred-type, computed-weight, groundness, and post-insertion lookup invariants as C assertions. The normal upstream build defines `NDEBUG`, so Rust keeps the corresponding checks as `debug_assert!`; this avoids scanning and cloning arguments plus repeating a term-store lookup on millions of release insertions while retaining the checks in debug builds.
+- `tb_termtop_insert` destroys a rejected duplicate through `TBCellFree`, whose C size-class allocator can reuse the top cell. Rust now recovers the same reuse opportunity with a bounded bank-local pool for uniquely owned rejected shells of arity zero through two. `Rc::get_mut` proves exclusivity before every full reset; canonical/shared cells and externally retained duplicates are never recycled, and the cap of eight cells per eligible arity bounds idle storage. Exact proof, safety regressions, a 1.9169% matched Callgrind reduction, and comprehensive compatibility evidence are retained in [`experiment 311`](../../../experiments/2026-07-25-010-reuse-duplicate-top-shells/FINDINGS.md).
 - `TBInsertOpt` assumes ground terms are already shared and, in higher-order `DEREF_ALWAYS` mode, C reaches dereferencing through `WHNF_deref`. Rust currently keeps the no-WHNF insertion path explicit but shares unshared ground terms exposed by applied-variable dereferencing so the bank invariant still holds for lambda-headed applications.
 
 ### Change Later
