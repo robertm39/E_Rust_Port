@@ -1,0 +1,29 @@
+{
+  "evidence_checks": {
+    "compatibility_matrix_has_zero_unexpected_differences": true,
+    "latest_validation_has_4425_tests": true,
+    "source_docs_are_fully_covered": true
+  },
+  "exact_text_still_in_current_docs": 144,
+  "review_count": 157,
+  "review_digest": "27e0e1c199f59284bcf5cce010e06974c0f046f54849aacd35ef1921876b9f53",
+  "schema_version": 1,
+  "source_file_count": 93,
+  "standard_content_hashes_verified": 157,
+  "subsystem_counts": {
+    "basics": 18,
+    "clauses": 25,
+    "contrib": 3,
+    "control": 16,
+    "external": 1,
+    "heuristics": 12,
+    "inout": 3,
+    "learn": 7,
+    "orderings": 3,
+    "pcl2": 6,
+    "propositional": 2,
+    "prover": 41,
+    "simple_apps": 1,
+    "terms": 19
+  }
+}
