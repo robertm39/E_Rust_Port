@@ -959,6 +959,47 @@ impl EqnList {
         self.subst_norm_except(None, subst, vars)
     }
 
+    /// Bank-aware C `EqnListSubstNormExcept` using the problem-specific
+    /// dereference policy from `SubstNormTerm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order weak-head normalization.
+    pub fn subst_norm_except_with_bank(
+        &self,
+        except_index: Option<usize>,
+        subst: &mut Substitution,
+        vars: &VarBank,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<usize, Diagnostic> {
+        let result = subst.len();
+        for (index, literal) in self.literals.iter().enumerate() {
+            if Some(index) != except_index {
+                if let Err(error) = literal.subst_norm_with_bank(subst, vars, bank, problem_type) {
+                    subst.backtrack_to_pos(result);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Bank-aware C `EqnListSubstNorm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order weak-head normalization.
+    pub fn subst_norm_with_bank(
+        &self,
+        subst: &mut Substitution,
+        vars: &VarBank,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<usize, Diagnostic> {
+        self.subst_norm_except_with_bank(None, subst, vars, bank, problem_type)
+    }
+
     #[must_use]
     pub fn depth(&self) -> i64 {
         self.literals

@@ -11,7 +11,7 @@ use crate::terms::garbage_coll::{
     gc_deregister_clause_set, gc_register_clause_set, gc_register_formula_set, GcAdmin, GcSetHandle,
 };
 use crate::terms::lambda::apply_terms as lambda_apply_terms;
-use crate::terms::lambda::normalize_pattern_app_var;
+use crate::terms::lambda::{normalize_pattern_app_var, whnf_deref};
 use crate::terms::signature::{
     FunctionProperties, Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE,
 };
@@ -1390,7 +1390,14 @@ impl TermBank {
     /// Panics if a free/DB variable has no type, matching the C preconditions
     /// for `TBInsertOpt`.
     pub fn insert_opt(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
-        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
+        let limit = Self::deref_limit(term, deref);
+        let (term, current_deref) =
+            if problem_type() == ProblemType::HigherOrder && deref == DerefType::Always {
+                (whnf_deref(self, term)?, deref)
+            } else {
+                let (term, current_deref, _) = self.deref_root_no_whnf(term, deref)?;
+                (term, current_deref)
+            };
         if term_is_ground_for_insert(&term) {
             if term.is_shared() {
                 return Ok(term);
@@ -7250,6 +7257,34 @@ mod tests {
         assert!(inserted.is_shared());
         assert!(inserted.is_phony_app());
         assert_eq!(inserted.argument(0), Some(lambda));
+    }
+
+    #[test]
+    fn optimized_insertion_weak_head_normalizes_higher_order_deref_always() {
+        let _global = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let i_type = sig.type_bank().i_type();
+        let a_code = sig.insert_id("opt_whnf_ground_lambda_a", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let arrow_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let a = bank.create_const_term(a_code).unwrap();
+        let lambda = close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &a).unwrap();
+        let function = Term::const_cell_alloc(-2);
+        function.set_type(Some(arrow_type));
+        function.set_binding(Some(lambda));
+        let db0 = bank.request_db_var(&i_type, 0);
+        let app = apply_terms(&mut bank, &function, std::slice::from_ref(&db0)).unwrap();
+
+        let inserted = bank.insert_opt(&app, DerefType::Always).unwrap();
+
+        assert_eq!(inserted, a);
+        assert!(inserted.is_shared());
     }
 
     #[test]

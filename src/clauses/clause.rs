@@ -4,7 +4,7 @@ use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::ptrees::PTree;
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
@@ -943,11 +943,18 @@ impl Clause {
 
         let mut subst = Substitution::new();
         fresh_vars.reset_v_counts();
-        let _ = self.literals.subst_norm(&mut subst, fresh_vars);
-        if !subst.is_empty() {
-            self.literals = self.literals.copy_to_bank(bank)?;
+        let normalized =
+            self.literals
+                .subst_norm_with_bank(&mut subst, fresh_vars, bank, problem_type());
+        if let Err(error) = normalized {
+            subst.delete();
+            return Err(error);
         }
+        let copied = (!subst.is_empty()).then(|| self.literals.copy_to_bank(bank));
         subst.delete();
+        if let Some(copied) = copied {
+            self.literals = copied?;
+        }
         Ok(())
     }
 
@@ -1235,6 +1242,22 @@ impl Clause {
     #[must_use]
     pub fn norm_subst(&self, subst: &mut Substitution, vars: &VarBank) -> usize {
         self.literals.subst_norm(subst, vars)
+    }
+
+    /// Bank-aware C `ClauseNormSubst`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order weak-head normalization.
+    pub fn norm_subst_with_bank(
+        &self,
+        subst: &mut Substitution,
+        vars: &VarBank,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<usize, Diagnostic> {
+        self.literals
+            .subst_norm_with_bank(subst, vars, bank, problem_type)
     }
 
     pub fn add_symbol_distribution(&self, dist_array: &mut [i64]) {

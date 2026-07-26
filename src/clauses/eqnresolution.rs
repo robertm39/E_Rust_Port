@@ -158,17 +158,25 @@ fn build_resolvent(
     freshvars: &VarBank,
     subst: &mut Substitution,
 ) -> Result<Clause, Diagnostic> {
-    let backtrack = clause
-        .literals()
-        .subst_norm_except(Some(literal_index), subst, freshvars);
-    let mut new_literals = clause
-        .literals()
-        .copy_opt_except_index(Some(literal_index), bank)?;
+    let backtrack = subst.len();
+    let result = (|| {
+        let _ = clause.literals().subst_norm_except_with_bank(
+            Some(literal_index),
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
+        let mut new_literals = clause
+            .literals()
+            .copy_opt_except_index(Some(literal_index), bank)?;
+        new_literals.lambda_normalize(bank)?;
+        new_literals.remove_resolved(bank);
+        new_literals.remove_duplicates(bank);
+        Ok(Clause::alloc(new_literals))
+    })();
     subst.backtrack_to_pos(backtrack);
-    new_literals.lambda_normalize(bank)?;
-    new_literals.remove_resolved(bank);
-    new_literals.remove_duplicates(bank);
-    Ok(Clause::alloc(new_literals))
+    result
 }
 
 fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {

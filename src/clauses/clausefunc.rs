@@ -1,7 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::ptrees::PTree;
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::{
     clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
 };
@@ -5701,8 +5701,9 @@ pub fn tformula_collect_clause(
     if let Some(fresh_vars) = fresh_vars {
         let mut subst = Substitution::new();
         fresh_vars.reset_v_counts();
-        let _ = literals.subst_norm(&mut subst, fresh_vars);
-        let copied = literals.copy_to_bank(bank);
+        let normalized =
+            literals.subst_norm_with_bank(&mut subst, fresh_vars, bank, problem_type());
+        let copied = normalized.and_then(|_| literals.copy_to_bank(bank));
         subst.delete();
         literals = copied?;
     }

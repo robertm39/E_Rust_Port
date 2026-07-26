@@ -2172,6 +2172,30 @@ impl Eqn {
         result
     }
 
+    /// Bank-aware C `EqnSubstNorm` using the problem-specific dereference
+    /// policy from `SubstNormTerm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order weak-head normalization.
+    pub fn subst_norm_with_bank(
+        &self,
+        subst: &mut Substitution,
+        vars: &VarBank,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<usize, Diagnostic> {
+        let backtrack = subst.len();
+        let result = subst
+            .norm_term_with_bank(&self.lterm, vars, bank, problem_type)
+            .and_then(|_| subst.norm_term_with_bank(&self.rterm, vars, bank, problem_type));
+        if let Err(error) = result {
+            subst.backtrack_to_pos(backtrack);
+            return Err(error);
+        }
+        Ok(backtrack)
+    }
+
     #[must_use]
     pub fn syntax_compare(&self, other: &Self, bank: &TermBank) -> i32 {
         if self.is_equ_lit(bank) && !other.is_equ_lit(bank) {

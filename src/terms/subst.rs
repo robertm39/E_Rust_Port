@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::terms::lambda::whnf_deref;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_create_prefix;
@@ -12,6 +13,7 @@ use crate::terms::termvars::VarBank;
 pub struct Substitution {
     bindings: Vec<Term>,
     norm_stack: Vec<BorrowedTermCell>,
+    owned_norm_stack: Vec<Term>,
 }
 
 struct BorrowedNormStack<'a> {
@@ -42,12 +44,37 @@ impl Drop for BorrowedNormStack<'_> {
     }
 }
 
+struct OwnedNormStack<'a> {
+    stack: &'a mut Vec<Term>,
+}
+
+impl<'a> OwnedNormStack<'a> {
+    fn new(stack: &'a mut Vec<Term>) -> Self {
+        Self { stack }
+    }
+
+    fn push(&mut self, term: Term) {
+        self.stack.push(term);
+    }
+
+    fn pop(&mut self) -> Option<Term> {
+        self.stack.pop()
+    }
+}
+
+impl Drop for OwnedNormStack<'_> {
+    fn drop(&mut self) {
+        self.stack.clear();
+    }
+}
+
 impl Substitution {
     #[must_use]
     pub const fn new() -> Self {
         Self {
             bindings: Vec::new(),
             norm_stack: Vec::new(),
+            owned_norm_stack: Vec::new(),
         }
     }
 
@@ -179,6 +206,71 @@ impl Substitution {
             }
         }
         previous
+    }
+
+    /// Instantiates unbound variables after applying the C problem-specific
+    /// root dereference policy.
+    ///
+    /// Higher-order traversal uses `WHNF_deref`; first-order traversal uses
+    /// `TermDerefAlways`. The term bank and problem type are explicit instead
+    /// of reproducing C's unused signature parameter and process-global policy
+    /// inside `SubstNormTerm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from higher-order weak-head normalization.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a reachable free variable has no type, following the C
+    /// precondition for `VarBankGetFreshVar`.
+    pub fn norm_term_with_bank(
+        &mut self,
+        term: &Term,
+        vars: &VarBank,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<usize, Diagnostic> {
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(self.norm_term(term, vars));
+        }
+
+        let previous = self.len();
+        debug_assert!(
+            self.owned_norm_stack.is_empty(),
+            "higher-order normalization scratch must be empty"
+        );
+        let normalized = {
+            let bindings = &mut self.bindings;
+            let mut norm_stack = OwnedNormStack::new(&mut self.owned_norm_stack);
+            norm_stack.push(term.clone());
+            (|| {
+                while let Some(candidate) = norm_stack.pop() {
+                    let current = whnf_deref(bank, &candidate)?;
+                    if current.is_free_var() {
+                        if current.query_prop(TP_SPECIAL_FLAG) {
+                            continue;
+                        }
+                        let type_ = current.type_().expect("free variable must have a type");
+                        let new_var = vars.get_fresh_var(&type_);
+                        new_var.set_prop(TP_SPECIAL_FLAG);
+                        Self::add_owned_binding_to(bindings, current, &new_var);
+                    } else {
+                        for index in (0..current.arity()).rev() {
+                            norm_stack.push(current.argument(index).unwrap_or_else(|| {
+                                panic!("term argument {index} is uninitialized")
+                            }));
+                        }
+                    }
+                }
+                Ok(())
+            })()
+        };
+        if let Err(error) = normalized {
+            self.backtrack_to_pos(previous);
+            return Err(error);
+        }
+        Ok(previous)
     }
 
     /// Returns whether this substitution is a one-step variable renaming.
@@ -314,6 +406,7 @@ impl Substitution {
 mod tests {
     use super::Substitution;
     use crate::basics::simple_stuff::ProblemType;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -447,6 +540,45 @@ mod tests {
         assert_eq!(head.binding(), Some(rigid));
         assert_eq!(subst.backtrack(), 1);
         assert!(head.binding().is_none());
+    }
+
+    #[test]
+    fn norm_term_with_bank_weak_head_normalizes_higher_order_roots() {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let individual = sig.type_bank().i_type();
+        let rigid_code = sig.insert_id("subst_norm_whnf_rigid", 0, false);
+        sig.declare_type(rigid_code, individual.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let rigid = bank.create_const_term(rigid_code).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &rigid).unwrap();
+        let arrow_type = lambda.type_().expect("closed lambda must have a type");
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(arrow_type));
+        head.set_binding(Some(lambda));
+        let discarded = Term::const_cell_alloc(-4);
+        discarded.set_type(Some(individual));
+        let application = apply_terms(&mut bank, &head, std::slice::from_ref(&discarded)).unwrap();
+        let fresh = VarBank::new(bank.signature().type_bank());
+        let mut subst = Substitution::new();
+
+        let ordinary_pos = subst
+            .norm_term_with_bank(&application, &fresh, &mut bank, ProblemType::NotInitialized)
+            .unwrap();
+
+        assert_eq!(ordinary_pos, 0);
+        assert_eq!(subst.len(), 1);
+        assert!(discarded.binding().is_some());
+        subst.backtrack();
+
+        let pos = subst
+            .norm_term_with_bank(&application, &fresh, &mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(pos, 0);
+        assert!(subst.is_empty());
+        assert!(discarded.binding().is_none());
     }
 
     #[test]

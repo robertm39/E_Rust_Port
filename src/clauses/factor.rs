@@ -866,17 +866,24 @@ fn build_ordered_factor(
     freshvars: &VarBank,
     subst: &mut Substitution,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let backtrack =
-        clause
+    let backtrack = subst.len();
+    let result = (|| {
+        let _ = clause.literals().subst_norm_except_with_bank(
+            Some(removed_literal_index),
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
+        let mut new_literals = clause
             .literals()
-            .subst_norm_except(Some(removed_literal_index), subst, freshvars);
-    let mut new_literals = clause
-        .literals()
-        .copy_opt_except_index(Some(removed_literal_index), bank)?;
+            .copy_opt_except_index(Some(removed_literal_index), bank)?;
+        new_literals.remove_resolved(bank);
+        new_literals.remove_duplicates(bank);
+        Ok(Some(Clause::alloc(new_literals)))
+    })();
     subst.backtrack_to_pos(backtrack);
-    new_literals.remove_resolved(bank);
-    new_literals.remove_duplicates(bank);
-    Ok(Some(Clause::alloc(new_literals)))
+    result
 }
 
 fn build_equality_factor(
@@ -888,22 +895,29 @@ fn build_equality_factor(
     freshvars: &VarBank,
     subst: &mut Substitution,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let backtrack =
-        clause
+    let backtrack = subst.len();
+    let result = (|| {
+        let _ = clause.literals().subst_norm_except_with_bank(
+            Some(position.second_literal_index),
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
+        let condition_left = bank.insert_no_props_cached(min_term, DerefType::Always)?;
+        let condition_right = bank.insert_no_props_cached(second_other, DerefType::Always)?;
+        let new_condition = Eqn::alloc(condition_left, condition_right, bank, false)?;
+        let mut new_literals = clause
             .literals()
-            .subst_norm_except(Some(position.second_literal_index), subst, freshvars);
-    let condition_left = bank.insert_no_props_cached(min_term, DerefType::Always)?;
-    let condition_right = bank.insert_no_props_cached(second_other, DerefType::Always)?;
-    let new_condition = Eqn::alloc(condition_left, condition_right, bank, false)?;
-    let mut new_literals = clause
-        .literals()
-        .copy_opt_except_index(Some(position.first_literal_index), bank)?;
+            .copy_opt_except_index(Some(position.first_literal_index), bank)?;
+        new_literals.insert_first(new_condition);
+        new_literals.lambda_normalize(bank)?;
+        new_literals.remove_resolved(bank);
+        new_literals.remove_duplicates(bank);
+        Ok(Some(Clause::alloc(new_literals)))
+    })();
     subst.backtrack_to_pos(backtrack);
-    new_literals.insert_first(new_condition);
-    new_literals.lambda_normalize(bank)?;
-    new_literals.remove_resolved(bank);
-    new_literals.remove_duplicates(bank);
-    Ok(Some(Clause::alloc(new_literals)))
+    result
 }
 
 fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {

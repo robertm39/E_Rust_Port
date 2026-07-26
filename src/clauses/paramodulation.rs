@@ -1446,8 +1446,8 @@ fn indexed_plain_paramod_construct_with_subst(
 
         // C ComputeOverlap normalizes these terms before constructing the
         // critical pair; the order determines shared variable-cell identity.
-        subst.norm_term(&into_lhs, freshvars);
-        subst.norm_term(&from_rhs, freshvars);
+        subst.norm_term_with_bank(&into_lhs, freshvars, bank, problem_type())?;
+        subst.norm_term_with_bank(&from_rhs, freshvars, bank, problem_type())?;
         let new_lhs = tb_term_pos_replace(
             bank,
             &from_rhs,
@@ -1456,19 +1456,27 @@ fn indexed_plain_paramod_construct_with_subst(
             0,
             Some(&into_subterm),
         )?;
-        subst.norm_term(&into_rhs, freshvars);
+        subst.norm_term_with_bank(&into_rhs, freshvars, bank, problem_type())?;
         let new_rhs = bank.insert(&into_rhs, DerefType::Always)?;
 
         if into_literal.is_positive() && new_lhs == new_rhs {
             return Ok(None);
         }
 
-        let _ = into_clause
-            .literals()
-            .subst_norm_except(Some(into_index), subst, freshvars);
-        let _ = from_clause
-            .literals()
-            .subst_norm_except(Some(from_index), subst, freshvars);
+        let _ = into_clause.literals().subst_norm_except_with_bank(
+            Some(into_index),
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
+        let _ = from_clause.literals().subst_norm_except_with_bank(
+            Some(from_index),
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
         let mut into_copy = into_clause
             .literals()
             .copy_opt_except_index(Some(into_index), bank)?;
@@ -1728,8 +1736,13 @@ pub fn compute_overlap(
         }
     }
 
-    subst.norm_term(into, freshvars);
-    subst.norm_term(&rep_side, freshvars);
+    if let Err(error) = subst
+        .norm_term_with_bank(into, freshvars, bank, problem_type())
+        .and_then(|_| subst.norm_term_with_bank(&rep_side, freshvars, bank, problem_type()))
+    {
+        subst.backtrack_to_pos(oldstate);
+        return Err(error);
+    }
     match tb_term_pos_replace(bank, &rep_side, pos, DerefType::Always, 0, Some(&sub_into)) {
         Ok(term) => Ok(Some(term)),
         Err(error) => {
@@ -1817,7 +1830,10 @@ pub fn eqn_ordered_paramod(
         return Ok(None);
     }
 
-    subst.norm_term(&rside, freshvars);
+    if let Err(error) = subst.norm_term_with_bank(&rside, freshvars, bank, problem_type()) {
+        subst.backtrack_to_pos(oldstate);
+        return Err(error);
+    }
     let instantiated_rhs = match bank.insert(&rside, DerefType::Always) {
         Ok(term) => term,
         Err(error) => {
@@ -2085,12 +2101,20 @@ fn clause_ordered_paramod_with_subst(
         return Ok(None);
     }
 
-    let _ = into_clause
-        .literals()
-        .subst_norm_except(Some(into_index), subst, freshvars);
-    let _ = from_clause
-        .literals()
-        .subst_norm_except(Some(from_index), subst, freshvars);
+    let _ = into_clause.literals().subst_norm_except_with_bank(
+        Some(into_index),
+        subst,
+        freshvars,
+        bank,
+        problem_type(),
+    )?;
+    let _ = from_clause.literals().subst_norm_except_with_bank(
+        Some(from_index),
+        subst,
+        freshvars,
+        bank,
+        problem_type(),
+    )?;
 
     let mut into_copy = into_clause
         .literals()
@@ -2236,12 +2260,20 @@ fn clause_ordered_sim_paramod_active_subst(
 
     let backtrack = subst.len();
     let result = (|| {
-        let _ = into_clause
-            .literals()
-            .subst_norm_except(None, subst, freshvars);
-        let _ = from_clause
-            .literals()
-            .subst_norm_except(None, subst, freshvars);
+        let _ = into_clause.literals().subst_norm_except_with_bank(
+            None,
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
+        let _ = from_clause.literals().subst_norm_except_with_bank(
+            None,
+            subst,
+            freshvars,
+            bank,
+            problem_type(),
+        )?;
 
         let mut into_deref = DerefType::Always;
         let into_term_instance = term_deref(into_term, &mut into_deref);
