@@ -76,6 +76,10 @@ impl DiversityWeightScratch {
     }
 }
 
+#[allow(
+    unsafe_code,
+    reason = "diversity traversal retains shared term owners and only mutates property flags"
+)]
 fn collect_diversity_subterms(
     term: &Term,
     subterms: &mut PStack<Term>,
@@ -99,7 +103,9 @@ fn collect_diversity_subterms(
 
     term.set_prop(TP_OP_FLAG);
     subterms.push(term.clone());
-    let arguments = term.arguments();
+    // SAFETY: `term` is a retained shared owner; recursive collection mutates
+    // only flags and leaves structural argument slots unchanged.
+    let arguments = unsafe { term.arguments() };
     for argument in arguments.iter().flatten() {
         collect_diversity_subterms(argument, subterms, variable_ids);
     }

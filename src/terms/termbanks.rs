@@ -1420,6 +1420,10 @@ impl TermBank {
         }
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "replacement insertion retains the immutable source and initializes a distinct unshared copy"
+    )]
     fn insert_repl_for_problem<const FIRST_ORDER: bool>(
         &mut self,
         term: &Term,
@@ -1457,8 +1461,12 @@ impl TermBank {
 
         let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
-        let arguments = term.arguments();
-        let mut copy_arguments = copy.arguments_mut();
+        // SAFETY: `term` stays owned and structurally unchanged during this
+        // recursive insertion.
+        let arguments = unsafe { term.arguments() };
+        // SAFETY: `copy` is fresh, unshared, distinct from `term`, and has no
+        // overlapping argument access while its slots are initialized.
+        let copy_arguments = unsafe { copy.arguments_mut() };
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
                 .as_ref()
@@ -1472,7 +1480,6 @@ impl TermBank {
                 self.insert_repl_for_problem::<FIRST_ORDER>(arg, child_deref, old, repl)?;
             copy_arguments[index] = Some(shared);
         }
-        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
@@ -1482,6 +1489,10 @@ impl TermBank {
     ///
     /// In debug builds, panics if `repl` is not already present in this bank,
     /// matching `TBInsertReplPlain`.
+    #[allow(
+        unsafe_code,
+        reason = "plain replacement retains the immutable source and initializes a distinct unshared copy"
+    )]
     pub fn insert_repl_plain(
         &mut self,
         term: &Term,
@@ -1502,8 +1513,12 @@ impl TermBank {
         let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
         let mut changed = false;
-        let arguments = term.arguments();
-        let mut copy_arguments = copy.arguments_mut();
+        // SAFETY: `term` stays owned and structurally unchanged during this
+        // recursive insertion.
+        let arguments = unsafe { term.arguments() };
+        // SAFETY: `copy` is fresh, unshared, distinct from `term`, and has no
+        // overlapping argument access while its slots are initialized.
+        let copy_arguments = unsafe { copy.arguments_mut() };
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
                 .as_ref()
@@ -1514,8 +1529,6 @@ impl TermBank {
             }
             copy_arguments[index] = Some(replaced);
         }
-        drop(copy_arguments);
-
         if changed {
             self.term_top_insert(copy)
         } else {
@@ -1627,6 +1640,10 @@ impl TermBank {
     /// In debug builds, panics if a ground or bound term is not already present
     /// in the bank. Panics in all builds if a free/DB variable has no type,
     /// matching `TBInsertInstantiatedFO`.
+    #[allow(
+        unsafe_code,
+        reason = "instantiation retains the immutable source and initializes a distinct unshared copy"
+    )]
     pub fn insert_instantiated_fo(&mut self, term: &Term) -> Result<Term, Diagnostic> {
         if term_is_ground_for_insert(term) {
             debug_assert!(
@@ -1653,15 +1670,18 @@ impl TermBank {
 
         let copy = self.alloc_top_copy_without_args(term);
         copy.set_properties(TP_IGNORE_PROPS);
-        let arguments = term.arguments();
-        let mut copy_arguments = copy.arguments_mut();
+        // SAFETY: `term` stays owned and structurally unchanged during this
+        // recursive insertion.
+        let arguments = unsafe { term.arguments() };
+        // SAFETY: `copy` is fresh, unshared, distinct from `term`, and has no
+        // overlapping argument access while its slots are initialized.
+        let copy_arguments = unsafe { copy.arguments_mut() };
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
                 .as_ref()
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
             copy_arguments[index] = Some(self.insert_instantiated_fo(arg)?);
         }
-        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
@@ -3997,6 +4017,10 @@ impl TermBank {
         )
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "bank insertion retains the immutable source and initializes a distinct unshared copy"
+    )]
     fn insert_derefed_with_mode(
         &mut self,
         term: &Term,
@@ -4020,8 +4044,12 @@ impl TermBank {
         if mode == InsertMode::NoProperties {
             copy.set_properties(TP_IGNORE_PROPS);
         }
-        let arguments = term.arguments();
-        let mut copy_arguments = copy.arguments_mut();
+        // SAFETY: `term` stays owned and structurally unchanged during this
+        // recursive insertion.
+        let arguments = unsafe { term.arguments() };
+        // SAFETY: `copy` is fresh, unshared, distinct from `term`, and has no
+        // overlapping argument access while its slots are initialized.
+        let copy_arguments = unsafe { copy.arguments_mut() };
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
                 .as_ref()
@@ -4032,10 +4060,13 @@ impl TermBank {
                 mode,
             )?);
         }
-        drop(copy_arguments);
         self.term_top_insert(copy)
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "optional insertion retains the immutable source while initializing a distinct copy"
+    )]
     fn insert_opt_derefed(
         &mut self,
         term: &Term,
@@ -4058,7 +4089,9 @@ impl TermBank {
         }
 
         let copy = self.alloc_top_copy_without_args(term);
-        let arguments = term.arguments();
+        // SAFETY: `term` remains owned and structurally unchanged while each
+        // child is recursively inserted into a distinct fresh copy.
+        let arguments = unsafe { term.arguments() };
         for (index, arg) in arguments.iter().enumerate() {
             let arg = arg
                 .as_ref()
@@ -4136,6 +4169,10 @@ impl TermBank {
         Ok(inserted)
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "metadata aggregation owns the completed term and mutates only non-structural fields"
+    )]
     fn set_top_insert_metadata(&self, term: &Term) {
         let type_ = term.type_().expect("shared terms have types");
         if term.is_db_var() {
@@ -4162,7 +4199,9 @@ impl TermBank {
         let mut f_count = u32::from(!term.is_phony_app());
         let mut weight = DEFAULT_FWEIGHT * i64::from(f_count);
         {
-            let arguments = term.arguments();
+            // SAFETY: The completed term remains owned and this aggregation
+            // mutates only properties and cached counts, never argument slots.
+            let arguments = unsafe { term.arguments() };
             for (index, arg) in arguments.iter().enumerate() {
                 let arg = arg
                     .as_ref()
@@ -4280,6 +4319,10 @@ pub fn tb_term_set_prop_count(term: &Term, prop: TermProperties) -> i64 {
 ///
 /// Panics if `term` is not shared, matching the C assertion in
 /// `TBTermCollectSubterms`.
+#[allow(
+    unsafe_code,
+    reason = "shared subterm collection retains owners and mutates only the traversal flag"
+)]
 pub fn tb_term_collect_subterms(term: &Term, collector: &mut PStack<Term>) -> i64 {
     assert!(term.is_shared(), "subterm collection expects shared terms");
     if term.query_prop(TP_OP_FLAG) {
@@ -4289,7 +4332,9 @@ pub fn tb_term_collect_subterms(term: &Term, collector: &mut PStack<Term>) -> i6
     let mut count = 1;
     term.set_prop(TP_OP_FLAG);
     collector.push(term.clone());
-    let arguments = term.arguments();
+    // SAFETY: `term` is a retained shared owner and recursion leaves all
+    // structural argument slots unchanged.
+    let arguments = unsafe { term.arguments() };
     for arg in arguments.iter().flatten() {
         count += tb_term_collect_subterms(arg, collector);
     }

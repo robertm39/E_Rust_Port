@@ -770,6 +770,10 @@ pub fn term_struct_equal_deref(
 }
 
 #[must_use]
+#[allow(
+    unsafe_code,
+    reason = "prefix comparison owns both immutable term graphs during argument recursion"
+)]
 pub fn term_struct_prefix_equal(
     left: &Term,
     right: &Term,
@@ -799,8 +803,11 @@ pub fn term_struct_prefix_equal(
         return false;
     }
 
-    let left_args = left.arguments();
-    let right_args = right.arguments();
+    // SAFETY: Both owners remain live and no argument setters run during the
+    // synchronous structural comparison.
+    let left_args = unsafe { left.arguments() };
+    // SAFETY: The same immutable owner scope covers `right`.
+    let right_args = unsafe { right.arguments() };
     for (index, (left, right)) in left_args.iter().zip(right_args.iter()).enumerate() {
         let Some((left, right)) = left.as_ref().zip(right.as_ref()) else {
             return false;
@@ -837,6 +844,10 @@ pub fn term_struct_weight_compare(left: &Term, right: &Term) -> i64 {
     term_struct_weight_compare_unshared(left, right)
 }
 
+#[allow(
+    unsafe_code,
+    reason = "recursive weight comparison owns both immutable unshared term graphs"
+)]
 fn term_struct_weight_compare_unshared(left: &Term, right: &Term) -> i64 {
     if left.f_code() == SIG_TRUE_CODE {
         return if right.f_code() == SIG_TRUE_CODE {
@@ -871,8 +882,11 @@ fn term_struct_weight_compare_unshared(left: &Term, right: &Term) -> i64 {
         return arity_cmp;
     }
 
-    let left_args = left.arguments();
-    let right_args = right.arguments();
+    // SAFETY: Both owners remain live and recursion performs no structural
+    // argument mutation.
+    let left_args = unsafe { left.arguments() };
+    // SAFETY: The same immutable owner scope covers `right`.
+    let right_args = unsafe { right.arguments() };
     for (left, right) in left_args.iter().zip(right_args.iter()) {
         if let Some((left, right)) = left.as_ref().zip(right.as_ref()) {
             let cmp = term_struct_weight_compare_unshared(left, right);
@@ -885,6 +899,10 @@ fn term_struct_weight_compare_unshared(left: &Term, right: &Term) -> i64 {
 }
 
 #[must_use]
+#[allow(
+    unsafe_code,
+    reason = "lexicographic comparison owns both immutable term graphs during recursion"
+)]
 pub fn term_lex_compare(left: &Term, right: &Term) -> i64 {
     let f_code_cmp = left.f_code() - right.f_code();
     if f_code_cmp != 0 {
@@ -894,8 +912,11 @@ pub fn term_lex_compare(left: &Term, right: &Term) -> i64 {
     if arity_cmp != 0 {
         return arity_cmp;
     }
-    let left_args = left.arguments();
-    let right_args = right.arguments();
+    // SAFETY: Both owners remain live and recursion performs no structural
+    // argument mutation.
+    let left_args = unsafe { left.arguments() };
+    // SAFETY: The same immutable owner scope covers `right`.
+    let right_args = unsafe { right.arguments() };
     for (left, right) in left_args.iter().zip(right_args.iter()) {
         if let Some((left, right)) = left.as_ref().zip(right.as_ref()) {
             let cmp = term_lex_compare(left, right);
@@ -1224,6 +1245,10 @@ pub fn term_collect_prop_variables(
     count
 }
 
+#[allow(
+    unsafe_code,
+    reason = "variable collection retains each popped owner and only clones immutable arguments"
+)]
 pub fn term_collect_variables(term: &Term, vars: &mut BTreeMap<usize, Term>) -> i64 {
     let mut count = 0;
     let mut stack = vec![term.clone()];
@@ -1233,7 +1258,9 @@ pub fn term_collect_variables(term: &Term, vars: &mut BTreeMap<usize, Term>) -> 
                 count += 1;
             }
         } else {
-            let arguments = current.arguments();
+            // SAFETY: `current` remains owned through this iteration and no
+            // argument setter runs while its children are cloned.
+            let arguments = unsafe { current.arguments() };
             for argument in arguments.iter().flatten() {
                 if !term_is_ground(argument) {
                     stack.push(argument.clone());

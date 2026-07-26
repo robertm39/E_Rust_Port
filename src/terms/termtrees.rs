@@ -281,6 +281,10 @@ mod tests {
         term
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "the comparison test owns both immutable term graphs for the complete argument traversal"
+    )]
     fn owned_top_order(left: &Term, right: &Term, problem_type: ProblemType) -> Ordering {
         let mut result = left.f_code().cmp(&right.f_code());
         if result != Ordering::Equal {
@@ -296,7 +300,12 @@ mod tests {
         if result != Ordering::Equal {
             return result;
         }
-        for (left_arg, right_arg) in left.arguments().iter().zip(right.arguments().iter()) {
+        // SAFETY: Both term graphs remain owned and structurally unchanged
+        // throughout this synchronous comparison.
+        let left_arguments = unsafe { left.arguments() };
+        // SAFETY: The same owner and no-mutation scope covers `right`.
+        let right_arguments = unsafe { right.arguments() };
+        for (left_arg, right_arg) in left_arguments.iter().zip(right_arguments.iter()) {
             result =
                 term_identity_cmp(left_arg.as_ref().unwrap(), right_arg.as_ref().unwrap()).cmp(&0);
             if result != Ordering::Equal {

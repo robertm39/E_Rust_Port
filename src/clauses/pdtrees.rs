@@ -856,6 +856,10 @@ impl PdTree {
         *self.search_cursor.borrow_mut() = None;
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "query construction retains each term owner and only clones immutable arguments"
+    )]
     fn build_search_query(&self, term: &Term) -> Vec<PrefixQueryCell> {
         let mut query = self.search_query_scratch.borrow_mut();
         debug_assert!(
@@ -878,7 +882,9 @@ impl PdTree {
 
                     if traverses_arguments {
                         build_stack.push(PrefixQueryBuildFrame::Exit(start));
-                        let arguments = term.arguments();
+                        // SAFETY: `term` stays owned by this frame and query
+                        // construction performs no structural argument writes.
+                        let arguments = unsafe { term.arguments() };
                         let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
                         for index in (first_arg..arity).rev() {
                             let argument = arguments[index].clone().unwrap_or_else(|| {
@@ -1386,6 +1392,10 @@ impl PdTree {
     ///
     /// Panics if a function term contains an uninitialized argument cell.
     #[must_use]
+    #[allow(
+        unsafe_code,
+        reason = "prefix matching retains each popped term owner and only clones immutable arguments"
+    )]
     pub fn match_prefix(&self, term: &Term) -> PrefixMatch {
         let mut stack = self.prefix_match_stack.borrow_mut();
         debug_assert!(
@@ -1414,7 +1424,9 @@ impl PdTree {
                 continue;
             }
             let start = usize::from(term.is_lambda() || term.is_applied_db_var());
-            let arguments = term.arguments();
+            // SAFETY: `term` stays owned through this iteration and matching
+            // performs no structural argument writes.
+            let arguments = unsafe { term.arguments() };
             for index in (start..arguments.len()).rev() {
                 stack.push(
                     arguments[index]
@@ -2122,6 +2134,10 @@ impl PdTree {
     }
 }
 
+#[allow(
+    unsafe_code,
+    reason = "symbol expansion retains the popped owner and only clones immutable arguments"
+)]
 fn advance_symbol_query(cursor: &mut PdtSubstCursor) {
     let term = cursor
         .query_stack
@@ -2132,7 +2148,9 @@ fn advance_symbol_query(cursor: &mut PdtSubstCursor) {
     } else {
         let first_arg = usize::from(term.is_lambda() || term.is_applied_db_var());
         let arity = term.arity();
-        let arguments = term.arguments();
+        // SAFETY: `term` remains owned until after its children are cloned and
+        // symbol expansion performs no structural argument writes.
+        let arguments = unsafe { term.arguments() };
         for index in (first_arg..arity).rev() {
             let argument = arguments[index]
                 .clone()
@@ -2147,20 +2165,25 @@ fn advance_symbol_query(cursor: &mut PdtSubstCursor) {
     });
 }
 
+#[allow(
+    unsafe_code,
+    reason = "first-order expansion retains the popped owner and only clones immutable arguments"
+)]
 fn advance_first_order_symbol_query(cursor: &mut PdtSubstCursor) {
     let term = cursor
         .query_stack
         .pop()
         .expect("symbol traversal requires a pending query term");
     let arity = term.arity();
-    let arguments = term.arguments();
+    // SAFETY: `term` remains owned until after its children are cloned and
+    // symbol expansion performs no structural argument writes.
+    let arguments = unsafe { term.arguments() };
     for index in (0..arity).rev() {
         let argument = arguments[index]
             .clone()
             .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
         cursor.query_stack.push(argument);
     }
-    drop(arguments);
     cursor.query_steps.push(PdtQueryStep {
         term,
         expanded_children: arity,
@@ -2439,6 +2462,10 @@ pub fn prefix_code_ref_count(term_code: &[PrefixToken], prefixes: &[Vec<PrefixTo
     PdTree::from_codes(prefixes).prefix_ref_count(term_code)
 }
 
+#[allow(
+    unsafe_code,
+    reason = "token classification retains the immutable term owner for all head inspection"
+)]
 fn prefix_token(term: &Term) -> PrefixToken {
     let f_code = term.f_code();
     if f_code < 0 {
@@ -2450,7 +2477,9 @@ fn prefix_token(term: &Term) -> PrefixToken {
     } else if term.is_db_var() {
         PrefixToken::DbLike(term_identity_id(term))
     } else if f_code == SIG_PHONY_APP_CODE {
-        let arguments = term.arguments();
+        // SAFETY: `term` remains owned and token classification performs no
+        // structural argument writes.
+        let arguments = unsafe { term.arguments() };
         let Some(head) = arguments.first().and_then(Option::as_ref) else {
             return PrefixToken::Fun(f_code);
         };
@@ -2466,7 +2495,9 @@ fn prefix_token(term: &Term) -> PrefixToken {
             PrefixToken::Fun(f_code)
         }
     } else if matches!(f_code, SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE) {
-        let arguments = term.arguments();
+        // SAFETY: `term` remains owned and token classification performs no
+        // structural argument writes.
+        let arguments = unsafe { term.arguments() };
         let head = arguments
             .first()
             .and_then(Option::as_ref)

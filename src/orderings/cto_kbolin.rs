@@ -300,6 +300,10 @@ fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool
     debug_assert!(ocb.kbo_borrowed_balance_stack.is_empty());
 }
 
+#[allow(
+    unsafe_code,
+    reason = "KBO traversal retains each popped owner and only clones structurally immutable arguments"
+)]
 fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
     debug_assert!(
         ocb.kbo_balance_stack.is_empty(),
@@ -320,7 +324,9 @@ fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs:
             } else {
                 ocb.wb -= ocb.fun_weight(current.f_code());
             }
-            let arguments = current.arguments();
+            // SAFETY: `current` stays owned through this iteration and KBO
+            // balance traversal never structurally mutates term arguments.
+            let arguments = unsafe { current.arguments() };
             for (index, arg) in arguments.iter().enumerate() {
                 let arg = arg
                     .as_ref()

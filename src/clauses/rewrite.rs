@@ -562,6 +562,10 @@ fn term_li_normalform_plain_with_date(
     clippy::too_many_arguments,
     reason = "Recursive subterm rewrite mirrors C term_subterm_rewrite context"
 )]
+#[allow(
+    unsafe_code,
+    reason = "rewriting retains the immutable source and initializes a distinct unshared copy"
+)]
 fn term_subterm_rewrite_plain(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -578,7 +582,9 @@ fn term_subterm_rewrite_plain(
     }
 
     let rewritten_term = {
-        let source_args = term.arguments();
+        // SAFETY: The source owner remains live and its argument slots are
+        // structurally unchanged while normalized children are inspected.
+        let source_args = unsafe { term.arguments() };
         let mut rewritten_term: Option<Term> = None;
         for (index, arg) in source_args.iter().enumerate() {
             let arg = arg
@@ -602,7 +608,10 @@ fn term_subterm_rewrite_plain(
             } else if normalized != *arg {
                 let new_term = bank.alloc_top_copy_without_args(term);
                 {
-                    let mut target_args = new_term.arguments_mut();
+                    // SAFETY: `new_term` is a fresh, unshared copy distinct
+                    // from the immutable source and has no other argument
+                    // borrows while these slots are initialized.
+                    let target_args = unsafe { new_term.arguments_mut() };
                     for (previous, arg) in source_args[..index].iter().enumerate() {
                         target_args[previous] = Some(arg.clone().unwrap_or_else(|| {
                             panic!("term argument {previous} is uninitialized")

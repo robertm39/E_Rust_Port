@@ -8,7 +8,7 @@ use crate::terms::signature::{
 use crate::terms::simpletypes::{
     sort_is_interpreted, type_identity_cmp, types_cmp, Type, TypeUniqueId,
 };
-use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
+use std::cell::{Cell, UnsafeCell};
 use std::cmp::Ordering;
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -394,6 +394,92 @@ impl TermArgs {
     }
 }
 
+struct TermArguments(UnsafeCell<TermArgs>);
+
+impl TermArguments {
+    fn new(arity: usize) -> Self {
+        Self(UnsafeCell::new(TermArgs::new(arity)))
+    }
+}
+
+impl fmt::Debug for TermArguments {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermArguments(..)")
+    }
+}
+
+// `Term` uses `Rc`, so argument access is confined to one thread. Safe
+// accessors clone or copy values before returning and never expose a reference
+// into the cell. Internal slice access has a separate unsafe contract whose
+// callers retain owners and prohibit overlapping structural mutation.
+#[allow(
+    unsafe_code,
+    reason = "measured compact single-threaded argument storage behind non-borrowing safe APIs"
+)]
+impl TermArguments {
+    fn get_mut(&mut self) -> &mut TermArgs {
+        self.0.get_mut()
+    }
+
+    fn arity(&self) -> usize {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a structural setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).as_slice().len() }
+    }
+
+    fn argument(&self, index: usize) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the selected owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).as_slice().get(index).cloned().flatten() }
+    }
+
+    fn set_argument_opt(&self, index: usize, argument: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared argument reference can overlap this write.
+        let arguments = unsafe { &mut *self.0.get() };
+        let slot = arguments
+            .as_mut_slice()
+            .get_mut(index)
+            .unwrap_or_else(|| panic!("term argument index {index} out of bounds"));
+        *slot = argument;
+    }
+
+    fn clones(&self) -> Vec<Option<Term>> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and every owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).as_slice().to_vec() }
+    }
+
+    /// Borrows the argument representation without dynamic bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// No argument setter or mutable argument borrow may run until the
+    /// returned reference is dead. The containing `Rc<TermCell>` and every
+    /// initialized argument owner must remain live for the complete borrow.
+    unsafe fn shared(&self) -> &TermArgs {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &*self.0.get() }
+    }
+
+    /// Mutably borrows the argument representation without dynamic
+    /// bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// The containing term must be structurally mutable. No other argument
+    /// read, write, or borrow may overlap the returned reference, and every
+    /// installed owner must remain valid.
+    #[allow(
+        clippy::mut_from_ref,
+        reason = "the unsafe contract excludes aliases for this single-threaded interior-mutable cell"
+    )]
+    unsafe fn mutable(&self) -> &mut TermArgs {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &mut *self.0.get() }
+    }
+}
+
 #[expect(
     clippy::inline_always,
     reason = "the un-inlined helper added 92 million instructions in the pinned LUSK6 profile"
@@ -412,7 +498,7 @@ struct TermCell {
     // Term arity is fixed after allocation. The overwhelmingly common unary
     // and binary cells keep their argument slots in the Rc allocation; larger
     // cells retain the boxed-slice fallback.
-    args: RefCell<TermArgs>,
+    args: TermArguments,
     // C stores these five nullable pointers inline in TermCell. One compact
     // single-threaded mutation boundary covers the colder binding/rewrite/type
     // metadata without per-node dynamic borrow state. Safe accessors expose
@@ -530,7 +616,7 @@ impl Term {
 
     #[must_use]
     pub fn arity(&self) -> usize {
-        self.0.args.borrow().as_slice().len()
+        self.0.args.arity()
     }
 
     #[must_use]
@@ -544,13 +630,7 @@ impl Term {
 
     #[must_use]
     pub fn argument(&self, index: usize) -> Option<Term> {
-        self.0
-            .args
-            .borrow()
-            .as_slice()
-            .get(index)
-            .cloned()
-            .flatten()
+        self.0.args.argument(index)
     }
 
     /// Assigns an argument slot.
@@ -570,18 +650,24 @@ impl Term {
     /// Panics if `index` is outside the term arity, matching the C flexible
     /// array precondition.
     pub fn set_argument_opt(&self, index: usize, arg: Option<Term>) {
-        let mut args = self.0.args.borrow_mut();
-        let slot = args
-            .as_mut_slice()
-            .get_mut(index)
-            .unwrap_or_else(|| panic!("term argument index {index} out of bounds"));
-        *slot = arg;
+        self.0.args.set_argument_opt(index, arg);
     }
 
-    /// Borrows the argument slots without cloning their reference-counted terms.
+    /// Borrows the argument slots without cloning their owners.
+    ///
+    /// # Safety
+    ///
+    /// No argument setter or mutable argument borrow may overlap the returned
+    /// slice. This term and every initialized argument must remain owned for
+    /// the complete borrow.
     #[must_use]
-    pub fn arguments(&self) -> Ref<'_, [Option<Term>]> {
-        Ref::map(self.0.args.borrow(), TermArgs::as_slice)
+    #[allow(
+        unsafe_code,
+        reason = "measured internal slice access is guarded by the documented ownership contract"
+    )]
+    pub(crate) unsafe fn arguments(&self) -> &[Option<Term>] {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.0.args.shared() }.as_slice()
     }
 
     /// Returns a non-owning cursor to this term's stable `Rc` allocation.
@@ -595,17 +681,30 @@ impl Term {
     }
 
     /// Mutably borrows the argument slots without cloning their terms.
-    pub(crate) fn arguments_mut(&self) -> RefMut<'_, [Option<Term>]> {
+    ///
+    /// # Safety
+    ///
+    /// No other argument read, write, or borrow may overlap the returned
+    /// slice. The term must be unshared and every installed argument owner
+    /// must remain valid.
+    #[allow(
+        unsafe_code,
+        clippy::mut_from_ref,
+        reason = "the unsafe contract excludes aliases and the shared-term check preserves structural immutability"
+    )]
+    pub(crate) unsafe fn arguments_mut(&self) -> &mut [Option<Term>] {
         assert!(
             !self.is_shared(),
             "shared term arguments are structurally immutable"
         );
-        RefMut::map(self.0.args.borrow_mut(), TermArgs::as_mut_slice)
+        // SAFETY: Forwarded from this method's caller contract after checking
+        // the shared-term structural-immutability invariant.
+        unsafe { self.0.args.mutable() }.as_mut_slice()
     }
 
     #[must_use]
     pub fn argument_clones(&self) -> Vec<Option<Term>> {
-        self.0.args.borrow().as_slice().to_vec()
+        self.0.args.clones()
     }
 
     #[must_use]
@@ -945,7 +1044,7 @@ impl Term {
         Self(Rc::new(TermCell {
             f_code: Cell::new(0),
             properties: Cell::new(TP_IGNORE_PROPS),
-            args: RefCell::new(TermArgs::new(arity)),
+            args: TermArguments::new(arity),
             links: TermLinks::default(),
             left: TermTreeLink::default(),
             right: TermTreeLink::default(),
@@ -1012,9 +1111,9 @@ impl BorrowedTermCell {
             let bound_applied_free_var = cell.properties.get().give(TP_IS_DB_VAR)
                 == TP_IGNORE_PROPS
                 && cell.f_code.get() == SIG_PHONY_APP_CODE
-                && cell
-                    .args
-                    .borrow()
+                // SAFETY: The traversal contract prohibits argument mutation
+                // and retains the complete addressed graph.
+                && unsafe { cell.args.shared() }
                     .as_slice()
                     .first()
                     .and_then(Option::as_ref)
@@ -1155,8 +1254,10 @@ impl BorrowedTermCell {
     pub(crate) unsafe fn push_arguments_reversed(self, stack: &mut Vec<Self>) {
         // SAFETY: Forwarded from this method's caller contract.
         let cell = unsafe { self.cell() };
-        let arguments = cell.args.borrow();
-        match &*arguments {
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
+        match arguments {
             TermArgs::Empty => {}
             TermArgs::One(args) => {
                 if let Some(argument) = args[0].as_ref() {
@@ -1191,7 +1292,9 @@ impl BorrowedTermCell {
     pub(crate) unsafe fn push_initialized_arguments_reversed(self, stack: &mut Vec<Self>) -> usize {
         // SAFETY: Forwarded from this method's caller contract.
         let cell = unsafe { self.cell() };
-        let arguments = cell.args.borrow();
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
         let arity = arguments.as_slice().len();
         for (index, argument) in arguments.as_slice().iter().enumerate().rev() {
             let argument = argument
@@ -1218,8 +1321,10 @@ impl BorrowedTermCell {
     ) {
         // SAFETY: Forwarded from this method's caller contract.
         let cell = unsafe { self.cell() };
-        let arguments = cell.args.borrow();
-        match &*arguments {
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
+        match arguments {
             TermArgs::Empty => {}
             TermArgs::One(args) => {
                 if let Some(argument) = args[0].as_ref() {
@@ -1295,11 +1400,10 @@ impl BorrowedTermCell {
         }
 
         // SAFETY: The caller excludes structural mutation and active mutable
-        // argument borrows. `RefCell::as_ptr` preserves the allocation and
-        // interior-value provenance without changing the borrow flag.
-        let left_args = unsafe { &*left.args.as_ptr() }.as_slice();
+        // argument borrows while both allocation-backed slices are compared.
+        let left_args = unsafe { left.args.shared() }.as_slice();
         // SAFETY: Identical argument for the right cursor.
-        let right_args = unsafe { &*right.args.as_ptr() }.as_slice();
+        let right_args = unsafe { right.args.shared() }.as_slice();
         let arity_cmp = i64::from(left_args.len() > right_args.len())
             - i64::from(left_args.len() < right_args.len());
         if arity_cmp != 0 {
@@ -1378,9 +1482,9 @@ impl BorrowedTermCell {
         // SAFETY: The caller excludes structural mutation and active mutable
         // argument borrows for the complete comparison. Pairwise dispatch
         // preserves arity ordering and unrolls the dominant inline shapes.
-        let left_args = unsafe { &*left.args.as_ptr() };
+        let left_args = unsafe { left.args.shared() };
         // SAFETY: Identical argument for the right cursor.
-        let right_args = unsafe { &*right.args.as_ptr() };
+        let right_args = unsafe { right.args.shared() };
         left_args.compare_initialized_identity_order(right_args)
     }
 
@@ -1922,6 +2026,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<super::TermLinkData>(), 24);
         assert_eq!(std::mem::size_of::<super::TermLinks>(), 24);
         assert_eq!(std::mem::size_of::<super::TermArgs>(), 24);
+        assert_eq!(std::mem::size_of::<super::TermArguments>(), 24);
         assert_eq!(
             std::mem::size_of::<std::cell::UnsafeCell<super::TermLinkData>>(),
             std::mem::size_of::<super::TermLinks>()
@@ -1931,10 +2036,10 @@ mod tests {
             std::mem::size_of::<Term>()
         );
         assert_eq!(
-            std::mem::size_of::<std::cell::RefCell<super::TermArgs>>(),
-            32
+            std::mem::size_of::<std::cell::UnsafeCell<super::TermArgs>>(),
+            std::mem::size_of::<super::TermArguments>()
         );
-        assert_eq!(std::mem::size_of::<super::TermCell>(), 144);
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 136);
 
         let term = Term::const_cell_alloc(1);
         let binding = Term::const_cell_alloc(2);
@@ -1956,6 +2061,7 @@ mod tests {
         assert_eq!(term.left_son(), Some(left.clone()));
         assert_eq!(term.right_son(), Some(right.clone()));
         let debug = format!("{term:?}");
+        assert!(debug.contains("TermArguments(..)"));
         assert!(debug.contains("TermLinks(..)"));
         assert!(debug.contains("TermTreeLink(..)"));
         assert_eq!(term.left_son(), Some(left.clone()));
@@ -1992,6 +2098,10 @@ mod tests {
         assert!(replacement_weak.upgrade().is_none());
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "the representation regression owns and leaves each test term structurally unchanged during inspection"
+    )]
     #[test]
     fn term_arguments_use_inline_slots_and_heap_fallback() {
         for arity in 0..=4 {
@@ -2001,16 +2111,21 @@ mod tests {
                 let code = i64::try_from(index).expect("small test arity fits i64") + 1;
                 term.set_argument(index, Term::const_cell_alloc(code));
             }
-            assert_eq!(term.arguments().len(), arity);
+            // SAFETY: `term` and all initialized arguments remain owned and
+            // structurally unchanged until both inspections finish.
+            let arguments = unsafe { term.arguments() };
+            assert_eq!(arguments.len(), arity);
             assert_eq!(term.argument_clones().len(), arity);
             for index in 0..arity {
                 let code = i64::try_from(index).expect("small test arity fits i64") + 1;
                 assert_eq!(term.argument(index).unwrap().f_code(), code);
             }
 
-            let args = term.0.args.borrow();
+            // SAFETY: The same immutable owner scope covers the private
+            // representation check, and no argument setter runs here.
+            let args = unsafe { term.0.args.shared() };
             assert!(matches!(
-                (&*args, arity),
+                (args, arity),
                 (super::TermArgs::Empty, 0)
                     | (super::TermArgs::One(_), 1)
                     | (super::TermArgs::Two(_), 2)
@@ -2057,12 +2172,18 @@ mod tests {
         }
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "the regression enters the unsafe mutation boundary only to verify its shared-term guard"
+    )]
     #[test]
     #[should_panic(expected = "shared term arguments are structurally immutable")]
     fn shared_term_arguments_reject_mutable_borrows() {
         let term = Term::top_alloc(1, 1);
         term.set_prop(TP_IS_SHARED);
-        drop(term.arguments_mut());
+        // SAFETY: The method must reject the shared term before exposing a
+        // mutable slice; the expected panic verifies that precondition.
+        let _arguments = unsafe { term.arguments_mut() };
     }
 
     #[test]

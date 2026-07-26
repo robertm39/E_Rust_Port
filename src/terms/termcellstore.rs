@@ -167,9 +167,15 @@ impl TermCellStore {
 ///
 /// Panics if a unary or n-ary term has uninitialized hash arguments.
 #[must_use]
+#[allow(
+    unsafe_code,
+    reason = "hashing retains the immutable term owner and performs no structural mutation"
+)]
 pub fn term_cell_hash(term: &Term) -> usize {
     let mut hash = f_code_hash_bits(term.f_code());
-    let arguments = term.arguments();
+    // SAFETY: `term` remains owned and structurally unchanged for the complete
+    // synchronous hash calculation.
+    let arguments = unsafe { term.arguments() };
     if !arguments.is_empty() {
         let arg = arguments[0]
             .as_ref()
