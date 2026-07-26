@@ -11,6 +11,7 @@ use crate::terms::garbage_coll::{
     gc_deregister_clause_set, gc_register_clause_set, gc_register_formula_set, GcAdmin, GcSetHandle,
 };
 use crate::terms::lambda::apply_terms as lambda_apply_terms;
+use crate::terms::lambda::normalize_pattern_app_var;
 use crate::terms::signature::{
     FunctionProperties, Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE,
 };
@@ -24,9 +25,9 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
-    reject_term_bank_distinct_argument_list, term_apply_arg as term_apply_arg_unshared,
-    term_array_no_duplicates, term_copy, term_is_ground_compute, term_parse_operator,
-    term_sig_insert, term_standard_weight, var_print_string,
+    reject_term_bank_distinct_argument_list, term_apply_arg as term_apply_arg_unshared, term_copy,
+    term_is_ground_compute, term_parse_operator, term_sig_insert, term_standard_weight,
+    var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref_if_changed, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
@@ -1902,7 +1903,7 @@ impl TermBank {
         term.set_entry_no(i64::try_from(self.in_count).unwrap_or(i64::MAX));
         term.assign_prop(TP_GARBAGE_FLAG, self.garbage_state);
         term.set_prop(TP_IS_SHARED);
-        self.set_top_insert_metadata(&term);
+        self.set_top_insert_metadata(&term)?;
         debug_assert_eq!(self.find(&term), Some(term.clone()));
         Ok(term)
     }
@@ -4173,7 +4174,7 @@ impl TermBank {
         unsafe_code,
         reason = "metadata aggregation owns the completed term and mutates only non-structural fields"
     )]
-    fn set_top_insert_metadata(&self, term: &Term) {
+    fn set_top_insert_metadata(&mut self, term: &Term) -> Result<(), Diagnostic> {
         let type_ = term.type_().expect("shared terms have types");
         if term.is_db_var() {
             term.set_prop(TP_HAS_DB_SUBTERM);
@@ -4240,7 +4241,7 @@ impl TermBank {
 
         if term.is_applied_free_var() {
             term.set_prop(TP_HAS_APP_VAR);
-            if normalize_pattern_app_var_no_eta(term).is_some() {
+            if normalize_pattern_app_var(self, term)?.is_some() {
                 f_count = 0;
                 v_count = 1;
                 weight = DEFAULT_VWEIGHT;
@@ -4255,28 +4256,7 @@ impl TermBank {
         if v_count == 0 {
             term.set_prop(TP_IS_GROUND);
         }
-    }
-}
-
-fn normalize_pattern_app_var_no_eta(term: &Term) -> Option<Term> {
-    if term.is_free_var() {
-        return Some(term.clone());
-    }
-    assert!(term.is_applied_free_var(), "expected applied free variable");
-
-    let mut args = Vec::with_capacity(term.arity());
-    for index in 0..term.arity() {
-        let arg = initialized_arg(term, index);
-        if index != 0 && !arg.is_db_var() {
-            return None;
-        }
-        args.push(arg);
-    }
-
-    if term_array_no_duplicates(&args) {
-        Some(term.clone())
-    } else {
-        None
+        Ok(())
     }
 }
 
@@ -7127,11 +7107,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "term argument 0 is uninitialized")]
     fn top_insert_metadata_rejects_uninitialized_arguments() {
-        let (bank, f_code) = bank_with_symbol("f", 1);
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
         let term = Term::top_alloc(f_code, 1);
         term.set_type(Some(bank.signature().type_bank().i_type()));
 
-        bank.set_top_insert_metadata(&term);
+        bank.set_top_insert_metadata(&term).unwrap();
     }
 
     #[test]
@@ -7806,6 +7786,40 @@ mod tests {
 
         let shared = bank.insert_ignore_var(&app, DerefType::Never).unwrap();
 
+        assert!(shared.query_prop(TP_HAS_APP_VAR));
+        assert!(!shared.query_prop(TP_HAS_NON_PATTERN_VAR));
+        assert!(shared.is_pattern());
+        assert_eq!(shared.v_count(), 1);
+        assert_eq!(shared.f_count(), 0);
+        assert_eq!(shared.weight(), DEFAULT_VWEIGHT);
+    }
+
+    #[test]
+    fn eta_normalizable_applied_free_var_is_pattern_and_counts_as_single_var() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let unary_type =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let head_type = type_bank
+            .insert_type_shared(alloc_arrow_type(vec![unary_type.clone(), i_type.clone()]));
+        let sig = Signature::new(type_bank);
+        let mut bank = TermBank::new(sig).unwrap();
+
+        let loose_head = bank.request_db_var(&unary_type, 1);
+        let bound_arg = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &loose_head, &[bound_arg]).unwrap();
+        let eta_arg =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(head_type));
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, eta_arg);
+
+        let shared = bank.insert_ignore_var(&app, DerefType::Never).unwrap();
+
+        assert!(shared.has_lambda_subterm());
         assert!(shared.query_prop(TP_HAS_APP_VAR));
         assert!(!shared.query_prop(TP_HAS_NON_PATTERN_VAR));
         assert!(shared.is_pattern());

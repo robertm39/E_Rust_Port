@@ -8,7 +8,7 @@ use crate::terms::simpletypes::{
     arrow_type_flattened, type_drop_first_arg, type_get_max_arity, type_is_predicate, Type,
 };
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
+use crate::terms::termfunc::{term_array_no_duplicates, term_is_db_closed, term_is_ground};
 use crate::terms::termtypes::{term_deref, DerefType, Term, TP_PRED_POS};
 use std::collections::BTreeMap;
 use std::sync::{OnceLock, RwLock};
@@ -592,6 +592,44 @@ pub fn lambda_eta_reduce_db(bank: &mut TermBank, term: &Term) -> Result<Term, Di
         "eta reduction preserves term type"
     );
     Ok(result)
+}
+
+/// Eta-reduces an applied free variable and accepts it when all visible
+/// arguments are distinct DB variables, matching C `NormalizePatternAppVar`.
+///
+/// A plain free variable is already normalized and is returned unchanged.
+///
+/// # Errors
+///
+/// Returns a diagnostic if eta reduction cannot rebuild an intermediate term
+/// in `bank`.
+///
+/// # Panics
+///
+/// Panics if `term` is neither a free variable nor an applied free variable,
+/// matching the C precondition.
+pub fn normalize_pattern_app_var(
+    bank: &mut TermBank,
+    term: &Term,
+) -> Result<Option<Term>, Diagnostic> {
+    if term.is_free_var() {
+        return Ok(Some(term.clone()));
+    }
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+
+    let reduced = lambda_eta_reduce_db(bank, term)?;
+    let mut args = Vec::with_capacity(reduced.arity());
+    for index in 0..reduced.arity() {
+        let arg = reduced
+            .argument(index)
+            .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        if index != 0 && !arg.is_db_var() {
+            return Ok(None);
+        }
+        args.push(arg);
+    }
+
+    Ok(term_array_no_duplicates(&args).then_some(reduced))
 }
 
 /// Performs beta normalization followed by the registered eta normalizer,

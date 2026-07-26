@@ -225,6 +225,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
@@ -343,6 +344,34 @@ mod tests {
         let clause = singleton_clause(eqn(&mut bank, &app, &rhs, true), 4);
         let mut positions = Vec::new();
 
+        assert!(app.is_pattern());
+        collect_ext_sup_into_pos(&clause, &mut positions);
+
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn collect_into_positions_skips_eta_normalizable_pattern_applied_free_vars() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let loose_head = bank.request_db_var(&unary_type, 1);
+        let bound_arg = bank.request_db_var(&individual, 0);
+        let matrix = apply_terms(&mut bank, &loose_head, &[bound_arg]).unwrap();
+        let eta_arg =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &matrix).unwrap();
+        let app = applied_free_var(&mut bank, &eta_arg);
+        let rhs = typed_const(&mut bank, "ext_eta_pattern_app_rhs", individual);
+        let clause = singleton_clause(eqn(&mut bank, &app, &rhs, true), 6);
+        let mut positions = Vec::new();
+
+        assert!(app.has_lambda_subterm());
         assert!(app.is_pattern());
         collect_ext_sup_into_pos(&clause, &mut positions);
 

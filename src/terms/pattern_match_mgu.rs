@@ -5,16 +5,14 @@ use crate::basics::pqueue::PQueue;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
     apply_terms, close_with_db_var, close_with_type_prefix, fresh_var_with_args,
-    lambda_eta_expand_db, lambda_eta_reduce_db, lambda_normalize_db, shift_db, unfold_lambda,
+    lambda_eta_expand_db, lambda_normalize_db, normalize_pattern_app_var, shift_db, unfold_lambda,
     whnf_deref,
 };
 use crate::terms::match_mgu::{occur_check, OracleUnifResult};
 use crate::terms::simpletypes::{get_ret_type, type_get_max_arity, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{
-    term_array_no_duplicates, term_is_db_closed, term_is_ground, term_standard_weight,
-};
+use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
 use crate::terms::termtypes::{term_deref, DerefType, Term, DEFAULT_VWEIGHT};
 use std::collections::BTreeMap;
 
@@ -728,36 +726,6 @@ fn db_var_map(bank: &mut TermBank, term: &Term) -> DbVarMap {
         );
     }
     result
-}
-
-fn normalize_pattern_app_var(bank: &mut TermBank, term: &Term) -> Result<Option<Term>, Diagnostic> {
-    if term.is_free_var() {
-        return Ok(Some(term.clone()));
-    }
-    assert!(term.is_applied_free_var(), "expected applied free variable");
-
-    let reduced = lambda_eta_reduce_db(bank, term)?;
-    if reduced.is_free_var() {
-        return Ok(Some(reduced));
-    }
-    if !reduced.is_applied_free_var() {
-        return Ok(None);
-    }
-
-    let mut args = Vec::with_capacity(reduced.arity());
-    for index in 0..reduced.arity() {
-        let arg = required_arg(&reduced, index);
-        if index != 0 && !arg.is_db_var() {
-            return Ok(None);
-        }
-        args.push(arg);
-    }
-
-    if term_array_no_duplicates(&args) {
-        Ok(Some(reduced))
-    } else {
-        Ok(None)
-    }
 }
 
 fn eta_expand_on_the_fly(
