@@ -379,6 +379,26 @@ mod tests {
     }
 
     #[test]
+    fn norm_term_preserves_order_through_inline_argument_shapes() {
+        let type_bank = TypeBank::new();
+        let vars = VarBank::new(&type_bank);
+        let x = typed_var(-2, &type_bank);
+        let y = typed_var(-4, &type_bank);
+        let unary = Term::top_alloc(20, 1);
+        unary.set_argument(0, x.clone());
+        let root = Term::top_alloc(21, 2);
+        root.set_argument(0, unary);
+        root.set_argument(1, y.clone());
+        let mut subst = Substitution::new();
+
+        assert_eq!(subst.norm_term(&root, &vars), 0);
+        assert_eq!(subst.bindings(), &[x.clone(), y.clone()]);
+        assert_eq!(subst.backtrack(), 2);
+        assert!(x.binding().is_none());
+        assert!(y.binding().is_none());
+    }
+
+    #[test]
     fn norm_term_follows_existing_binding_chain_before_freshening() {
         let type_bank = TypeBank::new();
         let vars = VarBank::new(&type_bank);

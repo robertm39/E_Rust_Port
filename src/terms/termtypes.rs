@@ -1077,8 +1077,26 @@ impl BorrowedTermCell {
         // SAFETY: Forwarded from this method's caller contract.
         let cell = unsafe { self.cell() };
         let arguments = cell.args.borrow();
-        for argument in arguments.as_slice().iter().rev().flatten() {
-            stack.push(argument.borrowed_cell());
+        match &*arguments {
+            TermArgs::Empty => {}
+            TermArgs::One(args) => {
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
+            TermArgs::Two(args) => {
+                if let Some(argument) = args[1].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
+            TermArgs::Heap(args) => {
+                for argument in args.iter().rev().flatten() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
         }
     }
 
