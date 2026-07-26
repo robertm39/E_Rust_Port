@@ -1,0 +1,20 @@
+{
+  "content_hashes_verified": 24,
+  "decision_count": 24,
+  "decision_digest": "8fd40c09bca063fa91c446c3862c8372629c0071648b278bc5120bf0e6f63202",
+  "evidence_checks": {
+    "analysis_dangling_parent_boundaries_are_explicit": true,
+    "expression_positions_preserve_pcl_only_output": true,
+    "full_pcl2_and_port_compatibility_evidence_is_current": true,
+    "identifier_storage_replaces_the_sentinel_without_syntax_drift": true,
+    "lemma_weights_and_reference_failures_are_deterministic": true,
+    "miniclauses_retain_term_identity_and_drop_metadata_like_c": true,
+    "ministep_zero_extra_and_shell_contracts_are_exact": true,
+    "proofcheck_preserves_the_legacy_checker_surface": true,
+    "protocol_membership_and_fof_strip_quirks_are_preserved": true,
+    "step_parsing_printing_and_shell_ownership_are_exact": true
+  },
+  "schema_version": 1,
+  "source_digest": "c631a5c0324758e9d3d472dffad8c507e87653043b9f536ab7add7e3bd9d5fbd",
+  "source_file_count": 39
+}
