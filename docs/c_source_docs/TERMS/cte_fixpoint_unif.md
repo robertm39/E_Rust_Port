@@ -87,11 +87,10 @@ Source files reviewed: `TERMS/cte_fixpoint_unif.h`, `TERMS/cte_fixpoint_unif.c`.
 ### Rust Port Status
 
 - Initial Rust support is in `src/terms/fixpoint_unif.rs`, covering `SubstComputeFixpointMgu` over the existing Rust substitution stack, C-shaped weak-head dereference plus DB eta-reduction before the top-level decision, free-variable/free-variable binding, non-free/non-free `NOT_IN_FRAGMENT`, and rigid-path classification of direct occurrence, applied-variable-under-occurrence, lambda-prefix, arrow-variable, and loose-DB-variable cases.
-- Rust takes the owning `TermBank` explicitly for WHNF and eta-reduction because Rust `Term` handles do not yet retain owner-bank metadata. This mirrors the broader lambda-normalization port boundary.
+- Rust takes the owning `TermBank` explicitly for WHNF and eta-reduction. This is the completed ownership boundary: it preserves allocation and sharing without a movable/stale per-term owner pointer, as audited in [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
 
 ### Change Later
 
-- `SubstComputeFixpointMgu` in C discovers owner banks with `TermGetBank(t)` and can therefore normalize each argument through hidden term ownership. Rust currently requires the caller to pass the correct bank; full higher-order unification integration should either preserve that explicit boundary or add audited owner-bank metadata to terms.
 - The C helper returns `NOT_IN_FRAGMENT` for any pair of non-free top-level terms, even if they are syntactically identical. Rust preserves that oracle boundary; revisit only if the full CSU dispatcher needs a separate exact-term fast path before calling the fixpoint oracle.
 - The C file body still carries the copied `cte_pattern_match_mgu.c` header/include wording while exporting `cte_fixpoint_unif` behavior. Keep the Rust module named for the actual exported unit, and avoid using the stale banner as ownership evidence.
 - The C routine only adds bindings after a successful oracle decision and does not perform its own speculative backtracking. Future multi-oracle callers should keep substitution-stack checkpointing outside this helper, matching the current C contract.

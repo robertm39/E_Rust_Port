@@ -111,9 +111,12 @@ Source files reviewed: `TERMS/cte_varhash.h`, `TERMS/cte_varhash.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `VarHashAddVarDistrib` is documented as FOL-only, but it calls `TermDeref`; LFHO use can therefore refresh C's applied-variable cache as an incidental side effect. Rust preserves dereferenced variable counts with result-equivalent no-cache expansion. The cache mutation is not part of the hash result and is intentionally omitted under the measured explicit-bank decision in [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
+
 ### Change Later
 
-- `VarHashAddVarDistrib` is documented as FOL-only, but it calls `TermDeref`, so if LFHO callers reach it with bound applied variables the C helper can trigger `applied_var_deref` cache refreshes while counting variables. Rust follows the current no-cache `term_deref` expansion shape; add owner-bank/cache effects only after LFHO var-distribution callers and cache-aware GC are represented.
 - `VarHashAddValue` stores counts in signed `long` and adds without overflow checks. Rust keeps the C-width counter surface; revisit checked or saturating counts only after ordering/KBO variable-balance reference tests cover very large terms.
 - The hash has 16 fixed buckets and inserts new entries at the bucket head. Preserve that traversal/order shape for compatibility-sensitive callers, but a later internal API can use a clearer map once no caller observes bucket order.
 

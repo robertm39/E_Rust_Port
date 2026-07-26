@@ -1,0 +1,26 @@
+{
+  "aggregate_rust_c_ratio": 1.0801753448,
+  "check_count": 15,
+  "checks": {
+    "compact_links_have_only_semantic_fields": true,
+    "complete_match_has_banked_entry": true,
+    "complete_mgu_has_banked_entry": true,
+    "fixpoint_unification_takes_explicit_bank": true,
+    "fresh_performance_aggregate_is_below_threshold": true,
+    "gc_has_no_nonexistent_cache_root": true,
+    "kbo6_has_banked_entry": true,
+    "lpo4_has_banked_entry": true,
+    "ordering_matrix_is_18_of_18": true,
+    "ordering_option_matrix_is_73_of_73": true,
+    "rewrite_normalizes_zero_suffix": true,
+    "term_cell_layout_is_136_bytes": true,
+    "unification_matrix_is_21_of_21": true,
+    "varhash_preserves_no_cache_deref_shape": true,
+    "whnf_deref_takes_explicit_bank": true
+  },
+  "passed": 15,
+  "projected_inline_cache_bytes": 160,
+  "projected_inline_cache_growth_percent": 17.647059,
+  "schema_version": 1,
+  "term_cell_bytes": 136
+}
