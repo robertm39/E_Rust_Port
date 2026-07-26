@@ -819,9 +819,9 @@ impl Term {
 }
 
 // This private cursor is the smallest practical unsafe boundary for matching
-// C's measured non-owning normalization stack. Its only production caller
-// retains the complete reachable ownership graph and permits interior scalar
-// and additive binding mutation, but no structural or removing mutation.
+// C's measured non-owning term traversals. Every production caller retains the
+// complete reachable ownership graph and forbids structural or removing
+// mutation while a cursor can be dereferenced.
 #[allow(
     unsafe_code,
     reason = "measured C-shaped read-only traversal of stable Rc allocations"
@@ -888,6 +888,54 @@ impl BorrowedTermCell {
         }
     }
 
+    /// Follows ordinary first-order variable bindings for one dereference
+    /// mode without acquiring reference-counted ownership.
+    ///
+    /// # Safety
+    ///
+    /// This cursor and every binding reached from it must satisfy `cell`'s
+    /// contract. Binding slots followed here must not be cleared or replaced
+    /// during the traversal. The addressed graph must be first-order, so it
+    /// cannot require applied-variable expansion.
+    pub(crate) unsafe fn deref_first_order(self, deref: &mut DerefType) -> Self {
+        if *deref == DerefType::Never {
+            return self;
+        }
+
+        let mut current = self;
+        loop {
+            // SAFETY: Forwarded from this method's caller contract.
+            let cell = unsafe { current.cell() };
+            debug_assert!(
+                cell.f_code.get() < 0 || cell.links.borrow().binding.is_none(),
+                "only variables may have active bindings"
+            );
+            if cell.f_code.get() >= 0 {
+                return current;
+            }
+
+            let links = cell.links.borrow();
+            let Some(binding) = links.binding.as_ref() else {
+                return current;
+            };
+            current = binding.borrowed_cell();
+            if *deref == DerefType::Once {
+                *deref = DerefType::Never;
+                return current;
+            }
+        }
+    }
+
+    /// Returns the addressed term's function code.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn f_code(self) -> FunCode {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.f_code.get()
+    }
+
     /// Returns whether the addressed term is a free variable.
     ///
     /// # Safety
@@ -933,6 +981,28 @@ impl BorrowedTermCell {
         let arguments = cell.args.borrow();
         for argument in arguments.as_slice().iter().rev().flatten() {
             stack.push(argument.borrowed_cell());
+        }
+    }
+
+    /// Pushes initialized first-order arguments from right to left with one
+    /// shared dereference mode and without acquiring reference-counted
+    /// ownership.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has been consumed.
+    pub(crate) unsafe fn push_first_order_arguments_reversed(
+        self,
+        stack: &mut Vec<(Self, DerefType)>,
+        deref: DerefType,
+    ) {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        let arguments = cell.args.borrow();
+        for argument in arguments.as_slice().iter().rev().flatten() {
+            stack.push((argument.borrowed_cell(), deref));
         }
     }
 

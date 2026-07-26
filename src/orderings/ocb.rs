@@ -10,7 +10,7 @@ use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{term_deref, term_identity_id, DerefType, Term};
+use crate::terms::termtypes::{term_deref, term_identity_id, BorrowedTermCell, DerefType, Term};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -53,8 +53,10 @@ pub struct OrderControlBlock {
     pub ho_order_kind: HoOrderKind,
     min_constants: BTreeMap<TypeUniqueId, FunCode>,
     state_stack: Vec<FunCode>,
-    /// Reusable LIFO workspace for KBO variable-balance traversals.
+    /// Reusable owning LIFO workspace for higher-order KBO balance traversals.
     pub(crate) kbo_balance_stack: Vec<(Term, DerefType)>,
+    /// Reusable non-owning LIFO workspace for first-order KBO balance traversals.
+    pub(crate) kbo_borrowed_balance_stack: Vec<(BorrowedTermCell, DerefType)>,
 }
 
 impl OrderControlBlock {
@@ -99,6 +101,7 @@ impl OrderControlBlock {
             min_constants: BTreeMap::new(),
             state_stack: Vec::new(),
             kbo_balance_stack: Vec::new(),
+            kbo_borrowed_balance_stack: Vec::new(),
         };
 
         match ordering_type {
@@ -784,6 +787,7 @@ mod tests {
         assert_eq!(kbo.vb_size, 64);
         assert!(kbo.vb.iter().all(|entry| *entry == 0));
         assert!(kbo.kbo_balance_stack.is_empty());
+        assert!(kbo.kbo_borrowed_balance_stack.is_empty());
         assert!(lpo.weights.is_none());
         assert!(lpo.precedence.is_some());
         assert_eq!(lpo.vb_size, 1);

@@ -195,8 +195,50 @@ fn dec_vb(ocb: &mut OrderControlBlock, var: &Term) {
 }
 
 fn var_index(var: &Term) -> usize {
-    assert!(var.f_code() < 0, "KBO6 variable f-code must be negative");
-    usize::try_from(-var.f_code()).unwrap_or_else(|_| panic!("variable index must fit usize"))
+    var_index_from_code(var.f_code())
+}
+
+fn var_index_from_code(f_code: i64) -> usize {
+    assert!(f_code < 0, "KBO6 variable f-code must be negative");
+    usize::try_from(-f_code).unwrap_or_else(|_| panic!("variable index must fit usize"))
+}
+
+fn inc_vb_code(ocb: &mut OrderControlBlock, f_code: i64) {
+    let index = var_index_from_code(f_code);
+    if index > usize::try_from(ocb.max_var).unwrap_or(0) {
+        if index >= ocb.vb_size {
+            resize_vb(ocb, index);
+        }
+        ocb.max_var = i64::try_from(index).unwrap_or_else(|_| panic!("variable index too large"));
+        ocb.vb[index] = 1;
+        ocb.pos_bal += 1;
+        ocb.wb += ocb.var_weight;
+    } else {
+        let tmp_bal = ocb.vb[index];
+        ocb.vb[index] += 1;
+        ocb.pos_bal += i64::from(tmp_bal == 0);
+        ocb.neg_bal -= i64::from(tmp_bal == -1);
+        ocb.wb += ocb.var_weight;
+    }
+}
+
+fn dec_vb_code(ocb: &mut OrderControlBlock, f_code: i64) {
+    let index = var_index_from_code(f_code);
+    if index > usize::try_from(ocb.max_var).unwrap_or(0) {
+        if index >= ocb.vb_size {
+            resize_vb(ocb, index);
+        }
+        ocb.max_var = i64::try_from(index).unwrap_or_else(|_| panic!("variable index too large"));
+        ocb.vb[index] = -1;
+        ocb.neg_bal += 1;
+        ocb.wb -= ocb.var_weight;
+    } else {
+        let tmp_bal = ocb.vb[index];
+        ocb.vb[index] -= 1;
+        ocb.neg_bal += i64::from(tmp_bal == 0);
+        ocb.pos_bal -= i64::from(tmp_bal == 1);
+        ocb.wb -= ocb.var_weight;
+    }
 }
 
 fn mfy_vwb_lhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
@@ -215,33 +257,47 @@ fn mfy_vwb_lfho_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) 
     mfy_vwb_lfho(ocb, term, deref, false);
 }
 
+#[allow(
+    unsafe_code,
+    reason = "measured private first-order traversal over stable Rc term allocations"
+)]
 fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
-    debug_assert!(
-        ocb.kbo_balance_stack.is_empty(),
-        "KBO balance traversal scratch must be empty on entry"
-    );
-    ocb.kbo_balance_stack.push((term.clone(), deref));
-    while let Some((candidate, mut current_deref)) = ocb.kbo_balance_stack.pop() {
-        let current = term_deref(&candidate, &mut current_deref);
-        if current.is_free_var() {
-            if lhs {
-                inc_vb(ocb, &current);
+    ocb.kbo_borrowed_balance_stack.clear();
+    ocb.kbo_borrowed_balance_stack
+        .push((term.borrowed_cell(), deref));
+    while let Some((candidate, mut current_deref)) = ocb.kbo_borrowed_balance_stack.pop() {
+        // SAFETY: `term` remains borrowed for the complete traversal and owns
+        // every structural descendant of the initial cursor. First-order KBO
+        // comparison does not replace argument or binding slots, release a
+        // reachable root, or invoke user code. Every followed binding remains
+        // owned by its variable cell. The single-threaded `Rc` graph prevents
+        // concurrent structural mutation, and all pointers preserve
+        // `Rc::as_ptr` provenance, alignment, and initialization. Entry clears
+        // stale cursors left by a caught invariant panic before any cursor is
+        // dereferenced.
+        unsafe {
+            let current = candidate.deref_first_order(&mut current_deref);
+            let f_code = current.f_code();
+            if f_code < 0 {
+                if lhs {
+                    inc_vb_code(ocb, f_code);
+                } else {
+                    dec_vb_code(ocb, f_code);
+                }
             } else {
-                dec_vb(ocb, &current);
-            }
-        } else {
-            if lhs {
-                ocb.wb += ocb.fun_weight(current.f_code());
-            } else {
-                ocb.wb -= ocb.fun_weight(current.f_code());
-            }
-            let arguments = current.arguments();
-            for arg in arguments.iter().flatten() {
-                ocb.kbo_balance_stack.push((arg.clone(), current_deref));
+                if lhs {
+                    ocb.wb += ocb.fun_weight(f_code);
+                } else {
+                    ocb.wb -= ocb.fun_weight(f_code);
+                }
+                current.push_first_order_arguments_reversed(
+                    &mut ocb.kbo_borrowed_balance_stack,
+                    current_deref,
+                );
             }
         }
     }
-    debug_assert!(ocb.kbo_balance_stack.is_empty());
+    debug_assert!(ocb.kbo_borrowed_balance_stack.is_empty());
 }
 
 fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
@@ -1456,16 +1512,36 @@ mod tests {
         let mut ocb = ocb(&signature);
 
         mfy_vwb_lhs(&mut ocb, &nested, DerefType::Never);
-        assert!(ocb.kbo_balance_stack.is_empty());
-        let capacity = ocb.kbo_balance_stack.capacity();
+        assert!(ocb.kbo_borrowed_balance_stack.is_empty());
+        let capacity = ocb.kbo_borrowed_balance_stack.capacity();
         assert!(capacity > 0);
 
         mfy_vwb_rhs(&mut ocb, &nested, DerefType::Never);
-        assert!(ocb.kbo_balance_stack.is_empty());
-        assert_eq!(ocb.kbo_balance_stack.capacity(), capacity);
+        assert!(ocb.kbo_borrowed_balance_stack.is_empty());
+        assert_eq!(ocb.kbo_borrowed_balance_stack.capacity(), capacity);
         assert_eq!(ocb.wb, 0);
         assert_eq!(ocb.pos_bal, 0);
         assert_eq!(ocb.neg_bal, 0);
+    }
+
+    #[test]
+    fn kbo6_borrowed_balance_discards_stale_cursors_after_unwind() {
+        let mut signature = signature();
+        let f = symbol(&mut signature, "f", 2);
+        let a = Term::const_cell_alloc(symbol(&mut signature, "a", 0));
+        let invalid_var = Term::const_cell_alloc(i64::MIN);
+        let broken = app(f, &[invalid_var, a.clone()]);
+        let valid = app(f, std::slice::from_ref(&a));
+        let mut ocb = ocb(&signature);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mfy_vwb_lhs(&mut ocb, &broken, DerefType::Never);
+        }));
+        assert!(result.is_err());
+        assert!(!ocb.kbo_borrowed_balance_stack.is_empty());
+
+        mfy_vwb_lhs(&mut ocb, &valid, DerefType::Never);
+        assert!(ocb.kbo_borrowed_balance_stack.is_empty());
     }
 
     #[test]
