@@ -1,0 +1,23 @@
+{
+  "content_hashes_verified": 39,
+  "decision_count": 39,
+  "decision_digest": "cda274f33bac74274c652554c2a96c285718dd5396bdd6d4182d3a42f7730aa0",
+  "evidence_checks": {
+    "allocator_and_registered_scratch_safety_boundaries_are_owned": true,
+    "assertion_shaped_array_and_stack_contracts_are_retained": true,
+    "dynamic_string_ownership_and_safe_indexing_are_explicit": true,
+    "full_basics_and_port_compatibility_evidence_is_current": true,
+    "heap_compatibility_names_indices_and_empty_behavior_are_pinned": true,
+    "list_local_stack_queue_and_print_helpers_keep_narrow_raw_surfaces": true,
+    "numeric_and_object_splay_boundaries_match_unchanged_c": true,
+    "partial_ordering_and_property_masks_keep_the_c_tables": true,
+    "performance_counter_single_slot_contract_is_current": true,
+    "permanent_strings_and_verbose_globals_have_safe_compatibility_owners": true,
+    "pointer_and_quad_tree_topology_and_identity_are_explicit": true,
+    "pointer_and_range_arrays_quarantine_raw_mutation_hazards": true,
+    "resource_footer_elog_and_cpu_clock_surfaces_are_exact": true
+  },
+  "schema_version": 1,
+  "source_digest": "eb480bd6c4057c29b15c15fd54a7d13a6dc775149253a7691ce1c16e42720695",
+  "source_file_count": 86
+}
