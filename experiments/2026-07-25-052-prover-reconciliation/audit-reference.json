@@ -1,0 +1,20 @@
+{
+  "content_hashes_verified": 82,
+  "decision_count": 82,
+  "decision_digest": "a66a35f4a2c20b3688a3e4be3cf03f635c23f1d9d0da838d58835d833719ca73",
+  "evidence_checks": {
+    "auto_sine_prune_cnf_and_app_encode_phase_order_is_exact": true,
+    "formula_owner_syntax_include_and_mixed_dialect_paths_are_current": true,
+    "legacy_dpll_kb_and_normalizer_behavior_is_owned": true,
+    "network_server_client_and_ltb_boundaries_are_explicit": true,
+    "option_fallthrough_format_types_and_resource_ownership_are_pinned": true,
+    "ordered_proof_objects_results_and_statistics_are_complete": true,
+    "pcl_tools_preserve_version_streaming_weight_and_numeric_quirks": true,
+    "standalone_option_output_and_safe_undefined_boundaries_are_pinned": true,
+    "support_tools_and_full_candidate_have_zero_unexpected_differences": true,
+    "thf_application_lambda_and_fool_surfaces_are_regression_pinned": true
+  },
+  "schema_version": 1,
+  "source_digest": "8dbe8b7ed9e1be611abc19ca935c92bf5e8bd2850e96154e79ed8c7c1caeab4c",
+  "source_file_count": 79
+}
