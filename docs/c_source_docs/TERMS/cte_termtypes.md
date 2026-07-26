@@ -221,7 +221,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for zero-suffix rewrite normalization on 2026-07-09, shared-argument ownership on 2026-07-11, compact pointer-field ownership on 2026-07-16, term representation/free-boundary ownership on 2026-07-17, borrowed type-UID access on 2026-07-20, and duplicate top-shell reuse on 2026-07-25.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for zero-suffix rewrite normalization on 2026-07-09, shared-argument ownership on 2026-07-11, compact pointer-field ownership on 2026-07-16, term representation/free-boundary ownership on 2026-07-17, borrowed type-UID access on 2026-07-20, and duplicate top-shell reuse plus borrowed normalization traversal on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 
@@ -245,6 +245,7 @@ Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 - Hot metadata consumers can read a term's optional type UID through the borrowed `TermLinks` cell without cloning the reference-counted type handle. PD-tree prefix/query construction uses this accessor while preserving the same shared-type identity value.
 - `TermFree` recursively releases an unshared non-variable tree but deliberately leaves variable cells owned by the `VarBank`; `TermTopFree` releases only the top cell because its argument pointers are borrowed or transferred. Rust encodes both boundaries through reference-counted term handles: dropping the last root handle recursively releases unretained non-variable descendants, VarBank-held variables survive, and dropping a temporary top handle only releases its child references. An explicit manual-free API would weaken this ownership contract and is intentionally not exposed.
 - Rust retains that ownership model while avoiding repeated destruction and allocation of uniquely owned duplicate top wrappers: a crate-private full reset guarded by `Rc::get_mut` prepares eligible arity-zero-through-two shells for the owning term bank's bounded reuse pool. This is not manual free; shared or externally retained handles fail the uniqueness check and follow normal reference-counted destruction. The safety regressions and performance evidence are retained in [`experiment 311`](../../../experiments/2026-07-25-010-reuse-duplicate-top-shells/FINDINGS.md).
+- Stable `Rc<TermCell>` allocations also support a narrowly contained non-owning normalization cursor. The cursor preserves pointer provenance and never escapes the safe substitution-normalization boundary; a live root and additive-only binding mutation keep every structural, binding, and temporary expansion allocation valid until the traversal stack is empty. Argument replacement, binding removal, or general-purpose exposure would violate this contract and are intentionally unavailable. Unsafe contracts, focused liveness regressions, exact work, native timing, and complete compatibility evidence are retained in [`experiment 312`](../../../experiments/2026-07-25-011-borrowed-subst-normalization/FINDINGS.md).
 
 ### Change Later
 

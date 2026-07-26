@@ -272,6 +272,9 @@ struct TermCell {
     rw_demod: Cell<Option<RewriteDemodulator>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BorrowedTermCell(*const TermCell);
+
 impl PartialEq for Term {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
@@ -420,6 +423,16 @@ impl Term {
     #[must_use]
     pub fn arguments(&self) -> Ref<'_, [Option<Term>]> {
         Ref::map(self.0.args.borrow(), TermArgs::as_slice)
+    }
+
+    /// Returns a non-owning cursor to this term's stable `Rc` allocation.
+    ///
+    /// Dereferencing the cursor remains unsafe because the type deliberately
+    /// carries no lifetime; the normalization traversal supplies the scoped
+    /// root and mutation restrictions that keep it valid.
+    #[must_use]
+    pub(crate) fn borrowed_cell(&self) -> BorrowedTermCell {
+        BorrowedTermCell(Rc::as_ptr(&self.0))
     }
 
     /// Mutably borrows the argument slots without cloning their terms.
@@ -780,6 +793,141 @@ impl Term {
             ],
             rw_demod: Cell::new(None),
         }))
+    }
+}
+
+// This private cursor is the smallest practical unsafe boundary for matching
+// C's measured non-owning normalization stack. Its only production caller
+// retains the complete reachable ownership graph and permits interior scalar
+// and additive binding mutation, but no structural or removing mutation.
+#[allow(
+    unsafe_code,
+    reason = "measured C-shaped read-only traversal of stable Rc allocations"
+)]
+impl BorrowedTermCell {
+    /// Returns the term cell addressed by this cursor.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must originate from `Term::borrowed_cell`. The corresponding
+    /// `Rc<TermCell>` allocation must remain live, aligned, and initialized for
+    /// the returned borrow, and no mutable reference to the cell may exist.
+    unsafe fn cell<'a>(self) -> &'a TermCell {
+        // SAFETY: The caller provides allocation liveness, provenance,
+        // alignment, initialization, and shared-alias validity.
+        unsafe { &*self.0 }
+    }
+
+    /// Fully follows ordinary bindings and expands a bound applied free
+    /// variable through the existing owned dereference helper.
+    ///
+    /// # Safety
+    ///
+    /// This cursor and every binding reached from it must satisfy `cell`'s
+    /// contract. Binding slots followed here must not be cleared or replaced
+    /// during the traversal. `expansion_roots` must remain live until no raw
+    /// cursor can refer to an expansion it owns.
+    pub(crate) unsafe fn deref_always(self, expansion_roots: &mut Vec<Term>) -> Self {
+        let mut current = self;
+        loop {
+            // SAFETY: Forwarded from this method's caller contract.
+            let cell = unsafe { current.cell() };
+            if cell.f_code.get() < 0 {
+                let links = cell.links.borrow();
+                let Some(binding) = links.binding.as_ref() else {
+                    return current;
+                };
+                current = binding.borrowed_cell();
+                continue;
+            }
+
+            let bound_applied_free_var = cell.properties.get().give(TP_IS_DB_VAR)
+                == TP_IGNORE_PROPS
+                && cell.f_code.get() == SIG_PHONY_APP_CODE
+                && cell
+                    .args
+                    .borrow()
+                    .as_slice()
+                    .first()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|head| {
+                        head.f_code() < 0 && head.0.links.borrow().binding.is_some()
+                    });
+            if !bound_applied_free_var {
+                return current;
+            }
+
+            // SAFETY: Forwarded from this method's caller contract; incrementing
+            // the strong count converts the valid borrowed allocation into an
+            // ordinary owned handle without changing aliasing.
+            let owner = unsafe { current.to_owned() };
+            expansion_roots.push(term_deref_always(&owner));
+            return expansion_roots.last().map_or(current, Term::borrowed_cell);
+        }
+    }
+
+    /// Returns whether the addressed term is a free variable.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn is_free_var(self) -> bool {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.f_code.get() < 0
+    }
+
+    /// Returns whether the addressed term has all requested property bits.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn query_prop(self, prop: TermProperties) -> bool {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.properties.get().query(prop)
+    }
+
+    /// Clones the addressed term's type handle.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn type_(self) -> Option<Type> {
+        // SAFETY: Forwarded from this method's caller contract. The scoped
+        // RefCell borrow is released before returning the cloned type handle.
+        unsafe { self.cell() }.links.borrow().type_.clone()
+    }
+
+    /// Pushes initialized arguments from right to left without acquiring
+    /// reference-counted ownership.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has been consumed.
+    pub(crate) unsafe fn push_arguments_reversed(self, stack: &mut Vec<Self>) {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        let arguments = cell.args.borrow();
+        for argument in arguments.as_slice().iter().rev().flatten() {
+            stack.push(argument.borrowed_cell());
+        }
+    }
+
+    /// Acquires one owned `Term` handle for the addressed allocation.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract and must have originated from
+    /// `Rc::as_ptr` for this exact `TermCell` allocation.
+    pub(crate) unsafe fn to_owned(self) -> Term {
+        // SAFETY: The caller guarantees this pointer came from a live
+        // `Rc<TermCell>`. Incrementing before `from_raw` creates exactly one
+        // new strong handle and preserves the original owner's count.
+        unsafe {
+            Rc::increment_strong_count(self.0);
+            Term(Rc::from_raw(self.0))
+        }
     }
 }
 

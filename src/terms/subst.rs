@@ -4,14 +4,42 @@ use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_create_prefix;
 use crate::terms::termtypes::{
-    term_deref, term_deref_always, DerefType, Term, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
+    term_deref, BorrowedTermCell, DerefType, Term, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
 };
 use crate::terms::termvars::VarBank;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Substitution {
     bindings: Vec<Term>,
-    norm_stack: Vec<Term>,
+    norm_stack: Vec<BorrowedTermCell>,
+}
+
+struct BorrowedNormStack<'a> {
+    stack: &'a mut Vec<BorrowedTermCell>,
+}
+
+impl<'a> BorrowedNormStack<'a> {
+    fn new(stack: &'a mut Vec<BorrowedTermCell>) -> Self {
+        Self { stack }
+    }
+
+    fn push(&mut self, term: BorrowedTermCell) {
+        self.stack.push(term);
+    }
+
+    fn pop(&mut self) -> Option<BorrowedTermCell> {
+        self.stack.pop()
+    }
+
+    fn as_mut(&mut self) -> &mut Vec<BorrowedTermCell> {
+        self.stack
+    }
+}
+
+impl Drop for BorrowedNormStack<'_> {
+    fn drop(&mut self) {
+        self.stack.clear();
+    }
 }
 
 impl Substitution {
@@ -46,13 +74,21 @@ impl Substitution {
     /// or has a different type from `bind`, matching the C `SubstAddBinding`
     /// assertions when `NDEBUG` is not defined.
     pub fn add_binding(&mut self, var: &Term, bind: &Term) -> usize {
-        let previous = self.len();
+        self.add_owned_binding(var.clone(), bind)
+    }
+
+    fn add_owned_binding(&mut self, var: Term, bind: &Term) -> usize {
+        Self::add_owned_binding_to(&mut self.bindings, var, bind)
+    }
+
+    fn add_owned_binding_to(bindings: &mut Vec<Term>, var: Term, bind: &Term) -> usize {
+        let previous = bindings.len();
         debug_assert!(var.is_free_var(), "only free variables can be bound");
         debug_assert!(var.binding().is_none(), "variable is already bound");
         debug_assert_eq!(var.type_(), bind.type_(), "binding type mismatch");
 
         var.set_binding(Some(bind.clone()));
-        self.bindings.push(var.clone());
+        bindings.push(var);
         previous
     }
 
@@ -101,26 +137,44 @@ impl Substitution {
     ///
     /// Panics if a reachable free variable has no type, following the C
     /// precondition for `VarBankGetFreshVar`.
+    #[allow(
+        unsafe_code,
+        reason = "measured private traversal over stable Rc term allocations"
+    )]
     pub fn norm_term(&mut self, term: &Term, vars: &VarBank) -> usize {
         let previous = self.len();
         debug_assert!(
             self.norm_stack.is_empty(),
             "normalization scratch must be empty"
         );
-        self.norm_stack.push(term.clone());
-        while let Some(candidate) = self.norm_stack.pop() {
-            let current = term_deref_always(&candidate);
-            if current.is_free_var() {
-                if !current.query_prop(TP_SPECIAL_FLAG) {
+        let bindings = &mut self.bindings;
+        let mut expansion_roots = Vec::new();
+        let mut norm_stack = BorrowedNormStack::new(&mut self.norm_stack);
+        norm_stack.push(term.borrowed_cell());
+        while let Some(candidate) = norm_stack.pop() {
+            // SAFETY: `term` remains borrowed for the complete traversal and
+            // owns every structural argument reachable from the initial
+            // cursor. Normalization never replaces argument slots or removes
+            // bindings: it only reads the graph, sets scalar property bits,
+            // and changes a currently empty variable binding to `Some`.
+            // Existing and newly installed bindings therefore retain every
+            // followed target. Applied-variable expansion owners stay in
+            // `expansion_roots` until the raw stack is empty. `TermCell` uses
+            // interior mutability, so no mutable reference aliases these
+            // shared reads, and all pointers preserve `Rc::as_ptr` provenance,
+            // alignment, and initialization.
+            unsafe {
+                let current = candidate.deref_always(&mut expansion_roots);
+                if current.is_free_var() {
+                    if current.query_prop(TP_SPECIAL_FLAG) {
+                        continue;
+                    }
                     let type_ = current.type_().expect("free variable must have a type");
                     let new_var = vars.get_fresh_var(&type_);
                     new_var.set_prop(TP_SPECIAL_FLAG);
-                    self.add_binding(&current, &new_var);
-                }
-            } else {
-                let arguments = current.arguments();
-                for argument in arguments.iter().rev().flatten() {
-                    self.norm_stack.push(argument.clone());
+                    Self::add_owned_binding_to(bindings, current.to_owned(), &new_var);
+                } else {
+                    current.push_arguments_reversed(norm_stack.as_mut());
                 }
             }
         }
@@ -260,7 +314,7 @@ impl Substitution {
 mod tests {
     use super::Substitution;
     use crate::basics::simple_stuff::ProblemType;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
@@ -304,11 +358,12 @@ mod tests {
     fn norm_term_binds_each_unmarked_free_variable_to_fresh_marked_vars() {
         let type_bank = TypeBank::new();
         let vars = VarBank::new(&type_bank);
-        let root = Term::top_alloc(20, 2);
+        let root = Term::top_alloc(20, 3);
         let x = typed_var(-2, &type_bank);
         let y = typed_var(-4, &type_bank);
         root.set_argument(0, x.clone());
-        root.set_argument(1, y.clone());
+        root.set_argument(1, x.clone());
+        root.set_argument(2, y.clone());
         let mut subst = Substitution::new();
 
         let pos = subst.norm_term(&root, &vars);
@@ -321,6 +376,82 @@ mod tests {
         assert_eq!(subst.backtrack(), 2);
         assert!(x.binding().is_none());
         assert!(y.binding().is_none());
+    }
+
+    #[test]
+    fn norm_term_follows_existing_binding_chain_before_freshening() {
+        let type_bank = TypeBank::new();
+        let vars = VarBank::new(&type_bank);
+        let x = typed_var(-2, &type_bank);
+        let y = typed_var(-4, &type_bank);
+        let mut subst = Substitution::new();
+        subst.add_binding(&x, &y);
+
+        let pos = subst.norm_term(&x, &vars);
+
+        assert_eq!(pos, 1);
+        assert_eq!(subst.bindings(), &[x.clone(), y.clone()]);
+        assert!(y.binding().unwrap().query_prop(TP_SPECIAL_FLAG));
+        assert_eq!(subst.backtrack_to_pos(pos), 1);
+        assert_eq!(x.binding(), Some(y.clone()));
+        assert!(y.binding().is_none());
+        assert_eq!(subst.backtrack(), 1);
+        assert!(x.binding().is_none());
+    }
+
+    #[test]
+    fn norm_term_keeps_applied_variable_expansion_owned_during_traversal() {
+        let type_bank = TypeBank::new();
+        let vars = VarBank::new(&type_bank);
+        let individual = type_bank.i_type();
+        let function_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(function_type.clone()));
+        let rigid = Term::const_cell_alloc(20);
+        rigid.set_type(Some(function_type));
+        let argument = typed_var(-4, &type_bank);
+        let application = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        application.set_type(Some(individual));
+        application.set_argument(0, head.clone());
+        application.set_argument(1, argument.clone());
+        let mut subst = Substitution::new();
+        subst.add_binding(&head, &rigid);
+
+        let pos = subst.norm_term(&application, &vars);
+
+        assert_eq!(pos, 1);
+        assert_eq!(subst.bindings(), &[head.clone(), argument.clone()]);
+        assert!(argument.binding().unwrap().query_prop(TP_SPECIAL_FLAG));
+        assert_eq!(subst.backtrack_to_pos(pos), 1);
+        assert!(argument.binding().is_none());
+        assert_eq!(head.binding(), Some(rigid));
+        assert_eq!(subst.backtrack(), 1);
+        assert!(head.binding().is_none());
+    }
+
+    #[test]
+    fn norm_term_clears_borrowed_scratch_when_a_panic_is_caught() {
+        let type_bank = TypeBank::new();
+        let vars = VarBank::new(&type_bank);
+        let untyped = Term::const_cell_alloc(-2);
+        let trailing = typed_var(-4, &type_bank);
+        let invalid = Term::top_alloc(20, 2);
+        invalid.set_argument(0, untyped);
+        invalid.set_argument(1, trailing);
+        let mut subst = Substitution::new();
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            subst.norm_term(&invalid, &vars);
+        }));
+
+        assert!(panic.is_err());
+        assert!(subst.norm_stack.is_empty());
+
+        let valid = typed_var(-6, &type_bank);
+        assert_eq!(subst.norm_term(&valid, &vars), 0);
+        assert_eq!(subst.bindings(), std::slice::from_ref(&valid));
+        assert_eq!(subst.backtrack(), 1);
+        assert!(valid.binding().is_none());
     }
 
     #[test]
