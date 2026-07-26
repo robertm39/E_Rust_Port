@@ -1,6 +1,5 @@
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::terms::simpletypes::type_identity_cmp;
-use crate::terms::termtypes::{term_identity_cmp, Term, TermProperties};
+use crate::terms::termtypes::{Term, TermProperties};
 use std::cmp::Ordering;
 
 #[derive(Clone, Debug, Default)]
@@ -159,53 +158,22 @@ pub fn term_top_compare_for_problem(left: &Term, right: &Term, problem_type: Pro
     clippy::inline_always,
     reason = "pinned whole-prover Callgrind improves when this hot comparator is forced inline"
 )]
+#[allow(
+    unsafe_code,
+    reason = "measured private comparison over stable term-tree inputs"
+)]
 #[inline(always)]
 fn term_top_order_for_problem(left: &Term, right: &Term, problem_type: ProblemType) -> Ordering {
-    let mut result = left.f_code().cmp(&right.f_code());
-    if result != Ordering::Equal {
-        return result;
+    // SAFETY: Both owned handles keep their cells and initialized argument
+    // handles live for this synchronous comparison. Term-tree operations
+    // mutate only the disjoint intrusive left/right fields; every production
+    // argument guard is dropped before store entry, and types are complete.
+    unsafe {
+        left.borrowed_cell().compare_top_order(
+            right.borrowed_cell(),
+            problem_type == ProblemType::HigherOrder,
+        )
     }
-
-    if problem_type == ProblemType::HigherOrder {
-        let left_type = left.type_().expect("term top comparison requires types");
-        let right_type = right.type_().expect("term top comparison requires types");
-        result = type_identity_cmp(&left_type, &right_type).cmp(&0);
-        if result != Ordering::Equal {
-            return result;
-        }
-    } else {
-        debug_assert!(left.type_().is_some(), "term top comparison requires types");
-        debug_assert!(
-            right.type_().is_some(),
-            "term top comparison requires types"
-        );
-        debug_assert_eq!(
-            left.type_(),
-            right.type_(),
-            "first-order term types must match"
-        );
-    }
-
-    let left_arguments = left.arguments();
-    let right_arguments = right.arguments();
-    result = left_arguments.len().cmp(&right_arguments.len());
-    if result != Ordering::Equal {
-        return result;
-    }
-
-    for (left_argument, right_argument) in left_arguments.iter().zip(right_arguments.iter()) {
-        let left_argument = left_argument
-            .as_ref()
-            .expect("term top comparison requires initialized arguments");
-        let right_argument = right_argument
-            .as_ref()
-            .expect("term top comparison requires initialized arguments");
-        result = term_identity_cmp(left_argument, right_argument).cmp(&0);
-        if result != Ordering::Equal {
-            return result;
-        }
-    }
-    result
 }
 
 #[expect(
@@ -300,16 +268,42 @@ fn walk_tree(root: Option<&Term>, mut visit: impl FnMut(&Term)) {
 mod tests {
     use super::{term_top_compare, term_top_compare_for_problem, TermTree};
     use crate::basics::simple_stuff::ProblemType;
-    use crate::terms::simpletypes::alloc_simple_sort;
+    use crate::terms::simpletypes::{alloc_simple_sort, type_identity_cmp};
     use crate::terms::termtypes::{
         term_identity_cmp, Term, TP_CHECK_FLAG, TP_GARBAGE_FLAG, TP_TOP_POS,
     };
     use crate::terms::typebanks::TypeBank;
+    use std::cmp::Ordering;
 
     fn typed_const(f_code: i64, type_: &crate::terms::simpletypes::Type) -> Term {
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(type_.clone()));
         term
+    }
+
+    fn owned_top_order(left: &Term, right: &Term, problem_type: ProblemType) -> Ordering {
+        let mut result = left.f_code().cmp(&right.f_code());
+        if result != Ordering::Equal {
+            return result;
+        }
+        if problem_type == ProblemType::HigherOrder {
+            result = type_identity_cmp(&left.type_().unwrap(), &right.type_().unwrap()).cmp(&0);
+            if result != Ordering::Equal {
+                return result;
+            }
+        }
+        result = left.arity().cmp(&right.arity());
+        if result != Ordering::Equal {
+            return result;
+        }
+        for (left_arg, right_arg) in left.arguments().iter().zip(right.arguments().iter()) {
+            result =
+                term_identity_cmp(left_arg.as_ref().unwrap(), right_arg.as_ref().unwrap()).cmp(&0);
+            if result != Ordering::Equal {
+                return result;
+            }
+        }
+        result
     }
 
     #[test]
@@ -345,6 +339,57 @@ mod tests {
         assert_ne!(
             term_top_compare_for_problem(&left, &right, ProblemType::HigherOrder),
             0
+        );
+    }
+
+    #[test]
+    fn borrowed_top_cursor_matches_owned_comparison_boundaries() {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let one = typed_const(1, &i_type);
+        let two = typed_const(2, &i_type);
+        let left = Term::top_alloc(3, 1);
+        left.set_type(Some(i_type.clone()));
+        left.set_argument(0, one.clone());
+        let right = Term::top_alloc(3, 1);
+        right.set_type(Some(i_type.clone()));
+        right.set_argument(0, two.clone());
+        let binary = Term::top_alloc(3, 2);
+        binary.set_type(Some(i_type.clone()));
+        binary.set_argument(0, one.clone());
+        binary.set_argument(1, two.clone());
+
+        for (left, right) in [
+            (&one, &two),
+            (&left, &right),
+            (&right, &left),
+            (&left, &binary),
+            (&binary, &left),
+            (&left, &left),
+        ] {
+            let expected = owned_top_order(left, right, ProblemType::FirstOrder);
+            assert_eq!(
+                term_top_compare_for_problem(left, right, ProblemType::FirstOrder),
+                match expected {
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                }
+            );
+        }
+
+        let type_a = alloc_simple_sort(20);
+        let type_b = alloc_simple_sort(20);
+        let left = typed_const(4, &type_a);
+        let right = typed_const(4, &type_b);
+        let expected = owned_top_order(&left, &right, ProblemType::HigherOrder);
+        assert_eq!(
+            term_top_compare_for_problem(&left, &right, ProblemType::HigherOrder),
+            match expected {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }
         );
     }
 

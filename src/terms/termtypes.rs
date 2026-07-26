@@ -5,8 +5,11 @@ use crate::terms::signature::{
     SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
     SIG_TRUE_CODE,
 };
-use crate::terms::simpletypes::{sort_is_interpreted, types_cmp, Type, TypeUniqueId};
+use crate::terms::simpletypes::{
+    sort_is_interpreted, type_identity_cmp, types_cmp, Type, TypeUniqueId,
+};
 use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cmp::Ordering;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
@@ -1093,6 +1096,82 @@ impl BorrowedTermCell {
         0
     }
 
+    /// Compares two term tops by function code, optional higher-order type,
+    /// arity, and argument allocation identity without acquiring argument or
+    /// type owners.
+    ///
+    /// # Safety
+    ///
+    /// Both cursors and every initialized argument handle must satisfy
+    /// `cell`'s contract for the complete call. No argument or type `RefMut`
+    /// may be live or created, and no argument or type metadata may be mutated
+    /// until the comparison returns. Every argument slot must be initialized.
+    pub(crate) unsafe fn compare_top_order(self, other: Self, higher_order: bool) -> Ordering {
+        // SAFETY: Forwarded from this method's caller contract.
+        let left = unsafe { self.cell() };
+        // SAFETY: Forwarded from this method's caller contract.
+        let right = unsafe { other.cell() };
+
+        let mut result = left.f_code.get().cmp(&right.f_code.get());
+        if result != Ordering::Equal {
+            return result;
+        }
+
+        if higher_order {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            let left_type =
+                unsafe { borrowed_cell_type(left) }.expect("term top comparison requires types");
+            // SAFETY: Identical argument for the right cell.
+            let right_type =
+                unsafe { borrowed_cell_type(right) }.expect("term top comparison requires types");
+            result = type_identity_cmp(left_type, right_type).cmp(&0);
+            if result != Ordering::Equal {
+                return result;
+            }
+        } else {
+            #[cfg(debug_assertions)]
+            {
+                // SAFETY: The caller excludes type mutation and active
+                // mutable link borrows for the complete comparison.
+                let left_type = unsafe { borrowed_cell_type(left) }
+                    .expect("term top comparison requires types");
+                // SAFETY: Identical argument for the right cell.
+                let right_type = unsafe { borrowed_cell_type(right) }
+                    .expect("term top comparison requires types");
+                debug_assert_eq!(
+                    type_identity_cmp(left_type, right_type),
+                    0,
+                    "first-order term types must match"
+                );
+            }
+        }
+
+        // SAFETY: The caller excludes structural mutation and active mutable
+        // argument borrows for the complete comparison.
+        let left_args = unsafe { &*left.args.as_ptr() }.as_slice();
+        // SAFETY: Identical argument for the right cursor.
+        let right_args = unsafe { &*right.args.as_ptr() }.as_slice();
+        result = left_args.len().cmp(&right_args.len());
+        if result != Ordering::Equal {
+            return result;
+        }
+
+        for (left_arg, right_arg) in left_args.iter().zip(right_args) {
+            let left_arg = left_arg
+                .as_ref()
+                .expect("term top comparison requires initialized arguments");
+            let right_arg = right_arg
+                .as_ref()
+                .expect("term top comparison requires initialized arguments");
+            result = term_identity_cmp(left_arg, right_arg).cmp(&0);
+            if result != Ordering::Equal {
+                return result;
+            }
+        }
+        result
+    }
+
     /// Acquires one owned `Term` handle for the addressed allocation.
     ///
     /// # Safety
@@ -1126,6 +1205,16 @@ unsafe fn compare_borrowed_cell_types(left: &TermCell, right: &TermCell) -> i64 
         (Some(_), None) => 1,
         (None, None) => 0,
     }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "read-only type access behind a scoped term-cell cursor"
+)]
+unsafe fn borrowed_cell_type(cell: &TermCell) -> Option<&Type> {
+    // SAFETY: The caller guarantees that no mutable link borrow or type
+    // mutation can overlap this shared read.
+    unsafe { &*cell.links.as_ptr() }.type_.as_ref()
 }
 
 #[must_use]
