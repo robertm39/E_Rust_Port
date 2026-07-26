@@ -1140,8 +1140,26 @@ impl BorrowedTermCell {
         // SAFETY: Forwarded from this method's caller contract.
         let cell = unsafe { self.cell() };
         let arguments = cell.args.borrow();
-        for argument in arguments.as_slice().iter().rev().flatten() {
-            stack.push((argument.borrowed_cell(), deref));
+        match &*arguments {
+            TermArgs::Empty => {}
+            TermArgs::One(args) => {
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
+            TermArgs::Two(args) => {
+                if let Some(argument) = args[1].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
+            TermArgs::Heap(args) => {
+                for argument in args.iter().rev().flatten() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
         }
     }
 
@@ -1880,6 +1898,44 @@ mod tests {
                     | (super::TermArgs::Two(_), 2)
                     | (super::TermArgs::Heap(_), 3..)
             ));
+        }
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "the regression directly verifies the performance-only borrowed cursor boundary"
+    )]
+    #[test]
+    fn borrowed_first_order_argument_push_preserves_all_arity_shapes() {
+        for arity in 0..=4 {
+            let term = Term::default_cell_arity_alloc(arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                term.set_argument(index, Term::const_cell_alloc(code));
+            }
+
+            let mut stack = Vec::new();
+            // SAFETY: `term` and all of its initialized arguments remain
+            // owned and structurally unchanged until every cursor is read.
+            unsafe {
+                term.borrowed_cell()
+                    .push_first_order_arguments_reversed(&mut stack, DerefType::Once);
+            }
+
+            let actual = stack
+                .into_iter()
+                .map(|(argument, deref)| {
+                    assert_eq!(deref, DerefType::Once);
+                    // SAFETY: The owning `term` remains alive and unchanged
+                    // for the complete cursor read.
+                    unsafe { argument.f_code() }
+                })
+                .collect::<Vec<_>>();
+            let expected = (1..=arity)
+                .rev()
+                .map(|code| i64::try_from(code).expect("small test arity fits i64"))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
         }
     }
 
