@@ -1,0 +1,29 @@
+{
+  "content_hashes_verified": 192,
+  "decision_count": 192,
+  "decision_digest": "ad2ff0142a122bb6d84fe3def9a5c5a50ef74153042fff6853243949b448d590",
+  "decision_group_counts": {
+    "accept_non_drop_in_internal_or_vendored_surface": 10,
+    "accept_ownership_safe_rust_boundary": 61,
+    "preserve_checked_c_behavior": 67,
+    "superseded_by_completed_implementation": 54
+  },
+  "evidence_checks": {
+    "clausal_preprocessing_owner_transition_is_closed": true,
+    "exact_candidate_passes_full_lifecycle": true,
+    "formula_owner_and_complete_cnf_pipeline_are_represented": true,
+    "formula_parser_app_encode_and_unfold_boundaries_are_pinned": true,
+    "generation_qualified_clause_owners_cover_bce_and_indices": true,
+    "higher_order_paramodulation_covers_all_six_release_orderings": true,
+    "ordered_mixed_proof_objects_and_derivation_metadata_are_complete": true,
+    "pdtree_occurrence_deletion_and_eta_paths_are_exactly_owned": true,
+    "picosat_deployment_boundary_is_explicit_and_tested": true,
+    "predicate_elimination_and_sat_owners_are_generation_safe": true,
+    "rewrite_splitting_and_subsumption_quirks_are_regression_pinned": true,
+    "watchlist_relevance_and_proof_state_paths_have_owned_regressions": true
+  },
+  "missing_sources": [],
+  "schema_version": 1,
+  "source_digest": "283202931396c98f5870e487fc3893b162787733acc7c617a1a4535507afa075",
+  "source_file_count": 183
+}
