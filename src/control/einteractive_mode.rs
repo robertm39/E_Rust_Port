@@ -1445,7 +1445,7 @@ mod tests {
     fn add_command_parses_uploaded_axioms_through_batch_parser() {
         let mut bank = parser_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
 
         let status = interactive
@@ -1472,7 +1472,7 @@ mod tests {
     fn add_command_propagates_parser_error_without_inserting() {
         let mut bank = parser_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
 
         let error = interactive
@@ -1577,7 +1577,7 @@ mod tests {
         .unwrap();
         let mut bank = parser_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
 
         let status = interactive
@@ -1792,7 +1792,7 @@ mod tests {
     fn dispatch_command_routes_immediate_state_commands() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         assert_eq!(
             interactive.add_axiom_set(axiom_set("set.one", "raw", false)),
@@ -1851,7 +1851,7 @@ mod tests {
     fn dispatch_add_command_reads_block_then_uses_batch_parser() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         let mut terminators = Vec::new();
 
@@ -1881,7 +1881,7 @@ mod tests {
     fn dispatch_text_command_reads_add_block_from_line_transport() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         let mut block_reader =
             Cursor::new(b"fof(text_formula, axiom, p(a)).\nGO\nignored\n".to_vec());
@@ -1908,7 +1908,7 @@ mod tests {
     fn dispatch_tcp_command_reads_add_block_from_message_transport() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         let mut block_reader = Cursor::new(packed_tcp_messages(&[
             "fof(tcp_formula, axiom, p(a)).\n",
@@ -1956,7 +1956,7 @@ mod tests {
              tcf(tcf_watch, watchlist, s(X)|t(X)).\n\
              include('{include_path}', [included_formula]).\n"
         );
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut bank = parser_bank();
         let ctrl = StructFofSpec::new(bank.signature());
         let mut interactive = InteractiveSpec::new("");
@@ -2010,7 +2010,7 @@ mod tests {
     fn start_deduction_server_tcp_processes_messages_until_quit() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut stream = Duplex::new(&[
             "ADD uploaded",
             "fof(uploaded_formula, axiom, p(a)).\n",
@@ -2047,7 +2047,7 @@ mod tests {
     fn start_deduction_server_tcp_sends_unknown_command_status() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut stream = Duplex::new(&["BOGUS", "QUIT"]);
 
         let report = start_deduction_server_tcp_with(
@@ -2074,7 +2074,7 @@ mod tests {
         fs::write(scratch.path.join("dispatch.ax"), b"fof(a, axiom, p).\n").unwrap();
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
 
         let result = interactive
@@ -2101,7 +2101,7 @@ mod tests {
     fn dispatch_run_command_uses_only_one_identifier_token_for_name() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         let mut terminators = Vec::new();
         let mut seen_run = None;
@@ -2147,7 +2147,7 @@ mod tests {
     fn run_command_with_parses_job_runs_batch_process_and_backtracks() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         assert_eq!(
             interactive.add_axiom_set(axiom_set("shared", "shared raw", false)),
@@ -2226,7 +2226,7 @@ mod tests {
     fn run_command_with_uses_configured_per_problem_limit() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.per_prob_limit = 12;
         let mut requests = Vec::<BatchRunnerRequest>::new();
 
@@ -2269,7 +2269,7 @@ mod tests {
     fn dispatch_printing_commands_append_statuses() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         assert_eq!(
             interactive.add_axiom_set(axiom_set("download_me", "raw axioms\n", false)),
@@ -2358,7 +2358,7 @@ mod tests {
     fn dispatch_quit_unstages_all_sets_and_marks_done() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
         for name in ["first", "second"] {
             assert_eq!(
@@ -2396,7 +2396,7 @@ mod tests {
     fn dispatch_unknown_command_reports_protocol_error() {
         let mut bank = parser_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut interactive = InteractiveSpec::new("");
 
         let result = interactive

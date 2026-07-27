@@ -647,7 +647,7 @@ impl ProofDocSession {
 
     /// Ports the represented cases of C `DocFormulaCreation`.
     ///
-    /// The formula text is supplied pre-rendered until the Rust port has a
+    /// The formula text is supplied pre-rendered until Umlaut has a
     /// full `WFormula` owner.
     ///
     /// # Panics

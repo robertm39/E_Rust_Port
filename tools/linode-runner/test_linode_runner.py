@@ -93,6 +93,10 @@ class PayloadTests(unittest.TestCase):
 
         self.assertIn("cargo test --locked --all-targets --all-features", script)
         self.assertIn("cargo clippy --locked --all-targets --all-features", script)
+        self.assertIn("canonical_binaries=(", script)
+        self.assertIn("umlaut-tsm-classify", script)
+        self.assertIn('test -x "$rust_bin_dir/$binary"', script)
+        self.assertIn('test -f "$windows_bin_dir/$binary.exe"', script)
         self.assertIn("--target x86_64-pc-windows-gnu", script)
         self.assertIn('"$compat_driver" compare', script)
         self.assertIn('"$compat_driver" compare-tools', script)

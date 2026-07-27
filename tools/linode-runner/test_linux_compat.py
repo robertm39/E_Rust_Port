@@ -25,6 +25,71 @@ class OutputParsingTests(unittest.TestCase):
             "problem <PROBLEM>\nproof",
         )
 
+    def test_normalization_canonicalizes_only_known_product_branding(self):
+        reference = (
+            "E will guess the format.\n"
+            "% E theorem prover knowledge base description\n"
+            "% Starting E-LTB wrapper\n"
+            "E server is not listening\n"
+            "Set E-LOP as the input format. If no input format is selected by this or\n"
+            "    one of the following options, E will guess the input format based on the\n"
+            "    first token. It will almost always correctly recognize TPTP-3, but it may\n"
+            "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n"
+            "    symbols.\n"
+            "given, checkproof will guess a name based on the type of the prover. This\n"
+            "    guess may be way off!\n"
+        )
+        candidate = (
+            "Umlaut will guess the format.\n"
+            "% Umlaut theorem prover knowledge base description\n"
+            "% Starting Umlaut LTB wrapper\n"
+            "Umlaut server is not listening\n"
+            "Set E-LOP as the input format. If no input format is selected by this or\n"
+            "    one of the following options, Umlaut will guess the input format based on\n"
+            "    the first token. It will almost always correctly recognize TPTP-3, but it\n"
+            "    may misidentify E-LOP files that use TPTP meta-identifiers as logical\n"
+            "    symbols.\n"
+            "given, umlaut-checkproof will guess a name based on the type of the\n"
+            "    prover. This guess may be way off!\n"
+        )
+
+        self.assertEqual(
+            e_interop.normalize_output(reference),
+            e_interop.normalize_output(candidate),
+        )
+        self.assertNotEqual(
+            e_interop.normalize_output("unrelated E behavior"),
+            e_interop.normalize_output("unrelated Umlaut behavior"),
+        )
+
+    def test_help_normalization_ignores_layout_but_not_substantive_words(self):
+        reference = (
+            "tool 1.0.0\n\n"
+            "Usage: tool [options]\n\n"
+            "Options:\n\n"
+            "  --mode\n"
+            "    Preserve every substantive word even when the reference wraps this\n"
+            "    description differently.\n"
+        )
+        candidate = (
+            "tool 1.0.0\n\n"
+            "Usage: tool [options]\n\n"
+            "Options:\n\n"
+            "  --mode\n"
+            "    Preserve every substantive word even when the reference wraps\n"
+            "    this description differently.\n"
+        )
+        changed = candidate.replace("substantive", "different")
+
+        self.assertEqual(
+            e_interop.normalize_output(reference),
+            e_interop.normalize_output(candidate),
+        )
+        self.assertNotEqual(
+            e_interop.normalize_output(reference),
+            e_interop.normalize_output(changed),
+        )
+
     def test_path_replacements_cover_relative_and_resolved_forms(self):
         path = Path("reference-root")
         replacements = e_interop.cross_platform_path_replacements(path, "<TPTP>")
@@ -41,7 +106,7 @@ class OutputParsingTests(unittest.TestCase):
 
     def test_tool_binary_replacements_cover_reference_and_candidate(self):
         reference = Path("reference-bin") / "termprops"
-        candidate = Path("candidate-bin") / "termprops"
+        candidate = Path("candidate-bin") / "umlaut-termprops"
         replacements = e_interop.tool_binary_path_replacements(
             reference,
             candidate,
@@ -1913,6 +1978,7 @@ class ComparisonTests(unittest.TestCase):
                     "normalized_stderr",
                     "output_files",
                 ],
+                "epatternize/help": ["normalized_stdout"],
                 "term2dag/shared-typed-boundary": ["normalized_stdout"],
             },
         )
@@ -2265,6 +2331,42 @@ class ComparisonTests(unittest.TestCase):
         )
         self.assertIn("tsm_classify", e_interop.ARCHIVED_REFERENCE_TOOL_LINKS)
 
+    def test_reference_tools_map_to_canonical_umlaut_binaries(self):
+        self.assertEqual(
+            e_interop.UMLAUT_TOOL_BINARIES,
+            {
+                "CSSCPA_filter": "umlaut-csscpa-filter",
+                "checkproof": "umlaut-checkproof",
+                "classify_problem": "umlaut-classify-problem",
+                "direct_examples": "umlaut-direct-examples",
+                "e_axfilter": "umlaut-axiom-filter",
+                "e_client": "umlaut-client",
+                "e_deduction_server": "umlaut-deduction-server",
+                "e_ltb_runner": "umlaut-ltb-runner",
+                "e_server": "umlaut-server",
+                "e_stratpar": "umlaut-stratpar",
+                "edpll": "umlaut-dpll",
+                "eground": "umlaut-ground",
+                "ekb_create": "umlaut-kb-create",
+                "ekb_delete": "umlaut-kb-delete",
+                "ekb_ginsert": "umlaut-kb-ginsert",
+                "ekb_insert": "umlaut-kb-insert",
+                "enormalizer": "umlaut-normalizer",
+                "epatternize": "umlaut-patternize",
+                "epclanalyse": "umlaut-pcl-analyse",
+                "epclextract": "umlaut-pcl-extract",
+                "epcllemma": "umlaut-pcl-lemma",
+                "ex_commandline": "umlaut-commandline-example",
+                "term2dag": "umlaut-term2dag",
+                "termprops": "umlaut-termprops",
+                "tsm_classify": "umlaut-tsm-classify",
+            },
+        )
+        self.assertEqual(
+            set(e_interop.UMLAUT_TOOL_BINARIES),
+            set(e_interop.REFERENCE_TOOL_BINARIES),
+        )
+
     def test_archived_reference_tool_source_patches_are_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             build_dir = Path(directory)
@@ -2320,13 +2422,13 @@ class LinodeNativeTests(unittest.TestCase):
                 "--repo-root",
                 "/opt/e-rust-port/source",
                 "--rust-bin",
-                "/opt/e-rust-port/source/target/release/eprover",
+                "/opt/e-rust-port/source/target/release/umlaut",
                 "--report-only",
             ]
         )
 
         self.assertEqual(arguments.command, "compare")
-        self.assertEqual(arguments.rust_bin.name, "eprover")
+        self.assertEqual(arguments.rust_bin.name, "umlaut")
         self.assertTrue(arguments.report_only)
 
 

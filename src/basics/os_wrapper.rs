@@ -1484,14 +1484,14 @@ mod tests {
 
     #[test]
     fn linux_stat_parser_sums_self_and_child_cpu_ticks() {
-        let stat = "1234 (eprover worker) R 1 2 3 4 5 6 7 8 9 10 13 17 19 23 24";
+        let stat = "1234 (umlaut worker) R 1 2 3 4 5 6 7 8 9 10 13 17 19 23 24";
 
         assert_eq!(parse_linux_stat_cpu_ticks(stat), Some((32, 40)));
     }
 
     #[test]
     fn linux_status_parser_reads_peak_resident_kib() {
-        let status = "Name:\teprover\nVmRSS:\t   2048 kB\nVmHWM:\t   4096 kB\n";
+        let status = "Name:\tumlaut\nVmRSS:\t   2048 kB\nVmHWM:\t   4096 kB\n";
 
         assert_eq!(parse_linux_status_vm_hwm_kib(status), Some(4096));
     }

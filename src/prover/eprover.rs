@@ -154,7 +154,7 @@ use crate::inout::signals::{finalize_cpu_limit_outcome, silent_time_out};
 use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
-use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
+use crate::prover::version::{self, PROGRAM_NAME, VERSION, VERSION_QUALIFIER};
 use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
@@ -181,8 +181,8 @@ const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const EMPTY_INPUT_MESSAGE: &str = "Input file contains no clauses or formulas";
-const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--e-rust-port-schedule-worker";
-const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--e-rust-port-schedule-search-worker";
+const INTERNAL_SCHEDULE_WORKER_ARG: &str = "--umlaut-schedule-worker";
+const INTERNAL_SCHEDULE_SEARCH_WORKER_ARG: &str = "--umlaut-schedule-search-worker";
 const NO_SCHEDULE_STDIN_SNAPSHOT: &str = "-";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
@@ -3212,7 +3212,7 @@ fn schedule_worker_usage_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::USAGE_ERROR,
         format!(
-            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> <cores> <stdin-snapshot-or-> -- <original-eprover-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <preprocessing-cores> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> <stdin-snapshot-or-> -- <original-eprover-argv...>"
+            "Usage: {PROGRAM_NAME} {INTERNAL_SCHEDULE_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <cpu-limit> <cores> <stdin-snapshot-or-> -- <original-umlaut-argv...>\n       {PROGRAM_NAME} {INTERNAL_SCHEDULE_SEARCH_WORKER_ARG} <preprocessing-index> <preprocessing-strategy> <preprocessing-ordering> <preprocessing-cpu-limit> <preprocessing-cores> <search-index> <search-strategy> <search-ordering> <search-cpu-limit> <stdin-snapshot-or-> -- <original-umlaut-argv...>"
         ),
     )
 }
@@ -3642,7 +3642,7 @@ fn apply_parsed_option(
     } else if is_search_control_option(option_code) {
         apply_search_control_option(config, parsed)?;
     } else {
-        unreachable!("unhandled eprover option");
+        unreachable!("unhandled umlaut option");
     }
     Ok(None)
 }
@@ -5357,7 +5357,7 @@ fn apply_simple_flag(config: &mut EProverConfig, option: EProverOption) {
 #[must_use]
 pub fn print_help() -> String {
     let mut result = format!(
-        "\nE {VERSION} \"{E_NICKNAME}\"\n\n\
+        "\nUmlaut {VERSION} {VERSION_QUALIFIER}\n\n\
 Usage: {PROGRAM_NAME} [options] [files]\n\n\
 Read a set of first-order (or, in the -ho-version, higher-order)\n\
 clauses and formulae and try to prove the conjecture (if given)\n\
@@ -6607,7 +6607,7 @@ fn spawn_schedule_worker(
     let current_exe = std::env::current_exe().map_err(|error| {
         Diagnostic::new(
             ErrorCode::FILE_ERROR,
-            format!("Cannot locate eprover executable for schedule worker: {error}"),
+            format!("Cannot locate umlaut executable for schedule worker: {error}"),
         )
     })?;
     let mut command = Command::new(current_exe);
@@ -6700,7 +6700,7 @@ fn spawn_search_schedule_worker(
     let current_exe = std::env::current_exe().map_err(|error| {
         Diagnostic::new(
             ErrorCode::FILE_ERROR,
-            format!("Cannot locate eprover executable for search schedule worker: {error}"),
+            format!("Cannot locate umlaut executable for search schedule worker: {error}"),
         )
     })?;
     let mut command = Command::new(current_exe);
@@ -16618,7 +16618,7 @@ mod tests {
         std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("eprover-{name}-{}.out", std::process::id()))
+            .join(format!("umlaut-{name}-{}.out", std::process::id()))
     }
 
     fn empty_input_stdout() -> String {
@@ -18031,7 +18031,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--lift-lambdas=false",
             "--cnf-lambda-to-forall=false",
             "--unroll-formulas-only=false",
@@ -18046,20 +18046,20 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_recognizes_version_action() {
-        let action = process_options(["eprover", "--version"]).unwrap();
+        let action = process_options(["umlaut", "--version"]).unwrap();
         assert_eq!(action, EProverAction::Version);
     }
 
     #[test]
     fn process_options_keeps_non_option_files_and_inserts_stdin_default() {
-        let action = process_options(["eprover", "a.p", "--silent", "b.p"]).unwrap();
+        let action = process_options(["umlaut", "a.p", "--silent", "b.p"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.output_level, 0);
         assert_eq!(config.files, ["a.p", "b.p"]);
 
-        let action = process_options(["eprover", "--silent"]).unwrap();
+        let action = process_options(["umlaut", "--silent"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18068,7 +18068,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_tracks_cpu_limit_schedule_state_like_c() {
-        let action = process_options(["eprover", "--cpu-limit"]).unwrap();
+        let action = process_options(["umlaut", "--cpu-limit"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18077,8 +18077,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.schedule_time_limit, Some(300));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(300));
 
-        let action =
-            process_options(["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"]).unwrap();
+        let action = process_options(["umlaut", "--soft-cpu-limit=25", "--cpu-limit=100"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18087,21 +18086,20 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.schedule_time_limit, Some(100));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
 
-        let action =
-            process_options(["eprover", "--cpu-limit=100", "--soft-cpu-limit=25"]).unwrap();
+        let action = process_options(["umlaut", "--cpu-limit=100", "--soft-cpu-limit=25"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.schedule_time_limit, Some(25));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
 
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(cpu_rlimit_to_apply(&config), None);
 
-        let action = process_options(["eprover", "--cpu-limit=-1"]).unwrap();
+        let action = process_options(["umlaut", "--cpu-limit=-1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18157,7 +18155,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             format!(
-                "eprover: {}\neprover: Warning: Cannot prevent core dumps!\n",
+                "umlaut: {}\numlaut: Warning: Cannot prevent core dumps!\n",
                 resource_limit_error_message(os_error)
             )
         );
@@ -18192,7 +18190,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_memory_limit_state_like_c() {
-        let action = process_options(["eprover", "-m", "128"]).unwrap();
+        let action = process_options(["umlaut", "-m", "128"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18200,20 +18198,20 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.delete_bad_limit, i64::MAX);
         assert!(config.option_stderr.is_empty());
 
-        let action = process_options(["eprover", "--memory-limit=-1"]).unwrap();
+        let action = process_options(["umlaut", "--memory-limit=-1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.memory_limit, u64::MAX.wrapping_mul(MEGA));
         assert!(config.option_stderr.is_empty());
 
-        let action = process_options(["eprover", "--verbose=1", "--memory-limit=-1"]).unwrap();
+        let action = process_options(["umlaut", "--verbose=1", "--memory-limit=-1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.option_stderr, ["Memory limit set to -1 MB\n"]);
 
-        let action = process_options(["eprover", "--memory-limit=64", "--verbose=1"]).unwrap();
+        let action = process_options(["umlaut", "--memory-limit=64", "--verbose=1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18237,21 +18235,21 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_input_mode_flags_like_c() {
-        let action = process_options(["eprover", "--print-formulas"]).unwrap();
+        let action = process_options(["umlaut", "--print-formulas"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert!(config.flags.contains(EProverFlag::SyntaxOnly));
         assert!(config.flags.contains(EProverFlag::PrintFormulas));
 
-        let action = process_options(["eprover", "--prune"]).unwrap();
+        let action = process_options(["umlaut", "--prune"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.output_level, 4);
         assert!(config.flags.contains(EProverFlag::PruneOnly));
 
-        let action = process_options(["eprover", "--cnf", "--error-on-empty"]).unwrap();
+        let action = process_options(["umlaut", "--cnf", "--error-on-empty"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18266,7 +18264,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_reporting_descriptors_like_c() {
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--print-statistics",
             "--print-detailed-statistics",
             "-S",
@@ -18288,8 +18286,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.filter_saturated_descriptor, "eig");
 
         let action =
-            process_options(["eprover", "--print-saturated=teA", "--filter-saturated=eig"])
-                .unwrap();
+            process_options(["umlaut", "--print-saturated=teA", "--filter-saturated=eig"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18299,21 +18296,21 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_reporting_descriptors() {
-        let error = process_options(["eprover", "--print-saturated=tx"]).unwrap_err();
+        let error = process_options(["umlaut", "--print-saturated=tx"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Illegal argument to option -S (--print-saturated)"
         );
 
-        let error = process_options(["eprover", "--filter-saturated"]).unwrap_err();
+        let error = process_options(["umlaut", "--filter-saturated"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Illegal argument to option --filter-saturated"
         );
 
-        let error = process_options(["eprover", "--filter-saturated=Fx"]).unwrap_err();
+        let error = process_options(["umlaut", "--filter-saturated=Fx"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
@@ -18324,7 +18321,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_strategy_and_limit_state_like_c() {
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--select-strategy=AutoSched",
             "--print-strategy",
             "--parse-strategy=strategy.txt",
@@ -18357,7 +18354,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.answer_limit, 2_147_483_647);
         assert!(config.flags.contains(EProverFlag::ConjecturesAreQuestions));
 
-        let action = process_options(["eprover", "--answers=7", "--print-strategy=Named"]).unwrap();
+        let action = process_options(["umlaut", "--answers=7", "--print-strategy=Named"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18368,7 +18365,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_format_state_like_c() {
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--lop-in",
             "--pcl-out",
             "--pcl-terms-compressed",
@@ -18388,7 +18385,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.pcl_output.shell_level, 1);
         assert!(config.equation_print.print_oriented);
 
-        let action = process_options(["eprover", "--pcl-shell-level=2"]).unwrap();
+        let action = process_options(["umlaut", "--pcl-shell-level=2"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18397,7 +18394,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_tptp_and_tstp_format_side_effects_like_c() {
-        let action = process_options(["eprover", "--full-equational-rep", "--tptp-out"]).unwrap();
+        let action = process_options(["umlaut", "--full-equational-rep", "--tptp-out"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18405,7 +18402,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.equation_print.full_equational_rep);
         assert!(!config.equation_print.use_infix);
 
-        let action = process_options(["eprover", "--tptp2-format"]).unwrap();
+        let action = process_options(["umlaut", "--tptp2-format"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18414,7 +18411,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.equation_print.use_infix);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--eqn-no-infix",
             "--full-equational-rep",
             "--tstp-out",
@@ -18428,7 +18425,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(config.equation_print.use_infix);
         assert!(config.equation_print.full_equational_rep);
 
-        let action = process_options(["eprover", "--tptp3-format"]).unwrap();
+        let action = process_options(["umlaut", "--tptp3-format"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18439,7 +18436,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_auto_schedule_state_like_c() {
-        let action = process_options(["eprover", "--auto"]).unwrap();
+        let action = process_options(["umlaut", "--auto"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18448,7 +18445,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.strategy_scheduling);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--auto-schedule=Auto",
             "--serialize-schedule=true",
             "--force-preproc-sched=false",
@@ -18464,7 +18461,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.force_preprocessing_schedule);
 
         let action =
-            process_options(["eprover", "--satauto-schedule", "--auto-schedule=4"]).unwrap();
+            process_options(["umlaut", "--satauto-schedule", "--auto-schedule=4"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18473,7 +18470,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.sine, None);
 
         let action =
-            process_options(["eprover", "--auto-schedule=4", "--satauto-schedule=8"]).unwrap();
+            process_options(["umlaut", "--auto-schedule=4", "--satauto-schedule=8"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18501,7 +18498,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn schedule_worker_commands_transfer_both_schedule_layers_and_original_argv() {
         let config = EProverConfig {
-            invocation_args: ["eprover", "--tstp-in", "problem.p"]
+            invocation_args: ["umlaut", "--tstp-in", "problem.p"]
                 .map(str::to_owned)
                 .to_vec(),
             schedule_stdin_snapshot: Some("stdin.snapshot".to_owned()),
@@ -18535,7 +18532,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "2",
                 "stdin.snapshot",
                 "--",
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "problem.p",
             ]
@@ -18556,7 +18553,7 @@ input_clause(c2,axiom,[++q(X)]).
                 "17",
                 "stdin.snapshot",
                 "--",
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "problem.p",
             ]
@@ -18567,7 +18564,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn schedule_worker_args_filter_recursive_scheduler_options() {
         let original = vec![
-            "eprover".to_owned(),
+            "umlaut".to_owned(),
             "--auto-schedule=4".to_owned(),
             "--serialize-schedule=true".to_owned(),
             "--force-preproc-sched=false".to_owned(),
@@ -18589,46 +18586,39 @@ input_clause(c2,axiom,[++q(X)]).
 
         assert_eq!(
             filtered,
-            [
-                "eprover",
-                "--resources-info",
-                "-R",
-                "--tstp-in",
-                "problem.p"
-            ]
-            .map(str::to_owned)
+            ["umlaut", "--resources-info", "-R", "--tstp-in", "problem.p"].map(str::to_owned)
         );
     }
 
     #[test]
     fn schedule_worker_run_args_strips_recursive_controls_without_strategy_injection() {
-        let original = ["eprover", "--auto", "--tstp-in", "problem.p"].map(str::to_owned);
+        let original = ["umlaut", "--auto", "--tstp-in", "problem.p"].map(str::to_owned);
 
         let args = schedule_worker_run_args(&original);
 
         assert_eq!(
             args,
-            ["eprover", "--tstp-in", "problem.p"].map(str::to_owned)
+            ["umlaut", "--tstp-in", "problem.p"].map(str::to_owned)
         );
     }
 
     #[test]
     fn schedule_worker_run_args_preserves_double_dash_tail() {
         let original =
-            ["eprover", "--auto-schedule=1", "--", "-problem-like-name.p"].map(str::to_owned);
+            ["umlaut", "--auto-schedule=1", "--", "-problem-like-name.p"].map(str::to_owned);
 
         let args = schedule_worker_run_args(&original);
 
         assert_eq!(
             args,
-            ["eprover", "--", "-problem-like-name.p"].map(str::to_owned)
+            ["umlaut", "--", "-problem-like-name.p"].map(str::to_owned)
         );
     }
 
     #[test]
     fn schedule_worker_parser_keeps_original_argv_tail() {
         let argv = [
-            "eprover",
+            "umlaut",
             INTERNAL_SCHEDULE_WORKER_ARG,
             "2",
             "ScheduledCell",
@@ -18637,7 +18627,7 @@ input_clause(c2,axiom,[++q(X)]).
             "3",
             "stdin.snapshot",
             "--",
-            "eprover",
+            "umlaut",
             "--auto-schedule=1",
             "problem.p",
         ]
@@ -18657,14 +18647,14 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(parsed.stdin_snapshot.as_deref(), Some("stdin.snapshot"));
         assert_eq!(
             parsed.original_args,
-            ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)
+            ["umlaut", "--auto-schedule=1", "problem.p"].map(str::to_owned)
         );
     }
 
     #[test]
     fn search_schedule_worker_parser_keeps_preprocessing_and_search_strategies() {
         let argv = [
-            "eprover",
+            "umlaut",
             INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
             "1",
             "PreprocCell",
@@ -18677,7 +18667,7 @@ input_clause(c2,axiom,[++q(X)]).
             "17",
             "-",
             "--",
-            "eprover",
+            "umlaut",
             "--auto-schedule=1",
             "problem.p",
         ]
@@ -18702,22 +18692,22 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(parsed.stdin_snapshot, None);
         assert_eq!(
             parsed.original_args,
-            ["eprover", "--auto-schedule=1", "problem.p"].map(str::to_owned)
+            ["umlaut", "--auto-schedule=1", "problem.p"].map(str::to_owned)
         );
     }
 
     #[test]
     fn process_options_rejects_invalid_schedule_bool_args() {
-        let error = process_options(["eprover", "--serialize-schedule=yes"]).unwrap_err();
+        let error = process_options(["umlaut", "--serialize-schedule=yes"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--force-preproc-sched=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--force-preproc-sched=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn process_options_records_preprocessing_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18730,7 +18720,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.preprocessing.relevance_prune_level, 0);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--no-preprocessing",
             "--eq-unfold-limit=7",
             "--eq-unfold-maxclauses=11",
@@ -18758,7 +18748,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.preprocessing.ac_handling, AcHandling::KeepOrientable);
         assert!(!config.preprocessing.ac_res_aggressive);
 
-        let action = process_options(["eprover", "--no-eq-unfolding", "--ac-handling"]).unwrap();
+        let action = process_options(["umlaut", "--no-eq-unfolding", "--ac-handling"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18768,7 +18758,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_definition_and_cnf_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18798,7 +18788,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "-D",
             "wf1",
             "--define-weight-function=wf2",
@@ -18847,7 +18837,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let action =
-            process_options(["eprover", "--definitional-cnf=0", "--miniscope-limit=7"]).unwrap();
+            process_options(["umlaut", "--definitional-cnf=0", "--miniscope-limit=7"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -18857,7 +18847,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_ho_unification_defaults_like_c() {
-        let config = run_config_from(["eprover"]);
+        let config = run_config_from(["umlaut"]);
         let preprocessing = &config.preprocessing;
         let pred_elim = &preprocessing.predicate_elimination;
         let inference = &config.search.inference;
@@ -18914,7 +18904,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_ho_unification_overrides_like_c() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--ext-sup-max-depth=5",
             "--inverse-recognition",
             "--replace-inj-defs",
@@ -19004,81 +18994,80 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_ho_unification_args() {
-        let error =
-            process_options(["eprover", "--classification-timeout-portion=37"]).unwrap_err();
+        let error = process_options(["umlaut", "--classification-timeout-portion=37"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "--classification-timeout-portion expects 'true' or 'false' instead of '37'"
         );
 
-        let error = process_options(["eprover", "--ext-sup-max-depth=-2"]).unwrap_err();
+        let error = process_options(["umlaut", "--ext-sup-max-depth=-2"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--bce=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--bce=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--bce-max-occs=-2"]).unwrap_err();
+        let error = process_options(["umlaut", "--bce-max-occs=-2"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--pred-elim-tolerance=-1"]).unwrap_err();
+        let error = process_options(["umlaut", "--pred-elim-tolerance=-1"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--eta-normalize=both"]).unwrap_err();
+        let error = process_options(["umlaut", "--eta-normalize=both"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --eta-normalize requires 'reduce' or 'expand' as an argument"
         );
 
-        let error = process_options(["eprover", "--ho-order-kind=both"]).unwrap_err();
+        let error = process_options(["umlaut", "--ho-order-kind=both"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --ho-order-kind requires 'lfho' or 'lambda' as an argument"
         );
 
-        let error = process_options(["eprover", "--prim-enum-mode=logsymbol"]).unwrap_err();
+        let error = process_options(["umlaut", "--prim-enum-mode=logsymbol"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --prim-enum-mode excepts neg, and, or, eq, pragmatic, full, or logsym"
         );
 
-        let error = process_options(["eprover", "--func-proj-limit=64"]).unwrap_err();
+        let error = process_options(["umlaut", "--func-proj-limit=64"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--unif-mode=bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--unif-mode=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(
             error.message(),
             "values of unif mode are eiter single or multi"
         );
 
-        let error = process_options(["eprover", "--max-unifiers=1025"]).unwrap_err();
+        let error = process_options(["umlaut", "--max-unifiers=1025"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--max-unif-steps=100001"]).unwrap_err();
+        let error = process_options(["umlaut", "--max-unif-steps=100001"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn process_options_records_goal_defs_modes_like_c() {
-        let action = process_options(["eprover", "--goal-defs=None"]).unwrap();
+        let action = process_options(["umlaut", "--goal-defs=None"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert!(!config.preprocessing.goal_definitions.positive);
         assert!(!config.preprocessing.goal_definitions.negative);
 
-        let action = process_options(["eprover", "--goal-defs=Neg"]).unwrap();
+        let action = process_options(["umlaut", "--goal-defs=Neg"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert!(!config.preprocessing.goal_definitions.positive);
         assert!(config.preprocessing.goal_definitions.negative);
 
-        let action = process_options(["eprover", "--goal-defs=All"]).unwrap();
+        let action = process_options(["umlaut", "--goal-defs=All"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19088,27 +19077,27 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_preprocessing_modes() {
-        let error = process_options(["eprover", "--goal-defs=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--goal-defs=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --goal-defs accepts only None, All, or Neg"
         );
 
-        let error = process_options(["eprover", "--ac-handling=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--ac-handling=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --ac_handling requires None, DiscardAll, KeepUnits, or KeepOrientable as an argument"
         );
 
-        let error = process_options(["eprover", "--presat-simplify=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--presat-simplify=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn process_options_records_literal_selection_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19125,7 +19114,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.search.literal_selection.select_on_processing_only);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "-W",
             "SelectMaxLComplex",
             "--select-on-processing-only",
@@ -19158,7 +19147,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(selection.limits.all_max, 6);
         assert_eq!(selection.limits.weight_min, 7);
 
-        let action = process_options(["eprover", "--no-generation"]).unwrap();
+        let action = process_options(["umlaut", "--no-generation"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19168,7 +19157,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_heuristic_limits_and_completeness_like_c() {
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--prefer-initial-clauses",
             "-x",
             "Auto",
@@ -19195,7 +19184,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn process_options_records_inference_and_splitting_state_like_c() {
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--disable-eq-factoring",
             "--disable-paramod-into-neg-units",
             "--condense-aggressive",
@@ -19230,7 +19219,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.search.splitting.diseq_decomposition, 1024);
         assert_eq!(config.search.splitting.diseq_decomp_maxarity, 3);
 
-        let action = process_options(["eprover", "--simul-paramod"]).unwrap();
+        let action = process_options(["umlaut", "--simul-paramod"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19239,7 +19228,7 @@ input_clause(c2,axiom,[++q(X)]).
             ParamodulationType::Sim
         );
 
-        let action = process_options(["eprover", "--oriented-simul-paramod"]).unwrap();
+        let action = process_options(["umlaut", "--oriented-simul-paramod"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19248,7 +19237,7 @@ input_clause(c2,axiom,[++q(X)]).
             ParamodulationType::OrientedSim
         );
 
-        let action = process_options(["eprover", "--supersimul-paramod"]).unwrap();
+        let action = process_options(["umlaut", "--supersimul-paramod"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19260,7 +19249,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_inference_processing_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19283,7 +19272,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.search.ordering.rewrite_strong_rhs_inst);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--sos-uses-input-types",
             "--destructive-er",
             "--strong-destructive-er",
@@ -19319,7 +19308,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(config.search.support.strong_unit_forward_subsumption);
         assert!(!config.search.support.lift_lambdas);
 
-        let action = process_options(["eprover", "--destructive-er-aggressive"]).unwrap();
+        let action = process_options(["umlaut", "--destructive-er-aggressive"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19329,7 +19318,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_sat_check_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19343,7 +19332,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(sat_check.decision_limit, 10_000);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--satcheck-proc-interval",
             "--satcheck-gen-interval=6",
             "--satcheck-ttinsert-interval",
@@ -19366,7 +19355,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(sat_check.normalize);
 
         let action =
-            process_options(["eprover", "--satcheck", "--satcheck-decision-limit=-1"]).unwrap();
+            process_options(["umlaut", "--satcheck", "--satcheck-decision-limit=-1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19379,7 +19368,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_watchlist_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19387,7 +19376,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(config.search.watchlist.simplify);
         assert!(!config.search.watchlist.is_static);
 
-        let action = process_options(["eprover", "--watchlist"]).unwrap();
+        let action = process_options(["umlaut", "--watchlist"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19397,7 +19386,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert!(!config.search.watchlist.is_static);
 
-        let action = process_options(["eprover", "--watchlist=Use inline watchlist type"]).unwrap();
+        let action = process_options(["umlaut", "--watchlist=Use inline watchlist type"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19407,7 +19396,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--static-watchlist=watch.p",
             "--no-watchlist-simplification",
         ])
@@ -19425,7 +19414,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_subsumption_index_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19440,7 +19429,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.search.fv_index.symbol_slack, 0);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--fw-subsumption-aggressive",
             "--subsumption-indexing=Perm",
             "--fvindex-featuretypes=BillPlus",
@@ -19461,7 +19450,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.search.fv_index.max_symbols, 200);
         assert_eq!(config.search.fv_index.symbol_slack, 3);
 
-        let action = process_options(["eprover", "--conventional-subsumption"]).unwrap();
+        let action = process_options(["umlaut", "--conventional-subsumption"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19471,7 +19460,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--subsumption-indexing=PermOpt",
             "--subsumption-indexing=Direct",
         ])
@@ -19486,7 +19475,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn fv_index_params_from_config_maps_cli_state() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--subsumption-indexing=PermOpt",
             "--fvindex-featuretypes=BillPlus",
             "--fvindex-maxfeatures=200",
@@ -19531,7 +19520,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn proof_control_from_config_installs_configured_parameters() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--expert-heuristic=Auto",
             "--split-clauses=3",
             "--delete-bad-limit=77",
@@ -19570,7 +19559,7 @@ input_clause(c2,axiom,[++q(X)]).
         let _lock = global_state_lock();
         let _guard = set_env_var(PICOSAT_LIBRARY_ENV, "target/test-picosat-runtime.dll");
 
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19596,7 +19585,7 @@ input_clause(c2,axiom,[++q(X)]).
         let _ = std::fs::remove_dir_all(&root);
         let bin_dir = root.join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
-        let executable = bin_dir.join("eprover.exe");
+        let executable = bin_dir.join("umlaut.exe");
         let adjacent = bin_dir.join(PICOSAT_LIBRARY_NAMES[0]);
         let lib_dir = root.join("lib");
         std::fs::create_dir_all(&lib_dir).unwrap();
@@ -19621,7 +19610,7 @@ input_clause(c2,axiom,[++q(X)]).
         let lib_dir = root.join("lib");
         std::fs::create_dir_all(&bin_dir).unwrap();
         std::fs::create_dir_all(&lib_dir).unwrap();
-        let executable = bin_dir.join("eprover.exe");
+        let executable = bin_dir.join("umlaut.exe");
         let bundled = lib_dir.join(PICOSAT_LIBRARY_NAMES[0]);
         std::fs::write(&bundled, b"fake picosat").unwrap();
 
@@ -19641,7 +19630,7 @@ input_clause(c2,axiom,[++q(X)]).
         let bin_dir = root.join("bin");
         let lib_dir = bin_dir.join("lib");
         std::fs::create_dir_all(&lib_dir).unwrap();
-        let executable = bin_dir.join("eprover.exe");
+        let executable = bin_dir.join("umlaut.exe");
         let bundled = lib_dir.join(PICOSAT_LIBRARY_NAMES[0]);
         std::fs::write(&bundled, b"fake picosat").unwrap();
 
@@ -19672,7 +19661,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn proof_control_from_config_applies_selected_predefined_strategy() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--select-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN",
         ]);
 
@@ -19691,7 +19680,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_fingerprint_index_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19702,7 +19691,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(config.search.fingerprint_index.pdt_use_age_constraints);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--rw-bw-index=FP0",
             "--pm-from-index=NoIndex",
             "--pm-into-index=NPDT",
@@ -19722,7 +19711,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!config.search.fingerprint_index.pdt_use_size_constraints);
         assert!(!config.search.fingerprint_index.pdt_use_age_constraints);
 
-        let action = process_options(["eprover", "--fp-index=FP7M"]).unwrap();
+        let action = process_options(["umlaut", "--fp-index=FP7M"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19730,7 +19719,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.search.fingerprint_index.pm_from_index_type, "FP7M");
         assert_eq!(config.search.fingerprint_index.pm_into_index_type, "FP7M");
 
-        let action = process_options(["eprover", "--fp-no-size-constr"]).unwrap();
+        let action = process_options(["umlaut", "--fp-no-size-constr"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19775,93 +19764,93 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_search_control_args() {
-        let error = process_options(["eprover", "-W", "none"]).unwrap_err();
+        let error = process_options(["umlaut", "-W", "none"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().starts_with(
             "Wrong argument to option -W (--literal-selection-strategy). Possible values: "
         ));
         assert!(error.message().contains("NoSelection"));
 
-        let error = process_options(["eprover", "--split-method=3"]).unwrap_err();
+        let error = process_options(["umlaut", "--split-method=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--forward-demod-level=3"]).unwrap_err();
+        let error = process_options(["umlaut", "--forward-demod-level=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--demod-under-lambda=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--demod-under-lambda=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--lift-lambdas=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--lift-lambdas=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--definitional-cnf=-1"]).unwrap_err();
+        let error = process_options(["umlaut", "--definitional-cnf=-1"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--miniscope-limit=-1"]).unwrap_err();
+        let error = process_options(["umlaut", "--miniscope-limit=-1"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--fool-unroll=maybe"]).unwrap_err();
+        let error = process_options(["umlaut", "--fool-unroll=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--arg-cong=bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--arg-cong=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "neg-ext excepts either all, max or off");
 
-        let error = process_options(["eprover", "--neg-ext=bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--neg-ext=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "neg-ext excepts either all or max");
 
-        let error = process_options(["eprover", "--pos-ext=bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--pos-ext=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
         assert_eq!(error.message(), "pos-ext excepts either all or max");
 
-        let error = process_options(["eprover", "--satcheck-proc-interval=0"]).unwrap_err();
+        let error = process_options(["umlaut", "--satcheck-proc-interval=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--satcheck-gen-interval=0"]).unwrap_err();
+        let error = process_options(["umlaut", "--satcheck-gen-interval=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--satcheck-ttinsert-interval=0"]).unwrap_err();
+        let error = process_options(["umlaut", "--satcheck-ttinsert-interval=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--satcheck=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--satcheck=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error
             .message()
             .starts_with("Wrong argument to option --sat-check. Possible values: "));
         assert!(error.message().contains("ConjMinMinFreq"));
 
-        let error = process_options(["eprover", "--satcheck-decision-limit=-2"]).unwrap_err();
+        let error = process_options(["umlaut", "--satcheck-decision-limit=-2"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
         let error =
-            process_options(["eprover", "--satcheck-decision-limit=2147483648"]).unwrap_err();
+            process_options(["umlaut", "--satcheck-decision-limit=2147483648"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--subsumption-indexing=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--subsumption-indexing=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option --subsumption-indexing requires 'None', 'Direct', 'Perm', or 'PermOpt'."
         );
 
-        let error = process_options(["eprover", "--fvindex-featuretypes=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--fvindex-featuretypes=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error
             .message()
             .starts_with("Option --fvindex-featuretypes requires "));
 
-        let error = process_options(["eprover", "--fvindex-maxfeatures=0"]).unwrap_err();
+        let error = process_options(["umlaut", "--fvindex-maxfeatures=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Argument to option --fvindex-maxfeatures has to be > 0"
         );
 
-        let error = process_options(["eprover", "--fvindex-slack=-1"]).unwrap_err();
+        let error = process_options(["umlaut", "--fvindex-slack=-1"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
-        let error = process_options(["eprover", "--rw-bw-index=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--rw-bw-index=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error
             .message()
@@ -19871,7 +19860,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_term_ordering_state_like_c() {
-        let action = process_options(["eprover"]).unwrap();
+        let action = process_options(["umlaut"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19889,7 +19878,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!ordering.rewrite_strong_rhs_inst);
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "-t",
             "LPO4Copy",
             "-w",
@@ -19927,7 +19916,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(ordering.lambda_weight, 30);
         assert_eq!(ordering.db_weight, 12);
 
-        let action = process_options(["eprover", "--precedence"]).unwrap();
+        let action = process_options(["umlaut", "--precedence"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -19937,7 +19926,7 @@ input_clause(c2,axiom,[++q(X)]).
     #[test]
     fn order_parms_from_config_maps_cli_ordering_state() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "-t",
             "LPO4Copy",
             "-w",
@@ -20003,7 +19992,7 @@ input_clause(c2,axiom,[++q(X)]).
     )]
     fn heuristic_parms_from_config_maps_cli_search_state() {
         let config = run_config_from([
-            "eprover",
+            "umlaut",
             "--memory-limit=2",
             "--delete-bad-limit=77",
             "--no-preprocessing",
@@ -20211,7 +20200,7 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_records_lpo_literal_comparison_fallthrough_like_c() {
-        let action = process_options(["eprover", "--lpo-recursion-limit"]).unwrap();
+        let action = process_options(["umlaut", "--lpo-recursion-limit"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20224,7 +20213,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let action = process_options([
-            "eprover",
+            "umlaut",
             "--lpo-recursion-limit=25",
             "--literal-comparison=TFOEqMin",
         ])
@@ -20239,7 +20228,7 @@ input_clause(c2,axiom,[++q(X)]).
             LiteralComparison::TfoEqMin
         );
 
-        let action = process_options(["eprover", "--lpo-recursion-limit=20001"]).unwrap();
+        let action = process_options(["umlaut", "--lpo-recursion-limit=20001"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20253,10 +20242,10 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.warnings[0].message(), LPO_RECURSION_LIMIT_WARNING);
         assert_eq!(
             config.option_stderr,
-            [format!("eprover: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")]
+            [format!("umlaut: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")]
         );
 
-        let action = process_options(["eprover", "--restrict-literal-comparisons"]).unwrap();
+        let action = process_options(["umlaut", "--restrict-literal-comparisons"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20268,56 +20257,56 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_term_ordering_args() {
-        let error = process_options(["eprover", "-t", "Auto"]).unwrap_err();
+        let error = process_options(["umlaut", "-t", "Auto"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
         );
 
-        let error = process_options(["eprover", "-t", "Optimize"]).unwrap_err();
+        let error = process_options(["umlaut", "-t", "Optimize"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
         );
 
-        let error = process_options(["eprover", "--term-ordering=RPO"]).unwrap_err();
+        let error = process_options(["umlaut", "--term-ordering=RPO"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
         );
 
-        let error = process_options(["eprover", "-w", "none"]).unwrap_err();
+        let error = process_options(["umlaut", "-w", "none"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().starts_with(
             "Wrong argument to option -w (--order-weight-generation). Possible values: "
         ));
         assert!(error.message().contains("invfreqrank"));
 
-        let error = process_options(["eprover", "-G", "none"]).unwrap_err();
+        let error = process_options(["umlaut", "-G", "none"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().starts_with(
             "Wrong argument to option -G (--order-precedence-generation). Possible values: "
         ));
         assert!(error.message().contains("invfreq"));
 
-        let error = process_options(["eprover", "-c", "0"]).unwrap_err();
+        let error = process_options(["umlaut", "-c", "0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Argument to option -c (--order-constant-weight) has to be > 0"
         );
 
-        let error = process_options(["eprover", "--lpo-recursion-limit=0"]).unwrap_err();
+        let error = process_options(["umlaut", "--lpo-recursion-limit=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
             "Argument to option --lpo-recursion-limit has to be > 0"
         );
 
-        let error = process_options(["eprover", "--literal-comparison=Bad"]).unwrap_err();
+        let error = process_options(["umlaut", "--literal-comparison=Bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
@@ -20327,27 +20316,27 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_invalid_pcl_shell_level() {
-        let error = process_options(["eprover", "--pcl-shell-level=3"]).unwrap_err();
+        let error = process_options(["umlaut", "--pcl-shell-level=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn process_options_records_proof_output_state_like_c() {
-        let action = process_options(["eprover", "--proof-object=0"]).unwrap();
+        let action = process_options(["umlaut", "--proof-object=0"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.proof_object_level, 0);
         assert_eq!(config.proof_output, 0);
 
-        let action = process_options(["eprover", "--proof-object=3", "--proof-object=1"]).unwrap();
+        let action = process_options(["umlaut", "--proof-object=3", "--proof-object=1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(config.proof_object_level, 3);
         assert_eq!(config.proof_output, 1);
 
-        let action = process_options(["eprover", "--proof-graph=2"]).unwrap();
+        let action = process_options(["umlaut", "--proof-graph=2"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20355,7 +20344,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.proof_output, 3);
 
         let action =
-            process_options(["eprover", "-d", "--proof-statistics", "--record-gcs"]).unwrap();
+            process_options(["umlaut", "-d", "--proof-statistics", "--record-gcs"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20365,7 +20354,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(config.proof_object_level, 1);
 
         let action =
-            process_options(["eprover", "--force-deriv=2", "--training-examples=3"]).unwrap();
+            process_options(["umlaut", "--force-deriv=2", "--training-examples=3"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
@@ -20377,14 +20366,14 @@ input_clause(c2,axiom,[++q(X)]).
 
     #[test]
     fn process_options_rejects_force_derivation_outside_c_range() {
-        let error = process_options(["eprover", "--force-deriv=3"]).unwrap_err();
+        let error = process_options(["umlaut", "--force-deriv=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn process_options_rejects_non_increasing_cpu_limits() {
         let error =
-            process_options(["eprover", "--cpu-limit=10", "--soft-cpu-limit=10"]).unwrap_err();
+            process_options(["umlaut", "--cpu-limit=10", "--soft-cpu-limit=10"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
@@ -20392,7 +20381,7 @@ input_clause(c2,axiom,[++q(X)]).
         );
 
         let error =
-            process_options(["eprover", "--soft-cpu-limit=20", "--cpu-limit=10"]).unwrap_err();
+            process_options(["umlaut", "--soft-cpu-limit=20", "--cpu-limit=10"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
@@ -20401,15 +20390,15 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
-    fn run_version_prints_c_compatible_version_line() {
+    fn run_version_identifies_umlaut_and_e_baseline() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let status = run(["eprover", "-V"], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", "-V"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "E 3.3.5 Countess Grey (facc36eaf92d70896d830140efc4382df9e8dcdb)\n"
+            crate::prover::version::version_line()
         );
         assert!(stderr.is_empty());
     }
@@ -20421,7 +20410,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--verbose=1", "--memory-limit=0", "--version"],
+            ["umlaut", "--verbose=1", "--memory-limit=0", "--version"],
             &mut stdout,
             &mut stderr,
         )
@@ -20430,7 +20419,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "E 3.3.5 Countess Grey (facc36eaf92d70896d830140efc4382df9e8dcdb)\n"
+            crate::prover::version::version_line()
         );
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
@@ -20441,7 +20430,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--verbose=1",
                 "--memory-limit=0",
                 "--cpu-limit=1",
@@ -20465,10 +20454,10 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let status = run(["eprover", "-h"], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", "-h"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let output = String::from_utf8(stdout).unwrap();
-        assert!(output.contains("Usage: eprover [options] [files]"));
+        assert!(output.contains("Usage: umlaut [options] [files]"));
         assert!(output.contains("--version"));
     }
 
@@ -20478,7 +20467,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--help"],
+            ["umlaut", "--help"],
             &mut FlushFailOnNthWriter::new(1),
             &mut stderr,
         )
@@ -20486,7 +20475,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
 
         let status = run(
-            ["eprover", "--version"],
+            ["umlaut", "--version"],
             &mut FlushFailOnNthWriter::new(1),
             &mut stderr,
         )
@@ -20505,7 +20494,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy".to_owned(),
                 problem_arg,
             ],
@@ -20530,7 +20519,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy".to_owned(),
                 problem_arg,
             ],
@@ -20559,7 +20548,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy".to_owned(),
                 problem_arg,
             ],
@@ -20586,7 +20575,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--lop-in".to_owned(),
                 "--syntax-only".to_owned(),
                 "--print-strategy".to_owned(),
@@ -20616,7 +20605,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy".to_owned(),
                 "--bce=true".to_owned(),
                 "--pred-elim=true".to_owned(),
@@ -20646,15 +20635,15 @@ input_clause(c2,axiom,[++q(X)]).
         let strategy_arg = format!("--parse-strategy={}", strategy_path.to_string_lossy());
         let problem_arg = problem_path.to_string_lossy().into_owned();
         let expected = concat!(
-            "eprover: Warning: Config misses ordertype\n\n",
-            "eprover: Warning: Config misses db_w\n\n"
+            "umlaut: Warning: Config misses ordertype\n\n",
+            "umlaut: Warning: Config misses db_w\n\n"
         );
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let error = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 strategy_arg,
                 "--select-strategy=Missing".to_owned(),
                 "--print-strategy".to_owned(),
@@ -20689,7 +20678,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--output-level=0".to_owned(),
                 "--lop-in".to_owned(),
                 strategy_arg,
@@ -20704,8 +20693,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             concat!(
-                "eprover: Warning: Config misses ordertype\n\n",
-                "eprover: Warning: Config misses db_w\n\n"
+                "umlaut: Warning: Config misses ordertype\n\n",
+                "umlaut: Warning: Config misses db_w\n\n"
             )
         );
         std::fs::remove_file(strategy_path).unwrap();
@@ -20723,7 +20712,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy=>all-names<".to_owned(),
                 problem_arg,
             ],
@@ -20758,7 +20747,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--select-strategy=Missing".to_owned(),
                 "--print-strategy=>all-names<".to_owned(),
                 problem_arg,
@@ -20792,7 +20781,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover".to_owned(),
+                "umlaut".to_owned(),
                 "--print-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN".to_owned(),
                 problem_arg,
             ],
@@ -21217,7 +21206,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21252,7 +21241,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21286,12 +21275,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--app-encode",
-                "--print-types",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--app-encode", "--print-types", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21324,7 +21308,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21356,7 +21340,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--sine=Threshold(1)",
                 path_arg.as_str(),
@@ -21395,7 +21379,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--rel-pruning-level=2",
                 path_arg.as_str(),
@@ -21426,7 +21410,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--sine=NoSInE",
                 "--app-encode",
@@ -21472,7 +21456,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21534,7 +21518,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21566,7 +21550,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21605,7 +21589,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21639,7 +21623,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21673,7 +21657,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21706,7 +21690,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21747,7 +21731,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21782,7 +21766,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21817,7 +21801,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21852,7 +21836,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21887,7 +21871,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21925,7 +21909,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -21960,7 +21944,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--error-on-empty",
                 path_arg.as_str(),
@@ -22000,7 +21984,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22055,7 +22039,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22089,7 +22073,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22125,7 +22109,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22155,7 +22139,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22193,7 +22177,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22244,7 +22228,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22287,7 +22271,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22325,7 +22309,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22372,7 +22356,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22420,7 +22404,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22464,7 +22448,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22508,7 +22492,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22528,7 +22512,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22560,7 +22544,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22592,7 +22576,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22631,7 +22615,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22661,7 +22645,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 output_option.as_str(),
                 path_arg.as_str(),
@@ -22701,7 +22685,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--error-on-empty",
                 path_arg.as_str(),
@@ -22732,7 +22716,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--error-on-empty",
                 "--tstp-in",
@@ -22775,7 +22759,7 @@ input_clause(c2,axiom,[++q(X)]).
 
             let error = run(
                 [
-                    "eprover",
+                    "umlaut",
                     "--app-encode",
                     "--error-on-empty",
                     format_flag,
@@ -22805,7 +22789,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--app-encode",
                 "--error-on-empty",
                 path_arg.as_str(),
@@ -22837,7 +22821,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22867,7 +22851,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22901,7 +22885,7 @@ input_clause(c2,axiom,[++q(X)]).
             let mut stderr = Vec::new();
 
             let status = run(
-                ["eprover", "--app-encode", format_flag, path_arg.as_str()],
+                ["umlaut", "--app-encode", format_flag, path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -22941,7 +22925,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -22973,7 +22957,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--app-encode", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23005,7 +22989,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23031,7 +23015,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23057,7 +23041,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23086,7 +23070,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23115,7 +23099,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23170,7 +23154,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23252,7 +23236,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23283,7 +23267,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--app-encode", path_arg.as_str()],
+            ["umlaut", "--app-encode", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23307,7 +23291,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--verbose=2", path_arg.as_str()],
+            ["umlaut", "--verbose=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23335,7 +23319,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--verbose=1",
                 "--silent",
                 "--cnf",
@@ -23351,24 +23335,24 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             format!(
-                "eprover: Output is going to <stdout>\n\
-                 eprover: Input file is {path_arg}\n\
-                 eprover: Opened {path_arg}\n\
-                 eprover: Closing {path_arg}\n\
-                 eprover: Negated conjectures.\n\
-                 eprover: Clausification started.\n\
-                 eprover: Garbage collection started.\n\
+                "umlaut: Output is going to <stdout>\n\
+                 umlaut: Input file is {path_arg}\n\
+                 umlaut: Opened {path_arg}\n\
+                 umlaut: Closing {path_arg}\n\
+                 umlaut: Negated conjectures.\n\
+                 umlaut: Clausification started.\n\
+                 umlaut: Garbage collection started.\n\
                  Garbage collection reclaimed 1 unused term cells.\n\
-                 eprover: Garbage collection started.\n\
+                 umlaut: Garbage collection started.\n\
                  Garbage collection reclaimed 1 unused term cells.\n\
-                 eprover: Clausification done.\n\
-                 eprover: CNFization done\n\
-                 eprover: Clausal preprocessing started.\n\
-                 eprover: Clausal preprocessing complete.\n\
-                 eprover: Generating ordering precedence with none\n\
-                 eprover: Fall-through to unary_first\n\
-                 eprover: Generating ordering weight with none\n\
-                 eprover: Closing output\n"
+                 umlaut: Clausification done.\n\
+                 umlaut: CNFization done\n\
+                 umlaut: Clausal preprocessing started.\n\
+                 umlaut: Clausal preprocessing complete.\n\
+                 umlaut: Generating ordering precedence with none\n\
+                 umlaut: Fall-through to unary_first\n\
+                 umlaut: Generating ordering weight with none\n\
+                 umlaut: Closing output\n"
             )
         );
 
@@ -23395,7 +23379,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--verbose=2",
                 "--silent",
                 "--cnf",
@@ -23410,12 +23394,12 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let stderr = String::from_utf8(stderr).unwrap();
         let markers = [
-            format!("eprover: Opened {main_arg}\n"),
-            format!("eprover: Trying file {include_arg}\n"),
-            format!("eprover: Input file is {include_arg}\n"),
-            format!("eprover: Opened {include_arg}\n"),
-            format!("eprover: Closing {include_arg}\n"),
-            format!("eprover: Closing {main_arg}\n"),
+            format!("umlaut: Opened {main_arg}\n"),
+            format!("umlaut: Trying file {include_arg}\n"),
+            format!("umlaut: Input file is {include_arg}\n"),
+            format!("umlaut: Opened {include_arg}\n"),
+            format!("umlaut: Closing {include_arg}\n"),
+            format!("umlaut: Closing {main_arg}\n"),
         ];
         let positions = markers
             .iter()
@@ -23448,7 +23432,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--verbose=1",
                 "--silent",
                 "--cnf",
@@ -23464,8 +23448,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let stderr = String::from_utf8(stderr).unwrap();
         assert!(stderr.contains(&format!(
-            "eprover: Closing {path_arg}\n% Found 1 seed clauses/formulas\n\
-             eprover: Negated conjectures.\n"
+            "umlaut: Closing {path_arg}\n% Found 1 seed clauses/formulas\n\
+             umlaut: Negated conjectures.\n"
         )));
 
         set_verbose_level(0);
@@ -23479,12 +23463,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
-            ["eprover", "--verbose=2147483648"],
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap_err();
+        let error = run(["umlaut", "--verbose=2147483648"], &mut stdout, &mut stderr).unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("out of int range"));
@@ -23503,7 +23482,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--soft-cpu-limit=25",
                 "--cpu-limit=100",
                 path_arg.as_str(),
@@ -23533,7 +23512,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(!time_is_up());
@@ -23555,7 +23534,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--eta-normalize=expand", path_arg.as_str()],
+            ["umlaut", "--eta-normalize=expand", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23579,7 +23558,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(eta_normalizer_is(lambda_eta_reduce_db));
@@ -23600,7 +23579,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let result = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--auto",
                 "--cpu-limit=0",
@@ -23621,7 +23600,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("User resource limit exceeded"));
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "eprover: CPU time limit exceeded, terminating\n"
+            "umlaut: CPU time limit exceeded, terminating\n"
         );
 
         std::fs::remove_file(&path).unwrap();
@@ -23639,7 +23618,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--soft-cpu-limit=0",
                 "--cpu-limit=1",
@@ -23674,7 +23653,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--silent", silent_arg.as_str()],
+            ["umlaut", "--silent", silent_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23684,7 +23663,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert_eq!(output_level(), 0);
 
         let status = run(
-            ["eprover", "--output-level=3", output_arg.as_str()],
+            ["umlaut", "--output-level=3", output_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23711,7 +23690,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-version",
                 "-o",
                 path_arg.as_str(),
@@ -23735,7 +23714,7 @@ input_clause(c2,axiom,[++q(X)]).
         stdout.clear();
 
         let status = run(
-            ["eprover", "--print-version", "-o", "-", input_arg.as_str()],
+            ["umlaut", "--print-version", "-o", "-", input_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23800,7 +23779,7 @@ input_clause(c2,axiom,[++q(X)]).
             error.message()
         );
         assert!(
-            error.message().contains("\neprover: "),
+            error.message().contains("\numlaut: "),
             "{}",
             error.message()
         );
@@ -23822,7 +23801,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--lop-in",
                 "-o",
@@ -23860,7 +23839,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23889,7 +23868,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -23914,7 +23893,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut rejected_stdout = Vec::new();
         let mut rejected_stderr = Vec::new();
         let error = run(
-            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--lop-in", path_arg.as_str()],
             &mut rejected_stdout,
             &mut rejected_stderr,
         )
@@ -23934,7 +23913,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut accepted_stderr = Vec::new();
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--lop-in",
                 "--free-numbers",
@@ -23973,7 +23952,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24004,7 +23983,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24035,7 +24014,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24065,7 +24044,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24097,7 +24076,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24131,7 +24110,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24169,7 +24148,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24211,7 +24190,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24251,7 +24230,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24289,7 +24268,7 @@ input_clause(c2,axiom,[++q(X)]).
             let mut stderr = Vec::new();
 
             let status = run(
-                ["eprover", "--syntax-only", path_arg.as_str()],
+                ["umlaut", "--syntax-only", path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -24320,7 +24299,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24351,7 +24330,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24381,7 +24360,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24415,7 +24394,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24445,7 +24424,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24471,7 +24450,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--lop-in",
                 "--resources-info",
@@ -24504,7 +24483,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--resources-info", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--resources-info", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24538,7 +24517,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--prune", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--prune", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -24570,7 +24549,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -24903,7 +24882,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -24945,7 +24924,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -24988,7 +24967,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25030,7 +25009,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25074,7 +25053,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25113,7 +25092,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25159,7 +25138,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25200,7 +25179,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25237,7 +25216,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25277,7 +25256,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25318,7 +25297,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25355,7 +25334,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25393,7 +25372,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--prune", path_arg.as_str()],
+            ["umlaut", "--prune", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25439,7 +25418,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--prune", path_arg.as_str()],
+            ["umlaut", "--prune", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25472,7 +25451,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25509,7 +25488,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--lop-in",
                 "--sine=Threshold(1)",
@@ -25543,7 +25522,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--sine=NoSInE",
                 "--prune",
@@ -25585,7 +25564,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25629,7 +25608,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25671,7 +25650,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--prune", "--bce=true", path_arg.as_str()],
+            ["umlaut", "--prune", "--bce=true", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25699,7 +25678,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25734,7 +25713,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25776,7 +25755,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25821,7 +25800,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--prune",
                 "--tstp-in",
                 "--tstp-out",
@@ -25859,7 +25838,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25887,7 +25866,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25914,7 +25893,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25948,7 +25927,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -25976,7 +25955,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--satcheck=GlobalMin",
                 "--satcheck-proc-interval=1",
@@ -26010,7 +25989,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--satcheck=ConjMinMinFreq",
                 "--satcheck-proc-interval=1",
@@ -26052,7 +26031,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26072,7 +26051,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--auto", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--auto", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26112,7 +26091,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--auto", "--cnf", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--auto", "--cnf", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26139,7 +26118,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--sine=NoSInE",
                 "--cnf",
@@ -26174,7 +26153,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26199,7 +26178,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26228,7 +26207,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -26257,7 +26236,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26282,7 +26261,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26307,7 +26286,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26331,7 +26310,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26356,7 +26335,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -26379,7 +26358,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26406,7 +26385,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26433,7 +26412,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26460,7 +26439,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26484,7 +26463,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26508,7 +26487,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26531,7 +26510,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -26559,7 +26538,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26583,7 +26562,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26607,7 +26586,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26632,7 +26611,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26661,7 +26640,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26689,7 +26668,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26718,7 +26697,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", first_order_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", first_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26749,7 +26728,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", higher_order_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", higher_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -26780,7 +26759,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26805,7 +26784,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26829,7 +26808,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26853,7 +26832,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26877,7 +26856,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26901,7 +26880,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26925,7 +26904,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26950,7 +26929,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -26975,7 +26954,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27000,7 +26979,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27025,7 +27004,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27050,7 +27029,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27074,7 +27053,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27099,7 +27078,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27125,7 +27104,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27152,7 +27131,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27177,7 +27156,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27203,7 +27182,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27228,7 +27207,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -27257,7 +27236,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27282,7 +27261,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27307,7 +27286,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27333,7 +27312,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27360,7 +27339,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27385,7 +27364,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27410,7 +27389,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27435,7 +27414,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27460,7 +27439,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27485,7 +27464,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27510,7 +27489,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27535,7 +27514,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27560,7 +27539,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27585,7 +27564,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27610,7 +27589,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27634,7 +27613,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27660,7 +27639,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27685,7 +27664,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27711,7 +27690,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27735,7 +27714,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27759,7 +27738,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27784,7 +27763,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27809,7 +27788,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27836,7 +27815,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -27865,7 +27844,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27890,7 +27869,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27915,7 +27894,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27940,7 +27919,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27965,7 +27944,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -27990,7 +27969,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28015,7 +27994,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28041,7 +28020,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28066,7 +28045,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28090,7 +28069,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28116,7 +28095,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28144,7 +28123,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28169,7 +28148,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28194,7 +28173,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28223,7 +28202,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28249,7 +28228,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28275,7 +28254,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28304,7 +28283,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28330,7 +28309,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28355,7 +28334,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28384,7 +28363,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28410,7 +28389,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28435,7 +28414,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28465,7 +28444,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28491,7 +28470,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28520,7 +28499,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28545,7 +28524,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28571,7 +28550,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28606,7 +28585,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--unif-mode=multi",
                 "--pattern-oracle=false",
                 "--fixpoint-oracle=false",
@@ -28656,7 +28635,7 @@ input_clause(c2,axiom,[++q(X)]).
             let mut stderr = Vec::new();
             let status = run(
                 [
-                    "eprover",
+                    "umlaut",
                     ordering_arg.as_str(),
                     "--literal-selection-strategy=NoSelection",
                     "--pm-from-index=NoIndex",
@@ -28710,7 +28689,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28737,7 +28716,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 path_arg.as_str(),
                 "--auto",
                 "--silent",
@@ -28780,7 +28759,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -28812,7 +28791,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28843,7 +28822,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -28882,7 +28861,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28921,7 +28900,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -28952,7 +28931,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap_err();
+        let error = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
         assert!(error.message().contains(
@@ -28975,7 +28954,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29008,7 +28987,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
@@ -29036,7 +29015,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--conjectures-are-questions", path_arg.as_str()],
+            ["umlaut", "--conjectures-are-questions", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29062,7 +29041,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29103,7 +29082,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--processed-clauses-limit=2", path_arg.as_str()],
+            ["umlaut", "--processed-clauses-limit=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29134,7 +29113,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -29157,7 +29136,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
@@ -29181,7 +29160,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--no-generation", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--no-generation", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29209,7 +29188,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -29238,7 +29217,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--assume-incompleteness",
                 path_arg.as_str(),
@@ -29271,7 +29250,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--print-saturated=e",
@@ -29306,7 +29285,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--print-saturated=e",
@@ -29340,7 +29319,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--pm-from-index=FP1",
                 "--pm-into-index=FP1",
@@ -29374,7 +29353,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--define-weight-function=custom_fifo=FIFOWeight(ConstPrio)",
                 "--define-heuristic=CustomSearch=(1*custom_fifo)",
@@ -29418,7 +29397,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--define-weight-function=strategy_fifo=FIFOWeight(ConstPrio)",
                 strategy_arg.as_str(),
@@ -29453,7 +29432,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--term-ordering=KBO",
                 "--order-weight-generation=arity",
@@ -29488,7 +29467,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--literal-selection-strategy=SelectUnlessPosMax",
                 path_arg.as_str(),
@@ -29521,7 +29500,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-saturated=e",
                 path_arg.as_str(),
@@ -29556,7 +29535,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--tstp-out",
                 "--print-saturated=e",
@@ -29600,7 +29579,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-out",
                 "--print-saturated=e",
                 path_arg.as_str(),
@@ -29631,7 +29610,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--eqn-no-infix",
@@ -29663,7 +29642,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -29828,7 +29807,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-detailed-statistics",
                 path_arg.as_str(),
@@ -29897,7 +29876,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--no-generation",
@@ -29937,7 +29916,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--no-generation",
@@ -29971,7 +29950,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-statistics",
                 "--sine=Threshold(1)",
@@ -30009,7 +29988,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--print-statistics",
                 "--sine=Threshold(1)",
@@ -30049,7 +30028,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--no-generation",
@@ -30089,7 +30068,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--no-generation",
@@ -30131,7 +30110,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--no-generation",
@@ -30170,7 +30149,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--bce=true",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30207,7 +30186,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--bce=true",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30242,7 +30221,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--bce=true",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30283,7 +30262,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--bce=true",
                 "--pred-elim=true",
@@ -30328,7 +30307,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut disabled_stderr = Vec::new();
         let disabled_status = run(
             [
-                "eprover",
+                "umlaut",
                 "--cnf",
                 "--output-level=2",
                 "--print-statistics",
@@ -30344,7 +30323,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut enabled_stderr = Vec::new();
         let enabled_status = run(
             [
-                "eprover",
+                "umlaut",
                 "--cnf",
                 "--output-level=2",
                 "--print-statistics",
@@ -30386,7 +30365,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--pred-elim=true",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30424,7 +30403,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--pred-elim=true",
                 "--pred-elim-recognize-gates=true",
                 "--print-statistics",
@@ -30462,7 +30441,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--pred-elim=true",
                 "--print-statistics",
@@ -30497,7 +30476,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--goal-defs=All",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30528,7 +30507,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--goal-defs=All",
                 "--print-statistics",
@@ -30567,7 +30546,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--print-statistics",
                 path_arg.as_str(),
@@ -30604,7 +30583,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-statistics", path_arg.as_str()],
+            ["umlaut", "--print-statistics", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -30631,7 +30610,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-statistics",
                 "--sine=LambdaDef",
@@ -30663,7 +30642,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--presat-simplify=true",
                 path_arg.as_str(),
@@ -30696,7 +30675,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--presat-simplify=true",
                 path_arg.as_str(),
@@ -30724,7 +30703,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -30756,7 +30735,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["umlaut", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -30795,23 +30774,23 @@ input_clause(c2,axiom,[++q(X)]).
         let path_arg = path.to_string_lossy().into_owned();
         let cases = [
             (
-                vec!["eprover", "--syntax-only", "--silent", path_arg.as_str()],
+                vec!["umlaut", "--syntax-only", "--silent", path_arg.as_str()],
                 "\n% Parsing successful!\n% SZS status Unknown\n".to_owned(),
             ),
             (
-                vec!["eprover", "--print-formulas", "--silent", path_arg.as_str()],
+                vec!["umlaut", "--print-formulas", "--silent", path_arg.as_str()],
                 "fof(test1, axiom, ![X1, X2]:((p(X1,X2)&?[X1]:((q(X2,X1)=>q(X1,X2)))))).\n"
                     .to_owned(),
             ),
             (
-                vec!["eprover", "--prune", "--silent", path_arg.as_str()],
+                vec!["umlaut", "--prune", "--silent", path_arg.as_str()],
                 format!(
                     "{}\n% Pruning successful!\n% SZS status Unknown\n",
                     default_preprocessing_debug_line()
                 ),
             ),
             (
-                vec!["eprover", "--cnf", "--silent", path_arg.as_str()],
+                vec!["umlaut", "--cnf", "--silent", path_arg.as_str()],
                 format!(
                     "{}\n\
                      % CNFization successful!\n\
@@ -30857,7 +30836,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+        let status = run(["umlaut", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
@@ -30902,7 +30881,7 @@ input_clause(c2,axiom,[++q(X)]).
 
             let status = run(
                 [
-                    "eprover",
+                    "umlaut",
                     "--tstp-in",
                     "--error-on-empty",
                     "--cnf",
@@ -30942,7 +30921,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", path_arg.as_str()],
+            ["umlaut", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -30977,7 +30956,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--cnf", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--cnf", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31005,7 +30984,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--cnf",
                 "--output-level=2",
@@ -31041,7 +31020,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--cnf",
                 "--output-level=2",
@@ -31080,7 +31059,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--cnf",
                 "--output-level=2",
@@ -31124,7 +31103,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31162,7 +31141,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31255,7 +31234,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--fool-unroll=false",
                 "--cnf",
@@ -31287,7 +31266,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31320,7 +31299,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31354,7 +31333,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31384,7 +31363,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31418,7 +31397,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31445,7 +31424,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-out",
                 path_arg.as_str(),
@@ -31484,7 +31463,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31516,7 +31495,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31553,7 +31532,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--tstp-in", "--cnf", path_arg.as_str()],
+            ["umlaut", "--tstp-in", "--cnf", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31587,7 +31566,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31611,7 +31590,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--output-level=2",
                 "--no-generation",
@@ -31655,7 +31634,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--output-level=2",
                 "--no-generation",
@@ -31689,7 +31668,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--output-level=2",
                 "--no-generation",
@@ -31720,7 +31699,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--output-level=2",
                 "--no-generation",
@@ -31754,7 +31733,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--output-level=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31780,7 +31759,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--output-level=6",
                 "--no-generation",
@@ -31813,7 +31792,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--output-level=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31838,7 +31817,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--output-level=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31864,7 +31843,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--tstp-out",
                 "--output-level=2",
@@ -31934,7 +31913,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--tstp-out",
                 "--output-level=2",
@@ -31964,7 +31943,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--proof-object=1", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--proof-object=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -31996,7 +31975,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--full-deriv",
                 "--proof-object=1",
@@ -32118,7 +32097,7 @@ input_clause(c2,axiom,[++q(X)]).
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--proof-object=0", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--proof-object=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32144,7 +32123,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--tstp-out",
                 "--proof-object=1",
@@ -32185,7 +32164,7 @@ input_clause(c2,axiom,[++q(X)]).
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--silent",
                 "--cpu-limit=60",
@@ -32242,7 +32221,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--proof-object=1", path_arg.as_str()],
+            ["umlaut", "--proof-object=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32267,7 +32246,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--silent",
                 "--cpu-limit=60",
@@ -32318,7 +32297,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--proof-graph=1", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--proof-graph=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32361,7 +32340,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--proof-graph=2", path_arg.as_str()],
+            ["umlaut", "--lop-in", "--proof-graph=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32392,7 +32371,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--proof-graph=2", path_arg.as_str()],
+            ["umlaut", "--proof-graph=2", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32630,7 +32609,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--print-statistics",
                 "--record-gcs",
@@ -32660,7 +32639,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--proof-statistics",
                 "--record-gcs",
@@ -32696,7 +32675,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--training-examples=3",
                 path_arg.as_str(),
@@ -32730,7 +32709,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--tstp-out",
                 "--training-examples=1",
@@ -32762,7 +32741,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--proof-object=1", path_arg.as_str()],
+            ["umlaut", "--proof-object=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32793,7 +32772,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--proof-object=1",
                 "--proof-statistics",
                 path_arg.as_str(),
@@ -32827,7 +32806,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--proof-graph=1", path_arg.as_str()],
+            ["umlaut", "--proof-graph=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -32861,12 +32840,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--pcl-out",
-                "--proof-object=1",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--pcl-out", "--proof-object=1", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -33475,7 +33449,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--proof-object=1",
@@ -33506,7 +33480,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--proof-object=1",
@@ -33541,7 +33515,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--processed-clauses-limit=0",
                 "--proof-object=1",
@@ -33574,7 +33548,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--processed-clauses-limit=0",
                 "--force-deriv=2",
@@ -33609,7 +33583,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--processed-clauses-limit=0",
                 "--print-saturated=e",
@@ -33641,7 +33615,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 "--processed-clauses-limit=0",
@@ -33706,7 +33680,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let EProverAction::Run(mut config) = process_options([
-            "eprover",
+            "umlaut",
             "--no-preprocessing",
             "--no-generation",
             "--processed-clauses-limit=1",
@@ -33753,7 +33727,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 watch_arg.as_str(),
@@ -33792,7 +33766,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--output-level=2",
                 "--no-generation",
                 "--watchlist=Use inline watchlist type",
@@ -33837,7 +33811,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--output-level=2",
                 "--no-generation",
                 "--watchlist=Use inline watchlist type",
@@ -33891,7 +33865,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--tstp-out",
                 "--output-level=2",
@@ -33951,7 +33925,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--no-generation",
                 "--watchlist=Use inline watchlist type",
                 path_arg.as_str(),
@@ -33988,7 +33962,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--output-level=2",
                 "--no-generation",
@@ -34039,7 +34013,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--lop-in",
                 "--no-generation",
                 watch_arg.as_str(),
@@ -34076,12 +34050,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            [
-                "eprover",
-                "--lop-in",
-                watch_arg.as_str(),
-                input_arg.as_str(),
-            ],
+            ["umlaut", "--lop-in", watch_arg.as_str(), input_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34108,7 +34077,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--lop-in",
                 "--lpo-recursion-limit=20001",
@@ -34126,7 +34095,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         );
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "eprover: Warning: Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.\n"
+            "umlaut: Warning: Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.\n"
         );
 
         set_lpo_recursion_depth_limit(old_limit);
@@ -34147,7 +34116,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
             let status = run(
                 [
-                    "eprover",
+                    "umlaut",
                     "--output-level=0",
                     "--lop-in",
                     ordering_arg.as_str(),
@@ -34181,7 +34150,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--lpo-recursion-limit=20001",
                 "--literal-comparison=Bad",
             ],
@@ -34198,7 +34167,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            format!("eprover: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")
+            format!("umlaut: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")
         );
     }
 
@@ -34212,7 +34181,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--print-formulas", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34234,7 +34203,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--lop-in",
                 "--eqn-no-infix",
@@ -34261,7 +34230,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--lop-in",
                 "--print-types",
@@ -34279,7 +34248,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut tptp_stderr = Vec::new();
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--lop-in",
                 "--tptp-out",
@@ -34314,7 +34283,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-in",
                 "--print-types",
@@ -34362,12 +34331,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34410,12 +34374,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34464,7 +34423,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             let mut stderr = Vec::new();
 
             let status = run(
-                ["eprover", "--print-formulas", format_arg, path_arg.as_str()],
+                ["umlaut", "--print-formulas", format_arg, path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -34504,7 +34463,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34575,7 +34534,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-in",
                 "--print-types",
@@ -34617,7 +34576,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-in",
                 "--print-types",
@@ -34658,7 +34617,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-in",
                 "--print-types",
@@ -34697,7 +34656,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tstp-in",
                 "--print-types",
@@ -34731,7 +34690,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34759,12 +34718,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34791,12 +34745,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34830,7 +34779,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", first_order_arg.as_str()],
+            ["umlaut", "--print-formulas", first_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34859,7 +34808,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", higher_order_arg.as_str()],
+            ["umlaut", "--print-formulas", higher_order_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34884,7 +34833,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34916,7 +34865,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34941,7 +34890,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -34972,7 +34921,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35002,12 +34951,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tstp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35043,7 +34987,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--fool-unroll=false",
                 path_arg.as_str(),
@@ -35069,7 +35013,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--lop-in",
                 "--tptp-out",
@@ -35102,7 +35046,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tptp-in",
                 "--tstp-out",
@@ -35137,12 +35081,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            [
-                "eprover",
-                "--print-formulas",
-                "--tptp-in",
-                path_arg.as_str(),
-            ],
+            ["umlaut", "--print-formulas", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35174,7 +35113,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--print-formulas",
                 "--tptp-in",
                 "--tstp-out",
@@ -35204,7 +35143,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35225,7 +35164,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35246,7 +35185,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35267,7 +35206,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35297,7 +35236,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35340,7 +35279,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35387,7 +35326,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35434,7 +35373,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35473,7 +35412,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35506,7 +35445,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35535,7 +35474,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35571,7 +35510,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35606,7 +35545,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35631,7 +35570,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35652,7 +35591,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35673,7 +35612,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35694,7 +35633,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35715,7 +35654,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35736,7 +35675,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35757,7 +35696,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35778,7 +35717,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35799,7 +35738,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35820,7 +35759,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35841,7 +35780,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35862,7 +35801,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35883,7 +35822,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35904,7 +35843,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35925,7 +35864,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35946,7 +35885,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35967,7 +35906,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -35988,7 +35927,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36009,7 +35948,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36030,7 +35969,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36051,7 +35990,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36072,7 +36011,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36093,7 +36032,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36114,7 +36053,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36135,7 +36074,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36156,7 +36095,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36179,7 +36118,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36205,7 +36144,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36229,7 +36168,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36259,7 +36198,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36289,7 +36228,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", "--tptp-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36321,7 +36260,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36354,7 +36293,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", "--tstp-in", path_arg.as_str()],
+            ["umlaut", "--syntax-only", "--tstp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36388,7 +36327,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36413,7 +36352,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36447,7 +36386,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36472,7 +36411,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36498,7 +36437,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--error-on-empty",
                 path_arg.as_str(),
@@ -36532,7 +36471,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36563,7 +36502,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             )
             .unwrap();
             let path_arg = path.to_string_lossy().into_owned();
-            let mut args = vec!["eprover"];
+            let mut args = vec!["umlaut"];
             args.extend_from_slice(mode_args);
             args.push(path_arg.as_str());
             let mut stdout = Vec::new();
@@ -36596,7 +36535,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             let mut stderr = Vec::new();
 
             let error = run(
-                ["eprover", "--syntax-only", path_arg.as_str()],
+                ["umlaut", "--syntax-only", path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -36626,7 +36565,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36657,7 +36596,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36691,7 +36630,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36719,7 +36658,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36753,7 +36692,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36786,7 +36725,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36820,7 +36759,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36854,7 +36793,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36885,7 +36824,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36916,7 +36855,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36946,7 +36885,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -36977,7 +36916,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37009,7 +36948,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37039,7 +36978,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37072,7 +37011,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37105,7 +37044,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37139,7 +37078,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37169,7 +37108,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37201,7 +37140,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37238,7 +37177,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37272,7 +37211,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37305,7 +37244,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+            ["umlaut", "--print-formulas", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37341,7 +37280,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37373,7 +37312,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37403,7 +37342,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37437,7 +37376,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37469,7 +37408,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37501,7 +37440,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37546,7 +37485,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--output-level=0",
                 "--term-ordering=KBO6",
                 "--order-weight-generation=invfreqrank",
@@ -37587,7 +37526,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37622,7 +37561,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37655,7 +37594,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37687,7 +37626,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let status = run(
             [
-                "eprover",
+                "umlaut",
                 "--auto",
                 "--cnf",
                 "--output-level=0",
@@ -37723,7 +37662,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37754,7 +37693,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37785,7 +37724,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37817,7 +37756,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37849,7 +37788,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37882,7 +37821,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37914,7 +37853,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37945,7 +37884,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -37976,7 +37915,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38006,7 +37945,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38031,7 +37970,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38061,7 +38000,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38105,7 +38044,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             let mut stderr = Vec::new();
 
             let status = run(
-                ["eprover", "--syntax-only", path_arg.as_str()],
+                ["umlaut", "--syntax-only", path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -38131,7 +38070,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38156,7 +38095,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38181,7 +38120,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38211,7 +38150,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38255,7 +38194,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38285,7 +38224,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38315,7 +38254,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38351,7 +38290,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38382,7 +38321,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38416,7 +38355,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38449,7 +38388,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38479,7 +38418,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--output-level=0", path_arg.as_str()],
+            ["umlaut", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38512,7 +38451,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38547,7 +38486,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38579,7 +38518,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38604,7 +38543,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38634,7 +38573,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38659,7 +38598,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38690,7 +38629,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38719,7 +38658,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38750,7 +38689,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38780,7 +38719,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38811,7 +38750,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38842,7 +38781,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38867,7 +38806,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38892,7 +38831,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38917,7 +38856,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38947,7 +38886,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -38978,7 +38917,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39003,7 +38942,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39033,7 +38972,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39058,7 +38997,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39088,7 +39027,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             let mut stderr = Vec::new();
 
             let error = run(
-                ["eprover", "--syntax-only", path_arg.as_str()],
+                ["umlaut", "--syntax-only", path_arg.as_str()],
                 &mut stdout,
                 &mut stderr,
             )
@@ -39120,7 +39059,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39145,7 +39084,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39176,7 +39115,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39205,7 +39144,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+            ["umlaut", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -39231,7 +39170,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--error-on-empty",
                 path_arg.as_str(),
@@ -39262,7 +39201,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         let error = run(
             [
-                "eprover",
+                "umlaut",
                 "--syntax-only",
                 "--error-on-empty",
                 output_option.as_str(),
@@ -39300,7 +39239,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut syntax_stderr = Vec::new();
         let syntax_status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--error-on-empty",
                 "--syntax-only",
@@ -39323,7 +39262,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let mut app_stderr = Vec::new();
         let app_status = run(
             [
-                "eprover",
+                "umlaut",
                 "--tstp-in",
                 "--error-on-empty",
                 "--app-encode",
@@ -39366,7 +39305,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
             let status = run(
                 [
-                    "eprover",
+                    "umlaut",
                     "--syntax-only",
                     "--error-on-empty",
                     path_arg.as_str(),

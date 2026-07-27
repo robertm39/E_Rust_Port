@@ -25,7 +25,7 @@ use std::io::Write as IoWrite;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub const E_EXEC_DEFAULT: &str = "eprover";
+pub const E_EXEC_DEFAULT: &str = "umlaut";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
 pub const SPASS_EXEC_DEFAULT: &str = "SPASS-0.55";
 pub const FOF_PROOFCHECK_WARNING: &str = "Cannot currently handle full first-order format!";
@@ -1186,7 +1186,7 @@ mod tests {
 
         let count = collect_preconditions_with_warnings(
             &mut warning,
-            "eprover",
+            "umlaut",
             &mut protocol,
             &parse_id("3"),
             &mut set,
@@ -1197,7 +1197,7 @@ mod tests {
         assert_eq!(set.members(), 1);
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
+            format!("umlaut: Warning: {FOF_PROOFCHECK_WARNING}\n")
         );
     }
 
@@ -1234,14 +1234,14 @@ mod tests {
         let mut warning = Vec::new();
 
         let problem =
-            generate_check_with_warnings(&mut warning, "eprover", &mut protocol, &parse_id("2"))
+            generate_check_with_warnings(&mut warning, "umlaut", &mut protocol, &parse_id("2"))
                 .unwrap()
                 .unwrap();
 
         assert_eq!(problem.members(), 1);
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
+            format!("umlaut: Warning: {FOF_PROOFCHECK_WARNING}\n")
         );
     }
 
@@ -1662,7 +1662,7 @@ mod tests {
 
         let summary = protocol_check_with_output_and_warnings(
             &mut output,
-            &mut ProofcheckWarningOutput::new(&mut warning, "eprover"),
+            &mut ProofcheckWarningOutput::new(&mut warning, "umlaut"),
             1,
             &mut protocol,
             ProverType::NoProver,
@@ -1679,7 +1679,7 @@ mod tests {
         assert!(output.contains("% Check not implemented, assuming true!\n\n"));
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
+            format!("umlaut: Warning: {FOF_PROOFCHECK_WARNING}\n")
         );
     }
 

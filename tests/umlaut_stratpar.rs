@@ -10,7 +10,7 @@ fn real_problem_inputs_match_current_c_invalid_autosched_boundary() {
         ("sat", "cnf(unit_axiom, axiom, p(a)).\n"),
     ] {
         let path = write_problem(label, problem);
-        let output = Command::new(env!("CARGO_BIN_EXE_e_stratpar"))
+        let output = Command::new(env!("CARGO_BIN_EXE_umlaut-stratpar"))
             .arg("--cpu-limit=10")
             .arg(&path)
             .env("PATH", path_with_built_eprover())
@@ -24,8 +24,8 @@ fn real_problem_inputs_match_current_c_invalid_autosched_boundary() {
         assert_eq!(
             stderr,
             concat!(
-                "eprover: Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument\n",
-                "e_stratpar: Cannot read eprover PID line\n",
+                "umlaut: Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument\n",
+                "umlaut-stratpar: Cannot read umlaut PID line\n",
             )
         );
 
@@ -34,7 +34,7 @@ fn real_problem_inputs_match_current_c_invalid_autosched_boundary() {
 }
 
 fn path_with_built_eprover() -> OsString {
-    let eprover_dir = Path::new(env!("CARGO_BIN_EXE_eprover"))
+    let eprover_dir = Path::new(env!("CARGO_BIN_EXE_umlaut"))
         .parent()
         .unwrap()
         .to_path_buf();
@@ -51,7 +51,7 @@ fn write_problem(label: &str, contents: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "e-rust-port-e-stratpar-{label}-{}-{nonce}.p",
+        "umlaut-stratpar-{label}-{}-{nonce}.p",
         std::process::id()
     ));
     std::fs::write(&path, contents).unwrap();

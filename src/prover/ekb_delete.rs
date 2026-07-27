@@ -19,7 +19,7 @@ use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
-pub const PROGRAM_NAME: &str = "ekb_delete";
+pub const PROGRAM_NAME: &str = "umlaut-kb-delete";
 const DEFAULT_KB_NAME: &str = "E_KNOWLEDGE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,7 +264,7 @@ pub fn print_help() -> String {
 \n\
 Usage: {PROGRAM_NAME} [options] <name>\n\
 \n\
-Remove the example <name> from an E knowledge base.\n\n"
+Remove the example <name> from an Umlaut knowledge base.\n\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
     result.push_str("\n\n");
@@ -320,7 +320,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("ekb_delete run succeeds");
+            .expect("umlaut-kb-delete run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -379,7 +379,7 @@ r(a) : 2:(1,0,0,0,0,0,0).\n",
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: ekb_delete [options] <name>"));
+        assert!(help.contains("Usage: umlaut-kb-delete [options] <name>"));
         assert!(help.contains("Remove the example <name>"));
         assert!(help.contains("--knowledge-base"));
         assert!(stderr.is_empty());
@@ -529,8 +529,8 @@ r(a) : 2:(1.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000).\n"
         assert_eq!(
             stderr,
             format!(
-                "ekb_delete: Old knowledge base files parsed successfully\n\
-ekb_delete: Removing {removed_path}\n"
+                "umlaut-kb-delete: Old knowledge base files parsed successfully\n\
+umlaut-kb-delete: Removing {removed_path}\n"
             )
         );
 

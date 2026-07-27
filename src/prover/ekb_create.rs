@@ -11,7 +11,7 @@ use crate::prover::version::{footer, VERSION};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "ekb_create";
+pub const PROGRAM_NAME: &str = "umlaut-kb-create";
 const DEFAULT_KB_NAME: &str = "E_KNOWLEDGE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,7 +278,7 @@ pub fn print_help() -> String {
 \n\
 Usage: {PROGRAM_NAME} [options] [<name>]\n\
 \n\
-Create an empty knowledge base with name <name> for E.\n\n"
+Create an empty knowledge base with name <name> for Umlaut.\n\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
     result.push_str("\n\n");
@@ -342,7 +342,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("ekb_create run succeeds");
+            .expect("umlaut-kb-create run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -357,7 +357,7 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: ekb_create [options] [<name>]"));
+        assert!(help.contains("Usage: umlaut-kb-create [options] [<name>]"));
         assert!(help.contains("Create an empty knowledge base"));
         assert!(help.contains("--negative-example-proportion"));
         assert!(stderr.is_empty());
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(kb_path.join("description")).expect("description is readable"),
             format!(
-                "% E theorem prover knowledge base description\n\
+                "% Umlaut theorem prover knowledge base description\n\
 Version     : \"{KB_VERSION}\"\n\
 NegProp     : 0.500000  % Negative example proportion (successful proof search)\n\
 FailExamples:        7  % Number of clauses from a failed proof search\n"
@@ -480,12 +480,12 @@ FailExamples:        7  % Number of clauses from a failed proof search\n"
         assert!(stdout.is_empty());
         assert_eq!(
             stderr,
-            "ekb_create: Creating base directory...\n\
-ekb_create: ...successful.\n\
+            "umlaut-kb-create: Creating base directory...\n\
+umlaut-kb-create: ...successful.\n\
 Creating files...\n\
-ekb_create: ...done.\n\
+umlaut-kb-create: ...done.\n\
 Creating subdirectory FILES...\n\
-ekb_create: ...done.\n\
+umlaut-kb-create: ...done.\n\
 New knowledge base complete.\n"
         );
 

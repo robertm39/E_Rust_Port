@@ -17,7 +17,7 @@ use crate::prover::eprover::{
     apply_proof_state_sine_silent, parse_clause_scanner_into_formula_set_with_options, FoolUnroll,
     FormulaPreprocessing,
 };
-use crate::prover::version::{E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::{
     FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
 };
@@ -25,7 +25,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "epatternize";
+pub const PROGRAM_NAME: &str = "umlaut-patternize";
 const TFORM_RENAME_LIMIT_STR: &str = "24";
 const TFORM_MINISCOPE_LIMIT_STR: &str = "2147483648";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
@@ -136,7 +136,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpParse,
@@ -895,7 +895,7 @@ pub fn print_help() -> String {
 \n\
 {PROGRAM_NAME} {VERSION}\n\
 \n\
-Usage: classify_problem [options] [files]\n\
+Usage: {PROGRAM_NAME} [options] [files]\n\
 \n\
 Read sets of clauses/formulas, perform cnfization, then convert \n\
 the clauses to patterns and print them.\n\
@@ -907,40 +907,7 @@ the clauses to patterns and print them.\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "\n\
-Copyright (C) 1998-2009 by Stephan Schulz, {STS_MAIL}\n\
-\n\
-This program is a part of the support structure for the E equational\n\
-theorem prover. You can find the latest version of the E distribution\n\
-as well as additional information at\n\
-{E_URL}\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n"
-    )
+    footer()
 }
 
 enum EpatternizeOutput<'a, W: Write> {
@@ -1054,7 +1021,7 @@ mod tests {
     use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::proofstate::proof_state_alloc;
     use crate::inout::scanner::IoFormat;
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{assert_help_matches_fixture, VERSION};
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
@@ -1084,9 +1051,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "epatternize {version}\n",
+                "umlaut-patternize {version}\n",
                 "\n",
-                "Usage: classify_problem [options] [files]\n",
+                "Usage: umlaut-patternize [options] [files]\n",
                 "\n",
                 "Read sets of clauses/formulas, perform cnfization, then convert \n",
                 "the clauses to patterns and print them.\n",
@@ -1120,8 +1087,8 @@ mod tests {
                 "\n",
                 "  --lop-in\n",
                 "    Set E-LOP as the input format. If no input format is selected by this or\n",
-                "    one of the following options, E will guess the input format based on the\n",
-                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
+                "    one of the following options, Umlaut will guess the input format based on\n",
+                "    the first token. It will almost always correctly recognize TPTP-3, but it may\n",
                 "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
                 "    symbols.\n",
                 "\n",
@@ -1374,18 +1341,21 @@ mod tests {
         )
     }
 
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
+    }
+
     #[test]
     fn help_and_version_preserve_c_text() {
         let mut stdout = Vec::new();
-        let command = process_options(["epatternize", "--help"], &mut stdout).unwrap();
+        let command = process_options(["umlaut-patternize", "--help"], &mut stdout).unwrap();
 
         assert!(matches!(command, RunCommand::Exit(0)));
-        assert_eq!(
-            String::from_utf8(std::mem::take(&mut stdout)).unwrap(),
-            expected_help()
+        assert_help_matches_rebranded_footer(
+            &String::from_utf8(std::mem::take(&mut stdout)).unwrap(),
         );
 
-        let command = process_options(["epatternize", "--version"], &mut stdout).unwrap();
+        let command = process_options(["umlaut-patternize", "--version"], &mut stdout).unwrap();
 
         assert!(matches!(command, RunCommand::Exit(0)));
         assert_eq!(
@@ -1393,13 +1363,13 @@ mod tests {
             format!("{PROGRAM_NAME} {VERSION}\n")
         );
 
-        let err = process_options(["epatternize", "-V"], &mut Vec::new()).unwrap_err();
+        let err = process_options(["umlaut-patternize", "-V"], &mut Vec::new()).unwrap_err();
         assert_eq!(err.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_rebranded_footer(&print_help());
     }
 
     #[test]
@@ -1407,7 +1377,7 @@ mod tests {
         let mut stdout = Vec::new();
         let command = process_options(
             [
-                "epatternize",
+                "umlaut-patternize",
                 "--tstp-format",
                 "--parse-features",
                 "--raw-class",
@@ -1447,7 +1417,7 @@ mod tests {
 
     #[test]
     fn miniscope_option_without_argument_uses_c_header_limit() {
-        let command = process_options(["epatternize", "--miniscope-limit"], &mut Vec::new())
+        let command = process_options(["umlaut-patternize", "--miniscope-limit"], &mut Vec::new())
             .expect("optional miniscope argument parses");
 
         let RunCommand::Execute(config) = command else {
@@ -1459,14 +1429,17 @@ mod tests {
     #[test]
     fn masks_require_c_exact_lengths() {
         let class_err = process_options(
-            ["epatternize", "--class-mask=aaaaaaaaaaaaaa"],
+            ["umlaut-patternize", "--class-mask=aaaaaaaaaaaaaa"],
             &mut Vec::new(),
         )
         .unwrap_err();
         assert_eq!(class_err.code(), ErrorCode::USAGE_ERROR);
 
-        let raw_err =
-            process_options(["epatternize", "--raw-mask=aaaaaaaa"], &mut Vec::new()).unwrap_err();
+        let raw_err = process_options(
+            ["umlaut-patternize", "--raw-mask=aaaaaaaa"],
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_eq!(raw_err.code(), ErrorCode::USAGE_ERROR);
     }
 
@@ -1478,7 +1451,7 @@ mod tests {
         let mut stdin: &[u8] = b"p(a).\n";
 
         let status = run(
-            ["epatternize", "--lop-in"],
+            ["umlaut-patternize", "--lop-in"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1603,7 +1576,7 @@ mod tests {
             thf(fact, axiom, p @ a).\n";
 
         let status = run(
-            ["epatternize", "--tstp-in"],
+            ["umlaut-patternize", "--tstp-in"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1657,8 +1630,8 @@ mod tests {
     #[test]
     fn tstp_include_selector_feeds_pattern_formula_owner_cnf_path() {
         let _guard = global_state_lock();
-        let include_path = temp_path("epatternize-include-selected-inc");
-        let main_path = temp_path("epatternize-include-selected-main");
+        let include_path = temp_path("umlaut-patternize-include-selected-inc");
+        let main_path = temp_path("umlaut-patternize-include-selected-main");
         let include_arg = include_path.to_string_lossy().replace('\\', "/");
         fs::write(
             &include_path,
@@ -1711,7 +1684,7 @@ mod tests {
         let mut stdin: &[u8] = b"cnf(skip, axiom, (a=b | c=d)).\ncnf(keep, axiom, p(a)).\n";
 
         let status = run(
-            ["epatternize", "--tstp-in"],
+            ["umlaut-patternize", "--tstp-in"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1729,8 +1702,8 @@ mod tests {
     #[test]
     fn patternizes_tstp_file_to_output_file() {
         let _guard = global_state_lock();
-        let input_path = temp_path("epatternize-input");
-        let output_path = temp_path("epatternize-output");
+        let input_path = temp_path("umlaut-patternize-input");
+        let output_path = temp_path("umlaut-patternize-output");
         fs::write(&input_path, "cnf(c1, axiom, (p(a))).\n").unwrap();
 
         let mut stdout = Vec::new();
@@ -1738,7 +1711,7 @@ mod tests {
         let mut stdin: &[u8] = b"";
         let status = run(
             [
-                "epatternize",
+                "umlaut-patternize",
                 "--tstp-in",
                 "-o",
                 output_path.to_str().unwrap(),
@@ -1768,7 +1741,7 @@ mod tests {
         let mut stdin: &[u8] = b"p(a).\n";
 
         let status = run(
-            ["epatternize", "--lop-in", "-o", "-"],
+            ["umlaut-patternize", "--lop-in", "-o", "-"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1791,7 +1764,7 @@ mod tests {
         let mut stdin: &[u8] = b"cnf(c1, axiom, (p(a))).\n";
 
         let status = run(
-            ["epatternize", "--tstp-in", "--sine=NoSInE"],
+            ["umlaut-patternize", "--tstp-in", "--sine=NoSInE"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1809,14 +1782,14 @@ mod tests {
     #[test]
     fn input_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
-        let missing_path = temp_path("epatternize-missing-input");
+        let missing_path = temp_path("umlaut-patternize-missing-input");
         let _ = fs::remove_file(&missing_path);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"";
 
         let error = run(
-            ["epatternize", missing_path.to_str().unwrap()],
+            ["umlaut-patternize", missing_path.to_str().unwrap()],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1835,7 +1808,7 @@ mod tests {
     #[test]
     fn included_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
-        let input_dir = temp_path("epatternize-missing-include-dir");
+        let input_dir = temp_path("umlaut-patternize-missing-include-dir");
         let input_path = input_dir.join("main.p");
         let _ = fs::remove_dir_all(&input_dir);
         fs::create_dir(&input_dir).unwrap();
@@ -1845,7 +1818,11 @@ mod tests {
         let mut stdin: &[u8] = b"";
 
         let error = run(
-            ["epatternize", "--tstp-in", input_path.to_str().unwrap()],
+            [
+                "umlaut-patternize",
+                "--tstp-in",
+                input_path.to_str().unwrap(),
+            ],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1855,7 +1832,9 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert!(
             error.message().contains("Cannot stat file ")
-                && error.message().contains("missing-include.p\nepatternize: "),
+                && error
+                    .message()
+                    .contains("missing-include.p\numlaut-patternize: "),
             "unexpected include diagnostic: {}",
             error.message()
         );
@@ -1868,8 +1847,8 @@ mod tests {
     #[test]
     fn output_file_is_created_before_later_input_open_failure() {
         let _guard = global_state_lock();
-        let output_path = temp_path("epatternize-early-output");
-        let missing_path = temp_path("epatternize-missing-after-output");
+        let output_path = temp_path("umlaut-patternize-early-output");
+        let missing_path = temp_path("umlaut-patternize-missing-after-output");
         let _ = fs::remove_file(&output_path);
         let _ = fs::remove_file(&missing_path);
         let mut stdout = Vec::new();
@@ -1878,7 +1857,7 @@ mod tests {
 
         let error = run(
             [
-                "epatternize",
+                "umlaut-patternize",
                 "-o",
                 output_path.to_str().unwrap(),
                 missing_path.to_str().unwrap(),
@@ -1904,7 +1883,7 @@ mod tests {
     #[test]
     fn output_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
-        let output_path = temp_path("epatternize-output-dir");
+        let output_path = temp_path("umlaut-patternize-output-dir");
         let _ = fs::remove_file(&output_path);
         let _ = fs::remove_dir(&output_path);
         fs::create_dir(&output_path).unwrap();
@@ -1913,7 +1892,7 @@ mod tests {
         let mut stdin: &[u8] = b"p(a).\n";
 
         let error = run(
-            ["epatternize", "-o", output_path.to_str().unwrap()],
+            ["umlaut-patternize", "-o", output_path.to_str().unwrap()],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1939,7 +1918,7 @@ mod tests {
         let mut stdin: &[u8] = b"p(a).\n";
 
         let error = run(
-            ["epatternize", "--lop-in"],
+            ["umlaut-patternize", "--lop-in"],
             &mut stdin,
             &mut stdout,
             &mut stderr,

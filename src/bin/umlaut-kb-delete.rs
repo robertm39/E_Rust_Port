@@ -1,8 +1,8 @@
 use std::io;
 use std::process::ExitCode;
 
-use e_rust_port::basics::error::{init_error, report_fatal_diagnostic};
-use e_rust_port::prover::epclanalyse::{run, PROGRAM_NAME};
+use umlaut::basics::error::{init_error, report_fatal_diagnostic};
+use umlaut::prover::ekb_delete::{run, PROGRAM_NAME};
 
 fn main() -> ExitCode {
     init_error(PROGRAM_NAME);

@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "CSSCPA_filter";
+pub const PROGRAM_NAME: &str = "umlaut-csscpa-filter";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -179,7 +179,7 @@ where
                 if level > 1 {
                     return Err(Diagnostic::new(
                         ErrorCode::USAGE_ERROR,
-                        "Option -l (--output-level) accepts only 0 or 1for CSSCPA_filter",
+                        "Option -l (--output-level) accepts only 0 or 1for umlaut-csscpa-filter",
                     ));
                 }
                 config.output_level = level;
@@ -604,7 +604,7 @@ mod tests {
         assert_eq!(version_status, 0);
         assert!(String::from_utf8(stdout)
             .expect("version is utf8")
-            .starts_with("CSSCPA_filter "));
+            .starts_with("umlaut-csscpa-filter "));
     }
 
     #[test]
@@ -857,7 +857,7 @@ check improve(1.0,0.0): cnf(csscpa_pos,axiom,p(a)).\n"
         assert_eq!(
             diagnostic.message(),
             "Cannot open file output.csscpa\n\
-CSSCPA_filter: host-specific suffix (os error 1234)"
+umlaut-csscpa-filter: host-specific suffix (os error 1234)"
         );
     }
 
@@ -874,7 +874,7 @@ CSSCPA_filter: host-specific suffix (os error 1234)"
         assert_eq!(
             diagnostic.message(),
             "Cannot open file C:\\csscpa cases\\missing.csscpa for reading\n\
-CSSCPA_filter: host suffix"
+umlaut-csscpa-filter: host suffix"
         );
     }
 

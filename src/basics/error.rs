@@ -388,15 +388,15 @@ mod tests {
         assert_eq!(set_tmp_errno(2), 0);
         assert_eq!(tmp_errno(), 2);
 
-        init_error("eprover");
+        init_error("umlaut");
         let diagnostic = Diagnostic::new(ErrorCode::FILE_ERROR, "cannot open input");
         assert_eq!(
             diagnostic.render_global_error(),
-            "eprover: cannot open input\n"
+            "umlaut: cannot open input\n"
         );
         assert_eq!(
             diagnostic.render_global_warning(),
-            "eprover: Warning: cannot open input\n"
+            "umlaut: Warning: cannot open input\n"
         );
 
         init_error("Unknown program");
@@ -410,28 +410,28 @@ mod tests {
         let diagnostic = Diagnostic::new(ErrorCode::FILE_ERROR, "cannot open input");
 
         assert_eq!(
-            render_error_message("eprover", diagnostic.message()),
-            "eprover: cannot open input\n"
+            render_error_message("umlaut", diagnostic.message()),
+            "umlaut: cannot open input\n"
         );
         assert_eq!(
-            render_warning_message("eprover", diagnostic.message()),
-            "eprover: Warning: cannot open input\n"
+            render_warning_message("umlaut", diagnostic.message()),
+            "umlaut: Warning: cannot open input\n"
         );
         assert_eq!(
-            diagnostic.render_sys_error("eprover", &system_error),
-            format!("eprover: cannot open input\neprover: {c_system_error}\n")
+            diagnostic.render_sys_error("umlaut", &system_error),
+            format!("umlaut: cannot open input\numlaut: {c_system_error}\n")
         );
         assert_eq!(
-            diagnostic.render_sys_warning("eprover", &system_error),
-            format!("eprover: Warning: cannot open input\neprover: {c_system_error}\n")
+            diagnostic.render_sys_warning("umlaut", &system_error),
+            format!("umlaut: Warning: cannot open input\numlaut: {c_system_error}\n")
         );
         assert_eq!(
-            render_sys_error_message("eprover", "cannot open input", &system_error),
-            format!("eprover: cannot open input\neprover: {c_system_error}\n")
+            render_sys_error_message("umlaut", "cannot open input", &system_error),
+            format!("umlaut: cannot open input\numlaut: {c_system_error}\n")
         );
         assert_eq!(
-            render_sys_warning_message("eprover", "cannot open input", &system_error),
-            format!("eprover: Warning: cannot open input\neprover: {c_system_error}\n")
+            render_sys_warning_message("umlaut", "cannot open input", &system_error),
+            format!("umlaut: Warning: cannot open input\numlaut: {c_system_error}\n")
         );
         assert_eq!(c_io_error_message(&system_error), c_system_error);
         assert!(!c_io_error_message(&system_error).contains("(os error 2)"));
@@ -446,17 +446,17 @@ mod tests {
     #[test]
     fn tmp_errno_syserror_rendering_uses_current_global_state() {
         let _guard = global_state_lock();
-        init_error("eprover");
+        init_error("umlaut");
         set_tmp_errno(2);
 
         let system_error = c_runtime_error_message(2);
         assert_eq!(
             render_tmp_errno_error_message("cannot open input"),
-            format!("eprover: cannot open input\neprover: {system_error}\n")
+            format!("umlaut: cannot open input\numlaut: {system_error}\n")
         );
         assert_eq!(
             render_tmp_errno_warning_message("cannot open input"),
-            format!("eprover: Warning: cannot open input\neprover: {system_error}\n")
+            format!("umlaut: Warning: cannot open input\numlaut: {system_error}\n")
         );
 
         init_error("Unknown program");
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn top_level_fatal_report_uses_stored_program_name_and_status() {
         let _guard = global_state_lock();
-        init_error("invoked/path/termprops");
+        init_error("invoked/path/umlaut-termprops");
         let mut output = Vec::new();
 
         let status =
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(status, ErrorCode::SYNTAX_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "invoked/path/termprops: malformed term\n"
+            "invoked/path/umlaut-termprops: malformed term\n"
         );
         init_error("Unknown program");
     }
@@ -486,15 +486,15 @@ mod tests {
         let c_system_error = c_io_error_message(&system_error);
         let mut output = Vec::new();
 
-        write_error_message(&mut output, "eprover", "fatal").unwrap();
-        write_warning_message(&mut output, "eprover", "warn").unwrap();
-        write_sys_error_message(&mut output, "eprover", "sys", &system_error).unwrap();
-        write_sys_warning_message(&mut output, "eprover", "syswarn", &system_error).unwrap();
+        write_error_message(&mut output, "umlaut", "fatal").unwrap();
+        write_warning_message(&mut output, "umlaut", "warn").unwrap();
+        write_sys_error_message(&mut output, "umlaut", "sys", &system_error).unwrap();
+        write_sys_warning_message(&mut output, "umlaut", "syswarn", &system_error).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
             format!(
-                "eprover: fatal\neprover: Warning: warn\neprover: sys\neprover: {c_system_error}\neprover: Warning: syswarn\neprover: {c_system_error}\n"
+                "umlaut: fatal\numlaut: Warning: warn\numlaut: sys\numlaut: {c_system_error}\numlaut: Warning: syswarn\numlaut: {c_system_error}\n"
             )
         );
     }

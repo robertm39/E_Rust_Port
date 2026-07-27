@@ -5,7 +5,7 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use std::io::{Read, Write};
 
-pub const PROGRAM_NAME: &str = "ex_commandline";
+pub const PROGRAM_NAME: &str = "umlaut-commandline-example";
 const VERSION: &str = "1.0 Tue Jan 20 00:35:40 MET 1998";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,9 +107,9 @@ pub fn print_help() -> String {
     let mut result = format!(
         "\n\
 \n\
-ex_commandline.c {VERSION}\n\
+umlaut-commandline-example.c {VERSION}\n\
 \n\
-Usage: ex_commandline [options] [files]\n\
+Usage: umlaut-commandline-example [options] [files]\n\
 \n\
 Shows the usage of options, print non-option commandline arguments.\n\
 \n"
@@ -142,9 +142,9 @@ mod tests {
     const EXPECTED_HELP: &str = concat!(
         "\n",
         "\n",
-        "ex_commandline.c 1.0 Tue Jan 20 00:35:40 MET 1998\n",
+        "umlaut-commandline-example.c 1.0 Tue Jan 20 00:35:40 MET 1998\n",
         "\n",
-        "Usage: ex_commandline [options] [files]\n",
+        "Usage: umlaut-commandline-example [options] [files]\n",
         "\n",
         "Shows the usage of options, print non-option commandline arguments.\n",
         "\n",

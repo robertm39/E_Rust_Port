@@ -23,7 +23,7 @@ use crate::inout::fileops::file_name_strip;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
-use crate::prover::version::{footer, E_NICKNAME, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use crate::terms::{
     functypes::{func_symb_parse, FunCode},
     signature::Signature,
@@ -31,8 +31,8 @@ use crate::terms::{
     typebanks::TypeBank,
 };
 
-pub const PROGRAM_NAME: &str = "e_axfilter";
-const C_USAGE_ERROR: &str = "Usage: e_axfilter <problem> [<options>]\n";
+pub const PROGRAM_NAME: &str = "umlaut-axiom-filter";
+const C_USAGE_ERROR: &str = "Usage: umlaut-axiom-filter <problem> [<options>]\n";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -161,7 +161,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::LopFormat,
@@ -209,7 +209,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-in"),
         OptArgType::NoArg,
         None,
-        "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still under development, and the version in E may not be fully conforming at all times. E works on all TPTP 6.3.0 FOF and CNF input files (including includes).",
+        "Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve, and any given Umlaut version may not support every extension. Umlaut supports the TPTP 6.3.0 FOF and CNF input files covered by its compatibility suite (including includes).",
     ),
     OptCell::new(
         OptionCode::TstpFormat,
@@ -249,7 +249,7 @@ enum SubsampleMethod {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "The fields mirror e_axfilter.c process-wide option globals."
+    reason = "The fields mirror umlaut-axiom-filter.c process-wide option globals."
 )]
 struct EAxFilterConfig {
     output_file: Option<PathBuf>,
@@ -365,7 +365,10 @@ where
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Output => {
@@ -627,7 +630,7 @@ fn parse_seed_symbol(signature: &Signature, scanner: &mut Scanner) -> Result<Fun
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "The helper shape mirrors e_axfilter.c seeded_filter_all inputs."
+    reason = "The helper shape mirrors umlaut-axiom-filter.c seeded_filter_all inputs."
 )]
 fn seeded_filter_all<W: IoWrite + ?Sized>(
     bank: &mut TermBank,
@@ -649,7 +652,7 @@ fn seeded_filter_all<W: IoWrite + ?Sized>(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "The helper shape mirrors e_axfilter.c seeded_filter_largest inputs."
+    reason = "The helper shape mirrors umlaut-axiom-filter.c seeded_filter_largest inputs."
 )]
 fn seeded_filter_largest<W: IoWrite + ?Sized>(
     bank: &mut TermBank,
@@ -699,7 +702,7 @@ fn seeded_filter_largest<W: IoWrite + ?Sized>(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "The helper shape mirrors e_axfilter.c seeded_filter_diverse inputs."
+    reason = "The helper shape mirrors umlaut-axiom-filter.c seeded_filter_diverse inputs."
 )]
 fn seeded_filter_diverse<W: IoWrite + ?Sized>(
     bank: &mut TermBank,
@@ -992,7 +995,7 @@ fn atol_decimal_prefix(arg: &str) -> i64 {
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-{PROGRAM_NAME} {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
 Usage: {PROGRAM_NAME} [options] [files]\n\
 \n\
@@ -1006,8 +1009,8 @@ In default mode, the program reads a problem specification and an\n\
 (optional) filter specification, and produces one reduced output file \n\
 for each filter given. Note that while all standard input formats (LOP,\n\
 TPTP-2 and TPTP-3 are supported, output is only and automatically in\n\
-TPTP-3. Also note that unlike most of the other tools in the E\n\
-distribution, this program does not support pipe-based input and output,\n\
+TPTP-3. Also note that unlike most of the other tools in the Umlaut\n\
+suite, this program does not support pipe-based input and output,\n\
 since it uses file names generated from the input file name and filter\n\
 names to store the different result files\n\
 \n"
@@ -1104,7 +1107,7 @@ mod tests {
     use crate::control::sine::StructFofSpec;
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
-    use crate::prover::version::{footer, E_NICKNAME, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, footer, VERSION, VERSION_QUALIFIER};
     use crate::terms::signature::Signature;
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
@@ -1157,9 +1160,9 @@ mod tests {
         let mut expected = format!(
             concat!(
                 "\n",
-                "e_axfilter {version} \"{nickname}\"\n",
+                "umlaut-axiom-filter {version} {nickname}\n",
                 "\n",
-                "Usage: e_axfilter [options] [files]\n",
+                "Usage: umlaut-axiom-filter [options] [files]\n",
                 "\n",
                 "This program applies SinE-like goal-directed filters to a problem\n",
                 "specification (a set of clauses and/or formulas) to generate reduced\n",
@@ -1171,8 +1174,8 @@ mod tests {
                 "(optional) filter specification, and produces one reduced output file \n",
                 "for each filter given. Note that while all standard input formats (LOP,\n",
                 "TPTP-2 and TPTP-3 are supported, output is only and automatically in\n",
-                "TPTP-3. Also note that unlike most of the other tools in the E\n",
-                "distribution, this program does not support pipe-based input and output,\n",
+                "TPTP-3. Also note that unlike most of the other tools in the Umlaut\n",
+                "suite, this program does not support pipe-based input and output,\n",
                 "since it uses file names generated from the input file name and filter\n",
                 "names to store the different result files\n",
                 "\n",
@@ -1253,8 +1256,8 @@ mod tests {
                 "\n",
                 "  --lop-in\n",
                 "    Set E-LOP as the input format. If no input format is selected by this or\n",
-                "    one of the following options, E will guess the input format based on the\n",
-                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
+                "    one of the following options, Umlaut will guess the input format based on\n",
+                "    the first token. It will almost always correctly recognize TPTP-3, but it may\n",
                 "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
                 "    symbols.\n",
                 "\n",
@@ -1275,10 +1278,10 @@ mod tests {
                 "    Synonymous with --tptp-in.\n",
                 "\n",
                 "  --tstp-in\n",
-                "    Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still\n",
-                "    under development, and the version in E may not be fully conforming at\n",
-                "    all times. E works on all TPTP 6.3.0 FOF and CNF input files (including\n",
-                "    includes).\n",
+                "    Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve,\n",
+                "    and any given Umlaut version may not support every extension. Umlaut\n",
+                "    supports the TPTP 6.3.0 FOF and CNF input files covered by its\n",
+                "    compatibility suite (including includes).\n",
                 "\n",
                 "  --tstp-format\n",
                 "    Equivalent to --tstp-in.\n",
@@ -1293,7 +1296,7 @@ mod tests {
                 "\n",
             ),
             version = VERSION,
-            nickname = E_NICKNAME,
+            nickname = VERSION_QUALIFIER,
         );
         expected.push_str(&footer());
         expected
@@ -1309,7 +1312,7 @@ mod tests {
 
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert_eq!(help, expected_help());
+        assert_help_matches_fixture(&help, &expected_help());
         assert!(stderr.is_empty());
 
         let mut stdout = Vec::new();
@@ -1318,7 +1321,7 @@ mod tests {
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).expect("version utf8"),
-            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+            format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n")
         );
     }
 
@@ -2191,6 +2194,6 @@ mod tests {
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_fixture(&print_help(), &expected_help());
     }
 }

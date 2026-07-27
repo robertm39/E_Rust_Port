@@ -20,7 +20,7 @@ use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
-pub const PROGRAM_NAME: &str = "ekb_insert";
+pub const PROGRAM_NAME: &str = "umlaut-kb-insert";
 const DEFAULT_KB_NAME: &str = "E_KNOWLEDGE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,9 +325,9 @@ pub fn print_help() -> String {
 \n\
 Usage: {PROGRAM_NAME} [options] [names]\n\
 \n\
-Insert example files into an E knowledge base. Each non-option argument\n\
+Insert example files into an Umlaut knowledge base. Each non-option argument\n\
 is considered as one individual example file. For most applications\n\
-this is obsolete, use ekb_ginsert instead.\n\n"
+this is obsolete, use umlaut-kb-ginsert instead.\n\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
     result.push_str("\n\n");
@@ -417,8 +417,8 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: ekb_insert [options] [names]"));
-        assert!(help.contains("use ekb_ginsert instead"));
+        assert!(help.contains("Usage: umlaut-kb-insert [options] [names]"));
+        assert!(help.contains("use umlaut-kb-ginsert instead"));
         assert!(help.contains("-V"));
         assert!(stderr.is_empty());
 
@@ -654,8 +654,8 @@ mod tests {
         assert_eq!(
             stderr,
             format!(
-                "ekb_insert: Old knowledge base files parsed successfully\n\
-ekb_insert: New example will use name __problem__1\n"
+                "umlaut-kb-insert: Old knowledge base files parsed successfully\n\
+umlaut-kb-insert: New example will use name __problem__1\n"
             )
         );
         assert_eq!(
@@ -668,6 +668,6 @@ ekb_insert: New example will use name __problem__1\n"
 
     #[test]
     fn print_help_mentions_obsolete_guidance() {
-        assert!(print_help().contains("use ekb_ginsert instead"));
+        assert!(print_help().contains("use umlaut-kb-ginsert instead"));
     }
 }

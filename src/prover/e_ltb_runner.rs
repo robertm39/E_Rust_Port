@@ -19,7 +19,7 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::inout::simplestuff::read_text_block;
-use crate::prover::version::{footer, E_NICKNAME, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
@@ -29,14 +29,14 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const PROGRAM_NAME: &str = "e_ltb_runner";
+pub const PROGRAM_NAME: &str = "umlaut-ltb-runner";
 
-const DEFAULT_PROVER: &str = "eprover";
-const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
+const DEFAULT_PROVER: &str = "umlaut";
+const C_USAGE_ERROR: &str = "Usage: umlaut-ltb-runner <spec> [<path-to-umlaut>]";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const INTERNAL_VARIANT_CHILD_ARG: &str = "--internal-ltb-variant-child";
-const VARIANT_CHILD_NAME: &str = "E-LTB wrapper";
+const VARIANT_CHILD_NAME: &str = "Umlaut LTB wrapper";
 const VARIANT_CHILD_CORES: usize = 1;
 const VARIANT_CHILD_CPU_LIMIT: u64 = 1_000_000;
 const INTERACTIVE_TERMINATOR: &[u8] = b"go.\n";
@@ -50,15 +50,15 @@ const INTERACTIVE_HELP: &str = "\
 % results of this attempt.\n";
 
 const VARIANTS27: &[&str] = &["+4", "+5", "_4", "_5"];
-const PROVERS27: &[&str] = &["./eprover", "./eprover", "./eprover", "./eprover"];
+const PROVERS27: &[&str] = &["./umlaut", "./umlaut", "./umlaut", "./umlaut"];
 const VARIANTS28: &[&str] = &["+1", "_1"];
-const PROVERS28: &[&str] = &["./eprover", "./eprover"];
+const PROVERS28: &[&str] = &["./umlaut", "./umlaut"];
 const VARIANTS28_HO: &[&str] = &["+1", "_1", "^1"];
-const PROVERS28_HO: &[&str] = &["./eprover", "./eprover", "./eprover-ho"];
+const PROVERS28_HO: &[&str] = &["./umlaut", "./umlaut", "./umlaut"];
 const VARIANTS28_25: &[&str] = &["+1", "_1"];
-const PROVERS28_25: &[&str] = &["./eprover-25", "./eprover-25"];
+const PROVERS28_25: &[&str] = &["./umlaut-25", "./umlaut-25"];
 const VARIANTSJ11: &[&str] = &["_1", "_3", "^1"];
-const PROVERSJ11: &[&str] = &["./eprover-ho", "./eprover-ho", "./eprover-ho"];
+const PROVERSJ11: &[&str] = &["./umlaut", "./umlaut", "./umlaut"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -141,7 +141,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants28-ho"),
         OptArgType::NoArg,
         None,
-        "Handle different variants for each problem base name as required for CASC-28, including the TH0-variant. This is very specific hack. Note that this requires eprover-ho for the third variant.",
+        "Handle different variants for each problem base name as required for CASC-28, including the TH0-variant. The canonical umlaut executable handles all three variants.",
     ),
     OptCell::new(
         OptionCode::Variants28_25,
@@ -149,7 +149,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("variants28-25"),
         OptArgType::NoArg,
         None,
-        "Handle different variants for each problem base name as required for CASC-28, but run E-2.5 (prerelease) as the base prover. This is a really very specific hack, to enable E 2.5 as the CASC-J10 LTB winner to compete in CASC-28. It requires manual installation of the eprover-2.5 binary in the StarExec package.",
+        "Handle different variants for each problem base name as required for CASC-28, using the separately installed umlaut-25 compatibility binary based on the historical E 2.5 CASC-J10 LTB winner. This specialized mode requires manual installation of umlaut-25 in the StarExec package.",
     ),
     OptCell::new(
         OptionCode::VariantsJ11,
@@ -325,7 +325,10 @@ where
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Verbose => {
@@ -697,7 +700,7 @@ fn spawn_ltb_variant_child<W: Write + ?Sized>(
     let current_exe = std::env::current_exe().map_err(|error| {
         Diagnostic::new(
             ErrorCode::FILE_ERROR,
-            format!("Cannot locate e_ltb_runner executable: {error}"),
+            format!("Cannot locate umlaut-ltb-runner executable: {error}"),
         )
     })?;
     let mut command = Command::new(current_exe);
@@ -916,9 +919,9 @@ fn apply_global_options(config: &LtbRunnerConfig) -> Result<(), Diagnostic> {
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-{PROGRAM_NAME} {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
-Usage: {PROGRAM_NAME} [options] [Batchfile] [PATH_TO_EPROVER]\n\
+Usage: {PROGRAM_NAME} [options] [Batchfile] [PATH_TO_UMLAUT]\n\
 \n\
 Read a CASC LTB batch specification file and process it.\n\
 \n"
@@ -1055,7 +1058,7 @@ mod tests {
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).unwrap();
-        assert!(help.contains("Usage: e_ltb_runner [options] [Batchfile] [PATH_TO_EPROVER]"));
+        assert!(help.contains("Usage: umlaut-ltb-runner [options] [Batchfile] [PATH_TO_UMLAUT]"));
         assert!(help.contains("Read a CASC LTB batch specification file and process it."));
 
         let mut stdout = Vec::new();
@@ -1063,7 +1066,7 @@ mod tests {
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
         assert!(String::from_utf8(stdout)
             .unwrap()
-            .starts_with("e_ltb_runner "));
+            .starts_with("umlaut-ltb-runner "));
     }
 
     #[test]
@@ -1097,7 +1100,7 @@ mod tests {
                 "--verbose",
                 "--output-level=2",
                 "batch.spec",
-                "custom-eprover",
+                "custom-umlaut",
             ],
             &mut stdout,
         )
@@ -1107,7 +1110,7 @@ mod tests {
         };
 
         assert_eq!(config.spec_file, "batch.spec");
-        assert_eq!(config.prover, "custom-eprover");
+        assert_eq!(config.prover, "custom-umlaut");
         assert_eq!(config.output_file.as_deref(), Some("all.out"));
         assert_eq!(config.output_dir.as_deref(), Some("Results"));
         assert_eq!(config.total_wtc_limit, 90);
@@ -1145,27 +1148,27 @@ mod tests {
         );
         assert_eq!(
             LtbVariantMode::Variants27.provers(),
-            ["./eprover", "./eprover", "./eprover", "./eprover"]
+            ["./umlaut", "./umlaut", "./umlaut", "./umlaut"]
         );
         assert_eq!(LtbVariantMode::Variants28.variants(), ["+1", "_1"]);
         assert_eq!(
             LtbVariantMode::Variants28.provers(),
-            ["./eprover", "./eprover"]
+            ["./umlaut", "./umlaut"]
         );
         assert_eq!(LtbVariantMode::Variants28Ho.variants(), ["+1", "_1", "^1"]);
         assert_eq!(
             LtbVariantMode::Variants28Ho.provers(),
-            ["./eprover", "./eprover", "./eprover-ho"]
+            ["./umlaut", "./umlaut", "./umlaut"]
         );
         assert_eq!(LtbVariantMode::Variants28_25.variants(), ["+1", "_1"]);
         assert_eq!(
             LtbVariantMode::Variants28_25.provers(),
-            ["./eprover-25", "./eprover-25"]
+            ["./umlaut-25", "./umlaut-25"]
         );
         assert_eq!(LtbVariantMode::VariantsJ11.variants(), ["_1", "_3", "^1"]);
         assert_eq!(
             LtbVariantMode::VariantsJ11.provers(),
-            ["./eprover-ho", "./eprover-ho", "./eprover-ho"]
+            ["./umlaut", "./umlaut", "./umlaut"]
         );
     }
 
@@ -1177,7 +1180,7 @@ mod tests {
         assert_eq!(missing.message(), C_USAGE_ERROR);
 
         let extra =
-            process_options([PROGRAM_NAME, "spec", "eprover", "extra"], &mut stdout).unwrap_err();
+            process_options([PROGRAM_NAME, "spec", "umlaut", "extra"], &mut stdout).unwrap_err();
         assert_eq!(extra.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(extra.message(), C_USAGE_ERROR);
     }
@@ -1579,7 +1582,7 @@ mod tests {
             "spec.ltb".to_owned(),
             "2".to_owned(),
             "+1".to_owned(),
-            "./eprover".to_owned(),
+            "./umlaut".to_owned(),
             "Problems/prob_+1.p".to_owned(),
             "Results/prob.out".to_owned(),
             "17".to_owned(),
@@ -1590,7 +1593,7 @@ mod tests {
         assert_eq!(config.spec_file, "spec.ltb");
         assert_eq!(config.batch_index, 2);
         assert_eq!(config.variant, "+1");
-        assert_eq!(config.prover, "./eprover");
+        assert_eq!(config.prover, "./umlaut");
         assert_eq!(config.source, "Problems/prob_+1.p");
         assert_eq!(config.dest, "Results/prob.out");
         assert_eq!(config.wct_limit, 17);
@@ -1693,7 +1696,7 @@ mod tests {
     fn help_text_contains_current_version_and_footer() {
         let help = print_help();
 
-        assert!(help.contains("e_ltb_runner "));
+        assert!(help.contains("umlaut-ltb-runner "));
         assert!(help.contains("Options:"));
         assert!(
             help.contains("Directory for individual problem output files. Default is the current")
@@ -1709,7 +1712,7 @@ mod tests {
         assert!(help.contains("batch problems. Interactive mode allows the processing"));
         assert!(help.contains("Equivalent to --output-level=0."));
         assert!(help.contains("Set the global wall-clock limit for each batch (if any)."));
-        assert!(help.contains("Copyright 1998-2026 by Stephan Schulz"));
+        assert!(help.contains("E copyright 1998-2026 by Stephan Schulz"));
     }
 
     fn write_temp_spec(name: &str, contents: &str) -> PathBuf {

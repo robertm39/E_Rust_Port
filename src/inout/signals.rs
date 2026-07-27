@@ -629,7 +629,7 @@ mod linux_signal {
     const STDERR_FILENO_COMPAT: i32 = 2;
     const HARD_CPU_TIMEOUT_OUTPUT: &[u8] =
         b"\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n";
-    const HARD_CPU_TIMEOUT_ERROR: &[u8] = b"eprover: CPU time limit exceeded, terminating\n";
+    const HARD_CPU_TIMEOUT_ERROR: &[u8] = b"umlaut: CPU time limit exceeded, terminating\n";
     const UNEXPECTED_SIGNAL_WARNING: &[u8] = b"Warning: Unexpected signal caught, continuing";
 
     unsafe extern "C" {

@@ -44,7 +44,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "eground";
+pub const PROGRAM_NAME: &str = "umlaut-ground";
 const TFORM_RENAME_LIMIT_STR: &str = "24";
 const TFORM_MINISCOPE_LIMIT_STR: &str = "2147483648";
 const EGROUND_CNF_MINISCOPE_LIMIT: i64 = 1_048_576;
@@ -133,7 +133,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in eground (I think).",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in umlaut-ground (I think).",
     ),
     OptCell::new(
         OptionCode::PrintStatistics,
@@ -165,7 +165,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpParse,
@@ -388,7 +388,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "The fields mirror eground.c process-wide option globals."
+    reason = "The fields mirror umlaut-ground.c process-wide option globals."
 )]
 struct EgroundConfig {
     output_file: Option<PathBuf>,
@@ -1394,7 +1394,7 @@ mod tests {
         assert!(matches!(command, RunCommand::Exit(0)));
         let help = String::from_utf8(stdout).unwrap();
         assert!(help.contains(&format!("{PROGRAM_NAME} {VERSION}")));
-        assert!(help.contains("Usage: eground [options] [files]"));
+        assert!(help.contains("Usage: umlaut-ground [options] [files]"));
         assert!(stderr.is_empty());
 
         let mut version = Vec::new();
@@ -1536,7 +1536,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
         )
-        .expect_err("eground checks for EOF after FormulaAndClauseSetParse");
+        .expect_err("umlaut-ground checks for EOF after FormulaAndClauseSetParse");
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert_eq!(
@@ -1572,23 +1572,23 @@ mod tests {
         assert_eq!(String::from_utf8(stdout).unwrap(), "% Success!\n");
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "eground: Output is going to <stdout>\n\
-             eground: Opened <stdin>\n\
-             eground: Closing <stdin>\n\
-             eground: Negated conjectures.\n\
-             eground: Garbage collection started.\n\
+            "umlaut-ground: Output is going to <stdout>\n\
+             umlaut-ground: Opened <stdin>\n\
+             umlaut-ground: Closing <stdin>\n\
+             umlaut-ground: Negated conjectures.\n\
+             umlaut-ground: Garbage collection started.\n\
              Garbage collection reclaimed 2 unused term cells.\n\
-             eground: Garbage collection started.\n\
+             umlaut-ground: Garbage collection started.\n\
              Garbage collection reclaimed 2 unused term cells.\n\
-             eground: CNFization done\n\
-             eground: Closing output\n"
+             umlaut-ground: CNFization done\n\
+             umlaut-ground: Closing output\n"
         );
     }
 
     #[test]
     fn verbose_named_input_preserves_c_scanner_lifecycle() {
         let _guard = global_state_lock();
-        let input_path = temp_path("eground-verbose-input");
+        let input_path = temp_path("umlaut-ground-verbose-input");
         fs::write(&input_path, "p(a).\n").unwrap();
         let input_name = input_path.to_str().unwrap();
         let mut stdin: &[u8] = b"";
@@ -1615,12 +1615,12 @@ mod tests {
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             format!(
-                "eground: Output is going to <stdout>\n\
-                 eground: Input file is {input_name}\n\
-                 eground: Opened {input_name}\n\
-                 eground: Closing {input_name}\n\
-                 eground: CNFization done\n\
-                 eground: Closing output\n"
+                "umlaut-ground: Output is going to <stdout>\n\
+                 umlaut-ground: Input file is {input_name}\n\
+                 umlaut-ground: Opened {input_name}\n\
+                 umlaut-ground: Closing {input_name}\n\
+                 umlaut-ground: CNFization done\n\
+                 umlaut-ground: Closing output\n"
             )
         );
 
@@ -1697,8 +1697,8 @@ mod tests {
                 .iter()
                 .map(|warning| warning.render_warning(PROGRAM_NAME))
                 .collect::<String>(),
-            "eground: Warning: Had to reduce limit RLIMIT_DATA\n\
-             eground: Warning: Had to reduce limit RLIMIT_AS\n"
+            "umlaut-ground: Warning: Had to reduce limit RLIMIT_DATA\n\
+             umlaut-ground: Warning: Had to reduce limit RLIMIT_AS\n"
         );
     }
 
@@ -1898,8 +1898,8 @@ mod tests {
     #[test]
     fn tstp_include_selector_feeds_formula_owner_cnf_path() {
         let _guard = global_state_lock();
-        let include_path = temp_path("eground-include-selected-inc");
-        let main_path = temp_path("eground-include-selected-main");
+        let include_path = temp_path("umlaut-ground-include-selected-inc");
+        let main_path = temp_path("umlaut-ground-include-selected-main");
         let include_arg = include_path.to_string_lossy().replace('\\', "/");
         fs::write(
             &include_path,
@@ -1974,7 +1974,7 @@ mod tests {
     #[test]
     fn dimacs_output_file_keeps_c_non_unit_stdout_split() {
         let _guard = global_state_lock();
-        let output_path = temp_path("eground-dimacs-split");
+        let output_path = temp_path("umlaut-ground-dimacs-split");
         let _ = fs::remove_file(&output_path);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -2082,7 +2082,7 @@ mod tests {
     #[test]
     fn constrained_give_up_failure_uses_configured_output() {
         let _guard = global_state_lock();
-        let output_path = temp_path("eground-give-up-output");
+        let output_path = temp_path("umlaut-ground-give-up-output");
         let _ = fs::remove_file(&output_path);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -2205,7 +2205,7 @@ mod tests {
     #[test]
     fn output_file_redirects_main_stream() {
         let _guard = global_state_lock();
-        let output_path = temp_path("eground-output");
+        let output_path = temp_path("umlaut-ground-output");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(a).\n";
@@ -2287,8 +2287,8 @@ mod tests {
     #[test]
     fn output_file_is_created_before_later_input_open_failure() {
         let _guard = global_state_lock();
-        let output_path = temp_path("eground-early-output");
-        let missing_path = temp_path("eground-missing-after-output");
+        let output_path = temp_path("umlaut-ground-early-output");
+        let missing_path = temp_path("umlaut-ground-missing-after-output");
         let _ = fs::remove_file(&output_path);
         let _ = fs::remove_file(&missing_path);
         let mut stdout = Vec::new();

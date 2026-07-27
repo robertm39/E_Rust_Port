@@ -32,7 +32,7 @@ use crate::prover::eprover::{
     apply_proof_state_sine_silent, parse_clause_scanner_into_formula_set_with_options, FoolUnroll,
     FormulaPreprocessing,
 };
-use crate::prover::version::{E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::{
     FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
 };
@@ -44,9 +44,9 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const PROGRAM_NAME: &str = "classify_problem";
+pub const PROGRAM_NAME: &str = "umlaut-classify-problem";
 
-const INTERNAL_CNF_CHILD_ARG: &str = "--e-rust-port-classify-cnf-child";
+const INTERNAL_CNF_CHILD_ARG: &str = "--umlaut-classify-cnf-child";
 const DEFAULT_CLASSIFY_MASK: &str = "aaaa-aaaaaa-a";
 const DEFAULT_RAW_MASK: &str = "aaaaaaaaaa";
 const FORMULA_DEF_LIMIT_DEFAULT: i64 = 24;
@@ -165,7 +165,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpParse,
@@ -580,7 +580,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
 #[derive(Clone, Debug, PartialEq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "C-compatible executable configuration mirrors classify_problem.c globals"
+    reason = "C-compatible executable configuration mirrors umlaut-classify-problem.c globals"
 )]
 struct ClassifyProblemConfig {
     output_file: Option<PathBuf>,
@@ -1096,7 +1096,7 @@ fn classify_cnf_state_in_child(
 ) -> Result<String, Diagnostic> {
     let current_exe = std::env::current_exe().map_err(|error| {
         io_diagnostic(format!(
-            "Cannot locate classify_problem executable for merged classification: {error}"
+            "Cannot locate umlaut-classify-problem executable for merged classification: {error}"
         ))
     })?;
     let mut command = Command::new(current_exe);
@@ -1123,7 +1123,7 @@ fn classify_cnf_state_in_child(
 
     let mut child = command.spawn().map_err(|error| {
         io_diagnostic(format!(
-            "Cannot start classify_problem merged-classification child: {error}"
+            "Cannot start umlaut-classify-problem merged-classification child: {error}"
         ))
     })?;
     if let Some(data) = stdin_data {
@@ -1150,7 +1150,9 @@ fn wait_for_cnf_child(child: &mut Child, timeout: Duration) -> Result<bool, Diag
         if child
             .try_wait()
             .map_err(|error| {
-                io_diagnostic(format!("Cannot wait for classify_problem child: {error}"))
+                io_diagnostic(format!(
+                    "Cannot wait for umlaut-classify-problem child: {error}"
+                ))
             })?
             .is_some()
         {
@@ -1524,7 +1526,7 @@ fn parse_cnf_child_args(args: &[String]) -> Result<CnfChildConfig, Diagnostic> {
         other => {
             return Err(Diagnostic::new(
                 ErrorCode::USAGE_ERROR,
-                format!("Invalid classify_problem CNF child input kind '{other}'"),
+                format!("Invalid umlaut-classify-problem CNF child input kind '{other}'"),
             ));
         }
     };
@@ -1561,7 +1563,7 @@ fn parse_child_bool(arg: &str, name: &str) -> Result<bool, Diagnostic> {
         "1" => Ok(true),
         other => Err(Diagnostic::new(
             ErrorCode::USAGE_ERROR,
-            format!("Invalid classify_problem CNF child {name} flag '{other}'"),
+            format!("Invalid umlaut-classify-problem CNF child {name} flag '{other}'"),
         )),
     }
 }
@@ -1591,7 +1593,7 @@ fn parse_child_io_format(arg: &str) -> Result<IoFormat, Diagnostic> {
         "auto" => Ok(IoFormat::Auto),
         other => Err(Diagnostic::new(
             ErrorCode::USAGE_ERROR,
-            format!("Invalid classify_problem CNF child input format '{other}'"),
+            format!("Invalid umlaut-classify-problem CNF child input format '{other}'"),
         )),
     }
 }
@@ -1679,40 +1681,7 @@ Read sets of clauses and classify them according to predefined criteria.\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "\n\
-Copyright (C) 1998-2009 by Stephan Schulz, {STS_MAIL}\n\
-\n\
-This program is a part of the support structure for the E equational\n\
-theorem prover. You can find the latest version of the E distribution\n\
-as well as additional information at\n\
-{E_URL}\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n"
-    )
+    footer()
 }
 
 enum ClassifyOutput<'a, W: Write> {
@@ -1833,7 +1802,7 @@ mod tests {
         raw_spec_features_classify_for_problem_type, raw_spec_features_format,
     };
     use crate::inout::scanner::{IoFormat, Scanner};
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{assert_help_matches_fixture, VERSION};
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
@@ -1884,9 +1853,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "classify_problem {version}\n",
+                "umlaut-classify-problem {version}\n",
                 "\n",
-                "Usage: classify_problem [options] [files]\n",
+                "Usage: umlaut-classify-problem [options] [files]\n",
                 "\n",
                 "Read sets of clauses and classify them according to predefined criteria.\n",
                 "\n",
@@ -1919,8 +1888,8 @@ mod tests {
                 "\n",
                 "  --lop-in\n",
                 "    Set E-LOP as the input format. If no input format is selected by this or\n",
-                "    one of the following options, E will guess the input format based on the\n",
-                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
+                "    one of the following options, Umlaut will guess the input format based on\n",
+                "    the first token. It will almost always correctly recognize TPTP-3, but it may\n",
                 "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
                 "    symbols.\n",
                 "\n",
@@ -2184,6 +2153,10 @@ mod tests {
         )
     }
 
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
+    }
+
     fn object_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().i_type();
         let f_code = bank.signature_mut().insert_id(name, 0, false);
@@ -2215,7 +2188,7 @@ mod tests {
             run_with_stdin(&[PROGRAM_NAME, "--help"], "").expect("help succeeds");
 
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let (status, version, stderr) =
@@ -2227,7 +2200,7 @@ mod tests {
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_rebranded_footer(&print_help());
     }
 
     #[test]

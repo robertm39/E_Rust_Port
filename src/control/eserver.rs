@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 
-const PROGRAM_NAME: &str = "e_server";
+const PROGRAM_NAME: &str = "umlaut-server";
 
 #[derive(Debug)]
 pub struct EServer<P = NoProcessControlSet> {
@@ -61,7 +61,7 @@ impl<P> EServer<P> {
 
     pub fn listen(&mut self, port: u16) -> Result<bool, Diagnostic> {
         if self.listener.is_some() {
-            return Err(server_error("E server is already listening"));
+            return Err(server_error("Umlaut server is already listening"));
         }
 
         let Some(listener) = create_server_socket_no_fail(port) else {
@@ -77,7 +77,7 @@ impl<P> EServer<P> {
     pub fn local_addr(&self) -> Result<SocketAddr, Diagnostic> {
         self.listener
             .as_ref()
-            .ok_or_else(|| server_error("E server is not listening"))?
+            .ok_or_else(|| server_error("Umlaut server is not listening"))?
             .local_addr()
             .map_err(|error| server_error(format!("Could not read server socket address: {error}")))
     }
@@ -86,7 +86,7 @@ impl<P> EServer<P> {
         let listener = self
             .listener
             .as_ref()
-            .ok_or_else(|| server_error("E server is not listening"))?;
+            .ok_or_else(|| server_error("Umlaut server is not listening"))?;
         match listener.accept() {
             Ok((stream, _addr)) => {
                 let descriptor = descriptor_from_tcp_stream(&stream)?;
@@ -197,7 +197,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "e_server: Warning: Failure to accept connection\ne_server: host suffix\n"
+            "umlaut-server: Warning: Failure to accept connection\numlaut-server: host suffix\n"
         );
     }
 }

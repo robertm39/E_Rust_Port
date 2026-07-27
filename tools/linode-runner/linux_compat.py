@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Linux E references and compare them with the native Linux Rust port.
+"""Build Linux E references and compare them with native Linux Umlaut.
 
 This program is intentionally standard-library-only and runs on the ephemeral
 Linode worker.
@@ -158,6 +158,37 @@ REFERENCE_TOOL_BINARIES = {
     "termprops": "PROVER/termprops",
     "tsm_classify": "PROVER/tsm_classify",
 }
+UMLAUT_TOOL_BINARIES = {
+    "CSSCPA_filter": "umlaut-csscpa-filter",
+    "checkproof": "umlaut-checkproof",
+    "classify_problem": "umlaut-classify-problem",
+    "direct_examples": "umlaut-direct-examples",
+    "e_axfilter": "umlaut-axiom-filter",
+    "e_client": "umlaut-client",
+    "e_deduction_server": "umlaut-deduction-server",
+    "e_ltb_runner": "umlaut-ltb-runner",
+    "e_server": "umlaut-server",
+    "e_stratpar": "umlaut-stratpar",
+    "edpll": "umlaut-dpll",
+    "eground": "umlaut-ground",
+    "ekb_create": "umlaut-kb-create",
+    "ekb_delete": "umlaut-kb-delete",
+    "ekb_ginsert": "umlaut-kb-ginsert",
+    "ekb_insert": "umlaut-kb-insert",
+    "enormalizer": "umlaut-normalizer",
+    "epatternize": "umlaut-patternize",
+    "epclanalyse": "umlaut-pcl-analyse",
+    "epclextract": "umlaut-pcl-extract",
+    "epcllemma": "umlaut-pcl-lemma",
+    "ex_commandline": "umlaut-commandline-example",
+    "term2dag": "umlaut-term2dag",
+    "termprops": "umlaut-termprops",
+    "tsm_classify": "umlaut-tsm-classify",
+}
+UMLAUT_TO_E_EXECUTABLE_NAMES = {
+    "umlaut": "eprover",
+    **{candidate: reference for reference, candidate in UMLAUT_TOOL_BINARIES.items()},
+}
 ARCHIVED_REFERENCE_TOOL_LINKS = {
     "termprops": (
         ("make", "termprops.o"),
@@ -221,6 +252,9 @@ ARCHIVED_REFERENCE_TOOL_SOURCE_PATCHES = {
     ),
 }
 DEFAULT_TOOL_ARGUMENT_CASES = (("--help",),)
+TOOL_ARGUMENT_EXPECTED_MISMATCHES = {
+    ("epatternize", ("--help",)): ("normalized_stdout",),
+}
 VERSIONED_REFERENCE_TOOLS = frozenset(REFERENCE_TOOL_BINARIES) - {
     "ex_commandline",
     "term2dag",
@@ -2146,6 +2180,7 @@ def normalize_output(
     for old, new in replacements:
         if old:
             normalized = normalized.replace(old, new)
+    normalized = normalize_product_branding(normalized)
     lines = [
         normalize_platform_line(line.rstrip())
         for line in normalized.splitlines()
@@ -2155,7 +2190,197 @@ def normalize_output(
         lines = [normalize_classify_legacy_feature_suffix(line) for line in lines]
     lines = normalize_app_encode_type_declarations(lines)
     lines = normalize_saturation_blocks(lines)
-    return "\n".join(lines).strip()
+    lines, is_help_output = normalize_help_layout(lines)
+    result = "\n".join(lines).strip()
+    if is_help_output:
+        result = normalize_known_help_branding(result)
+    return result
+
+
+def normalize_product_branding(text: str) -> str:
+    """Normalize only intentional Umlaut/E program-name, version, and footer differences."""
+
+    normalized = text
+    for umlaut_name, e_name in sorted(
+        UMLAUT_TO_E_EXECUTABLE_NAMES.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        normalized = normalized.replace(umlaut_name, e_name)
+
+    normalized = re.sub(
+        r"(given, checkproof will guess a name based on the type of the)\n"
+        r"\s*(prover\. This)\s+(guess may be way off!)",
+        r"\1 \2\n    \3",
+        normalized,
+    )
+
+    branding_phrases = (
+        ("Umlaut will guess", "E will guess"),
+        ("Umlaut will treat", "E will treat"),
+        ("use Umlaut as", "use E as"),
+        ("Umlaut will detect", "E will detect"),
+        ("Umlaut will _first_", "E will _first_"),
+        ("Umlaut performs", "E performs"),
+        ("Umlaut prefers", "E prefers"),
+        (
+            "Umlaut theorem prover knowledge base description",
+            "E theorem prover knowledge base description",
+        ),
+        ("Umlaut knowledge base", "E knowledge base"),
+        ("E-compatible inference list", "E inference list"),
+        ("Umlaut's primary prover", "E proper"),
+        ("Umlaut LTB wrapper", "E-LTB wrapper"),
+        ("Umlaut server is", "E server is"),
+    )
+    for umlaut_phrase, e_phrase in branding_phrases:
+        normalized = normalized.replace(umlaut_phrase, e_phrase)
+
+    normalized = re.sub(
+        r"Set E-LOP as the input format\. If no input format is selected by this or\s+"
+        r"one of the following options, E will guess the input format based on\s+the\s+"
+        r"first token\. It will almost always correctly recognize TPTP-3, but it\s+may\s+"
+        r"misidentify E-LOP files that use TPTP meta-identifiers as logical\s+symbols\.",
+        "Set E-LOP as the input format. If no input format is selected by this or\n"
+        "    one of the following options, E will guess the input format based on the\n"
+        "    first token. It will almost always correctly recognize TPTP-3, but it may\n"
+        "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n"
+        "    symbols.",
+        normalized,
+    )
+
+    footer_markers = (
+        "Umlaut is an independent automated theorem prover.",
+        "Copyright 1998-2026 by Stephan Schulz",
+        "Copyright (C) 1998-2009 by Stephan Schulz",
+        "Copyright (C) 2002-2009 by Stephan Schulz",
+        "Copyright (C) 2003 by Stephan Schulz",
+        "Copyright (C) 2003-2005 by Stephan Schulz",
+        "Copyright (C) 2011 by Stephan Schulz",
+    )
+    footer_positions = [
+        position
+        for marker in footer_markers
+        if (position := normalized.find(marker)) >= 0
+    ]
+    if footer_positions:
+        normalized = normalized[: min(footer_positions)] + "<PRODUCT_FOOTER>\n"
+
+    normalized = re.sub(
+        r"(?m)^E compatibility baseline: [^\n]*\n?",
+        "",
+        normalized,
+    )
+    version_names = ("Umlaut", "E", "eprover", *REFERENCE_TOOL_BINARIES)
+    version_pattern = "|".join(
+        re.escape(name) for name in sorted(version_names, key=len, reverse=True)
+    )
+    normalized = re.sub(
+        rf"(?m)^(?:{version_pattern})\s+\d+\.\d+\.\d+[^\n]*$",
+        "<PRODUCT_VERSION>",
+        normalized,
+    )
+    return normalized
+
+
+def normalize_help_layout(lines: Iterable[str]) -> tuple[list[str], bool]:
+    """Collapse wrapping inside detected help-output blocks without changing words."""
+
+    materialized = list(lines)
+    if not any(line.strip() in {"Options", "Options:"} for line in materialized):
+        return materialized, False
+
+    blocks: list[str] = []
+    block: list[str] = []
+    for line in materialized:
+        if line.strip():
+            block.append(line.strip())
+        elif block:
+            blocks.append(" ".join(block))
+            block = []
+    if block:
+        blocks.append(" ".join(block))
+    return blocks, True
+
+
+def normalize_known_help_branding(text: str) -> str:
+    """Canonicalize deliberate product-identity prose in help comparisons."""
+
+    phrase_replacements = (
+        (
+            "TPTP-3. Also note that unlike most of the other tools in the Umlaut suite,",
+            "TPTP-3. Also note that unlike most of the other tools in the E distribution,",
+        ),
+        (
+            "Read an problem specification, connect to the Umlaut deduction server,",
+            "Read an problem specification, connect to the E deduction server,",
+        ),
+        (
+            "The Umlaut deduction server offers deduction services",
+            "The E deduction server offers deduction services",
+        ),
+        (
+            "Run 8 instances of Umlaut with different strategies in parallel.",
+            "Run 8 instances of E with different strategies in parallel.",
+        ),
+        (
+            "Create an empty knowledge base with name <name> for Umlaut.",
+            "Create an empty knowledge base with name <name> for E.",
+        ),
+        ("in the Umlaut toolchain.", "in the E toolchain."),
+        ("[PATH_TO_UMLAUT]", "[PATH_TO_EPROVER]"),
+        (
+            "usual error checking and hand holding features of E proper!",
+            "usual error checking and hand holding features as E proper!",
+        ),
+        (
+            "Specify the prover binary to use. The default is 'eprover'. "
+            "This option accepts absolute and relative paths.",
+            "Specify the prover binary to use. The default is 'eprover', and "
+            "initially, only E is supported. This option does accept absolute "
+            "and relative paths.",
+        ),
+        (
+            "Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve, "
+            "and any given Umlaut version may not support every extension. Umlaut "
+            "supports the TPTP 6.3.0 FOF and CNF input files covered by its "
+            "compatibility suite (including includes).",
+            "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still "
+            "under development, and the version in E may not be fully conforming at "
+            "all times. E works on all TPTP 6.3.0 FOF and CNF input files (including "
+            "includes).",
+        ),
+        (
+            "Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve, "
+            "and any given Umlaut version may not support every extension. Umlaut "
+            "supports the TPTP 4.1.0 input files covered by its compatibility suite "
+            "(including includes).",
+            "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still "
+            "under development, and the version in E may not be fully conforming at "
+            "all times. E works on all TPTP 4.1.0 input files (including includes).",
+        ),
+        (
+            "Handle different variants for each problem base name as required for "
+            "CASC-28, including the TH0-variant. The canonical eprover executable "
+            "handles all three variants.",
+            "Handle different variants for each problem base name as required for "
+            "CASC-28, including the TH0-variant. This is very specific hack. Note "
+            "that this requires eprover-ho for the third variant.",
+        ),
+        (
+            "Handle different variants for each problem base name as required for "
+            "CASC-28, using the separately installed eprover-25 compatibility binary "
+            "based on the historical E 2.5 CASC-J10 LTB winner. This specialized mode "
+            "requires manual installation of eprover-25 in the StarExec package.",
+            "Handle different variants for each problem base name as required for "
+            "CASC-28, but run E-2.5 (prerelease) as the base prover. This is a really "
+            "very specific hack, to enable E 2.5 as the CASC-J10 LTB winner to compete "
+            "in CASC-28. It requires manual installation of the eprover-2.5 binary in "
+            "the StarExec package.",
+        ),
+    )
+    normalized = text
+    for umlaut_phrase, e_phrase in phrase_replacements:
+        normalized = normalized.replace(umlaut_phrase, e_phrase)
+    return normalized
 
 
 def normalize_platform_line(line: str) -> str:
@@ -2781,6 +3006,9 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
     for tool in sorted(tool_names):
         for arguments in tool_argument_cases(tool):
             label = "-".join(part.strip("-") or "dash" for part in arguments)
+            expected_mismatches = TOOL_ARGUMENT_EXPECTED_MISMATCHES.get(
+                (tool, arguments), ()
+            )
             cases.append(
                 {
                     "tool": tool,
@@ -2788,6 +3016,7 @@ def tool_comparison_cases(tool_names: Sequence[str]) -> list[dict[str, Any]]:
                     "arguments": list(arguments),
                     "scenario": label,
                     "stdin": None,
+                    "expected_mismatches": list(expected_mismatches),
                 }
             )
         for functional_case in TOOL_FUNCTIONAL_CASES.get(tool, ()):
@@ -3137,7 +3366,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         rust_bin_dir = args.rust_bin_dir.resolve()
         if not rust_bin_dir.is_dir():
             raise InteropError(f"Native Linux Rust bin directory not found: {rust_bin_dir}")
-        candidate_kind = "linux-rust-tools"
+        candidate_kind = "linux-umlaut-tools"
 
     records: list[dict[str, Any]] = []
     mismatch_count = 0
@@ -3146,7 +3375,7 @@ def compare_tools(args: argparse.Namespace) -> None:
         "eprover": Path(manifest["builds"]["fol"]["binary"]),
     }
     candidate_companions = reference_companions if args.self_test else {
-        "eprover": rust_bin_dir / "eprover",
+        "eprover": rust_bin_dir / "umlaut",
     }
     cases = tool_comparison_cases(selected)
     for index, case in enumerate(cases, 1):
@@ -3206,7 +3435,7 @@ def compare_tools(args: argparse.Namespace) -> None:
             candidate_binary = reference_binary
         else:
             assert rust_bin_dir is not None
-            candidate_binary = rust_bin_dir / tool
+            candidate_binary = rust_bin_dir / UMLAUT_TOOL_BINARIES[tool]
             if not candidate_binary.is_file():
                 raise InteropError(f"Native Linux Rust tool executable not found: {candidate_binary}")
         candidate_arguments = substitute_tool_fixture_arguments(
@@ -3715,7 +3944,7 @@ def parser() -> argparse.ArgumentParser:
     build_parser.set_defaults(function=build_reference)
 
     compare_parser = subparsers.add_parser(
-        "compare", help="compare native Linux C and Rust eprover binaries"
+        "compare", help="compare native Linux E and Umlaut binaries"
     )
     compare_parser.add_argument("--repo-root", type=path_argument, required=True)
     candidate = compare_parser.add_mutually_exclusive_group(required=True)
@@ -3728,7 +3957,7 @@ def parser() -> argparse.ArgumentParser:
     compare_parser.set_defaults(function=compare)
 
     compare_tools_parser = subparsers.add_parser(
-        "compare-tools", help="compare native Linux C and Rust support tools"
+        "compare-tools", help="compare native Linux E and Umlaut support tools"
     )
     compare_tools_parser.add_argument("--repo-root", type=path_argument, required=True)
     tool_candidate = compare_tools_parser.add_mutually_exclusive_group(required=True)
@@ -3743,7 +3972,9 @@ def parser() -> argparse.ArgumentParser:
     compare_tools_parser.add_argument("--report-only", action="store_true")
     compare_tools_parser.set_defaults(function=compare_tools)
 
-    benchmark_parser = subparsers.add_parser("benchmark", help="benchmark native Linux C and Rust binaries")
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="benchmark native Linux E and Umlaut binaries"
+    )
     benchmark_parser.add_argument("--repo-root", type=path_argument, required=True)
     benchmark_parser.add_argument("--rust-bin", type=path_argument, required=True)
     benchmark_parser.add_argument("--corpus", type=path_argument)

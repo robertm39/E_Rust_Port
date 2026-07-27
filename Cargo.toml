@@ -1,5 +1,5 @@
 [package]
-name = "e-rust-port"
+name = "umlaut"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
@@ -14,108 +14,108 @@ pdt-count-nodes = []
 print-index-stats = []
 
 [[bin]]
-name = "eprover"
-path = "src/bin/eprover.rs"
+name = "umlaut"
+path = "src/bin/umlaut.rs"
 
 [[bin]]
-name = "CSSCPA_filter"
-path = "src/bin/csscpa_filter.rs"
+name = "umlaut-csscpa-filter"
+path = "src/bin/umlaut-csscpa-filter.rs"
 
 [[bin]]
-name = "e_stratpar"
-path = "src/bin/e_stratpar.rs"
+name = "umlaut-stratpar"
+path = "src/bin/umlaut-stratpar.rs"
 
 [[bin]]
-name = "e_ltb_runner"
-path = "src/bin/e_ltb_runner.rs"
+name = "umlaut-ltb-runner"
+path = "src/bin/umlaut-ltb-runner.rs"
 
 [[bin]]
-name = "termprops"
-path = "src/bin/termprops.rs"
+name = "umlaut-termprops"
+path = "src/bin/umlaut-termprops.rs"
 
 [[bin]]
-name = "term2dag"
-path = "src/bin/term2dag.rs"
+name = "umlaut-term2dag"
+path = "src/bin/umlaut-term2dag.rs"
 
 [[bin]]
-name = "ex_commandline"
-path = "src/bin/ex_commandline.rs"
+name = "umlaut-commandline-example"
+path = "src/bin/umlaut-commandline-example.rs"
 
 [[bin]]
-name = "epclextract"
-path = "src/bin/epclextract.rs"
+name = "umlaut-pcl-extract"
+path = "src/bin/umlaut-pcl-extract.rs"
 
 [[bin]]
-name = "epclanalyse"
-path = "src/bin/epclanalyse.rs"
+name = "umlaut-pcl-analyse"
+path = "src/bin/umlaut-pcl-analyse.rs"
 
 [[bin]]
-name = "checkproof"
-path = "src/bin/checkproof.rs"
+name = "umlaut-checkproof"
+path = "src/bin/umlaut-checkproof.rs"
 
 [[bin]]
-name = "epcllemma"
-path = "src/bin/epcllemma.rs"
+name = "umlaut-pcl-lemma"
+path = "src/bin/umlaut-pcl-lemma.rs"
 
 [[bin]]
-name = "edpll"
-path = "src/bin/edpll.rs"
+name = "umlaut-dpll"
+path = "src/bin/umlaut-dpll.rs"
 
 [[bin]]
-name = "eground"
-path = "src/bin/eground.rs"
+name = "umlaut-ground"
+path = "src/bin/umlaut-ground.rs"
 
 [[bin]]
-name = "classify_problem"
-path = "src/bin/classify_problem.rs"
+name = "umlaut-classify-problem"
+path = "src/bin/umlaut-classify-problem.rs"
 
 [[bin]]
-name = "tsm_classify"
-path = "src/bin/tsm_classify.rs"
+name = "umlaut-tsm-classify"
+path = "src/bin/umlaut-tsm-classify.rs"
 
 [[bin]]
-name = "direct_examples"
-path = "src/bin/direct_examples.rs"
+name = "umlaut-direct-examples"
+path = "src/bin/umlaut-direct-examples.rs"
 
 [[bin]]
-name = "e_client"
-path = "src/bin/e_client.rs"
+name = "umlaut-client"
+path = "src/bin/umlaut-client.rs"
 
 [[bin]]
-name = "e_deduction_server"
-path = "src/bin/e_deduction_server.rs"
+name = "umlaut-deduction-server"
+path = "src/bin/umlaut-deduction-server.rs"
 
 [[bin]]
-name = "e_server"
-path = "src/bin/e_server.rs"
+name = "umlaut-server"
+path = "src/bin/umlaut-server.rs"
 
 [[bin]]
-name = "e_axfilter"
-path = "src/bin/e_axfilter.rs"
+name = "umlaut-axiom-filter"
+path = "src/bin/umlaut-axiom-filter.rs"
 
 [[bin]]
-name = "enormalizer"
-path = "src/bin/enormalizer.rs"
+name = "umlaut-normalizer"
+path = "src/bin/umlaut-normalizer.rs"
 
 [[bin]]
-name = "epatternize"
-path = "src/bin/epatternize.rs"
+name = "umlaut-patternize"
+path = "src/bin/umlaut-patternize.rs"
 
 [[bin]]
-name = "ekb_create"
-path = "src/bin/ekb_create.rs"
+name = "umlaut-kb-create"
+path = "src/bin/umlaut-kb-create.rs"
 
 [[bin]]
-name = "ekb_delete"
-path = "src/bin/ekb_delete.rs"
+name = "umlaut-kb-delete"
+path = "src/bin/umlaut-kb-delete.rs"
 
 [[bin]]
-name = "ekb_insert"
-path = "src/bin/ekb_insert.rs"
+name = "umlaut-kb-insert"
+path = "src/bin/umlaut-kb-insert.rs"
 
 [[bin]]
-name = "ekb_ginsert"
-path = "src/bin/ekb_ginsert.rs"
+name = "umlaut-kb-ginsert"
+path = "src/bin/umlaut-kb-ginsert.rs"
 
 [dependencies]
 

@@ -7,12 +7,12 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::network::{
     create_client_socket, tcp_string_recv_from_or_error, tcp_string_send_to_or_error,
 };
-use crate::prover::version::{E_NICKNAME, E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "e_client";
+pub const PROGRAM_NAME: &str = "umlaut-client";
 const DEFAULT_SERVER: &str = "localhost";
 const DEFAULT_PORT: u16 = 3666;
 const IPPORT_RESERVED: u16 = 1024;
@@ -170,7 +170,10 @@ where
                 return Ok(RunCommand::Exit(0));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("E {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(0));
             }
             OptionCode::Output => {
@@ -330,11 +333,11 @@ fn load_problem_file(path: &Path, result: &mut Vec<u8>) -> Result<(), Diagnostic
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-E {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
 Usage: {PROGRAM_NAME} [options] [files]\n\
 \n\
-Read an problem specification, connect to the E deduction server, \n\
+Read an problem specification, connect to the Umlaut deduction server, \n\
 and try to have the problem solved.\n\
 \n"
     );
@@ -345,39 +348,7 @@ and try to have the problem solved.\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "Copyright (C) 2011 by Stephan Schulz, {STS_MAIL}\n\
-\n\
-You can find the latest version of E and additional information at\n\
-{E_URL}\n\
-\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n\
-\n"
-    )
+    footer()
 }
 
 const OUTPUT_CLOSE_ERROR: &str =
@@ -443,7 +414,7 @@ mod tests {
     use crate::inout::network::{
         tcp_string_recv_from_or_error, tcp_string_send_to_or_error, TcpMessage,
     };
-    use crate::prover::version::{E_NICKNAME, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, VERSION, VERSION_QUALIFIER};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Read, Write};
     use std::path::{Path, PathBuf};
@@ -527,11 +498,11 @@ mod tests {
         format!(
             concat!(
                 "\n",
-                "E {version} \"{nickname}\"\n",
+                "umlaut-client {version} {nickname}\n",
                 "\n",
-                "Usage: e_client [options] [files]\n",
+                "Usage: umlaut-client [options] [files]\n",
                 "\n",
-                "Read an problem specification, connect to the E deduction server, \n",
+                "Read an problem specification, connect to the Umlaut deduction server, \n",
                 "and try to have the problem solved.\n",
                 "\n",
                 "Options:\n",
@@ -606,8 +577,12 @@ mod tests {
                 "\n",
             ),
             version = VERSION,
-            nickname = E_NICKNAME,
+            nickname = VERSION_QUALIFIER,
         )
+    }
+
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
     }
 
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
@@ -615,7 +590,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("e_client run succeeds");
+            .expect("umlaut-client run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -629,12 +604,15 @@ mod tests {
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "ignored");
 
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "-V"], "ignored");
         assert_eq!(status, 0);
-        assert_eq!(version, format!("E {VERSION} {E_NICKNAME}\n"));
+        assert_eq!(
+            version,
+            format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n")
+        );
         assert!(stderr.is_empty());
     }
 
@@ -709,7 +687,7 @@ mod tests {
         assert_eq!(port, 80);
         assert_eq!(
             String::from_utf8(stderr).expect("stderr is utf8"),
-            "e_client: Warning: Port numbers less than 1024 require root level access\n"
+            "umlaut-client: Warning: Port numbers less than 1024 require root level access\n"
         );
     }
 
@@ -912,7 +890,7 @@ mod tests {
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_rebranded_footer(&print_help());
     }
 
     #[test]

@@ -2256,9 +2256,9 @@ mod tests {
 
     #[test]
     fn batch_spec_defaults_match_c_allocation_shape() {
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
 
-        assert_eq!(spec.executable, "eprover");
+        assert_eq!(spec.executable, "umlaut");
         assert_eq!(spec.format, IoFormat::Tstp);
         assert_eq!(spec.category, None);
         assert_eq!(spec.train_dir, None);
@@ -2303,7 +2303,7 @@ mod tests {
         let mut notices = Vec::new();
         let spec = BatchSpec::parse_with_include_output(
             &mut scanner,
-            "eprover",
+            "umlaut",
             &header.category,
             header.train_dir.as_deref(),
             IoFormat::Tstp,
@@ -2360,7 +2360,7 @@ mod tests {
         let mut notices = Vec::new();
         let spec = BatchSpec::parse_with_include_output(
             &mut scanner,
-            "eprover",
+            "umlaut",
             &header.category,
             header.train_dir.as_deref(),
             IoFormat::Tstp,
@@ -2424,7 +2424,7 @@ mod tests {
 
         let spec = BatchSpec::parse_with_include_output(
             &mut scanner,
-            "eprover",
+            "umlaut",
             "LTB.SAT",
             Some("/train"),
             IoFormat::Tstp,
@@ -2453,7 +2453,7 @@ mod tests {
 
     #[test]
     fn print_batch_spec_uses_c_field_order_and_training_directory_spelling() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.category = Some("LTB.SAT".to_owned());
         spec.train_dir = Some("/train".to_owned());
         spec.ordered = true;
@@ -2519,7 +2519,7 @@ mod tests {
 
     #[test]
     fn answer_options_match_batch_process_problem_switch() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
 
         assert_eq!(spec.answer_options(), "");
         spec.res_answer = BatchOutputType::Desired;
@@ -2538,7 +2538,7 @@ mod tests {
             FormulaSet::new(),
             false,
         );
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut ticks = [11, 12, 13].into_iter();
         let mut output = Vec::new();
 
@@ -2563,7 +2563,7 @@ mod tests {
              % Spec has 1 clauses and 0 formulas (12)\n\
              % Written new problem (13)\n"
         );
-        assert_eq!(request.executable, "eprover");
+        assert_eq!(request.executable, "umlaut");
         assert_eq!(request.name, "Threshold(10)");
         assert_eq!(
             request.options,
@@ -2580,7 +2580,7 @@ mod tests {
     fn create_runner_request_rejects_missing_filter_without_panicking() {
         let signature = test_signature();
         let mut ctrl = StructFofSpec::new(&signature);
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut output = Vec::new();
 
         let error = spec
@@ -2608,7 +2608,7 @@ mod tests {
             FormulaSet::new(),
             false,
         );
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut ticks = [21, 22, 23].into_iter();
         let mut output = Vec::new();
 
@@ -2660,7 +2660,7 @@ mod tests {
             FormulaSet::new(),
             false,
         );
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut output = Vec::new();
 
         let temp = spec
@@ -2767,7 +2767,7 @@ mod tests {
         problem
             .clauses
             .insert(Clause::alloc(EqnList::from_vec(vec![problem_literal])));
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.res_answer = BatchOutputType::Desired;
         let mut global = Vec::new();
         let mut external = Vec::new();
@@ -2838,7 +2838,7 @@ mod tests {
         let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut external = Vec::new();
         let mut socket = Vec::new();
@@ -2878,7 +2878,7 @@ mod tests {
     fn process_problem_with_runner_backend_reports_gave_up_after_expired_limit() {
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut external = Vec::new();
         let mut backend = FakeRunnerBackend::new(None);
@@ -2922,7 +2922,7 @@ mod tests {
     fn process_problem_with_runner_backend_mirrors_gave_up_to_socket_only() {
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut external = Vec::new();
         let mut socket = Vec::new();
@@ -2965,7 +2965,7 @@ mod tests {
     fn process_problem_spawns_up_to_max_cores_then_reports_success_and_backtracks() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.res_answer = BatchOutputType::Desired;
         let mut global = Vec::new();
         let mut external = Vec::new();
@@ -3036,7 +3036,7 @@ mod tests {
     fn process_problem_reports_gave_up_when_time_expires_before_spawn() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut external = Vec::new();
 
@@ -3080,7 +3080,7 @@ mod tests {
     fn process_file_loads_tstp_problem_and_writes_destination_output() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut dest = Vec::new();
         let mut load_requests = Vec::new();
@@ -3154,7 +3154,7 @@ mod tests {
     fn process_file_flushes_global_output_before_injected_load() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let flushes = Rc::new(Cell::new(0));
         let mut global = FlushCountingWriter::new(Rc::clone(&flushes));
         let mut dest = Vec::new();
@@ -3207,7 +3207,7 @@ mod tests {
     fn process_file_propagates_load_error_without_mutating_shared_spec() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut dest = Vec::new();
         let error = {
@@ -3254,7 +3254,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let problem = spec
@@ -3308,7 +3308,7 @@ mod tests {
         let source_name = source.to_string_lossy().into_owned();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
 
         let problem = spec
             .load_problem_from_file(
@@ -3353,7 +3353,7 @@ mod tests {
         let mut bank = test_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
         assert!(ctrl.mark_include_parsed("skip.ax"));
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
 
         let problem = spec
             .load_problem_from_file(
@@ -3391,7 +3391,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let problem = spec
@@ -3443,7 +3443,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let problem = spec
@@ -3480,7 +3480,7 @@ mod tests {
         fs::write(&source, "input_clause(old_clause, axiom, [++p(a)]).\n").unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let error = spec
@@ -3512,7 +3512,7 @@ mod tests {
             fs::write(&source, source_text).unwrap();
             let mut bank = test_bank();
             let ctrl = StructFofSpec::new(bank.signature());
-            let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+            let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
             let source_name = source.to_string_lossy().into_owned();
 
             assert!(!bank.signature().typed_symbols());
@@ -3540,7 +3540,7 @@ mod tests {
         fs::write(&source, "fof(untyped, axiom, p(a)).\n").unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         spec.load_problem_from_file(
@@ -3568,7 +3568,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let problem = spec
@@ -3612,7 +3612,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let ctrl = StructFofSpec::new(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let source_name = source.to_string_lossy().into_owned();
 
         let problem = spec
@@ -3654,7 +3654,7 @@ mod tests {
         .unwrap();
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut backend = FakeRunnerBackend::new(Some(theorem_completion("% thf proof\n")));
         let source_name = source.to_string_lossy().into_owned();
@@ -3704,7 +3704,7 @@ mod tests {
         fs::write(&source, "cnf(goal_clause, axiom, $false).\n").unwrap();
         let mut bank = test_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.includes = vec![include_name.clone()];
         let default_dir = format!("{}/", temp_dir.to_string_lossy().replace('\\', "/"));
         let mut init_output = Vec::new();
@@ -3760,7 +3760,7 @@ mod tests {
         fs::write(&include, "fof(shared_formula, axiom, p(a)).\n").unwrap();
         let mut bank = test_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let include_name = include.file_name().unwrap().to_string_lossy().into_owned();
         spec.includes = vec![include_name.clone(), "definitely-missing.ax".to_owned()];
         let mut output = Vec::new();
@@ -3806,7 +3806,7 @@ mod tests {
         fs::write(&concrete_include, "fof(concrete_shared, axiom, p(a)).\n").unwrap();
         let mut bank = test_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.includes = vec![abstract_name.clone()];
         let mut output = Vec::new();
         let default_dir = format!("{}/", dir.to_string_lossy().replace('\\', "/"));
@@ -3842,7 +3842,7 @@ mod tests {
         fs::write(&source, "cnf(goal_clause, axiom, $false).\n").unwrap();
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let mut global = Vec::new();
         let mut backend = FakeRunnerBackend::new(Some(BatchCompletedRunner {
             runner: BatchSpawnedRunner {
@@ -3895,7 +3895,7 @@ mod tests {
         fs::write(&source, "not_a_tstp_entry.\n").unwrap();
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let flushes = Rc::new(Cell::new(0));
         let mut global = FlushCountingWriter::new(Rc::clone(&flushes));
         let mut backend = FakeRunnerBackend::new(None);
@@ -3950,7 +3950,7 @@ mod tests {
 
         let mut bank = test_bank();
         let mut ctrl = StructFofSpec::new(bank.signature());
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.per_prob_limit = 12;
         spec.includes = vec![include_name.clone()];
         spec.source_files = vec![first_name.clone(), second_name.clone()];
@@ -4036,7 +4036,7 @@ mod tests {
 
     #[test]
     fn process_variants_uses_c_round_time_accounting_and_skips_solved_abstracts() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.total_wtc_limit = 100;
         spec.source_files = vec!["prob_*".to_owned(), "other_*suffix".to_owned()];
         spec.dest_files = vec!["prob.out".to_owned(), "other.out".to_owned()];
@@ -4115,7 +4115,7 @@ mod tests {
 
     #[test]
     fn process_variants_with_child_processes_captures_generic_child_output() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.total_wtc_limit = 50;
         spec.source_files = vec!["prob_*".to_owned()];
         spec.dest_files = vec!["prob.out".to_owned()];
@@ -4142,7 +4142,7 @@ mod tests {
                     assert_eq!(job.wct_limit, 40);
                     EGPCtrl::spawn_command_reporting(
                         status_command("% SZS status Unsatisfiable", 0),
-                        "E-LTB wrapper",
+                        "Umlaut LTB wrapper",
                         1,
                         1_000_000,
                         startup_output,
@@ -4155,15 +4155,15 @@ mod tests {
         assert_eq!(report.attempted, 1);
         assert!(report.records[0].solved);
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("% Starting E-LTB wrapper with 1000000s (1) cores\n"));
-        assert!(output.contains("% E-LTB wrapper with pid "));
+        assert!(output.contains("% Starting Umlaut LTB wrapper with 1000000s (1) cores\n"));
+        assert!(output.contains("% Umlaut LTB wrapper with pid "));
         assert!(output.contains("% SZS status Unsatisfiable"));
         assert!(output.contains("% SZS status Ended for prob_A.p\n\n"));
     }
 
     #[test]
     fn process_variants_with_child_processes_uses_c_success_status_set() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.total_wtc_limit = 20;
         spec.source_files = vec!["prob_*".to_owned()];
         spec.dest_files = vec!["prob.out".to_owned()];
@@ -4185,7 +4185,7 @@ mod tests {
                 |_job, startup_output| {
                     EGPCtrl::spawn_command_reporting(
                         status_command("% SZS status Satisfiable", 0),
-                        "E-LTB wrapper",
+                        "Umlaut LTB wrapper",
                         1,
                         1_000_000,
                         startup_output,
@@ -4204,7 +4204,7 @@ mod tests {
 
     #[test]
     fn process_variants_rejects_mismatched_variant_prover_lists() {
-        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         let variants = ["A", "B"];
         let provers = ["e-a"];
         let mut output = Vec::new();
@@ -4230,7 +4230,7 @@ mod tests {
 
     #[test]
     fn process_problems_uses_per_problem_limit_without_total_limit() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.per_prob_limit = 17;
         spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned()];
         spec.dest_files = vec!["o1".to_owned(), "o2".to_owned()];
@@ -4277,7 +4277,7 @@ mod tests {
 
     #[test]
     fn process_problems_biases_total_limit_up_and_caps_by_per_problem_limit() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.per_prob_limit = 20;
         spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned(), "p3.p".to_owned()];
         spec.dest_files = vec!["o1".to_owned(), "o2".to_owned(), "o3".to_owned()];
@@ -4312,7 +4312,7 @@ mod tests {
 
     #[test]
     fn process_problems_uses_proportional_total_limit_without_per_problem_cap() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned(), "p3.p".to_owned()];
         spec.dest_files = vec!["o1".to_owned(), "o2".to_owned(), "o3".to_owned()];
         let mut times = [100, 100, 110, 160].into_iter();
@@ -4346,7 +4346,7 @@ mod tests {
 
     #[test]
     fn process_problems_preserves_expired_total_limit_signed_arithmetic() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.source_files.push("late.p".to_owned());
         spec.dest_files.push("late.out".to_owned());
         let mut times = [10, 20].into_iter();
@@ -4370,7 +4370,7 @@ mod tests {
 
     #[test]
     fn process_problems_rejects_mismatched_source_and_dest_lists() {
-        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut spec = BatchSpec::new("umlaut", IoFormat::Tstp);
         spec.source_files.push("p.p".to_owned());
         let error = spec
             .process_problems_with(BatchProcessProblemsConfig::default(), || 0, |_| Ok(false))

@@ -119,10 +119,10 @@ mod tests {
         remove_if_present(&output_path);
         open_global_out(Some(&output_path)).unwrap();
 
-        init_io("eprover");
+        init_io("umlaut");
 
-        assert_eq!(program_name().as_deref(), Some("eprover"));
-        assert_eq!(error_program_name(), "eprover");
+        assert_eq!(program_name().as_deref(), Some("umlaut"));
+        assert_eq!(error_program_name(), "umlaut");
         assert_eq!(tptp_dir().as_deref(), Some("Problems/"));
         assert_eq!(global_out_fd(), STDOUT_FILENO_COMPAT);
         init_error("Unknown program");

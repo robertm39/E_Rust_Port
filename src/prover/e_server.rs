@@ -21,14 +21,14 @@ use crate::inout::network::{
 };
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner};
-use crate::prover::version::{E_NICKNAME, E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
 
-pub const PROGRAM_NAME: &str = "e_server";
-const DEFAULT_PROVER: &str = "eprover";
+pub const PROGRAM_NAME: &str = "umlaut-server";
+const DEFAULT_PROVER: &str = "umlaut";
 const DEFAULT_PORT: u16 = 3666;
 const IPPORT_RESERVED: u16 = 1024;
-const C_USAGE_ERROR: &str = "Usage: e_server <domain-spec> [<options>]\n";
+const C_USAGE_ERROR: &str = "Usage: umlaut-server <domain-spec> [<options>]\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -112,7 +112,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("prover"),
         OptArgType::ReqArg,
         None,
-        "Specify the prover binary to use. The default is 'eprover', and initially, only E is supported. This option does accept absolute and relative paths.",
+        "Specify the prover binary to use. The default is 'umlaut'. This option accepts absolute and relative paths.",
     ),
     OptCell::new(
         OptionCode::ServicePort,
@@ -176,7 +176,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-in"),
         OptArgType::NoArg,
         None,
-        "Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still under development, and the version in E may not be fully conforming at all times. E works on all TPTP 4.1.0 input files (including includes).",
+        "Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve, and any given Umlaut version may not support every extension. Umlaut supports the TPTP 4.1.0 input files covered by its compatibility suite (including includes).",
     ),
     OptCell::new(
         OptionCode::TstpFormat,
@@ -355,7 +355,10 @@ where
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("E {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Output => {
@@ -697,7 +700,7 @@ fn parse_port<Code>(
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-E {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
 Usage: {PROGRAM_NAME} [options] [files]\n\
 \n\
@@ -717,39 +720,7 @@ prover to use.\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "Copyright (C) 2011 by Stephan Schulz, {STS_MAIL}\n\
-\n\
-You can find the latest version of E and additional information at\n\
-{E_URL}\n\
-\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n\
-\n"
-    )
+    footer()
 }
 
 fn required_arg<'a>(
@@ -826,7 +797,7 @@ mod tests {
     };
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
-    use crate::prover::version::{E_NICKNAME, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, VERSION, VERSION_QUALIFIER};
     use crate::test_support::global_state_lock;
 
     #[derive(Debug)]
@@ -927,9 +898,9 @@ mod tests {
         format!(
             concat!(
                 "\n",
-                "E {version} \"{nickname}\"\n",
+                "umlaut-server {version} {nickname}\n",
                 "\n",
-                "Usage: e_server [options] [files]\n",
+                "Usage: umlaut-server [options] [files]\n",
                 "\n",
                 "Read an problem specification and offer deduction in the the structure\n",
                 "described by the specification as a service.  All input formats (LOP,\n",
@@ -979,9 +950,8 @@ mod tests {
                 "\n",
                 "   -p <arg>\n",
                 "  --prover=<arg>\n",
-                "    Specify the prover binary to use. The default is 'eprover', and\n",
-                "    initially, only E is supported. This option does accept absolute and\n",
-                "    relative paths.\n",
+                "    Specify the prover binary to use. The default is 'umlaut'. This option\n",
+                "    accepts absolute and relative paths.\n",
                 "\n",
                 "   -P <arg>\n",
                 "  --service-port=<arg>\n",
@@ -1007,9 +977,10 @@ mod tests {
                 "    Synonymous with --tptp-in.\n",
                 "\n",
                 "  --tstp-in\n",
-                "    Parse TPTP-3 format instead of E-LOP (Note that TPTP-3 syntax is still\n",
-                "    under development, and the version in E may not be fully conforming at\n",
-                "    all times. E works on all TPTP 4.1.0 input files (including includes).\n",
+                "    Parse TPTP-3 format instead of E-LOP. TPTP syntax continues to evolve,\n",
+                "    and any given Umlaut version may not support every extension. Umlaut\n",
+                "    supports the TPTP 4.1.0 input files covered by its compatibility suite\n",
+                "    (including includes).\n",
                 "\n",
                 "  --tstp-format\n",
                 "    Equivalent to --tstp-in.\n",
@@ -1054,8 +1025,12 @@ mod tests {
                 "\n",
             ),
             version = VERSION,
-            nickname = E_NICKNAME,
+            nickname = VERSION_QUALIFIER,
         )
+    }
+
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
     }
 
     #[test]
@@ -1067,7 +1042,7 @@ mod tests {
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).expect("help");
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).expect("help is utf8");
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let mut stdout = Vec::new();
@@ -1075,7 +1050,7 @@ mod tests {
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).expect("version utf8"),
-            format!("E {VERSION} {E_NICKNAME}\n")
+            format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n")
         );
     }
 
@@ -1150,7 +1125,7 @@ mod tests {
         assert_eq!(port, 80);
         assert_eq!(
             String::from_utf8(stderr).expect("stderr is utf8"),
-            "e_server: Warning: Port numbers less than 1024 require root level access\n"
+            "umlaut-server: Warning: Port numbers less than 1024 require root level access\n"
         );
     }
 
@@ -1463,6 +1438,6 @@ mod tests {
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_rebranded_footer(&print_help());
     }
 }

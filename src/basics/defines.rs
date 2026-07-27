@@ -209,7 +209,7 @@ impl<P> IntOrP<P> {
 }
 
 // Allowed external shared-library boundary: `WriteStr` is a raw descriptor
-// helper, so the Rust port calls the platform C runtime's one-shot write ABI
+// helper, so Umlaut calls the platform C runtime's one-shot write ABI
 // behind a safe, C-shaped wrapper.
 #[cfg(unix)]
 #[allow(unsafe_code)]

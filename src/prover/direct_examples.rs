@@ -18,7 +18,7 @@ use crate::prover::version::{footer, VERSION};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "direct_examples";
+pub const PROGRAM_NAME: &str = "umlaut-direct-examples";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -456,7 +456,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("direct_examples run succeeds");
+            .expect("umlaut-direct-examples run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -471,7 +471,7 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: direct_examples [options] [files]"));
+        assert!(help.contains("Usage: umlaut-direct-examples [options] [files]"));
         assert!(help.contains("generate training examples"));
         assert!(stderr.is_empty());
 
@@ -743,7 +743,7 @@ mod tests {
             run_with_stdin(&[PROGRAM_NAME, "--verbose=2"], NO_PROOF_PROTOCOL);
 
         assert_eq!(status, 0);
-        assert_eq!(stderr, "direct_examples: PCL input read\n");
+        assert_eq!(stderr, "umlaut-direct-examples: PCL input read\n");
     }
 
     #[test]

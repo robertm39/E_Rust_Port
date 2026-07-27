@@ -18,14 +18,14 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::network::{create_server_socket, listen};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::IoFormat;
-use crate::prover::version::{footer, E_NICKNAME, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
 
-pub const PROGRAM_NAME: &str = "e_deduction_server";
-const DEFAULT_PROVER: &str = "eprover";
+pub const PROGRAM_NAME: &str = "umlaut-deduction-server";
+const DEFAULT_PROVER: &str = "umlaut";
 const DEFAULT_TOTAL_WTC_LIMIT: i64 = 30;
 const STDOUT_SERVER_UNIMPLEMENTED_MESSAGE: &str =
-    "e_deduction_server: Server mode not implemented yet for stdout\n";
+    "umlaut-deduction-server: Server mode not implemented yet for stdout\n";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -188,7 +188,10 @@ where
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Port => {
@@ -449,11 +452,11 @@ fn parse_port<Code>(option: &OptCell<Code>, arg: &str) -> Result<u16, Diagnostic
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-{PROGRAM_NAME} {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
 Usage: {PROGRAM_NAME} -p <port> [options] [files]\n\
 \n\
-The E deduction server offers deduction services based on local or\n\
+The Umlaut deduction server offers deduction services based on local or\n\
 uploaded axiom sets via network. See README.server.\n\
 \n"
     );
@@ -528,7 +531,7 @@ mod tests {
     use crate::inout::network::{tcp_string_recv_from_or_error, tcp_string_send_to_or_error};
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
-    use crate::prover::version::{footer, E_NICKNAME, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, footer, VERSION, VERSION_QUALIFIER};
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use crate::test_support::global_state_lock;
 
@@ -594,11 +597,11 @@ mod tests {
         let mut expected = format!(
             concat!(
                 "\n",
-                "e_deduction_server {version} \"{nickname}\"\n",
+                "umlaut-deduction-server {version} {nickname}\n",
                 "\n",
-                "Usage: e_deduction_server -p <port> [options] [files]\n",
+                "Usage: umlaut-deduction-server -p <port> [options] [files]\n",
                 "\n",
-                "The E deduction server offers deduction services based on local or\n",
+                "The Umlaut deduction server offers deduction services based on local or\n",
                 "uploaded axiom sets via network. See README.server.\n",
                 "\n",
                 "Options:\n",
@@ -650,7 +653,7 @@ mod tests {
                 "\n",
             ),
             version = VERSION,
-            nickname = E_NICKNAME,
+            nickname = VERSION_QUALIFIER,
         );
         expected.push_str(&footer());
         expected
@@ -689,7 +692,7 @@ mod tests {
         .expect("help");
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
         let help = String::from_utf8(stdout).unwrap();
-        assert_eq!(help, expected_help());
+        assert_help_matches_fixture(&help, &expected_help());
 
         let mut stdin = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
@@ -698,7 +701,7 @@ mod tests {
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+            format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n")
         );
     }
 
@@ -742,7 +745,7 @@ mod tests {
                 "Axioms",
                 "--verbose",
                 "--output-level=2",
-                "custom-eprover",
+                "custom-umlaut",
                 "ignored-extra",
             ],
             &mut stdout,
@@ -755,7 +758,7 @@ mod tests {
         assert_eq!(
             config,
             DeductionServerConfig {
-                prover: "custom-eprover".to_owned(),
+                prover: "custom-umlaut".to_owned(),
                 port: Some(3667),
                 server_lib: "Axioms".to_owned(),
                 total_wtc_limit: 0,
@@ -1054,6 +1057,6 @@ mod tests {
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_fixture(&print_help(), &expected_help());
     }
 }

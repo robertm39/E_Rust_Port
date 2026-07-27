@@ -116,7 +116,7 @@ class LinodeApi:
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self.token}",
-            "User-Agent": "e-rust-port-linode-runner/1",
+            "User-Agent": "umlaut-linode-runner/1",
         }
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
@@ -304,7 +304,7 @@ def ensure_ssh_key() -> Path:
             "-N",
             "",
             "-C",
-            "e-rust-port-linode-runner",
+            "umlaut-linode-runner",
             "-f",
             str(private_key),
         ]

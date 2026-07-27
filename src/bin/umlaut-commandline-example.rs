@@ -1,8 +1,8 @@
 use std::io;
 use std::process::ExitCode;
 
-use e_rust_port::basics::error::{init_error_from_invocation, report_fatal_diagnostic};
-use e_rust_port::prover::termprops::{run, PROGRAM_NAME};
+use umlaut::basics::error::{init_error_from_invocation, report_fatal_diagnostic};
+use umlaut::simple_apps::ex_commandline::{run, PROGRAM_NAME};
 
 fn main() -> ExitCode {
     init_error_from_invocation(PROGRAM_NAME);

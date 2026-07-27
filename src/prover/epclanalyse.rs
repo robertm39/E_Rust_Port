@@ -11,12 +11,12 @@ use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::pcl2::propanalysis::{protocol_prop_analyse, protocol_prop_data_print_string};
 use crate::pcl2::protocol::PclProtocol;
 use crate::pcl2::steps::PclStepParseOptions;
-use crate::prover::version::{STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "epclanalyse";
+pub const PROGRAM_NAME: &str = "umlaut-pcl-analyse";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -241,42 +241,7 @@ protocol and its clauses.\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "\n\
-Copyright (C) 2002-2009 by Stephan Schulz, {STS_MAIL}\n\
-\n\
-This program is a part of the support structure for the E equational\n\
-theorem prover. You can find the latest version of the E distribution\n\
-as well as additional information at\n\
-http://wwwjessen.informatik.tu-muenchen.de/~schulz/WORK/eprover.html.\n\
-\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n\
-\n"
-    )
+    footer()
 }
 
 const OUTPUT_CLOSE_ERROR: &str =
@@ -369,7 +334,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::inout::output::output_level;
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{assert_help_matches_fixture, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -396,7 +361,10 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("epclanalyse-{name}-{}.tmp", std::process::id()))
+            .join(format!(
+                "umlaut-pcl-analyse-{name}-{}.tmp",
+                std::process::id()
+            ))
     }
 
     fn remove_if_present(path: &Path) {
@@ -408,9 +376,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "epclanalyse {version}\n",
+                "umlaut-pcl-analyse {version}\n",
                 "\n",
-                "Usage: epclanalyse [options] [files]\n",
+                "Usage: umlaut-pcl-analyse [options] [files]\n",
                 "\n",
                 "Read an PCL2 protocol and print a number of statistics about the\n",
                 "protocol and its clauses.\n",
@@ -476,12 +444,16 @@ mod tests {
         )
     }
 
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("epclanalyse run succeeds");
+            .expect("umlaut-pcl-analyse run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -494,7 +466,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not pcl");
@@ -520,7 +492,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let error = run([PROGRAM_NAME, "-V"], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("C epclanalyse has no -V shorthand");
+            .expect_err("C umlaut-pcl-analyse has no -V shorthand");
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("Unknown Option: -V"));
@@ -799,6 +771,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert_eq!(rendered, expected_help());
+        assert_help_matches_rebranded_footer(&rendered);
     }
 }

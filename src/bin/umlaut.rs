@@ -1,8 +1,9 @@
 use std::io;
 use std::process::ExitCode;
 
-use e_rust_port::basics::error::{init_error, report_fatal_diagnostic};
-use e_rust_port::prover::e_server::{run, PROGRAM_NAME};
+use umlaut::basics::error::{init_error, report_fatal_diagnostic};
+use umlaut::prover::eprover::run;
+use umlaut::prover::version::PROGRAM_NAME;
 
 fn main() -> ExitCode {
     init_error(PROGRAM_NAME);
@@ -10,7 +11,7 @@ fn main() -> ExitCode {
     let mut stderr = io::stderr().lock();
     let status = match run(std::env::args(), &mut stdout, &mut stderr) {
         Ok(status) => status,
-        Err(error) => report_fatal_diagnostic(&mut stderr, error.code(), error.message()),
+        Err(error) => report_fatal_diagnostic(&mut stderr, error.code(), &error.message()),
     };
     ExitCode::from(status)
 }

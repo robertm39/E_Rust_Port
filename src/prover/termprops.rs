@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "termprops";
+pub const PROGRAM_NAME: &str = "umlaut-termprops";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -262,7 +262,7 @@ pub fn print_help() -> String {
 \n\
 cl_test\n\
 \n\
-Usage: termprops [options] [files]\n\
+Usage: umlaut-termprops [options] [files]\n\
 \n\
 Read a set of terms and print it with size and depth information.\n\
 \n"
@@ -378,7 +378,10 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("termprops-{name}-{}.tmp", std::process::id()))
+            .join(format!(
+                "umlaut-termprops-{name}-{}.tmp",
+                std::process::id()
+            ))
     }
 
     fn remove_if_present(path: &Path) {
@@ -391,7 +394,7 @@ mod tests {
             "\n",
             "cl_test\n",
             "\n",
-            "Usage: termprops [options] [files]\n",
+            "Usage: umlaut-termprops [options] [files]\n",
             "\n",
             "Read a set of terms and print it with size and depth information.\n",
             "\n",
@@ -442,7 +445,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect("termprops stdin run succeeds");
+            .expect("umlaut-termprops stdin run succeeds");
 
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
@@ -672,7 +675,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect("termprops does not run OutClose-style final flush");
+            .expect("umlaut-termprops does not run OutClose-style final flush");
 
         assert_eq!(status, 0);
         assert!(stderr.is_empty());

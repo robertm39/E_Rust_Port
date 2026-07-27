@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "checkproof";
+pub const PROGRAM_NAME: &str = "umlaut-checkproof";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -97,7 +97,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("executable"),
         OptArgType::ReqArg,
         None,
-        "Give the name under which the prover can be called. If no executable is given, checkproof will guess a name based on the type of the prover. This guess may be way off!",
+        "Give the name under which the prover can be called. If no executable is given, umlaut-checkproof will guess a name based on the type of the prover. This guess may be way off!",
     ),
     OptCell::new(
         OptionCode::TimeLimit,
@@ -354,11 +354,11 @@ Usage: {PROGRAM_NAME} [options] [files]\n\
 Read an UPCL2 protocol and verify the inferences using one of a\n\
 varity of external provers.\n\
 \n\
-This is a _very_ experimental program. Passing checkproof does\n\
+This is a _very_ experimental program. Passing umlaut-checkproof does\n\
 indicate that all inferences in an UPCL2 protocol are correct\n\
 (i.e. that the conclusion is logically implied by the premisses) -\n\
 that is, if you believe that the transformation process and the used\n\
-prover are correct. However, checkproof will e.g. gladly show that the\n\
+prover are correct. However, umlaut-checkproof will e.g. gladly show that the\n\
 empty proof protocol does not contain any buggy steps.\n\
 \n\
 If a proof protocol fails to pass this test, the proof may still be\n\
@@ -468,7 +468,7 @@ mod tests {
     use super::{parse_options, print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
-    use crate::prover::version::{footer, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, footer, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -496,7 +496,10 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("checkproof-{name}-{}.tmp", std::process::id()))
+            .join(format!(
+                "umlaut-checkproof-{name}-{}.tmp",
+                std::process::id()
+            ))
     }
 
     fn remove_if_present(path: &Path) {
@@ -508,18 +511,18 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "checkproof {version}\n",
+                "umlaut-checkproof {version}\n",
                 "\n",
-                "Usage: checkproof [options] [files]\n",
+                "Usage: umlaut-checkproof [options] [files]\n",
                 "\n",
                 "Read an UPCL2 protocol and verify the inferences using one of a\n",
                 "varity of external provers.\n",
                 "\n",
-                "This is a _very_ experimental program. Passing checkproof does\n",
+                "This is a _very_ experimental program. Passing umlaut-checkproof does\n",
                 "indicate that all inferences in an UPCL2 protocol are correct\n",
                 "(i.e. that the conclusion is logically implied by the premisses) -\n",
                 "that is, if you believe that the transformation process and the used\n",
-                "prover are correct. However, checkproof will e.g. gladly show that the\n",
+                "prover are correct. However, umlaut-checkproof will e.g. gladly show that the\n",
                 "empty proof protocol does not contain any buggy steps.\n",
                 "\n",
                 "If a proof protocol fails to pass this test, the proof may still be\n",
@@ -575,7 +578,7 @@ mod tests {
                 "   -x <arg>\n",
                 "  --executable=<arg>\n",
                 "    Give the name under which the prover can be called. If no executable is\n",
-                "    given, checkproof will guess a name based on the type of the prover. This\n",
+                "    given, umlaut-checkproof will guess a name based on the type of the prover. This\n",
                 "    guess may be way off!\n",
                 "\n",
                 "   -t <arg>\n",
@@ -597,7 +600,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("checkproof run succeeds");
+            .expect("umlaut-checkproof run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -610,7 +613,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_fixture(&help, &expected_help());
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not pcl");
@@ -637,7 +640,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let error = run([PROGRAM_NAME, "-V"], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("C checkproof has no -V shorthand");
+            .expect_err("C umlaut-checkproof has no -V shorthand");
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("Unknown Option: -V"));
@@ -726,8 +729,8 @@ mod tests {
         assert_eq!(
             stderr,
             concat!(
-                "checkproof: Warning: Cannot currently handle full first-order format!\n",
-                "checkproof: Warning: Cannot currently handle full first-order format!\n",
+                "umlaut-checkproof: Warning: Cannot currently handle full first-order format!\n",
+                "umlaut-checkproof: Warning: Cannot currently handle full first-order format!\n",
             )
         );
     }
@@ -866,7 +869,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("C checkproof does not enable SupportShellPCL");
+            .expect_err("C umlaut-checkproof does not enable SupportShellPCL");
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().starts_with("<stdin>:"));
@@ -992,6 +995,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert_eq!(rendered, expected_help());
+        assert_help_matches_fixture(&rendered, &expected_help());
     }
 }

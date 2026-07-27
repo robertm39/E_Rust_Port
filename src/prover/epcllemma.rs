@@ -16,12 +16,12 @@ use crate::pcl2::lemmas::{
 };
 use crate::pcl2::protocol::PclProtocol;
 use crate::pcl2::steps::{PclStepParseOptions, PCL_IS_LEMMA};
-use crate::prover::version::{E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "epcllemma";
+pub const PROGRAM_NAME: &str = "umlaut-pcl-lemma";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -127,7 +127,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tptp-format"),
         OptArgType::NoArg,
         None,
-        "Equivalent to --tptp-out (supplied for consistency in the E toolchain.",
+        "Equivalent to --tptp-out (supplied for consistency in the Umlaut toolchain.",
     ),
     OptCell::new(
         OptionCode::TstpPrint,
@@ -143,7 +143,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("tstp-format"),
         OptArgType::NoArg,
         None,
-        "Equivalent to --tstp-out (supplied for consistency in the E toolchain. Note that this does not enable parsing of TPTP-3 proofs.",
+        "Equivalent to --tstp-out (supplied for consistency in the Umlaut toolchain. Note that this does not enable parsing of TPTP-3 proofs.",
     ),
     OptCell::new(
         OptionCode::LopPrint,
@@ -855,46 +855,7 @@ Read an UPCL2 protocol and suggest certain steps as lemmas.\n"
 }
 
 fn legacy_footer() -> String {
-    format!(
-        concat!(
-            "\n",
-            "Copyright (C) 2003-2005 by Stephan Schulz, {sts_mail}\n",
-            "\n",
-            "                                                                      This program is a part of the support structure for the E equational\n",
-            "  theorem prover. You can find the latest version of the E distribution\n",
-            " as well as additional information at\n",
-            "{e_url}\n",
-            "\n",
-            "This program is free software; you can redistribute it and/or modify\n",
-            "it under the terms of the GNU General Public License as published by\n",
-            "  the Free Software Foundation; either version 2 of the License, or\n",
-            "     (at your option) any later version.\n",
-            "\n",
-            "                                                                      This program is distributed in the hope that it will be useful,\n",
-            "       but WITHOUT ANY WARRANTY; without even the implied warranty of\n",
-            "        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n",
-            "         GNU General Public License for more details.\n",
-            "\n",
-            "                                                                      You should have received a copy of the GNU General Public License\n",
-            "     along with this program (it should be contained in the top level\n",
-            "      directory of the distribution in the file COPYING); if not, write to\n",
-            "  the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n",
-            "       Boston, MA  02111-1307 USA\n",
-            "\n",
-            "                                                                      The original copyright holder can be contacted as\n",
-            "\n",
-            "Stephan Schulz\n",
-            "DHBW Stuttgart\n",
-            "Fakultaet Technik\n",
-            "Informatik\n",
-            "Lerchenstrasse 1\n",
-            "70174 Stuttgart\n",
-            "Germany\n",
-            "\n",
-        ),
-        sts_mail = STS_MAIL,
-        e_url = E_URL,
-    )
+    footer()
 }
 
 const OUTPUT_CLOSE_ERROR: &str =
@@ -991,7 +952,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{assert_help_matches_fixture, VERSION};
     use crate::test_support::global_state_lock;
     use std::fmt::Write as _;
     use std::io::{self, Cursor, Write};
@@ -1021,7 +982,10 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("epcllemma-{name}-{}.tmp", std::process::id()))
+            .join(format!(
+                "umlaut-pcl-lemma-{name}-{}.tmp",
+                std::process::id()
+            ))
     }
 
     fn remove_if_present(path: &Path) {
@@ -1034,9 +998,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "epcllemma {version}\n",
+                "umlaut-pcl-lemma {version}\n",
                 "\n",
-                "Usage: epcllemma [options] [files]\n",
+                "Usage: umlaut-pcl-lemma [options] [files]\n",
                 "\n",
                 "Read an UPCL2 protocol and suggest certain steps as lemmas.\n",
                 "Options\n",
@@ -1071,13 +1035,13 @@ mod tests {
                 "    Print lemma sets in TPTP-2 format instead of lop.\n",
                 "\n",
                 "  --tptp-format\n",
-                "    Equivalent to --tptp-out (supplied for consistency in the E toolchain.\n",
+                "    Equivalent to --tptp-out (supplied for consistency in the Umlaut toolchain.\n",
                 "\n",
                 "  --tstp-out\n",
                 "    Print lemma sets in TPTP-3 (TSTP) format instead of lop.\n",
                 "\n",
                 "  --tstp-format\n",
-                "    Equivalent to --tstp-out (supplied for consistency in the E toolchain.\n",
+                "    Equivalent to --tstp-out (supplied for consistency in the Umlaut toolchain.\n",
                 "    Note that this does not enable parsing of TPTP-3 proofs.\n",
                 "\n",
                 "  --lop-out\n",
@@ -1263,12 +1227,16 @@ mod tests {
         )
     }
 
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("epcllemma run succeeds");
+            .expect("umlaut-pcl-lemma run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -1281,7 +1249,7 @@ mod tests {
         let _guard = global_state_lock();
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not pcl");
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not pcl");
@@ -1308,7 +1276,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let error = run([PROGRAM_NAME, "-V"], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("C epcllemma has no -V shorthand");
+            .expect_err("C umlaut-pcl-lemma has no -V shorthand");
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("Unknown Option: -V"));
@@ -1757,7 +1725,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect_err("C epcllemma does not enable SupportShellPCL");
+            .expect_err("C umlaut-pcl-lemma does not enable SupportShellPCL");
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().starts_with("<stdin>:1:"));
@@ -1769,6 +1737,6 @@ mod tests {
     fn help_text_preserves_c_usage_summary() {
         let rendered = print_help();
 
-        assert_eq!(rendered, expected_help());
+        assert_help_matches_rebranded_footer(&rendered);
     }
 }

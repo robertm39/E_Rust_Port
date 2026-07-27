@@ -67,8 +67,38 @@ cd "$source_root"
     tee "$artifact_root/rust-build.txt"
 
 rust_bin_dir="$source_root/target/release"
-rust_binary="$rust_bin_dir/eprover"
-test -x "$rust_binary"
+rust_binary="$rust_bin_dir/umlaut"
+canonical_binaries=(
+    umlaut
+    umlaut-axiom-filter
+    umlaut-checkproof
+    umlaut-classify-problem
+    umlaut-client
+    umlaut-commandline-example
+    umlaut-csscpa-filter
+    umlaut-deduction-server
+    umlaut-direct-examples
+    umlaut-dpll
+    umlaut-ground
+    umlaut-kb-create
+    umlaut-kb-delete
+    umlaut-kb-ginsert
+    umlaut-kb-insert
+    umlaut-ltb-runner
+    umlaut-normalizer
+    umlaut-patternize
+    umlaut-pcl-analyse
+    umlaut-pcl-extract
+    umlaut-pcl-lemma
+    umlaut-server
+    umlaut-stratpar
+    umlaut-term2dag
+    umlaut-termprops
+    umlaut-tsm-classify
+)
+for binary in "${canonical_binaries[@]}"; do
+    test -x "$rust_bin_dir/$binary"
+done
 
 echo "== Windows GNU x64 compile-only gates =="
 /usr/bin/time -v -o "$artifact_root/windows-test-build-time.txt" \
@@ -81,8 +111,10 @@ echo "== Windows GNU x64 compile-only gates =="
     tee "$artifact_root/windows-release-build.txt"
 
 windows_bin_dir="$source_root/target/x86_64-pc-windows-gnu/release"
-windows_eprover="$windows_bin_dir/eprover.exe"
-test -f "$windows_eprover"
+windows_umlaut="$windows_bin_dir/umlaut.exe"
+for binary in "${canonical_binaries[@]}"; do
+    test -f "$windows_bin_dir/$binary.exe"
+done
 find "$windows_bin_dir" -maxdepth 1 -type f -name '*.exe' -print0 |
     sort -z |
     xargs -0 file >"$artifact_root/windows-binaries-file.txt"

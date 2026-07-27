@@ -158,11 +158,11 @@ impl EPCtrl {
     ) -> Result<Self, Diagnostic> {
         command.stdout(Stdio::piped());
         let mut child = command.spawn().map_err(|error| {
-            proc_ctrl_system_error(format!("Cannot start eprover subprocess: {error}"))
+            proc_ctrl_system_error(format!("Cannot start umlaut subprocess: {error}"))
         })?;
         let Some(stdout) = child.stdout.take() else {
             cleanup_child(&mut child);
-            return Err(proc_ctrl_error("Cannot capture eprover subprocess output"));
+            return Err(proc_ctrl_error("Cannot capture umlaut subprocess output"));
         };
         let descriptor = match descriptor_from_child_stdout(&stdout) {
             Ok(descriptor) => descriptor,
@@ -174,11 +174,11 @@ impl EPCtrl {
         let mut stdout = BufReader::new(stdout);
         let mut pid_line = String::new();
         let read = stdout.read_line(&mut pid_line).map_err(|error| {
-            proc_ctrl_other_error(format!("Cannot read eprover PID line: {error}"))
+            proc_ctrl_other_error(format!("Cannot read umlaut PID line: {error}"))
         })?;
         if read == 0 {
             cleanup_child(&mut child);
-            return Err(proc_ctrl_other_error("Cannot read eprover PID line"));
+            return Err(proc_ctrl_other_error("Cannot read umlaut PID line"));
         }
         let pid = match parse_pid_line(&pid_line) {
             Ok(pid) => pid,
@@ -309,7 +309,7 @@ impl EPCtrl {
         let message = self
             .output_rx
             .as_ref()
-            .ok_or_else(|| proc_ctrl_error("Cannot read from closed eprover subprocess pipe"))?
+            .ok_or_else(|| proc_ctrl_error("Cannot read from closed umlaut subprocess pipe"))?
             .recv()
             .map_err(|_| proc_ctrl_error("Eprover subprocess output reader closed"))?;
         Ok(self.apply_output_message(message, buffer))
@@ -326,7 +326,7 @@ impl EPCtrl {
         let message = match self
             .output_rx
             .as_ref()
-            .ok_or_else(|| proc_ctrl_error("Cannot read from closed eprover subprocess pipe"))?
+            .ok_or_else(|| proc_ctrl_error("Cannot read from closed umlaut subprocess pipe"))?
             .try_recv()
         {
             Ok(message) => message,
@@ -692,7 +692,7 @@ fn spawn_output_reader(
 
 fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
     if !line.contains("% Pid: ") {
-        return Err(proc_ctrl_other_error("Cannot get eprover PID"));
+        return Err(proc_ctrl_other_error("Cannot get umlaut PID"));
     }
     let rest = line.get(7..).unwrap_or_default();
     let digits = rest
@@ -704,7 +704,7 @@ fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
     } else {
         digits
             .parse::<u32>()
-            .map_err(|error| proc_ctrl_other_error(format!("Cannot parse eprover PID: {error}")))
+            .map_err(|error| proc_ctrl_other_error(format!("Cannot parse umlaut PID: {error}")))
     }
 }
 
@@ -715,7 +715,7 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
     let raw = stdout.as_raw_fd();
     u64::try_from(raw)
         .map(Descriptor::new)
-        .map_err(|_| proc_ctrl_error(format!("Invalid eprover pipe descriptor: {raw}")))
+        .map_err(|_| proc_ctrl_error(format!("Invalid umlaut pipe descriptor: {raw}")))
 }
 
 #[cfg(windows)]
@@ -725,7 +725,7 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
     let raw = stdout.as_raw_handle() as usize;
     if raw == 0 {
         Err(proc_ctrl_error(
-            "Invalid eprover pipe descriptor: null handle",
+            "Invalid umlaut pipe descriptor: null handle",
         ))
     } else {
         Ok(Descriptor::new(u64::try_from(raw).unwrap_or(u64::MAX)))
@@ -831,23 +831,23 @@ mod tests {
     #[test]
     fn command_builder_preserves_c_spacing() {
         assert_eq!(
-            e_ctrl_command("eprover", " --auto", "--extra", 5, "problem.p"),
-            format!("eprover{E_OPTIONS_BASE} --auto --extra --cpu-limit=5 problem.p")
+            e_ctrl_command("umlaut", " --auto", "--extra", 5, "problem.p"),
+            format!("umlaut{E_OPTIONS_BASE} --auto --extra --cpu-limit=5 problem.p")
         );
         assert_eq!(
-            e_ctrl_default_command("eprover", "", 7, "problem.p"),
-            format!("eprover{E_OPTIONS_BASE}{E_OPTIONS}  --cpu-limit=7 problem.p")
+            e_ctrl_default_command("umlaut", "", 7, "problem.p"),
+            format!("umlaut{E_OPTIONS_BASE}{E_OPTIONS}  --cpu-limit=7 problem.p")
         );
         assert_eq!(
             e_ctrl_command(
-                r#""C:\Program Files\eprover.exe""#,
+                r#""C:\Program Files\umlaut.exe""#,
                 r#" --auto="x y""#,
                 "2>errors.log & next",
                 -3,
                 "problems/a b.p",
             ),
             format!(
-                r#""C:\Program Files\eprover.exe"{E_OPTIONS_BASE} --auto="x y" 2>errors.log & next --cpu-limit=-3 problems/a b.p"#
+                r#""C:\Program Files\umlaut.exe"{E_OPTIONS_BASE} --auto="x y" 2>errors.log & next --cpu-limit=-3 problems/a b.p"#
             )
         );
     }
@@ -975,13 +975,13 @@ mod tests {
     fn spawn_command_rejects_missing_pid_line() {
         let error = EPCtrl::spawn_command(no_pid_command(), "bad", None, 3).unwrap_err();
         assert_eq!(error.code(), crate::basics::error::ErrorCode::OTHER_ERROR);
-        assert_eq!(error.message(), "Cannot get eprover PID");
+        assert_eq!(error.message(), "Cannot get umlaut PID");
     }
 
     #[test]
     fn shell_command_not_found_reaches_c_pid_read_diagnostic() {
         let error = EPCtrl::create_generic_shell(
-            "e-rust-port-command-that-does-not-exist",
+            "umlaut-command-that-does-not-exist",
             "missing",
             "",
             shell_stderr_redirect(),
@@ -991,7 +991,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), crate::basics::error::ErrorCode::OTHER_ERROR);
-        assert_eq!(error.message(), "Cannot read eprover PID line");
+        assert_eq!(error.message(), "Cannot read umlaut PID line");
     }
 
     #[test]

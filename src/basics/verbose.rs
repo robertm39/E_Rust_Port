@@ -227,10 +227,10 @@ mod tests {
 
     #[test]
     fn message_formatting_matches_c_macros() {
-        assert_eq!(verbout_message("eprover", "working"), "eprover: working");
+        assert_eq!(verbout_message("umlaut", "working"), "umlaut: working");
         assert_eq!(
-            verbout_arg_message("eprover", "read ", "file.p"),
-            "eprover: read file.p\n"
+            verbout_arg_message("umlaut", "read ", "file.p"),
+            "umlaut: read file.p\n"
         );
     }
 
@@ -239,33 +239,33 @@ mod tests {
         let _guard = global_state_lock();
         set_verbose_level(0);
         let mut output = Vec::new();
-        assert!(!verbout(&mut output, "eprover", "quiet").unwrap());
+        assert!(!verbout(&mut output, "umlaut", "quiet").unwrap());
         assert!(output.is_empty());
 
         set_verbose_level(1);
-        assert!(verbout(&mut output, "eprover", "one").unwrap());
-        assert!(!verbout2(&mut output, "eprover", "two").unwrap());
-        assert!(!verbout10(&mut output, "eprover", "ten").unwrap());
-        assert!(verbout_arg(&mut output, "eprover", "arg", "1").unwrap());
+        assert!(verbout(&mut output, "umlaut", "one").unwrap());
+        assert!(!verbout2(&mut output, "umlaut", "two").unwrap());
+        assert!(!verbout10(&mut output, "umlaut", "ten").unwrap());
+        assert!(verbout_arg(&mut output, "umlaut", "arg", "1").unwrap());
 
         set_verbose_level(2);
-        assert!(verbout2(&mut output, "eprover", "two").unwrap());
-        assert!(verbout_arg2(&mut output, "eprover", "arg", "2").unwrap());
+        assert!(verbout2(&mut output, "umlaut", "two").unwrap());
+        assert!(verbout_arg2(&mut output, "umlaut", "arg", "2").unwrap());
 
         set_verbose_level(10);
-        assert!(verbout10(&mut output, "eprover", "ten").unwrap());
+        assert!(verbout10(&mut output, "umlaut", "ten").unwrap());
         set_verbose_level(0);
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "eprover: oneeprover: arg1\neprover: twoeprover: arg2\neprover: ten"
+            "umlaut: oneumlaut: arg1\numlaut: twoumlaut: arg2\numlaut: ten"
         );
     }
 
     #[test]
     fn global_program_name_helpers_match_c_progname_closure() {
         let _guard = global_state_lock();
-        init_error("eprover-global");
+        init_error("umlaut-global");
         set_verbose_level(0);
         let mut output = Vec::new();
 
@@ -284,7 +284,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "eprover-global: oneeprover-global: arg1\neprover-global: twoeprover-global: arg2\neprover-global: ten"
+            "umlaut-global: oneumlaut-global: arg1\numlaut-global: twoumlaut-global: arg2\numlaut-global: ten"
         );
 
         init_error("Unknown program");

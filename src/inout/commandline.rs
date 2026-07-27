@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn long_required_arguments_must_use_equals() {
-        let mut state = CommandLineState::new(["eprover", "--output-file", "out"]);
+        let mut state = CommandLineState::new(["umlaut", "--output-file", "out"]);
         let error = state.next_opt(OPTIONS).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(error.message(), "--output-file requires an argument!");
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn long_optional_argument_uses_default_without_equals() {
-        let mut state = CommandLineState::new(["eprover", "--verbose"]);
+        let mut state = CommandLineState::new(["umlaut", "--verbose"]);
         let parsed = state.next_opt(OPTIONS).unwrap().unwrap();
         assert_eq!(parsed.option().option_code, Code::Verbose);
         assert_eq!(parsed.arg(), Some("1"));
@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn short_required_argument_accepts_attached_value() {
-        let mut state = CommandLineState::new(["eprover", "-omy.out", "problem.p"]);
+        let mut state = CommandLineState::new(["umlaut", "-omy.out", "problem.p"]);
         let parsed = state.next_opt(OPTIONS).unwrap().unwrap();
         assert_eq!(parsed.option().option_code, Code::Output);
         assert_eq!(parsed.arg(), Some("my.out"));
@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn short_required_argument_accepts_next_argv_even_when_it_starts_with_dash() {
-        let mut state = CommandLineState::new(["eprover", "-o", "-"]);
+        let mut state = CommandLineState::new(["umlaut", "-o", "-"]);
         let parsed = state.next_opt(OPTIONS).unwrap().unwrap();
         assert_eq!(parsed.option().option_code, Code::Output);
         assert_eq!(parsed.arg(), Some("-"));
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn short_optional_argument_uses_default_and_keeps_aggregating() {
-        let mut state = CommandLineState::new(["eprover", "-vs"]);
+        let mut state = CommandLineState::new(["umlaut", "-vs"]);
         let first = state.next_opt(OPTIONS).unwrap().unwrap();
         let second = state.next_opt(OPTIONS).unwrap().unwrap();
         assert_eq!(first.option().option_code, Code::Verbose);
@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn double_dash_stops_option_processing() {
-        let mut state = CommandLineState::new(["eprover", "--", "-h"]);
+        let mut state = CommandLineState::new(["umlaut", "--", "-h"]);
         assert!(state.next_opt(OPTIONS).unwrap().is_none());
         assert_eq!(state.remaining_args(), &["-h".to_owned()]);
     }

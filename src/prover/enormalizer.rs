@@ -50,11 +50,11 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "enormalizer";
+pub const PROGRAM_NAME: &str = "umlaut-normalizer";
 const ENORMALIZER_CNF_MINISCOPE_LIMIT: i64 = 1000;
 const ENORMALIZER_CNF_DEF_LIMIT: i64 = 24;
 const LOP_FORMULA_OUTPUT_WARNING: &str =
-    "enormalizer: Warning: Currently no LOP FOF format, using TPTP";
+    "umlaut-normalizer: Warning: Currently no LOP FOF format, using TPTP";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
@@ -156,7 +156,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in enormalizer (I think).",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output except for the final clauses, level 1 produces minimal additional output. Higher levels are without meaning in umlaut-normalizer (I think).",
     ),
     OptCell::new(
         OptionCode::PrintStatistics,
@@ -180,7 +180,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         OptionCode::TptpIn,
@@ -1359,9 +1359,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "enormalizer {version}\n",
+                "umlaut-normalizer {version}\n",
                 "\n",
-                "Usage: enormalizer [options] [rulefiles]\n",
+                "Usage: umlaut-normalizer [options] [rulefiles]\n",
                 "\n",
                 "Read a set of rewrite rules (in the form of unit clauses and/or\n",
                 "formulas) with a single positive literal) and sets of terms, clauses,\n",
@@ -1427,7 +1427,7 @@ mod tests {
                 "    Select an output level, greater values imply more verbose output. Level 0\n",
                 "    produces nearly no output except for the final clauses, level 1 produces\n",
                 "    minimal additional output. Higher levels are without meaning in\n",
-                "    enormalizer (I think).\n",
+                "    umlaut-normalizer (I think).\n",
                 "\n",
                 "  --print-statistics\n",
                 "    Print a short statistical summary of clauses read and generated.\n",
@@ -1441,9 +1441,9 @@ mod tests {
                 "\n",
                 "  --lop-in\n",
                 "    Set E-LOP as the input format. If no input format is selected by this or\n",
-                "    one of the following options, E will guess the input format based on the\n",
-                "    first token. It will almost always correctly recognize TPTP-3, but it may\n",
-                "    misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
+                "    one of the following options, Umlaut will guess the input format based on\n",
+                "    the first token. It will almost always correctly recognize TPTP-3, but it\n",
+                "    may misidentify E-LOP files that use TPTP meta-identifiers as logical\n",
                 "    symbols.\n",
                 "\n",
                 "  --tptp-in\n",
@@ -1773,8 +1773,8 @@ mod tests {
                 .map(|warning| warning.render_warning(PROGRAM_NAME))
                 .collect::<Vec<_>>(),
             vec![
-                "enormalizer: Warning: Had to reduce limit RLIMIT_DATA\n",
-                "enormalizer: Warning: Had to reduce limit RLIMIT_AS\n",
+                "umlaut-normalizer: Warning: Had to reduce limit RLIMIT_DATA\n",
+                "umlaut-normalizer: Warning: Had to reduce limit RLIMIT_AS\n",
             ]
         );
     }

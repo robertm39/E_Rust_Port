@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "epclextract";
+pub const PROGRAM_NAME: &str = "umlaut-pcl-extract";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -602,7 +602,10 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("epclextract-{name}-{}.tmp", std::process::id()))
+            .join(format!(
+                "umlaut-pcl-extract-{name}-{}.tmp",
+                std::process::id()
+            ))
     }
 
     fn remove_if_present(path: &Path) {
@@ -614,9 +617,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "epclextract {version}\n",
+                "umlaut-pcl-extract {version}\n",
                 "\n",
-                "Usage: epclextract [options] [files]\n",
+                "Usage: umlaut-pcl-extract [options] [files]\n",
                 "\n",
                 "Read an PCL2 protocol and print the steps necessary for proving the clauses in \"proof\", \"final\", or \"extract\" steps.\n",
                 "\n",
@@ -685,7 +688,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("epclextract run succeeds");
+            .expect("umlaut-pcl-extract run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),

@@ -1099,7 +1099,7 @@ mod tests {
         let diagnostic = network_system_error_for_program(
             "Could not create connected socket",
             &system_error,
-            "e_client",
+            "umlaut-client",
         );
         assert_eq!(
             diagnostic.code(),
@@ -1107,7 +1107,7 @@ mod tests {
         );
         assert_eq!(
             diagnostic.message(),
-            "Could not create connected socket\ne_client: test refusal"
+            "Could not create connected socket\numlaut-client: test refusal"
         );
 
         let resolver_error =

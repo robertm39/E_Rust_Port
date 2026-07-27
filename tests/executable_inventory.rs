@@ -3,17 +3,76 @@ use std::fs;
 use std::path::Path;
 
 const UPSTREAM_EXECUTABLE_DIRECTORIES: &[&str] = &["PROVER", "SIMPLE_APPS", "EXTERNAL"];
+const EXECUTABLE_RENAMES: &[(&str, &str)] = &[
+    ("eprover", "umlaut"),
+    ("CSSCPA_filter", "umlaut-csscpa-filter"),
+    ("e_stratpar", "umlaut-stratpar"),
+    ("e_ltb_runner", "umlaut-ltb-runner"),
+    ("termprops", "umlaut-termprops"),
+    ("term2dag", "umlaut-term2dag"),
+    ("ex_commandline", "umlaut-commandline-example"),
+    ("epclextract", "umlaut-pcl-extract"),
+    ("epclanalyse", "umlaut-pcl-analyse"),
+    ("checkproof", "umlaut-checkproof"),
+    ("epcllemma", "umlaut-pcl-lemma"),
+    ("edpll", "umlaut-dpll"),
+    ("eground", "umlaut-ground"),
+    ("classify_problem", "umlaut-classify-problem"),
+    ("tsm_classify", "umlaut-tsm-classify"),
+    ("direct_examples", "umlaut-direct-examples"),
+    ("e_client", "umlaut-client"),
+    ("e_deduction_server", "umlaut-deduction-server"),
+    ("e_server", "umlaut-server"),
+    ("e_axfilter", "umlaut-axiom-filter"),
+    ("enormalizer", "umlaut-normalizer"),
+    ("epatternize", "umlaut-patternize"),
+    ("ekb_create", "umlaut-kb-create"),
+    ("ekb_delete", "umlaut-kb-delete"),
+    ("ekb_insert", "umlaut-kb-insert"),
+    ("ekb_ginsert", "umlaut-kb-ginsert"),
+];
 
 #[test]
-fn every_upstream_standalone_entry_point_has_a_rust_binary() {
+fn every_upstream_entry_point_maps_to_exactly_one_umlaut_binary() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let upstream = upstream_programs(root);
     let rust = rust_programs(root);
+    let expected_upstream = EXECUTABLE_RENAMES
+        .iter()
+        .map(|(old, _)| (*old).to_owned())
+        .collect::<BTreeSet<_>>();
+    let expected_umlaut = EXECUTABLE_RENAMES
+        .iter()
+        .map(|(_, new)| (*new).to_owned())
+        .collect::<BTreeSet<_>>();
 
     assert_eq!(
-        rust, upstream,
-        "Cargo binary registrations must exactly cover the standalone C entry points"
+        upstream, expected_upstream,
+        "rename table must exactly cover the standalone E entry points"
     );
+    assert_eq!(
+        rust, expected_umlaut,
+        "Cargo must expose exactly the canonical Umlaut executable suite"
+    );
+}
+
+#[test]
+fn cargo_package_and_library_identity_is_umlaut() {
+    assert_eq!(env!("CARGO_PKG_NAME"), "umlaut");
+}
+
+#[test]
+fn old_executable_names_are_not_cargo_targets() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let rust = rust_programs(root);
+
+    for (old, new) in EXECUTABLE_RENAMES {
+        assert!(!rust.contains(*old), "legacy Cargo target {old} remains");
+        assert!(
+            rust.contains(*new),
+            "canonical Cargo target {new} is missing"
+        );
+    }
 }
 
 fn upstream_programs(root: &Path) -> BTreeSet<String> {

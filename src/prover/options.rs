@@ -430,7 +430,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("error-on-empty"),
         OptArgType::NoArg,
         None,
-        "Return with an error code if the input file contains no clauses. Formally, the empty clause set (as an empty conjunction of clauses) is trivially satisfiable, and E will treat any empty input set as satisfiable. However, in composite systems this is more often a sign that something went wrong. Use this option to catch such bugs.",
+        "Return with an error code if the input file contains no clauses. Formally, the empty clause set (as an empty conjunction of clauses) is trivially satisfiable, and Umlaut will treat any empty input set as satisfiable. However, in composite systems this is more often a sign that something went wrong. Use this option to catch such bugs.",
     ),
     OptCell::new(
         EProverOption::MemoryLimit,
@@ -454,7 +454,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("soft-cpu-limit"),
         OptArgType::OptArg,
         Some("290"),
-        "Limit the cpu time the prover should spend in the main saturation phase. The prover will then terminate gracefully, i.e. it will perform post-processing, filtering and printing of unprocessed clauses, if these options are selected. Note that for some filtering options (in particular those which perform full subsumption), the post-processing time may well be larger than the saturation time. This option is particularly useful if you want to use E as a preprocessor or lemma generator in a larger system.",
+        "Limit the cpu time the prover should spend in the main saturation phase. The prover will then terminate gracefully, i.e. it will perform post-processing, filtering and printing of unprocessed clauses, if these options are selected. Note that for some filtering options (in particular those which perform full subsumption), the post-processing time may well be larger than the saturation time. This option is particularly useful if you want to use Umlaut as a preprocessor or lemma generator in a larger system.",
     ),
     OptCell::new(
         EProverOption::ResourcesInfo,
@@ -582,7 +582,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("lop-in"),
         OptArgType::NoArg,
         None,
-        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, E will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
+        "Set E-LOP as the input format. If no input format is selected by this or one of the following options, Umlaut will guess the input format based on the first token. It will almost always correctly recognize TPTP-3, but it may misidentify E-LOP files that use TPTP meta-identifiers as logical symbols.",
     ),
     OptCell::new(
         EProverOption::PclOut,
@@ -646,7 +646,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("tstp-in"),
         OptArgType::NoArg,
         None,
-        "Set TPTP-3 as the input format TPTP-3 syntax is still under development, and any given version in E may not be fully conforming at all times. E works on all TPTP 8.2.0 FOF and CNF files (including includes).",
+        "Set TPTP-3 as the input format. TPTP syntax continues to evolve, and any given Umlaut version may not support every extension. Umlaut supports the TPTP 8.2.0 FOF and CNF files covered by its compatibility suite (including includes).",
     ),
     OptCell::new(
         EProverOption::TstpOut,
@@ -822,7 +822,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("literal-selection-strategy"),
         OptArgType::ReqArg,
         None,
-        "Choose a strategy for selection of negative literals. There are two special values for this option: NoSelection will select no literal (i.e. perform normal superposition) and NoGeneration will inhibit all generating inferences. For a list of the other (hopefully self-documenting) values run 'eprover -W none'. There are two variants of each strategy. The one prefixed with 'P' will allow paramodulation into maximal positive literals in addition to paramodulation into maximal selected negative literals.",
+        "Choose a strategy for selection of negative literals. There are two special values for this option: NoSelection will select no literal (i.e. perform normal superposition) and NoGeneration will inhibit all generating inferences. For a list of the other (hopefully self-documenting) values run 'umlaut -W none'. There are two variants of each strategy. The one prefixed with 'P' will allow paramodulation into maximal positive literals in addition to paramodulation into maximal selected negative literals.",
     ),
     OptCell::new(
         EProverOption::NoGeneration,
@@ -966,7 +966,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("assume-completeness"),
         OptArgType::NoArg,
         None,
-        "There are various way (e.g. the next few options) to configure the prover to be strongly incomplete in the general case. E will detect when such an option is selected and return corresponding exit states (i.e. it will not claim satisfiability just because it ran out of unprocessed clauses). If you _know_ that for your class of problems the selected strategy is still complete, use this option to tell the system that this is the case.",
+        "There are various way (e.g. the next few options) to configure the prover to be strongly incomplete in the general case. Umlaut will detect when such an option is selected and return corresponding exit states (i.e. it will not claim satisfiability just because it ran out of unprocessed clauses). If you _know_ that for your class of problems the selected strategy is still complete, use this option to tell the system that this is the case.",
     ),
     OptCell::new(
         EProverOption::AssumeIncompleteness,
@@ -1110,7 +1110,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("order-weight-generation"),
         OptArgType::ReqArg,
         None,
-        "Select a method for the generation of weights for use with the term ordering. Run 'eprover -w none' for a list of options.",
+        "Select a method for the generation of weights for use with the term ordering. Run 'umlaut -w none' for a list of options.",
     ),
     OptCell::new(
         EProverOption::OrderWeights,
@@ -1118,7 +1118,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("order-weights"),
         OptArgType::ReqArg,
         None,
-        "Describe a (partial) assignments of weights to function symbols for term orderings (in particular, KBO). You can specify a list of weights of the form 'f1:w1,f2:w2, ...'. Since a total weight assignment is needed, E will _first_ apply any weight generation scheme specified (or the default one), and then modify the weights as specified. Note that E performs only very basic sanity checks, so you probably can specify weights that break KBO constraints.",
+        "Describe a (partial) assignments of weights to function symbols for term orderings (in particular, KBO). You can specify a list of weights of the form 'f1:w1,f2:w2, ...'. Since a total weight assignment is needed, Umlaut will _first_ apply any weight generation scheme specified (or the default one), and then modify the weights as specified. Note that Umlaut performs only very basic sanity checks, so you probably can specify weights that break KBO constraints.",
     ),
     OptCell::new(
         EProverOption::OrderPrecedenceGeneration,
@@ -1126,7 +1126,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("order-precedence-generation"),
         OptArgType::ReqArg,
         None,
-        "Select a method for the generation of a precedence for use with the term ordering. Run 'eprover -G none' for a list of options.",
+        "Select a method for the generation of a precedence for use with the term ordering. Run 'umlaut -G none' for a list of options.",
     ),
     OptCell::new(
         EProverOption::PrecPureConj,
@@ -1270,7 +1270,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("prefer-general-demodulators"),
         OptArgType::NoArg,
         None,
-        "Prefer general demodulators. By default, E prefers specialized demodulators. This affects in which order the rewrite  index is traversed.",
+        "Prefer general demodulators. By default, Umlaut prefers specialized demodulators. This affects in which order the rewrite  index is traversed.",
     ),
     OptCell::new(
         EProverOption::ForwardDemodLevel,
@@ -1438,7 +1438,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("rw-bw-index"),
         OptArgType::OptArg,
         Some("FP7"),
-        "Select fingerprint function for backwards rewrite index. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'eprover --pm-index=none'. FPX functions will use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
+        "Select fingerprint function for backwards rewrite index. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'umlaut --pm-index=none'. FPX functions will use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
     ),
     OptCell::new(
         EProverOption::ParamodFromIndex,
@@ -1446,7 +1446,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("pm-from-index"),
         OptArgType::OptArg,
         Some("FP7"),
-        "Select fingerprint function for the index for paramodulation from indexed clauses. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'eprover --pm-index=none'. FPX functionswill use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
+        "Select fingerprint function for the index for paramodulation from indexed clauses. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'umlaut --pm-index=none'. FPX functionswill use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
     ),
     OptCell::new(
         EProverOption::ParamodIntoIndex,
@@ -1454,7 +1454,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("pm-into-index"),
         OptArgType::OptArg,
         Some("FP7"),
-        "Select fingerprint function for the index for paramodulation into the indexed clauses. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'eprover --pm-index=none'. FPX functionswill use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
+        "Select fingerprint function for the index for paramodulation into the indexed clauses. \"NoIndex\" will disable paramodulation indexing. For a list of the other values run 'umlaut --pm-index=none'. FPX functionswill use a fingerprint of X positions, the letters disambiguate between different fingerprints with the same sample size.",
     ),
     OptCell::new(
         EProverOption::FingerprintIndex,
@@ -1931,7 +1931,34 @@ mod tests {
             .collect::<Vec<_>>();
         let c_help = c_help_surface();
 
-        assert_eq!(rust_help, c_help);
+        assert_eq!(rust_help.len(), c_help.len());
+        for ((rust_name, rust_description), (c_name, c_description)) in
+            rust_help.iter().zip(&c_help)
+        {
+            assert_eq!(rust_name, c_name);
+            if *rust_name == Some("tstp-in") {
+                assert!(rust_description.contains("Umlaut"));
+                assert!(rust_description.contains("TPTP 8.2.0"));
+            } else if matches!(
+                *rust_name,
+                Some(
+                    "error-on-empty"
+                        | "lop-in"
+                        | "soft-cpu-limit"
+                        | "assume-completeness"
+                        | "order-weights"
+                        | "prefer-general-demodulators"
+                )
+            ) {
+                assert_eq!(
+                    rust_description,
+                    &c_description.replace(" E ", " Umlaut "),
+                    "option {rust_name:?}"
+                );
+            } else {
+                assert_eq!(rust_description, c_description, "option {rust_name:?}");
+            }
+        }
     }
 
     fn assert_has_no_duplicates<T>(table_name: &str, options: &[T])
@@ -2256,7 +2283,7 @@ mod tests {
                     index += 1;
                 }
                 _ if field[index..].starts_with("NAME") => {
-                    result.push_str("eprover");
+                    result.push_str("umlaut");
                     index += "NAME".len();
                 }
                 _ if field[index..].starts_with("WATCHLIST_INLINE_QSTRING") => {

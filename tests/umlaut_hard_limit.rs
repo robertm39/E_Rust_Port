@@ -4,7 +4,7 @@ use std::process::Command;
 
 const HARD_TIMEOUT_OUTPUT: &str =
     "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n";
-const HARD_TIMEOUT_ERROR: &str = "eprover: CPU time limit exceeded, terminating\n";
+const HARD_TIMEOUT_ERROR: &str = "umlaut: CPU time limit exceeded, terminating\n";
 
 #[test]
 fn zero_cpu_limit_reports_hard_timeout_once() {
@@ -13,12 +13,12 @@ fn zero_cpu_limit_reports_hard_timeout_once() {
             .unwrap()
             .join("target")
             .join(format!(
-                "eprover-hard-limit-{}-{attempt}.p",
+                "umlaut-hard-limit-{}-{attempt}.p",
                 std::process::id()
             ));
         std::fs::write(&path, "p(a).\n").unwrap();
 
-        let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+        let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
             .arg("--lop-in")
             .arg("--auto")
             .arg("--cpu-limit=0")

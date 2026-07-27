@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "term2dag";
+pub const PROGRAM_NAME: &str = "umlaut-term2dag";
 const VERSION: &str = "0.1 - Sat Nov 29 16:39:20 MET 1997";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
@@ -210,9 +210,9 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
 #[must_use]
 pub fn print_help() -> String {
     let mut result = format!(
-        "\n\n{HELP_SPACE_46}term2dag {VERSION}\n\
+        "\n\n{HELP_SPACE_46}umlaut-term2dag {VERSION}\n\
          {HELP_SPACE_28}\n\
-         {HELP_SPACE_46}Usage: term2dag [options] [files]\n\
+         {HELP_SPACE_46}Usage: umlaut-term2dag [options] [files]\n\
          {HELP_SPACE_13}\n\
          {HELP_SPACE_54}Read a set of terms and print a DAG representing it.\n\n"
     );
@@ -330,7 +330,7 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("term2dag-{name}-{}.tmp", std::process::id()))
+            .join(format!("umlaut-term2dag-{name}-{}.tmp", std::process::id()))
     }
 
     fn remove_if_present(path: &Path) {
@@ -342,9 +342,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "                                              term2dag {version}\n",
+                "                                              umlaut-term2dag {version}\n",
                 "                            \n",
-                "                                              Usage: term2dag [options] [files]\n",
+                "                                              Usage: umlaut-term2dag [options] [files]\n",
                 "             \n",
                 "                                                      Read a set of terms and print a DAG representing it.\n",
                 "\n",
@@ -403,7 +403,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect("term2dag stdin run succeeds");
+            .expect("umlaut-term2dag stdin run succeeds");
 
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
@@ -433,7 +433,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
-            .expect("typed term2dag corpus succeeds");
+            .expect("typed umlaut-term2dag corpus succeeds");
 
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
@@ -499,7 +499,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
         )
-        .expect("term2dag run succeeds");
+        .expect("umlaut-term2dag run succeeds");
 
         assert_eq!(status, 0);
         let output = String::from_utf8(stdout).expect("output is utf8");

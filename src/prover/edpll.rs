@@ -12,7 +12,7 @@ use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::propositional::dpll::DpllState;
 use crate::propositional::dpllformula::DpllFormula;
-use crate::prover::version::{E_URL, STS_MAIL, VERSION};
+use crate::prover::version::{footer, VERSION};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
@@ -20,7 +20,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "edpll";
+pub const PROGRAM_NAME: &str = "umlaut-dpll";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -84,7 +84,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("output-level"),
         OptArgType::ReqArg,
         None,
-        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output, level 1 produces minimal additional output.Higher levels are without meaning in edpll (I think).",
+        "Select an output level, greater values imply more verbose output. Level 0 produces nearly no output, level 1 produces minimal additional output.Higher levels are without meaning in umlaut-dpll (I think).",
     ),
     OptCell::new(
         OptionCode::TptpParse,
@@ -235,7 +235,7 @@ where
                 return Ok(RunCommand::Exit(0));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("classify_problem {VERSION}"))?;
+                writeln_diag(stdout, &format!("{PROGRAM_NAME} {VERSION}"))?;
                 return Ok(RunCommand::Exit(0));
             }
             OptionCode::Output => {
@@ -433,42 +433,7 @@ Not completed yet!\n\
 }
 
 fn legacy_footer() -> String {
-    format!(
-        "\n\
-Copyright (C) 2003 by Stephan Schulz, {STS_MAIL} \n\
-\n\
-This program is a part of the support structure for the E equational\n\
-theorem prover. You can find the latest version of the E distribution\n\
-as well as additional information at\n\
-{E_URL}\n\
-\n\
-This program is free software; you can redistribute it and/or modify\n\
-it under the terms of the GNU General Public License as published by\n\
-the Free Software Foundation; either version 2 of the License, or\n\
-(at your option) any later version.\n\
-\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\
-\n\
-You should have received a copy of the GNU General Public License\n\
-along with this program (it should be contained in the top level\n\
-directory of the distribution in the file COPYING); if not, write to\n\
-the Free Software Foundation, Inc., 59 Temple Place, Suite 330,\n\
-Boston, MA  02111-1307 USA\n\
-\n\
-The original copyright holder can be contacted as\n\
-\n\
-Stephan Schulz\n\
-DHBW Stuttgart\n\
-Fakultaet Technik\n\
-Informatik\n\
-Lerchenstrasse 1\n\
-70174 Stuttgart\n\
-Germany\n\
-\n"
-    )
+    footer()
 }
 
 const OUTPUT_CLOSE_ERROR: &str =
@@ -582,7 +547,7 @@ mod tests {
     use crate::basics::verbose::verbose_level;
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
-    use crate::prover::version::VERSION;
+    use crate::prover::version::{assert_help_matches_fixture, VERSION};
     use crate::test_support::global_state_lock;
     use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
@@ -603,7 +568,7 @@ mod tests {
         std::env::current_dir()
             .expect("current directory is available")
             .join("target")
-            .join(format!("edpll-{name}-{}.tmp", std::process::id()))
+            .join(format!("umlaut-dpll-{name}-{}.tmp", std::process::id()))
     }
 
     fn remove_if_present(path: &Path) {
@@ -616,9 +581,9 @@ mod tests {
             concat!(
                 "\n",
                 "\n",
-                "edpll {version}\n",
+                "umlaut-dpll {version}\n",
                 "\n",
-                "Usage: edpll [options] [files]\n",
+                "Usage: umlaut-dpll [options] [files]\n",
                 "\n",
                 "Read a set of ground clauses and try to refute (or satisfy) it.\n",
                 "Not completed yet!\n",
@@ -650,7 +615,7 @@ mod tests {
                 "  --output-level=<arg>\n",
                 "    Select an output level, greater values imply more verbose output. Level 0\n",
                 "    produces nearly no output, level 1 produces minimal additional\n",
-                "    output.Higher levels are without meaning in edpll (I think).\n",
+                "    output.Higher levels are without meaning in umlaut-dpll (I think).\n",
                 "\n",
                 "  --tptp-in\n",
                 "    Parse TPTP format instead of lop (does not understand includes, as TPTP\n",
@@ -722,12 +687,16 @@ mod tests {
         )
     }
 
+    fn assert_help_matches_rebranded_footer(actual: &str) {
+        assert_help_matches_fixture(actual, &expected_help());
+    }
+
     fn run_with_stdin(args: &[&str], stdin_data: &str) -> (u8, String, String) {
         let mut stdin = Cursor::new(stdin_data.as_bytes().to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("edpll run succeeds");
+            .expect("umlaut-dpll run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -741,12 +710,12 @@ mod tests {
         let (status, help, stderr) = run_with_stdin(&[PROGRAM_NAME, "--help"], "not lop");
 
         assert_eq!(status, 0);
-        assert_eq!(help, expected_help());
+        assert_help_matches_rebranded_footer(&help);
         assert!(stderr.is_empty());
 
         let (status, version, stderr) = run_with_stdin(&[PROGRAM_NAME, "--version"], "not lop");
         assert_eq!(status, 0);
-        assert_eq!(version, format!("classify_problem {VERSION}\n"));
+        assert_eq!(version, format!("{PROGRAM_NAME} {VERSION}\n"));
         assert!(stderr.is_empty());
     }
 
@@ -1206,13 +1175,13 @@ mod tests {
                 .iter()
                 .map(|warning| warning.render_warning(PROGRAM_NAME))
                 .collect::<String>(),
-            "edpll: Warning: Had to reduce limit RLIMIT_DATA\n\
-             edpll: Warning: Had to reduce limit RLIMIT_AS\n"
+            "umlaut-dpll: Warning: Had to reduce limit RLIMIT_DATA\n\
+             umlaut-dpll: Warning: Had to reduce limit RLIMIT_AS\n"
         );
     }
 
     #[test]
     fn print_help_mentions_incomplete_c_tool_status() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_rebranded_footer(&print_help());
     }
 }

@@ -573,7 +573,7 @@ mod tests {
 
     fn temp_kb_dir(name: &str) -> PathBuf {
         std::env::temp_dir()
-            .join("e-rust-port-tests")
+            .join("umlaut-tests")
             .join(format!("tsmio-{name}-{}", std::process::id()))
     }
 
@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn tsm_from_kb_verbose_output_matches_c_verbout_message() {
         let _guard = global_state_lock();
-        init_error("eprover");
+        init_error("umlaut");
         set_verbose_level(1);
         let kb_dir = temp_kb_dir("tsm-from-kb-verbose");
         remove_dir_if_present(&kb_dir);
@@ -826,7 +826,7 @@ mod tests {
         assert_eq!(admin.tsm_type(), TsmType::Flat);
         assert_eq!(
             String::from_utf8(verbose_output).expect("verbose output is utf8"),
-            "eprover: TSM created\n"
+            "umlaut: TSM created\n"
         );
 
         init_error("Unknown program");

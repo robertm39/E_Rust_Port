@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 fn auto_schedule_runs_worker_process_and_replays_winner() {
     let path = write_false_problem("auto-schedule");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+    let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
         .arg("--auto-schedule=1")
         .arg("--tstp-in")
         .arg(&path)
@@ -30,7 +30,7 @@ fn auto_schedule_runs_worker_process_and_replays_winner() {
     assert!(stdout.contains("% Starting SAT001_MinMin_p005000_rr_RG"));
     assert!(stdout.contains("% Result found by SAT001_MinMin_p005000_rr_RG\n"));
     assert!(stdout.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
-    assert!(!stdout.contains("e-rust-port-schedule"), "{stdout}");
+    assert!(!stdout.contains("umlaut-schedule"), "{stdout}");
     assert!(!stdout.contains("strategy scheduling process execution is not ported yet"));
     assert!(stderr.is_empty(), "{stderr}");
 
@@ -41,7 +41,7 @@ fn auto_schedule_runs_worker_process_and_replays_winner() {
 fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
     let path = write_false_problem("auto-schedule-resources");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+    let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
         .arg("--auto-schedule=1")
         .arg("--resources-info")
         .arg("--tstp-in")
@@ -88,7 +88,7 @@ fn auto_schedule_resources_info_replays_worker_preprocessing_time() {
 fn auto_schedule_cnf_allows_nested_search_preprocessing_proof() {
     let path = write_false_problem("auto-schedule-cnf");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+    let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
         .arg("--auto-schedule=1")
         .arg("--resources-info")
         .arg("--cnf")
@@ -115,7 +115,7 @@ fn auto_schedule_cnf_allows_nested_search_preprocessing_proof() {
 
 #[test]
 fn auto_schedule_replays_snapshotted_standard_input_in_nested_workers() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_eprover"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_umlaut"))
         .arg("--auto-schedule=1")
         .arg("--tstp-in")
         .stdin(Stdio::piped())
@@ -158,7 +158,7 @@ fn auto_mode_classifies_cnf_inputs_as_pre_cnf_formula_owners() {
          fof(conj, conjecture, (?[X1,X2,X3,X4,X5]:((k(a,b)=k(X1,X1)&f(f(g(X4,X5),X3),f(X2,X1))=f(f(X1,X2),f(X3,g(X4,X5))))))&![X6]:p(X6)).\n",
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_eprover"))
+    let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
         .arg("--auto")
         .arg("--cnf")
         .arg("--silent")
@@ -188,7 +188,7 @@ fn write_problem(name: &str, contents: &str) -> std::path::PathBuf {
     let path = std::env::current_dir()
         .unwrap()
         .join("target")
-        .join(format!("eprover-{name}-{}.p", std::process::id()));
+        .join(format!("umlaut-{name}-{}.p", std::process::id()));
     std::fs::write(&path, contents).unwrap();
     path
 }

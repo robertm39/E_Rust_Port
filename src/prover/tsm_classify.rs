@@ -26,7 +26,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PROGRAM_NAME: &str = "tsm_classify";
+pub const PROGRAM_NAME: &str = "umlaut-tsm-classify";
 const DEFAULT_WEIGHTS: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,7 +88,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
         Some("index-type"),
         OptArgType::ReqArg,
         None,
-        "Select an index function type. Run tsm_classify -iNone for a list of possible functions.",
+        "Select an index function type. Run umlaut-tsm-classify -iNone for a list of possible functions.",
     ),
     OptCell::new(
         OptionCode::IndexDepth,
@@ -283,7 +283,7 @@ fn execute_tsm_classify(
 ) -> Result<u8, Diagnostic> {
     let mut summary_file = open_output_file(config.output_file.as_deref())?;
     let input = concat_inputs(&config.files, stdin)?;
-    let mut scanner = Scanner::from_file_content("tsm_classify-input", input, true)?;
+    let mut scanner = Scanner::from_file_content("umlaut-tsm-classify-input", input, true)?;
 
     let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
 
@@ -414,7 +414,7 @@ Usage: {PROGRAM_NAME} [options] [files]\n\
 \n\
 Parse a classification problem specification file and return\n\
 results. This is an experimental program and does not have all the\n\
-usual error checking and hand holding features as E proper!\n"
+usual error checking and hand holding features of Umlaut's primary prover!\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
     result.push_str("\n\n");
@@ -584,7 +584,7 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("tsm_classify run succeeds");
+            .expect("umlaut-tsm-classify run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -599,7 +599,7 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: tsm_classify [options] [files]"));
+        assert!(help.contains("Usage: umlaut-tsm-classify [options] [files]"));
         assert!(help.contains("experimental program"));
         assert!(help.contains("--tsm-type"));
         assert!(stderr.is_empty());
@@ -936,10 +936,10 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
         assert!(output.ends_with(" 2 terms, 2 successes, 100.000 percent\n"));
         assert_eq!(
             stderr,
-            "tsm_classify: Parsing and preprocessing done\n\
-tsm_classify: PatternSubst generated\n\
-tsm_classify: TSM build\n\
-tsm_classify: TSM freed\n"
+            "umlaut-tsm-classify: Parsing and preprocessing done\n\
+umlaut-tsm-classify: PatternSubst generated\n\
+umlaut-tsm-classify: TSM build\n\
+umlaut-tsm-classify: TSM freed\n"
         );
     }
 

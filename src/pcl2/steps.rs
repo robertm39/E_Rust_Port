@@ -1332,7 +1332,7 @@ mod tests {
         assert_eq!(
             step.print_lop_with_warning_string(
                 &mut warning,
-                "eprover",
+                "umlaut",
                 &mut bank,
                 ProblemType::FirstOrder
             )
@@ -1341,14 +1341,14 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
+            "umlaut: Warning: Shell PCL step encountered where full PCL step was required\n"
         );
 
         let mut warning = Vec::new();
         assert_eq!(
             step.print_tptp_with_warning_string(
                 &mut warning,
-                "eprover",
+                "umlaut",
                 &mut bank,
                 ProblemType::FirstOrder
             )
@@ -1357,14 +1357,14 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
+            "umlaut: Warning: Shell PCL step encountered where full PCL step was required\n"
         );
 
         let mut warning = Vec::new();
         assert_eq!(
             step.print_format_with_warning_string(
                 &mut warning,
-                "eprover",
+                "umlaut",
                 &mut bank,
                 ProblemType::FirstOrder,
                 false,
@@ -1377,13 +1377,13 @@ mod tests {
 
         let mut warning = Vec::new();
         assert_eq!(
-            step.print_example_with_warning_string(&mut warning, "eprover", &bank, 0, 0, 0)
+            step.print_example_with_warning_string(&mut warning, "umlaut", &bank, 0, 0, 0)
                 .unwrap(),
             "# Step 3 omitted (Shell)\n"
         );
         assert_eq!(
             String::from_utf8(warning).unwrap(),
-            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
+            "umlaut: Warning: Shell PCL step encountered where full PCL step was required\n"
         );
     }
 

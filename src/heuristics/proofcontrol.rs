@@ -19939,7 +19939,7 @@ mod tests {
 
     fn proof_control_tsm_kb_dir() -> std::path::PathBuf {
         std::path::PathBuf::from("target")
-            .join("e-rust-port-tests")
+            .join("umlaut-tests")
             .join(format!("proof-control-tsm-{}", std::process::id()))
     }
 

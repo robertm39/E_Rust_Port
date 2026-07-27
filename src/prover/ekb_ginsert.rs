@@ -29,7 +29,7 @@ use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
-pub const PROGRAM_NAME: &str = "ekb_ginsert";
+pub const PROGRAM_NAME: &str = "umlaut-kb-ginsert";
 const DEFAULT_KB_NAME: &str = "E_KNOWLEDGE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -405,7 +405,7 @@ pub fn print_help() -> String {
 \n\
 Usage: {PROGRAM_NAME} [options] [name]\n\
 \n\
-Generate a set of training examples from an E inference list (i.e. an\n\
+Generate a set of training examples from an E-compatible inference list (i.e. an\n\
 EPCL trace of a proof run) and insert it into a knowledge base.\n\n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options\n\n")));
@@ -486,7 +486,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(args.iter().copied(), &mut stdin, &mut stdout, &mut stderr)
-            .expect("ekb_ginsert run succeeds");
+            .expect("umlaut-kb-ginsert run succeeds");
         (
             status,
             String::from_utf8(stdout).expect("stdout is utf8"),
@@ -513,7 +513,7 @@ mod tests {
 
         assert_eq!(status, 0);
         assert!(help.starts_with(&format!("\n\n{PROGRAM_NAME} {VERSION}\n\n")));
-        assert!(help.contains("Usage: ekb_ginsert [options] [name]"));
+        assert!(help.contains("Usage: umlaut-kb-ginsert [options] [name]"));
         assert!(help.contains("Generate a set of training examples"));
         assert!(help.contains("-V"));
         assert!(stderr.is_empty());
@@ -728,13 +728,13 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             stderr,
-            "ekb_ginsert: Parameter files parsed successfully\n\
-ekb_ginsert: New example will use name __problem__1\n\
-ekb_ginsert: Generating training examples\n\
-ekb_ginsert: PCL input read\n\
-ekb_ginsert: Parsing data files\n\
-ekb_ginsert: Integrating new examples\n\
-ekb_ginsert: Writing example files\n"
+            "umlaut-kb-ginsert: Parameter files parsed successfully\n\
+umlaut-kb-ginsert: New example will use name __problem__1\n\
+umlaut-kb-ginsert: Generating training examples\n\
+umlaut-kb-ginsert: PCL input read\n\
+umlaut-kb-ginsert: Parsing data files\n\
+umlaut-kb-ginsert: Integrating new examples\n\
+umlaut-kb-ginsert: Writing example files\n"
         );
         assert!(Path::new(&stored).exists());
 

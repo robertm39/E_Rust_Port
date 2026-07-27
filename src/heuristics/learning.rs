@@ -1036,7 +1036,7 @@ mod tests {
 
     fn temp_kb_dir(label: &str) -> std::path::PathBuf {
         std::path::PathBuf::from("target")
-            .join("e-rust-port-tests")
+            .join("umlaut-tests")
             .join(format!("learning-{label}-{}", std::process::id()))
     }
 

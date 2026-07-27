@@ -4,14 +4,14 @@ use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
 };
 use crate::inout::initio::{exit_io, init_io};
-use crate::prover::version::{footer, E_NICKNAME, VERSION};
+use crate::prover::version::{footer, VERSION, VERSION_QUALIFIER};
 use std::io::Write;
 
-pub const PROGRAM_NAME: &str = "e_stratpar";
+pub const PROGRAM_NAME: &str = "umlaut-stratpar";
 
-const DEFAULT_PROVER: &str = "eprover";
+const DEFAULT_PROVER: &str = "umlaut";
 const DEFAULT_HARD_TIME_LIMIT: i64 = 3600;
-const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
+const C_USAGE_ERROR: &str = "Usage: umlaut-ltb-runner <spec> [<path-to-umlaut>]";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
@@ -110,7 +110,10 @@ where
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::Version => {
-                writeln_diag(stdout, &format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}"))?;
+                writeln_diag(
+                    stdout,
+                    &format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}"),
+                )?;
                 return Ok(RunCommand::Exit(ErrorCode::NO_ERROR.exit_status()));
             }
             OptionCode::CpuLimit => {
@@ -219,11 +222,11 @@ fn strategy_specs(config: &StratparConfig) -> Vec<StratparStrategy> {
 pub fn print_help() -> String {
     let mut result = format!(
         "\n\
-{PROGRAM_NAME} {VERSION} \"{E_NICKNAME}\"\n\
+{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n\
 \n\
 Usage: {PROGRAM_NAME} [options] [file]\n\
 \n\
-Run 8 instances of E with different strategies in parallel.\n\
+Run 8 instances of Umlaut with different strategies in parallel.\n\
 \n"
     );
     result.push_str(&print_options(OPTIONS, Some("Options:\n\n")));
@@ -257,7 +260,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::control::esession::{Descriptor, DescriptorInterestSet};
     use crate::control::proc_ctrl::{EPCtrl, EPCtrlSet};
-    use crate::prover::version::{footer, E_NICKNAME, VERSION};
+    use crate::prover::version::{assert_help_matches_fixture, footer, VERSION, VERSION_QUALIFIER};
     use crate::test_support::global_state_lock;
     use std::io::{self, Write};
     use std::process::Command;
@@ -278,11 +281,11 @@ mod tests {
         let mut expected = format!(
             concat!(
                 "\n",
-                "e_stratpar {version} \"{nickname}\"\n",
+                "umlaut-stratpar {version} {nickname}\n",
                 "\n",
-                "Usage: e_stratpar [options] [file]\n",
+                "Usage: umlaut-stratpar [options] [file]\n",
                 "\n",
-                "Run 8 instances of E with different strategies in parallel.\n",
+                "Run 8 instances of Umlaut with different strategies in parallel.\n",
                 "\n",
                 "Options:\n",
                 "\n",
@@ -304,7 +307,7 @@ mod tests {
                 "\n",
             ),
             version = VERSION,
-            nickname = E_NICKNAME,
+            nickname = VERSION_QUALIFIER,
         );
         expected.push_str(&footer());
         expected
@@ -318,22 +321,22 @@ mod tests {
 
         let help_status = run([PROGRAM_NAME, "--help"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(help_status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(
-            String::from_utf8(std::mem::take(&mut stdout)).unwrap(),
-            expected_help()
+        assert_help_matches_fixture(
+            &String::from_utf8(std::mem::take(&mut stdout)).unwrap(),
+            &expected_help(),
         );
 
         let version_status = run([PROGRAM_NAME, "-V"], &mut stdout, &mut stderr).unwrap();
         assert_eq!(version_status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            format!("{PROGRAM_NAME} {VERSION} {E_NICKNAME}\n")
+            format!("{PROGRAM_NAME} {VERSION} {VERSION_QUALIFIER}\n")
         );
     }
 
     #[test]
     fn print_help_preserves_full_c_text() {
-        assert_eq!(print_help(), expected_help());
+        assert_help_matches_fixture(&print_help(), &expected_help());
     }
 
     #[test]
@@ -358,7 +361,7 @@ mod tests {
                 PROGRAM_NAME,
                 "--cpu-limit=301",
                 "problem.p",
-                "custom-eprover",
+                "custom-umlaut",
             ],
             &mut stdout,
         )
@@ -368,7 +371,7 @@ mod tests {
         };
         let strategies = strategy_specs(&config);
 
-        assert_eq!(DEFAULT_PROVER, "eprover");
+        assert_eq!(DEFAULT_PROVER, "umlaut");
         assert_eq!(config.problem_file, "problem.p");
         assert_eq!(strategies.len(), 8);
         assert_eq!(strategies[0].name, "AutoSched0");
@@ -386,7 +389,7 @@ mod tests {
         assert_eq!(missing.message(), C_USAGE_ERROR);
 
         let extra =
-            process_options([PROGRAM_NAME, "a.p", "eprover", "extra"], &mut stdout).unwrap_err();
+            process_options([PROGRAM_NAME, "a.p", "umlaut", "extra"], &mut stdout).unwrap_err();
         assert_eq!(extra.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(extra.message(), C_USAGE_ERROR);
     }
@@ -505,9 +508,9 @@ mod tests {
     fn help_text_contains_current_version_and_footer() {
         let help = print_help();
 
-        assert!(help.contains("e_stratpar "));
+        assert!(help.contains("umlaut-stratpar "));
         assert!(help.contains("Options:"));
-        assert!(help.contains("Copyright 1998-2026 by Stephan Schulz"));
+        assert!(help.contains("E copyright 1998-2026 by Stephan Schulz"));
     }
 
     #[cfg(windows)]
