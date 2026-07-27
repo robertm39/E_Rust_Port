@@ -8,6 +8,16 @@ Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-c
 
 Implemented Rust-port history and compatibility evidence are recorded in [`docs/rust-port-status.md`](docs/rust-port-status.md). Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`; use `bd ready`, `bd list`, and `bd search` to inspect current status.
 
+## VIRAS Clean-Room Research
+
+An implementation-grade, paper-derived description of Virtual Integer-Real
+Arithmetic Substitution is in
+[`viras_docs/README.md`](viras_docs/README.md). The packet covers the base
+quantifier-elimination calculus, its conflict-driven extension, a Rust-oriented
+implementation blueprint, validation vectors, source provenance, and paper
+errata. It was prepared without inspecting or using the unlicensed VIRAS
+GitHub implementation.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
