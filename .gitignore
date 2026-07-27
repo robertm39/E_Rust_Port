@@ -27,9 +27,12 @@ __pycache__/
 
 
 # Added by Robert Morton
-eprover/
 .agents/
 .codex/
+
+# Other projects
+eprover/
+vampire/
 
 # Generated compatibility and benchmark reports
 .artifacts/

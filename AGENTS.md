@@ -1,14 +1,14 @@
 # Summary
-This project is a Rust port of the E theorem prover.
+This project is an automated theorem prover that started as a Rust port of the E theorem prover. My ambition for it is for it to be the #1 theorem prover and win the CASC (`https://tptp.org/CASC/`) in 2027.
 
-# Original Source
+# Original Source of E
 The original source of the E theorem prover is in `eprover/`. It is directly from the Github repo. Do not modify the contents of it at all.
 
 # Source Control
 This project uses git for source control. Make well-scoped commits with good commit messages. Push after committing. Use `git status` to confirm that the project is clean before starting a new piece of work.
 
-# Porting Rules
-This port must support all of the features of the original, so that the Rust executable is a drop-in replacement for the C executable. It must also have performance that is at least comparable to the original, and implement all of the optimizations the original implements (unless there is a specific and compelling reason otherwise). It should generally stay close to how the original is implemented, while still being idiomatic, high-quality Rust.
+# Compatibility Rules
+Umlaut must support all of the features of E, so that the Rust executable can be used with mostly the same interface as E. However, it is not stricly required to be an absolute drop-in replacement.
 
 # Testing
 Write thorough tests to confirm functionality and performance.
