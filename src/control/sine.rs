@@ -5,6 +5,7 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
+use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::sine::{
     select_axioms_clause_formula_sets, select_definitions_formula_sets,
     select_threshold_clause_formula_sets, ClauseSineParams, FormulaSineOptions, SineSetStacks,
@@ -12,6 +13,7 @@ use crate::clauses::sine::{
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -247,6 +249,27 @@ impl StructFofSpec {
             removed_formula_sets,
             signature_backtrack_to: self.shared_ax_f_count,
         }
+    }
+
+    /// Restores the term bank and structured specification to the shared-axiom boundary.
+    ///
+    /// The order matches C `StructFOFSpecBacktrackToSpec`: discard the
+    /// problem-specific sets, collect terms while the full signature is still
+    /// available, and only then forget the problem-specific symbols.
+    pub fn backtrack_to_spec_with_bank(
+        &mut self,
+        bank: &mut TermBank,
+    ) -> StructFofSpecBacktrackReport {
+        let report = self.backtrack_to_spec(bank.signature());
+        let _recovered = tb_gc_collect(
+            bank,
+            self.clause_sets.as_slice(),
+            self.formula_sets.as_slice(),
+        );
+        let _removed_symbols = bank
+            .signature_mut()
+            .backtrack(report.signature_backtrack_to);
+        report
     }
 
     pub fn collect_f_code(&self, f_code: FunCode, result: &mut Vec<u64>) -> i64 {
@@ -599,6 +622,46 @@ mod tests {
         assert_eq!(spec.clause_set_count(), 1);
         assert_eq!(spec.formula_set_count(), 1);
         assert_eq!(spec.problem_type(), ProblemType::FirstOrder);
+    }
+
+    #[test]
+    fn backtrack_to_spec_with_bank_collects_problem_terms_before_forgetting_symbols() {
+        let mut bank = test_bank();
+        let mut spec = StructFofSpec::new(bank.signature());
+        let shared_term = typed_const(&mut bank, "backtrack_bank_shared");
+        let shared_code = shared_term.f_code();
+        let shared_clause = unit_clause(&mut bank, &shared_term, &shared_term, true);
+        spec.add_problem(
+            bank.signature(),
+            ClauseSet::from_clauses([shared_clause]),
+            FormulaSet::new(),
+            false,
+        );
+        spec.mark_shared_axioms(bank.signature());
+        let signature_target = spec.shared_ax_f_count();
+
+        let problem_term = typed_const(&mut bank, "backtrack_bank_problem");
+        let problem_code = problem_term.f_code();
+        let problem_clause = unit_clause(&mut bank, &problem_term, &problem_term, true);
+        spec.add_problem(
+            bank.signature(),
+            ClauseSet::from_clauses([problem_clause]),
+            FormulaSet::new(),
+            false,
+        );
+
+        let report = spec.backtrack_to_spec_with_bank(&mut bank);
+
+        assert_eq!(report.signature_backtrack_to, signature_target);
+        assert_eq!(bank.signature().f_count(), signature_target);
+        assert_eq!(
+            bank.signature().find_f_code("backtrack_bank_shared"),
+            shared_code
+        );
+        assert_eq!(bank.signature().find_f_code("backtrack_bank_problem"), 0);
+        assert!(bank.find(&shared_term).is_some());
+        assert!(bank.find(&problem_term).is_none());
+        assert!(problem_code > signature_target);
     }
 
     #[test]

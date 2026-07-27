@@ -1366,7 +1366,7 @@ impl BatchSpec {
             }
         })();
 
-        let backtrack = ctrl.backtrack_to_spec(bank.signature());
+        let backtrack = ctrl.backtrack_to_spec_with_bank(bank);
         let cleanup = backend.clear(true);
         let (solved, completed) = process_result?;
         cleanup?;
@@ -2231,6 +2231,8 @@ mod tests {
     use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_WATCH_CLAUSE};
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::FormulaSet;
     use crate::control::esession::{Descriptor, DescriptorInterestSet};
     use crate::control::gproc_ctrl::EGPCtrl;
@@ -2751,6 +2753,20 @@ mod tests {
         let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
+        let problem_code = bank
+            .signature_mut()
+            .insert_id("batch_backtrack_problem", 0, false);
+        let individual_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(problem_code, individual_type)
+            .unwrap();
+        let problem_term = bank.create_const_term(problem_code).unwrap();
+        let problem_literal =
+            Eqn::alloc(problem_term.clone(), problem_term.clone(), &mut bank, true).unwrap();
+        let mut problem = one_empty_clause_problem();
+        problem
+            .clauses
+            .insert(Clause::alloc(EqnList::from_vec(vec![problem_literal])));
         let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
         spec.res_answer = BatchOutputType::Desired;
         let mut global = Vec::new();
@@ -2769,7 +2785,7 @@ mod tests {
             .process_problem_with_runner_backend(
                 &mut bank,
                 &mut ctrl,
-                one_empty_clause_problem(),
+                problem,
                 BatchProcessProblemConfig {
                     wct_limit: 20,
                     jobname: "job.p",
@@ -2790,6 +2806,8 @@ mod tests {
         assert_eq!(report.spawned, MAX_CORES);
         assert_eq!(report.backtrack.removed_clause_sets, 1);
         assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(bank.signature().find_f_code("batch_backtrack_problem"), 0);
+        assert!(bank.find(&problem_term).is_none());
         assert_eq!(backend.requests.len(), MAX_CORES);
         assert_eq!(backend.requests[0].name, "Threshold(10000)");
         assert_eq!(

@@ -1,0 +1,26 @@
+{
+  "content_hashes_verified": 107,
+  "decision_count": 107,
+  "decision_digest": "838c3ed8652f0ed713e7c8d2549ea3c8957e2278895bfefa07443892011f7eaf",
+  "decision_group_counts": {
+    "accept_ownership_safe_rust_boundary": 34,
+    "implemented_in_this_reconciliation": 1,
+    "preserve_checked_c_behavior": 48,
+    "superseded_by_completed_implementation": 24
+  },
+  "evidence_checks": {
+    "batch_spec_parser_runner_and_output_contracts_are_pinned": true,
+    "exact_candidate_passes_full_lifecycle": true,
+    "factoring_forward_modification_and_cleanup_are_regression_pinned": true,
+    "full_structured_spec_backtrack_is_in_production": true,
+    "higher_order_inference_dispatch_is_complete": true,
+    "interactive_and_process_control_owners_are_explicit": true,
+    "ordered_proof_objects_cover_owned_extraction_roots": true,
+    "paramodulation_and_preprocessing_are_owned": true,
+    "proof_control_cleanup_generation_and_indices_are_complete": true,
+    "schedule_simplification_and_selected_axiom_paths_are_closed": true
+  },
+  "schema_version": 1,
+  "source_digest": "0128ea1b044d1871e6889f4cf6a35771f6497fac38e39670e6394517b2b8376f",
+  "source_file_count": 67
+}
