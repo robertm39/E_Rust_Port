@@ -33,6 +33,11 @@ __pycache__/
 # Other projects
 eprover/
 vampire/
+cadical/
+viras/
+minisat/
+z3/
+gmp-6.3.0/
 
 # Generated compatibility and benchmark reports
 .artifacts/
