@@ -34,7 +34,6 @@ __pycache__/
 eprover/
 vampire/
 cadical/
-viras/
 minisat/
 z3/
 gmp-6.3.0/
