@@ -1,2 +1,3 @@
 tests/fixtures/ltb/official/* text eol=lf
 tools/linode-runner/remote_run.sh text eol=lf
+licenses/* -whitespace

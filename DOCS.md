@@ -8,6 +8,13 @@ Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-c
 
 Implemented Rust-port history and compatibility evidence are recorded in [`docs/rust-port-status.md`](docs/rust-port-status.md). Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`; use `bd ready`, `bd list`, and `bd search` to inspect current status.
 
+## Third-Party Licenses
+
+The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
+projects are inventoried in
+[`docs/third-party-licenses.md`](docs/third-party-licenses.md). Verbatim copies
+of the available license notices are stored in [`licenses/`](licenses/).
+
 ## Execution And Platform Policy
 
 All Rust and C formatting, compilation, tests, execution, compatibility
