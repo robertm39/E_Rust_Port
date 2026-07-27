@@ -91,4 +91,18 @@ Source files reviewed: `LEARN/cle_kbinsert.h`, `LEARN/cle_kbinsert.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- `KBAxiomsInsert` is ported in `src/learn/kbinsert.rs` as `kb_axioms_insert`, including `set->count + 1` id assignment, clause-set feature-vector extraction, and ignoring the `ExampleSetInsert` result.
+- `ParseExampleClause` is ported as `parse_example_clause` for the current simple clause parser, annotation-vector construction, representative pattern-clause computation, recursive clause encoding, signature translation, and insertion into the destination term bank.
+- `KBParseExampleFile` is ported as `kb_parse_example_file` for the current simple clause parser, including the temporary axiom-list parse, `KBAxiomsInsert` metadata insertion, standalone full-stop separator, annotated example-clause loop, `ParseExampleClause` dispatch, and `AnnoSetAddTerm`-style duplicate-term merging through explicit Rust parser and destination term-bank owners.
+
+### Change Later
+
+- `ParseExampleClause` stores the first annotation input twice: slot `1` becomes a proof-count flag (`1` only when the input distance is zero) and slot `2` stores the original distance. Preserve this learned-data layout for compatibility, but consider a named metadata structure after old KB files are covered by regression tests.
+- `ParseExampleClause` records `anno->val2.i_val` as one past the last assigned slot, so the implicit annotation length includes the count slot and both special first-value slots. Rust preserves this length; a later cleaned API should distinguish physical vector length from semantic feature count.
+- C `PatternClauseCompute` can return zero and silently skip the parsed example clause when representative search is too expensive. Rust now checks the represented pattern search's exact zero-tries result before recursive encoding, drops the parsed annotation through the `Option` boundary, and leaves the destination term bank unchanged.
+- `KBAxiomsInsert` ignores duplicate-id/name insertion failure. If a duplicate name is inserted, the numeric id entry can remain while `set->count` is not advanced. Rust preserves this side effect through `ExampleSet::insert`; a future KB builder should reject duplicate problem names before constructing inconsistent indexes.
+- `KBParseExampleFile` frees the temporary axiom term bank and signature immediately after computing numeric features, then parses example clauses through a new term bank sharing the result signature and the annotation set's internal term bank. Rust keeps feature extraction independent from temporary parser ownership and exposes the second parser/destination term banks explicitly; a future KB-session owner should decide whether shared `res_sig` mutation is required for byte-compatible learned-data ingestion.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,137 @@
+{
+  "candidate_kind": "windows-rust",
+  "case_count": 50,
+  "case_inventory": [
+    "fol:ALL_RULES.p",
+    "fol:ans_test06.p",
+    "fol:BOO020-1.p",
+    "fol:CNFTest.p",
+    "fol:GROUP1st.p",
+    "fol:LUSK3.p",
+    "fol:LUSK6.lop",
+    "fol:LUSK6ext.lop",
+    "fol:socrates.p",
+    "ho:tffex01.p",
+    "fol:BOO006-1.p",
+    "fol:BOO010-2.p",
+    "fol:CAT004-4.p",
+    "fol:COL042-8.p",
+    "fol:CSR036+2.p",
+    "fol:GEO288+1.p",
+    "fol:GRP237-1.p",
+    "fol:HEN011-2.p",
+    "fol:LCL365-1.p",
+    "fol:MGT063+1.p",
+    "fol:PLA012-1.p",
+    "fol:PUZ028-6.p",
+    "fol:SET183-6.p",
+    "fol:SET844-1.p",
+    "fol:SEU027+1.p",
+    "fol:SWB008+1.p",
+    "fol:SWB030+3.p",
+    "fol:SWC078-1.p",
+    "fol:SWV851-1.p",
+    "fol:SWW194+1.p",
+    "fol:SYN190-1.p",
+    "ho:lists.p",
+    "ho:permute_func_axioms.p",
+    "ho:permute_func_no_axioms.p",
+    "ho:SEV286^5.p",
+    "ho:sledgehammer.p",
+    "fol:synthetic/stdin-socrates.p",
+    "fol:synthetic/syntax-only-socrates.p",
+    "fol:synthetic/stdin-syntax-only-socrates.p",
+    "fol:synthetic/print-formulas-socrates.p",
+    "fol:synthetic/stdin-print-formulas-socrates.p",
+    "fol:synthetic/prune-socrates.p",
+    "fol:synthetic/stdin-prune-socrates.p",
+    "fol:synthetic/cnf-socrates.p",
+    "fol:synthetic/stdin-cnf-socrates.p",
+    "fol:synthetic/app-encode-socrates.p",
+    "fol:synthetic/stdin-app-encode-socrates.p",
+    "fol:synthetic/malformed.p",
+    "fol:synthetic/cpu-limit-LUSK6.lop",
+    "fol:synthetic/memory-limit-socrates.p"
+  ],
+  "expected_difference_count": 1,
+  "expected_differences": [
+    {
+      "candidate_exit_code": 0,
+      "candidate_status": "Theorem",
+      "expected_mismatches": [
+        "normalized_stdout"
+      ],
+      "mismatches": [
+        "normalized_stdout"
+      ],
+      "mode": "ho",
+      "name": "sledgehammer.p",
+      "reference_exit_code": 0,
+      "reference_status": "Theorem"
+    }
+  ],
+  "mismatch_count": 4,
+  "schema_version": 1,
+  "unexpected_differences": [
+    {
+      "candidate_exit_code": 9,
+      "candidate_status": null,
+      "expected_mismatches": [],
+      "mismatches": [
+        "exit_code",
+        "status",
+        "shape",
+        "normalized_stdout"
+      ],
+      "mode": "fol",
+      "name": "BOO020-1.p",
+      "reference_exit_code": 8,
+      "reference_status": "ResourceOut"
+    },
+    {
+      "candidate_exit_code": 8,
+      "candidate_status": "ResourceOut",
+      "expected_mismatches": [],
+      "mismatches": [
+        "exit_code",
+        "status",
+        "shape",
+        "normalized_stdout"
+      ],
+      "mode": "fol",
+      "name": "HEN011-2.p",
+      "reference_exit_code": 0,
+      "reference_status": "Unsatisfiable"
+    },
+    {
+      "candidate_exit_code": 9,
+      "candidate_status": null,
+      "expected_mismatches": [],
+      "mismatches": [
+        "exit_code",
+        "status",
+        "shape",
+        "normalized_stdout"
+      ],
+      "mode": "fol",
+      "name": "SWV851-1.p",
+      "reference_exit_code": 8,
+      "reference_status": "ResourceOut"
+    },
+    {
+      "candidate_exit_code": 8,
+      "candidate_status": "ResourceOut",
+      "expected_mismatches": [],
+      "mismatches": [
+        "exit_code",
+        "status",
+        "shape"
+      ],
+      "mode": "fol",
+      "name": "synthetic/cpu-limit-LUSK6.lop",
+      "reference_exit_code": 0,
+      "reference_status": "Unsatisfiable"
+    }
+  ],
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

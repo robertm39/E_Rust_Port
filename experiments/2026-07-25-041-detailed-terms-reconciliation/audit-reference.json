@@ -1,0 +1,28 @@
+{
+  "content_hashes_verified": 29,
+  "decision_count": 29,
+  "decision_digest": "00c854abf502190406eaa70514807dfa918c68d1e5951a0755b97f03c34b9426",
+  "decision_group_counts": {
+    "c_compatibility_contracts": 7,
+    "deterministic_or_safe_ownership": 8,
+    "parser_and_output_boundaries": 9,
+    "retained_measured_api_or_performance_shape": 3,
+    "source_parity_or_landed_owner": 2
+  },
+  "evidence_checks": {
+    "ac_and_fixpoint_compatibility_quirks_are_explicit": true,
+    "beta_only_rebuilding_matches_c_without_eta_flatten_repair": true,
+    "fp_and_gc_owners_are_explicit_and_live": true,
+    "higher_order_boundaries_and_safe_whnf_bindings_are_preserved": true,
+    "intrusive_term_tree_owner_is_private_and_noncloneable": true,
+    "latest_full_compatibility_validation_is_clean": true,
+    "parser_and_output_boundaries_are_owned_and_explicit": true,
+    "proof_state_freshvars_owner_and_family_reset_policies_landed": true,
+    "term_core_api_and_performance_decisions_remain_measured": true,
+    "type_output_is_uid_ordered_and_varhash_retains_c_width": true
+  },
+  "exact_text_still_in_current_docs": 27,
+  "schema_version": 1,
+  "source_digest": "1575d632d061bb119ff980e481a100b715d757008a2360e925fc1d86ef863c01",
+  "source_file_count": 17
+}

@@ -246,9 +246,29 @@ Source files reviewed: `HEURISTICS/che_clausesetfeatures.h`, `HEURISTICS/che_cla
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SpecFeaturesPrint` prints the higher-order tail fields after `clause_avg_depth`, but `SpecFeaturesParse` still expects the older vector shape ending at `clause_avg_depth` before `): class`. Rust preserves these as separate print and legacy parse surfaces instead of making them round-trip.
+- `SpecTypeString` builds 21 classification bytes in a 22-byte local buffer, accepts masks with length 13 through 22, and returns only 21 bytes via `SecureStrndup(result, 21)`. A 22nd mask byte can affect only the C buffer terminator and is not observable in the returned string.
+- `SpecFeaturesParse` accepts `G`, `H`, or `U` for the axiom class but only `H` or `U` for the goal class, even though `SpecTypeString` can encode general goals as `G`.
+- `ClauseSetPrintNegUnits` is named as if it prints all negative unit clauses, but it filters on `ClauseIsUnit && ClauseIsGoal`; with the current clause predicates this means unit goal clauses. Rust preserves that filter in both the caller-rendered helper and the default LOP wrapper.
+- `ProofStatePrintSelective` interprets the descriptor string left-to-right and may print repeated sections if the descriptor repeats a letter. Its `printinfo` flag is only forwarded to the selected clause-set printers, where `ClauseLinePrint` appends same-line `ClauseInfoPrint` comments. Rust preserves that descriptor-order behavior, `printinfo` forwarding, and explicit LOP/TPTP/TSTP plus problem-type clause-output dispatch for represented proof-state clause sections, type declarations, and equality axioms; formula-dependent classification and final proof-output banners remain outside this helper.
+- `ClauseSetPrintPosUnits`, `ClauseSetPrintNegUnits`, and `ClauseSetPrintNonUnits` are documented with no global variables, but each reaches the process-global `OutputFormat` through `ClauseLinePrint`/`ClausePrint`; TSTP clause output also observes the process-global `problemType`. Rust keeps those dependencies explicit through output-format and problem-type parameters on the selective set wrappers and `ProofStatePrintSelective`.
+- `ClauseSetComputeHOFeatures` computes `has_defined_choice` by calling `ClauseRecognizeChoice(NULL, clause)`, which beta-normalizes and eta-reduces the two predicate terms before recognizing `~P X | P (f P)`. With a `NULL` map, C does not record duplicate choice symbols and does not replace the live literal terms after recognition. Rust now ports the represented beta-normal no-map feature path separately from the proof-state path that records choice-symbol clauses..
+- `SpecFeaturesCompute` computes the clause-level higher-order order through `ClauseSetComputeHOFeatures`, then overwrites both `features->order` and `features->goal_order` with `1` before scanning formula archives/current formulas. If both formula sets are `NULL`, the final strategy order ignores the clause-level HO order. Rust preserves this in the full wrapper and leaves the clause-set helper at the reset boundary; change later: a cleaned API should expose the raw clause HO order separately from the classification order.
+- `SpecFeaturesCompute` sets `num_of_definitions = -1` but does not write `perc_of_form_defs`; `SpecFeaturesAddEval` can still classify whatever ratio is already in the feature cell. Rust preserves this C-compatible sentinel behavior. Formula-definition ratios should stay with raw-spec feature extraction or a future cleaned classifier unless reference behavior proves a `SpecFeaturesCompute` caller expects a different value.
+- `ClausifyAndClassifyWTimeout` combines the full feature wrapper with formula CNF in a forked, CPU-limited child and substitutes a 21-hyphen class only after a short fixed-width read. Rust implements the same observable contract through the portable hidden `classify_problem` re-exec child. A zero CPU limit does not synchronously force C's fallback: the isolated fast CNF child completed 40/40 probes before signal delivery. Rust now gives zero-timeout re-exec a bounded startup grace, and completed CNF/FOF/THF plus zero, `-1`, and `-2` boundaries are 6/6 byte-exact in [`experiments/2026-07-17-084-specfeatures-timeout-classification/FINDINGS.md`](../../../experiments/2026-07-17-084-specfeatures-timeout-classification/FINDINGS.md).
+- `ClauseSetHasHOFeatures` and `ClauseSetComputeMaxOrder` are declared in `che_clausesetfeatures.h` but have no implementation in this checkout; leave them documented as header-only surface until a C definition or real caller appears.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- A cleaner API should split "recognize for classification" from "recognize and register for choice instantiation" explicitly instead of overloading a nullable map argument.
+- `ClausifyAndClassifyWTimeout` combines formula preprocessing, CNF conversion, feature extraction, POSIX `fork()`/`pipe()`, `RLIMIT_CPU`, fixed-width class-buffer I/O, and child-status collection in one helper. Rust now exposes the executable timeout as an explicit hidden child-process boundary; a later cleaned classifier should keep classification pure and let callers choose the isolation and timeout policy deliberately.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

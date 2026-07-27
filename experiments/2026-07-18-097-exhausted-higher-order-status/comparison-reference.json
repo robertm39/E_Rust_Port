@@ -1,0 +1,45 @@
+{
+  "case_count": 3,
+  "cases": {
+    "exhausted_higher_order_axioms": {
+      "counters": {
+        "Generated clauses": 0,
+        "Initial clauses in saturation": 2,
+        "Processed clauses": 2,
+        "Total rewrite steps": 1
+      },
+      "exit": 10,
+      "final_clauses": [
+        "thf(c_0_N, plain, ![X1:$i > $i]:(((wrap @ (X1 @ a))=(X1 @ b))), c_0_N,['final']).",
+        "thf(c_0_N, plain, ((h @ b)=(c)), c_0_N,['final'])."
+      ],
+      "stderr": "",
+      "terminal_lines": [
+        "% Failure: Out of unprocessed clauses!",
+        "% SZS status GaveUp"
+      ]
+    },
+    "first_order_satisfiable": {
+      "counters": {},
+      "exit": 1,
+      "final_clauses": [],
+      "stderr": "",
+      "terminal_lines": [
+        "% No proof found!",
+        "% SZS status Satisfiable"
+      ]
+    },
+    "higher_order_theorem": {
+      "counters": {},
+      "exit": 0,
+      "final_clauses": [],
+      "stderr": "",
+      "terminal_lines": [
+        "% Proof found!",
+        "% SZS status Theorem"
+      ]
+    }
+  },
+  "mismatches": [],
+  "sha256": "dd6605777180ae39bf6a5d06016b6336422ec63ecc487c977488cbb67fdc46dc"
+}

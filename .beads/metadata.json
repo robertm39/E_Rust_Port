@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "E_Rust_Port",
+  "project_id": "0556c647-c1b5-4f77-80cc-902552646ea4"
+}

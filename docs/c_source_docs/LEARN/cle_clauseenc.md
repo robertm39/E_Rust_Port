@@ -92,6 +92,15 @@ Source files reviewed: `LEARN/cle_clauseenc.h`, `LEARN/cle_clauseenc.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- The flat and recursive encoders consume a `PStack` alternating `Eqn*` entries and `PatEqnDirection` integers. `PStackGetSP(list)/2` floors the arity, so an odd trailing stack entry would be ignored by the C implementation.
+- The clause-representation container cells (`$orN`, `$or`, and `$cnil`) are allocated without type assignment in C. A typed Rust term bank needs a deliberate compatibility policy here when `$or` is already the fixed logical Boolean connective.
+- `FlatRecodeRecClauseRep` accepts only a recursive `$or` chain ending in the current `cnil_code`; malformed literal encodings call `Error(..., SYNTAX_ERROR)`.
+- `FlatRecodeRecClauseRep` reconstructs temporary `Eqn` cells from already encoded equality/inequality terms, then flat-encodes those temporary literals in normal direction. This preserves the left/right order already present in the recursive term, not the original direction metadata.
+- `ParseClauseTermRep` requires LOP input and consumes the literal list terminator as `<-.`, with `AcceptInpTokNoSkip` for the hyphen. The C path also accepts an empty literal list before `<` and asserts, rather than diagnoses, non-LOP scanner mode. Those details are compatibility behavior, but the adjacency requirement and empty-list grammar are reasonable cleanup candidates once learned-data compatibility is covered.
+- `ParseClauseTermRep` delegates literal parsing to `EqnListParse`/`EqnParse`/checked `TBTermParse`, so list/application token support and predicate/function type declaration side effects come from the general term parser rather than from this unit. Rust mirrors that path with the checked term-bank parser and the same list-support-sensitive `TermStartToken` rule.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

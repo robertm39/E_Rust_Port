@@ -1,0 +1,124 @@
+[package]
+name = "e-rust-port"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+publish = false
+
+[features]
+default = []
+measure-expensive = []
+measure-unification = []
+instrument-perf-ctr = []
+pdt-count-nodes = []
+print-index-stats = []
+
+[[bin]]
+name = "eprover"
+path = "src/bin/eprover.rs"
+
+[[bin]]
+name = "CSSCPA_filter"
+path = "src/bin/csscpa_filter.rs"
+
+[[bin]]
+name = "e_stratpar"
+path = "src/bin/e_stratpar.rs"
+
+[[bin]]
+name = "e_ltb_runner"
+path = "src/bin/e_ltb_runner.rs"
+
+[[bin]]
+name = "termprops"
+path = "src/bin/termprops.rs"
+
+[[bin]]
+name = "term2dag"
+path = "src/bin/term2dag.rs"
+
+[[bin]]
+name = "ex_commandline"
+path = "src/bin/ex_commandline.rs"
+
+[[bin]]
+name = "epclextract"
+path = "src/bin/epclextract.rs"
+
+[[bin]]
+name = "epclanalyse"
+path = "src/bin/epclanalyse.rs"
+
+[[bin]]
+name = "checkproof"
+path = "src/bin/checkproof.rs"
+
+[[bin]]
+name = "epcllemma"
+path = "src/bin/epcllemma.rs"
+
+[[bin]]
+name = "edpll"
+path = "src/bin/edpll.rs"
+
+[[bin]]
+name = "eground"
+path = "src/bin/eground.rs"
+
+[[bin]]
+name = "classify_problem"
+path = "src/bin/classify_problem.rs"
+
+[[bin]]
+name = "tsm_classify"
+path = "src/bin/tsm_classify.rs"
+
+[[bin]]
+name = "direct_examples"
+path = "src/bin/direct_examples.rs"
+
+[[bin]]
+name = "e_client"
+path = "src/bin/e_client.rs"
+
+[[bin]]
+name = "e_deduction_server"
+path = "src/bin/e_deduction_server.rs"
+
+[[bin]]
+name = "e_server"
+path = "src/bin/e_server.rs"
+
+[[bin]]
+name = "e_axfilter"
+path = "src/bin/e_axfilter.rs"
+
+[[bin]]
+name = "enormalizer"
+path = "src/bin/enormalizer.rs"
+
+[[bin]]
+name = "epatternize"
+path = "src/bin/epatternize.rs"
+
+[[bin]]
+name = "ekb_create"
+path = "src/bin/ekb_create.rs"
+
+[[bin]]
+name = "ekb_delete"
+path = "src/bin/ekb_delete.rs"
+
+[[bin]]
+name = "ekb_insert"
+path = "src/bin/ekb_insert.rs"
+
+[[bin]]
+name = "ekb_ginsert"
+path = "src/bin/ekb_ginsert.rs"
+
+[dependencies]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

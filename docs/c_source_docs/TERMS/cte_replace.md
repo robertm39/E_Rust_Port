@@ -91,6 +91,15 @@ Source files reviewed: `TERMS/cte_replace.h`, `TERMS/cte_replace.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TBTermPosReplace` rebuilds the enclosing term inside-out from the `TermPos` stack, using shallow `TermTopCopy` cells and inserting the final temporary term through `TBInsertNoProps`. Rust preserves this ordinary replacement path with safe temporary cells and term-bank sharing.
+- The LFHO positive-`remains` branch calls `MakeRewrittenTerm`, appends the remaining original arguments, sets owner-bank state, and runs lambda normalization. Rust ports the top-level and nested retained-argument construction, shares through the explicit bank, and beta-normalizes both retained and zero-suffix replacements. Exact higher-order rewrite/inference projections cover the production boundary; C's hidden owner/cache writes are deliberately absent under [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
+
+### Change Later
+
+- The C integer `remains` sentinel plus `old_into` side parameter may be worth replacing with an explicit prefix-rewrite descriptor, but only as an API cleanup after compatibility.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

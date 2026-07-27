@@ -1,0 +1,15 @@
+{
+  "accepted": true,
+  "c_owner_files": [],
+  "checks": {
+    "c_has_no_direct_production_owner": true,
+    "nan_structural_stop_and_ieee_match_are_separate": true,
+    "primary_find_and_extract_splay_on_misses": true,
+    "read_only_binary_query_is_explicit": true,
+    "rust_has_no_direct_production_owner": true,
+    "safe_index_linked_splay_representation": true,
+    "standard_total_order_tree_and_root_marker_are_removed": true
+  },
+  "direct_rust_owners": [],
+  "schema_version": 1
+}

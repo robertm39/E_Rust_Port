@@ -1,0 +1,22 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "checks": {
+    "evaluation_order_and_penalties": true,
+    "optimal_search_seed_iteration_and_strict_replacement": true,
+    "selection_normalization_and_rewrite_flag": true,
+    "initialized_auto_fields_match_c": true,
+    "all_thirteen_legacy_auto_generators_are_dormant": true,
+    "optimize_cli_path_is_upstream_disabled": true,
+    "full_reference_sequence_regression_present": true
+  },
+  "expected": {
+    "evaluation_order_and_penalties": true,
+    "optimal_search_seed_iteration_and_strict_replacement": true,
+    "selection_normalization_and_rewrite_flag": true,
+    "initialized_auto_fields_match_c": true,
+    "all_thirteen_legacy_auto_generators_are_dormant": true,
+    "optimize_cli_path_is_upstream_disabled": true,
+    "full_reference_sequence_regression_present": true
+  },
+  "passed": true
+}

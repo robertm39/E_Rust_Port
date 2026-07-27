@@ -133,10 +133,19 @@ Source files reviewed: `HEURISTICS/che_funweights.h`, `HEURISTICS/che_funweights
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `GenericFunWeightCompute` calls the configured `init_fun` lazily, then `ClauseCondMarkMaximalTerms(data->ocb, clause)`, then `ClauseFunWeight` with `data->fweights` and optional `type_freqs`; all eight Rust WFCB initializers that share generic funweight evaluation install the banked callback and preserve that init/mark/score order with the active proof-control OCB and owner bank.
+- `SymOffsetWeightCompute` follows the same lazy-init and `ClauseCondMarkMaximalTerms` order before ordinary clause weighting, then calls `ClauseAddFunOccs`, adds one configured offset per distinct symbol, and resets each touched occurrence-array slot to zero. Rust preserves the sequence with a banked callback; a proof-control regression evaluates two clauses through the same parsed HCB and pins identical repeated results after both clauses are marked, proving occurrence-state cleanup at the production boundary.
+- `init_relevance_vector` and `init_relevance_vector2` call `RelevanceDataCompute(data->proofstate)`, so C relevance-level symbol weights see both `state->axioms` and `state->f_axioms` at lazy initialization. Rust preserves that for represented owners by carrying optional formula axioms through the weight-parse context while retaining clause-only compatibility helpers for staged tests. A proof-control regression installs an option-defined relevance weight with nonempty formula owners and pins its formula-derived lazy score; ordinary executable proof control is initialized after formula CNF has drained the live formula set in both C and Rust. The boundary is documented in [`experiments/2026-07-17-058-formula-relevance-ownership/FINDINGS.md`](../../../experiments/2026-07-17-058-formula-relevance-ownership/FINDINGS.md).
+- The complete generic/offset owner audit and byte-exact executable comparison are recorded in [`experiments/2026-07-17-065-funweight-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-065-funweight-owner-context/FINDINGS.md). The generic production audit finds no immutable HCB/WFCB evaluation call outside adapter modules.
+
+### Change Later
+
+- `FunWeightParam` stores the whole `ProofState_p` mostly so lazy relevance/type initializers can reach axiom sets and the active OCB. Rust splits this into explicit clause/formula axiom snapshots plus banked OCB callbacks. Current executable timing is equivalent: formula CNF precedes proof-control installation, and active-HCB evaluation begins while the complete clause-axiom context remains available. Borrowed stable context could replace the snapshots to reduce cloning after profiling, and immutable already-marked-clause adapters could be removed as public-API simplification; neither is missing proof-search behavior.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

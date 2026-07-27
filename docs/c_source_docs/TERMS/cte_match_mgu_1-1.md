@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order complete matching, `SubstMguComplete` production integration, applied-variable dereference coverage, and first-order matching-stack profiling through 2026-07-13.
 
 Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 
@@ -115,10 +115,26 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `OccurCheck`, `SubstComputeMgu`, and `VerifyMatch` reach applied free-variable expansion through ordinary dereference/equality helpers. Rust now has regression coverage that the first-order match/MGU boundary follows bound applied free-variable heads instead of treating that as an unported path.
+- `MEASURE_UNIFICATION` owns process-global `UnifAttempts`/`UnifSuccesses` counters around `SubstComputeMgu` and `SubstComputeMguHO`. Rust maps the first-order `SubstComputeMgu` side to the non-default `measure-unification` Cargo feature and exposes the same executable statistics lines over those counters.
+- In higher-order problem mode, `SubstMguComplete` eta-reduces both inputs, calls `SubstComputeMguHO`, and falls back to the higher-order pattern MGU when both original inputs are non-first-order patterns. Rust now takes the owning `TermBank` explicitly and routes production equation unification, equality resolution, factoring, condensation, BCE, predicate elimination, injectivity checks, paramodulation, and CSSCPA through that dispatch, with entry-position rollback on false results and diagnostics.
+- In higher-order problem mode, `SubstMatchComplete` eta-reduces both inputs, calls the directed `SubstComputeMatchHO`, and falls back to `SubstComputeMatchPattern` when both unreduced inputs are non-first-order patterns. Rust now ports that bank-aware dispatch, including application-variable prefix construction, exact complete-match checking, diagnostic-safe substitution rollback, and use by forward/backward demodulation and predicate-gate validation where a mutable owner bank is available.
+- C's first-order helpers can incidentally refresh the LFHO binding cache through `TermDeref`, while its complete match/MGU APIs recover a mutable bank through hidden term ownership. Rust instead exposes result-equivalent no-cache expansion for read-only helpers and explicit-bank complete operations for allocating higher-order normalization. The 14/14 ownership audit and 21/21 executable projections support this completed boundary in [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
+- C first-order matching uses a per-call `PLocalStack` for pending term pairs. Rust preserves LIFO argument order with four inline jobs and a vector spill path; capacities 2, 4, 8, and 32 were profiled on bounded HEN011, with four minimizing instructions while retaining focused overflow coverage.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SubstComputeMguHO` reports leftover-argument information through `UnificationResult`, while `SubstMguComplete` collapses that to a boolean after checking no arguments remain. A cleaned API should expose the argument-prefix result type directly at callers that need HO constraints, rather than threading a C-style integer result plus a separate `CheckHOUnificationConstraints` hook.
+- Despite its name, `SubstMguComplete` is not a complete flex-rigid higher-order unifier: it can bind an applied variable to a rigid prefix, as in `F(b) = G(a,b)`, but does not synthesize the abstraction needed for `F(a) = b`. C delegates broader solution enumeration to the CSU path; a cleaned API should name the single-MGU fragment explicitly or dispatch callers that need completeness directly to CSU enumeration.
+- `SubstComputeMatchHO` is documented as matching a prefix and returns an `int`, but the current implementation initializes the successful result to zero and changes it only to `MATCH_FAILED`; no positive remainder is produced. Either restore an explicit prefix-result path or make this a boolean complete matcher after compatibility consumers no longer depend on the historical signature.
+- The higher-order pattern fallback is guarded by `TermIsNonFOPattern` checks on the unreduced original inputs after the first HO MGU attempt fails. Preserve that order for compatibility until trace tests prove eta-reduced pattern detection is equivalent.
+- C uses signed `long` globals for `UnifAttempts` and `UnifSuccesses`; Rust uses feature-gated atomic signed counters so tests and future threaded callers can read them safely. Revisit the exact overflow and reset story only if compatibility diagnostics depend on very long-running process-global counter behavior.
+- `SubstComputeMatch` allocates and frees a 64-pointer `PLocalStack` for each call even though most matches need only a small number of pending pairs. Bounded HEN011 profiling found four inline Rust pairs faster than 2, 8, or 32; a later C implementation should benchmark smaller initial storage or reusable caller-owned jobs, with explicit rollback/reentry rules, instead of depending on allocator free-list reuse.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -109,10 +109,24 @@ Source files reviewed: `BASICS/clb_defines.h`.
 - Foundation code. Preserve allocation, container, assertion, and fatal-error conventions before trying to make the Rust version more idiomatic.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `COMCHAR` is compile-time selected: the native Linux reference build used by the Linode compatibility workflow does not define `UNIX_COMMENTS`, so C prints `%`-prefixed status, proof, resource, and statistics comments. Rust now uses that reference default for supported executable comment output; if a `UNIX_COMMENTS` C build becomes a supported target, expose the comment prefix as a deliberate compatibility mode rather than scattering literals through output call sites.
+- `MAX(x,y)` and `MIN(x,y)` evaluate each argument once through GNU statement expressions and return the right-hand temporary on ties because their comparisons are strict. Rust exposes explicit helpers preserving that tie behavior, including the float-like branch shape when a comparison is unordered.
+- `SWAP(x,y)` is a GNU-typed lvalue exchange macro. Rust exposes the same value exchange for same-typed values through a normal helper instead of carrying macro-like assignment conversions.
+- `ABS(x)` uses the plain expression `((x)>0?(x):-(x))`, so ordinary signed values map to their positive magnitude but `LONG_MIN` would overflow in C. Rust keeps the helper for ordinary `long` values and panics on the minimum signed value instead of importing undefined behavior.
+- `WriteStr` is a one-shot low-allocation descriptor write: it truncates at the first C-string NUL byte through `strlen`, returns the raw write result as `size_t`, and therefore maps failed writes to an unsigned maximum value. Rust exposes this through a safe wrapper around narrowly scoped platform C-runtime calls, including POSIX `write`, MSVC UCRT `_write`, and GNU/MinGW MSVCRT `_write`.
+- The `TSTPOUT` and `TSTPOUTFD` macros use the same logical status text but different comment-prefix spellings in the default build: `fprintf(..., COMCHAR, ...)` renders `%`, while direct `WriteStr(fd, COMCHAR ...)` writes `%%`. Rust now exposes helpers for both shapes.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- In the default build `COMCHAR` is the printf-escaped string `%%`, while `COMCHARRAW` is `%`. Most call sites pass `COMCHAR` through `fprintf` and produce one percent sign, but direct `WriteStr` call sites such as hard CPU-timeout reporting emit the doubled `%%` literally. Rust preserves both spellings for compatibility; after drop-in behavior is secured, consider replacing this with separate explicit formatted-output and direct-output comment-prefix constants.
+- `IntOrP` is a raw C union of `long` and `void*`, so generic containers can silently reinterpret the same word as either an integer tag or a pointer. Rust intentionally keeps a tagged enum at compatibility boundaries; after drop-in behavior is secured, prefer typed payload enums for each queue/tree/list role instead of carrying a generic union-shaped abstraction.
+- `MAX`, `MIN`, `CMP`, and `SWAP` depend on GNU statement expressions and `__typeof__` to evaluate arguments once. They avoid some macro side effects but still make control flow and type conversions invisible at call sites. Rust should keep explicit helper functions where useful and eventually replace broad macro-style use with local `Ord`/`max`/`min` code in non-compatibility layers.
+- `ABS` is not protected by the GNU statement-expression pattern, so an argument with side effects can be evaluated twice, and `LONG_MIN` negation overflows. Prefer a normal function for Rust call sites and keep the panic-on-minimum compatibility helper isolated where C macro behavior is being modeled.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

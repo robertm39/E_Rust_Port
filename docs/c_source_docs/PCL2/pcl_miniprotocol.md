@@ -94,7 +94,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for storage, ownership, and traversal equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_miniprotocol.h`, `PCL2/pcl_miniprotocol.c`.
 
@@ -115,4 +115,20 @@ Source files reviewed: `PCL2/pcl_miniprotocol.h`, `PCL2/pcl_miniprotocol.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/miniprotocol.rs`, covering protocol-owned term-bank initialization, id-indexed mini-step storage, decimal-digit-token protocol parsing (including zero), scanner-comment forwarding through explicit output-aware parsing, duplicate-id rejection, ordered PCL/TSTP rendering, recursive proof-precondition collection, fast/slow proof-step marking, bulk property mutation, extraction/deletion by id, and proof-clause printing with the C newline behavior.
+- Rust stores owned steps in a safe `Vec<Option<PclMiniStep>>` indexed by mini id instead of a `PDArray_p` of raw pointers. Both provide constant-time indexed access and retain `max_ident` as a historical high-water mark after extraction/deletion. Rust borrowing prevents aliases from surviving mutation, drops each live step exactly once, and lets a missing lookup return without C's incidental `PDArrayElementP` enlargement.
+- C's initial one-slot `PDArray` grows in blocks of 500,000 pointer slots as soon as id 1 is accessed. Rust grows geometrically with inserted ids, avoiding that fixed first expansion while retaining amortized insertion and direct-index lookup. Dense step values also avoid C's separate allocation per protocol entry.
+- Scanner-comment forwarding is owned explicitly by `parse_with_output`; `epclextract --fast-extract --forward-comments` routes through it and has executable-level coverage for comment ordering.
+
+### Change Later
+
+- `PCLMiniProtInsertStep` returns false only when C receives the exact pointer already stored; a distinct pointer with the same id violates an assertion. Rust ownership makes reinserting a still-stored object impossible, so direct insertion rejects an id collision without replacing the live step and protocol parsing reports the duplicate. Raw-pointer reinsertion remains tracked by `E_Rust_Port-j76.4.949`.
+- `PCLMiniProtParse` enters its parse loop only when the current token is `PosInt`, whose scanner meaning is a sequence of decimal digits and therefore includes zero, even though `PCLMiniStepParse` itself calls signed `ParseInt`. Rust preserves that exact gate: zero is parsed and negative input is left unconsumed. The naming/free-time contradiction remains tracked by `E_Rust_Port-j76.4.950` and `E_Rust_Port-j76.4.957`.
+- The C parser echoes token comments to `GlobalOut` when `ignore_comments` is false. Rust preserves the observable executable behavior through an explicit session output owner and avoids a process-global sink; any API reconsideration remains tracked by `E_Rust_Port-j76.4.951`.
+- `PCLMiniProtPrint` prints each stored mini step without adding separators or newlines, so adjacent rendered steps concatenate. Rust preserves that exact string shape; cleanup remains tracked by `E_Rust_Port-j76.4.952`.
+- Fast proof marking starts only from the contiguous suffix of extract-marked steps ending at `max_ident` and stops at the first gap or non-extract step. Rust preserves this shortcut; broader seeding remains tracked by `E_Rust_Port-j76.4.953` and executable-level `E_Rust_Port-j76.4.1133`.
+- `PCLMiniExprCollectPreconds` stores raw step pointers in a `PTree`. Rust instead deduplicates and sorts by mini id. Proof marking sets the visited property before expanding preconditions and observes only the final property set plus an order-independent empty-clause boolean, so pointer order is not semantic; future order-sensitive traversal remains tracked by `E_Rust_Port-j76.4.954`.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -76,7 +76,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for exact scanner lifecycle, source labels, file diagnostics, and CNF garbage-collection progress on 2026-07-17.
 
 Source files reviewed: `PROVER/eground.c`.
 
@@ -91,9 +91,32 @@ Source files reviewed: `PROVER/eground.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `--miniscope-limit` is parsed into `miniscope_limit`, its prose advertises a built-in default of 1000, and its no-argument value comes from `TFORM_MINISCOPE_LIMIT_STR` (`2147483648`), but `main()` passes the hard-coded value `1048576` to `FormulaSetCNF2`. Rust preserves all three conflicting surfaces; decide later whether a cleaned non-drop-in mode should make the option control the actual miniscope limit.
+- `--local-constraints` sets `constraints`, `local_constraints`, `ClausesHaveDisjointVariables=true`, and `ClausesHaveLocalVariables=false`, but `local_constraints` is not read later in this file. Rust now preserves the parser-visible variable policy with explicit `ClauseParseOptions`; revisit the dead boolean and global parser mutation once grounding compatibility is locked down.
+- `FormulaAndClauseSetParse()` owns TSTP wrapper problem-type setup before eground clausifies formulas: `thf(...)` records select higher-order parsing at the wrapper boundary and mixed FO/HO records are rejected through the global problem type. Rust preserves this by leaving the eground run unset until the shared parser sees records; a cleaned grounding API should pass dialect state explicitly.
+- `GroundSetPrint()` reaches TSTP clause rendering through `ClausePrint()` and the process-global `OutputFormat`/`problemType`, so THF inputs affect both progress and final ground-instance wrappers without an explicit parameter at the call site. Rust now threads the parsed problem type through the eground adapter; a cleaned C/Rust grounding API should make output format and dialect ordinary arguments.
+- `OpenGlobalOut(outname)` runs before the default `-` input is inserted and before any scanner is created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
+- `app_encode` is initialized but unused. Remove it only after the executable option surface and any historical scripts depending on it are audited.
+- DIMACS output goes through `GroundSetPrintDimacs`, which delegates non-empty non-unit clause literal printing to `ClausePrintDimacs`; that helper writes literal integers to `stdout` while writing only terminators to the passed `FILE* out`. This is surprising for `--output-file` and should be cleaned only outside drop-in compatibility mode.
+- Equational clauses are recoded into predicate literals after a warning, shifting equality semantics onto explicit equality axioms supplied by the user. Keep the warning/output order for compatibility, but consider a clearer user-facing mode after parity.
+- `--give-up` estimate-limit handling exits the whole process from inside the grounding helper after printing a failure line to `GlobalOut`, bypassing normal result, statistics, and resource-footer output. Rust preserves the executable behavior while keeping the library-level estimate outcome explicit; a cleaned C API should return this status to the caller instead of calling `exit()`. The unconstrained helper's `bool tmp` truncation makes positive limits inert, while constrained grounding retains the real per-clause estimate; both branches have exact archived-C cases.
+- The completion-status switch handles complete, low-memory, and timeout, then asserts on any unknown state. Release builds may not surface a helpful diagnostic for impossible states; a modernized path should use an explicit error or internal invariant check.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
+- The Rust wrapper parses supported normal input owners into a represented `FormulaSet` without eagerly locking TSTP input to first-order, accepts and validates `--miniscope-limit` while intentionally discarding it like C, runs `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` with C's hard-coded `1048576` miniscope limit and parsed definitional-CNF limit, then continues through the grounding pipeline while carrying the parsed problem type into TSTP progress and final ground-set output.
+- The wrapper preserves default stdin through `-` while labeling scanner tokens `<stdin>`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, `stat`-before-open named-input handling with two-line `SysError`-style scanner/output diagnostics, C `OutClose` wording on final flush failure, `--give-up` success-status failure exits, and the C DIMACS split between the configured output stream and raw stdout.
+- The executable wrapper now returns each `Diagnostic`'s C exit status. Syntax, usage, file, and input-semantic failures therefore exit 3, 5, 6, and 12 instead of the former Rust wrapper's undifferentiated status 1.
+- Verbose execution preserves C's ordered `OutOpen`, scanner `Opened`/`Closing`, negated-conjecture, individual term-GC start/reclaimed-count pairs, CNFization, and `OutClose` stderr messages. `--memory-limit=Auto` also preserves the source's byte count mislabeled as MB, and reduced memory limits render both `RLIMIT_DATA` and the historically mislabeled `RLIMIT_AS` descriptions while failed `RLIMIT_DATA` warnings stay masked.
+- The permanent matrix has 22 cases and is byte-for-byte exact against archived C, with zero mismatches and zero expected differences in `.artifacts/e-compare/20260717-021359-566837-tools/`. The DIMACS output-file case pins the source bug byte for byte: stdout receives `  4  6` with no terminator/newline, while the file receives `%`, `p cnf 6 1`, a bare ` 0`, and the completion line. Four compact non-unit cases cover exact LOP/TPTP/TSTP routing, paired give-up cases cover the inert unconstrained boolean estimate plus the constrained success-status failure exit, direct and nested selected-include cases cover the represented include path, and diagnostic cases pin scanner labels/lifecycle, CNF GC progress, and file failures.
+- CPU deadlines are cooperatively visible to grounding through the shared `TimeIsUp` state. Direct POSIX hard-limit termination, memory exhaustion, and forced `getrlimit`/`setrlimit` failures are host-dependent; Windows does not apply a CPU job limit because `STATUS_QUOTA_EXCEEDED` would terminate before C-shaped output. Exact diagnostic evidence is recorded in `experiments/2026-07-17-005-eground-diagnostic-parity/FINDINGS.md`, with the give-up audit in `experiments/2026-07-17-004-eground-give-up-parity/FINDINGS.md` and the earlier wrapper audit in `experiments/2026-07-16-047-eground-expanded-comparison/FINDINGS.md`.
 <!-- END MANUAL REVIEW: c_source_docs -->

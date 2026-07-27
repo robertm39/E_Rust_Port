@@ -1,0 +1,3 @@
+implementation,run,exit_code,status,wall_seconds,cpu_seconds,sampled_peak_kib,stdout_bytes,failed_allocation_bytes
+baseline,1,-1073740791,,49.621060,48.281250,1846676,0,402653184
+candidate,1,-1073740791,,52.821038,51.875000,1922316,0,786432

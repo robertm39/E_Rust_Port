@@ -1,0 +1,35 @@
+{
+  "contracts": {
+    "batch_regression_present": true,
+    "c_binder_permutation_pinned_in_owner_tests": true,
+    "clause_scope_clears_external_names": true,
+    "default_clause_scope_is_local_not_disjoint": true,
+    "enormalizer_regression_present": true,
+    "main_all_rules_proof_regression_present": true,
+    "main_app_encode_regression_present": true,
+    "main_print_regression_present": true
+  },
+  "main_case": {
+    "candidate_exit_code": 0,
+    "candidate_status": "Theorem",
+    "expected_mismatches": [],
+    "mismatches": [],
+    "name": "ALL_RULES.p",
+    "normalized_output_equal": true,
+    "reference_exit_code": 0,
+    "reference_status": "Theorem"
+  },
+  "manifests_equal": true,
+  "schema_version": 1,
+  "tool_case": {
+    "candidate_exit_code": 0,
+    "expected_mismatches": [],
+    "mismatches": [],
+    "name": "enormalizer/tstp-formula-target",
+    "normalized_stderr_equal": true,
+    "normalized_stdout_equal": true,
+    "reference_exit_code": 0,
+    "reference_mode": "fol"
+  },
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

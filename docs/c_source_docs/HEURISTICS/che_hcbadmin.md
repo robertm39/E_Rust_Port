@@ -98,6 +98,15 @@ Source files reviewed: `HEURISTICS/che_hcbadmin.h`, `HEURISTICS/che_hcbadmin.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `HCBAdminCell` keeps names and HCB pointers in parallel `PStack`s, and `HCBAdminFindHCB` scans backward. Duplicate names intentionally shadow earlier definitions; keep this redefinition behavior even if the Rust registry later gains map-style lookup.
+- `HeuristicParse` parses a non-empty parenthesized list of positive-step items. Each item accepts either `*` or `.` between the step count and WFCB specifier, so both `2*Weight` and `2.Weight` are valid strategy syntax.
+- `parse_single_wfcb_item` treats an identifier followed by `(` as an inline anonymous weight-function definition through `WeightFunDefParse`; an identifier followed by `=` becomes a named WFCB definition; a bare identifier is looked up in the WFCB admin. Parser cleanup should preserve these three cases.
+- `HeuristicDefParse` uses the name `Default` when the definition starts directly with `(`. `HeuristicDefListParse` returns the existing stack size if it parses nothing, but the zero-based index of the last parsed definition otherwise; Rust preserves that mixed return value.
+- `HCBAdminFree` owns and frees stored HCBs and duplicated names, but each HCB still only stores admin-owned WFCB references. Rust mirrors this with owned `HcbCell`s containing WFCB admin handles.
+- C forwards `OCB_p` and `ProofState_p` through every HCB parser into `WeightFunDefParse`, and some WFCBs retain those raw pointers for later scoring. Rust's completed owner boundary passes clause axioms, formula axioms, and signature through `WeightParseContext` during HCB/WFCB construction, then lends the live mutable OCB and proof-state term bank to banked evaluation callbacks. This avoids a movable `ProofControl`/`ProofState` self-reference while preserving the parse-time data and evaluation-time owner identity. The production executable supplies the full context through `proof_control_init_with_formula_axioms`; inline, named, proof-state-backed, axiom-derived, and ordering-dependent paths are covered by unit and byte-exact executable regressions.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -84,6 +84,16 @@ Source files reviewed: `PROVER/e_version.h`.
 - Executable entry-point code. These files define command-line compatibility and compose the libraries into user-visible tools.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
+### Rust Port Notes
+
+- `src/prover/version.rs` carries the reviewed `PVERSION`, nickname, URL, contact addresses, and static upstream commit id used by C `VERSION`/`ECOMMITID` output.
+
+### Change Later
+
+- C `VERSION` is compile-time shaped: `ENABLE_LFHO` appends `-ho`, and non-`NDEBUG` builds append `-DEBUG`. Rust currently keeps the reviewed release-compatible `3.3.5` string; if debug or higher-order build variants become user-visible compatibility targets, expose those suffixes deliberately instead of hard-coding one version string.
+- `E_FOOTER` is a long preprocessor string shared by many help banners and includes historical wording, the old FSF postal address, and typo-level text such as "send to". Preserve it for byte-compatible help output, but a modernized non-compatibility help layer should centralize current contact/licensing text instead of copying this macro shape.
+- `E_URL` still uses `http://www.eprover.org`. Keep it while matching C help/version text; switch to a current URL only behind an explicit compatibility decision.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

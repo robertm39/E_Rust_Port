@@ -80,7 +80,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware higher-order unification on 2026-07-10 and branching-CSU trace coverage on 2026-07-15.
 
 Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 
@@ -93,6 +93,25 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status
+
+- `src/clauses/factor.rs` ports first-order ordered factor candidate enumeration (`ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`) and single ordered-factor construction (`ComputeOrderedFactor`).
+- The port preserves C's pair ordering, second-literal side retry, caller-owned `freshvars` reset, bank-aware complete-MGU equation unification, bank-backed post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- `src/clauses/factor.rs` also ports equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and `ComputeEqualityFactor` for both first-order complete-MGU candidates and higher-order CSU enumeration through the shared `CsuIterator`.
+- The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, caller-owned `freshvars` reuse without an equality-factor-local reset, bank-backed `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, lambda normalization after condition insertion, resolved/duplicate cleanup, and multi-CSU result-stack shape.
+- The all-factor wrappers now attach `DCOrderedFactor` / ordinary or higher-order `DCEqFactor` derivation entries with the source clause reference and expose opt-in represented `DocClauseCreationDefault(..., inf_factor/inf_efactor, ...)` output.
+- The branching-CSU trace in `experiments/2026-07-15-001-equality-factor-multicsu/` disables the pattern/fixpoint oracles and enables one imitation plus one projection for a single equality-factor candidate. C and Rust emit the same projection-first/imitation-second clauses and proof records, both report two factorizations, and the exact native-Linux 200-run batch median is within `1.044x` of C.
+
+### Change Later
+
+- `ComputeOrderedFactor` temporarily calls `EqnSwapSidesSimple` on the source `pos2->literal` and swaps it back after directed unification. Rust uses a local clone for the swapped view; a future C cleanup could avoid mutating the input clause during a failed or successful factor attempt.
+- Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars`, but only `ComputeOrderedFactor` resets its counts locally; `ComputeEqualityFactor` consumes the caller's current counts. Rust mirrors this through proof-control freshvars-aware wrappers while standalone helpers keep scratch normalization banks; a future C cleanup could expose the reset policy explicitly instead of relying on caller knowledge.
+- Equality factoring pushes generated clauses on a stack for CSU enumeration and the control wrapper later pops them, so multi-CSU insertion order is reversed. Rust mirrors that reversal with a temporary vector; a cleaned API could make ordering explicit once reference traces prove it is safe.
+- C assigns `subst_is_ho` from `SubstHasHOBinding` for each accepted equality factor rather than OR-ing it per generated clause. The control wrapper then maps the last accepted value for that candidate into every popped `DCEqFactor` derivation entry. Rust mirrors this for compatibility, but per-factor derivation metadata would be cleaner.
+- `ComputeEqualityFactor` normalizes the copied literal list except for `pos2->literal`, then copies all literals except `pos1->literal` and inserts a new negative condition. This asymmetry is compatibility-relevant and should be kept visible when refactoring the Rust builder.
+- `ComputeEqualityFactor` lambda-normalizes the copied literal list after inserting the generated condition and before false-literal and duplicate cleanup. Rust preserves this ordering through `EqnList::lambda_normalize`, including `EqnMap` truth/polarity side effects if normalization exposes `$true` or `$false`.
+- C stores the parent as a raw `Clause_p` in the derivation stack. Rust records a compact clause reference for now; replace it with a stable proof-state handle before derivation traversal or proof printing depends on parent object identity.
 
 ### Porting Focus
 

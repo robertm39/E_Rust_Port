@@ -1,0 +1,447 @@
+{
+  "c_variant": "tfidf_factor_initialized",
+  "case_count": 24,
+  "comparisons": [
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      },
+      "case": "relative:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "prefix:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tfidf:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "levenshtein:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tree:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      },
+      "case": "structural:conjecture_terms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      },
+      "case": "relative:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "prefix:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tfidf:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "levenshtein:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tree:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      },
+      "case": "structural:conjecture_subterms",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      },
+      "case": "relative:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "prefix:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tfidf:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "levenshtein:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tree:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      },
+      "case": "structural:conjecture_subterms_top_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      },
+      "case": "relative:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 235,
+        "stdout_sha256": "80DC952A3397F49D2426FF6590659E558A261CE3CF6BD8D6D5D248FE9CD76F9C"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "prefix:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tfidf:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "levenshtein:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      },
+      "case": "tree:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 254,
+        "stdout_sha256": "DEF7B93A9852D888E860DD4F2BC4F5A68293BA426C2DD85D404C78A9F0933792"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      },
+      "case": "structural:conjecture_subterms_all_gens",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 240,
+        "stdout_sha256": "EF067B9237F38BCAD766DFC3896A1BFB8EB5C90A91CE662B641171DF6076AAB2"
+      }
+    }
+  ],
+  "display_args": [
+    "--expert-heuristic=$DEFINITION",
+    "--processed-clauses-limit=1",
+    "--output-level=1",
+    "$FIXTURE"
+  ],
+  "exact_count": 24,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}

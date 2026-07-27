@@ -206,7 +206,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled with the Rust port on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 
@@ -221,6 +221,26 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- `EqnListPrint` has no format state of its own: it prints nothing for an empty list, writes the first literal without a leading separator, then writes the caller's separator before each remaining literal while forwarding `negated` and `fullterms` directly to `EqnPrint`. Rust preserves this exact list assembly over an owned vector.
+- `EqnListPrintDeref` uses the same no-leading-separator loop and forwards one `DerefType` to every literal. Rust preserves the separator behavior while keeping dereference expansion explicit in the literal helper.
+- `EqnListTSTPPrint` reuses the same first-literal/no-leading-separator loop but always delegates to `EqnTSTPPrint` without a negation argument. Rust keeps the separator behavior and forwards explicit `fullterms` and oriented-output choices to the bank-explicit TSTP literal writer.
+- `EqnListParse` first checks for a format-specific literal start and returns an empty list without consuming input if none is present; otherwise it parses the first literal and then consumes the caller-supplied separator before each following literal. Rust preserves that control flow and delegates each literal side to the banked `TBTermParse`-equivalent parser, including distinct integer, rational, float, and object terms.
+- `EqnListToStack` and `EqnListSplitToStacks` push the existing literal pointers without copying cells, while `EqnListFromStack` consumes the stack and relinks those cells in their original order. Rust exposes borrowed `PStack<&Eqn>` views for the non-owning operations and a separate consuming `into_stack`/`from_stack` path for ownership transfer, so safe borrowing replaces raw pointers without cloning literal cells.
+- `EqnListMaximalLiterals` temporarily extracts and relinks literals while using a stack archive to restore the original list order. Rust preserves the maximal and strictly-maximal flag results through an index-based active-candidate list, making the temporary C relinking unobservable without requiring intrusive literal handles.
+- `EqnListMapTerms` delegates every literal to `EqnMap`, so mapped `$false` sides become `$true` with a polarity flip, `$true` is swapped away from the left side, and the equational-literal property is recomputed. Rust preserves this in `Eqn::map_terms`, and `EqnListLambdaNormalize` is now represented by `EqnList::lambda_normalize` over `LambdaNormalizeDB`.
+
+### Rust Port Status Notes
+
+- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, no-copy borrowed stack views, consuming stack conversion, property mutation/querying, term-existence checks, banked list parsing, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking plus C's direct maximal/strict-maximal query predicates over already marked literals, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering.
+
+### Change Later
+
+- `EqnMap` clears `EPMaxIsUpToDate` and `EPIsOriented` only when the final left side differs from the old left side, even if the right side changed. Rust preserves that invalidation rule through both generic term mapping and lambda normalization; a cleaned literal-mutation API should decide whether right-side-only rewrites should also invalidate ordering metadata after compatibility tests cover the affected callers.
+- `EqnListLambdaNormalize` obtains the term bank from the first linked literal and is a no-op for `NULL`, which hides the bank ownership boundary inside list nodes. Rust takes the active `TermBank` explicitly; future call-site integration should keep that owner explicit rather than recreating C's implicit list-head bank lookup.
+- `EqnLongListIsTrivial` inherits the off-by-one behavior of `PStackBinSearch`: its exclusive upper bound is updated to `i-1`, and an unsuccessful search returns `lower+1`. The resulting two-stack search can skip complementary literals and admit a tautology once a clause exceeds `EQN_LIST_LONG_LIMIT` (15 literals); `GEO288+1.p` clause 3656 is a concrete 16-literal example. Rust preserves this false negative because delayed deletion changes the HCB schedule, but C should later use a conventional lower-bound search and add threshold-focused tests.
 
 ### Porting Focus
 

@@ -143,6 +143,12 @@ Source files reviewed: `HEURISTICS/che_varweights.h`, `HEURISTICS/che_varweights
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `TPTPTypeWeightCompute`, `SigWeightCompute`, `ProofWeightCompute`, `DepthWeightCompute`, `WeightLessDepthCompute`, `NLWeightCompute`, `PNRefinedWeightCompute`, and `SymTypeWeightCompute` all call `ClauseCondMarkMaximalTerms(data->ocb, clause)` before applying their specific scoring formulas. Rust preserves this with eight banked WFCB initializers and matching mark-then-score callbacks that borrow the active proof-control `OCB`, mutable owner bank, and mutable clause. A proof-control regression now pins parsed-HCB dispatch on an initially unmarked clause, and all eight executable evaluators are byte-exact against C in [`experiments/2026-07-17-064-varweight-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-064-varweight-owner-context/FINDINGS.md).
+- The immutable callbacks are compatibility adapters for direct callers with an already-marked clause. The production audit finds no immutable HCB/WFCB evaluation call outside adapter modules, so they neither hide a copied bank nor bypass C's maximality preparation in proof search.
+
+### Change Later
+
+- All production heuristic evaluation sites now pass the active `OCB`, mutable owner bank, and mutable clause. Removing the remaining immutable already-marked-clause adapters is optional public-API simplification after compatibility, not a proof-search ownership gap; if undertaken, retain the banked mark-then-score formulas as the canonical path.
 
 ### Porting Focus
 

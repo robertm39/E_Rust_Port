@@ -1,0 +1,5 @@
+% Rust accepts first-order FOOL term-valued lets here. The C 3.3.5 reference
+% rejects the individual-valued local-definition/body parse.
+tff(a_type, type, a: $i).
+tff(c_type, type, c: $i).
+fof(source, axiom, c = $let(f: $i > $i, f(X) := X, f(a))).

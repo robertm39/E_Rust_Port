@@ -1,0 +1,15 @@
+{
+  "content_hashes_verified": 3,
+  "decision_count": 3,
+  "decision_digest": "06630c51a7ad918eb6f2c2836343933462c51daa0ab0f68bdce11812d507b3a1",
+  "evidence_checks": {
+    "c_help_retains_spacer_runs": true,
+    "c_tree_sort_is_replaced_by_direct_entry_sort": true,
+    "mixed_signature_stream_is_confined_to_executable_boundary": true,
+    "permanent_matrix_covers_help_data_and_failure": true,
+    "rust_help_names_and_pins_all_spacer_runs": true
+  },
+  "schema_version": 1,
+  "source_digest": "87a1df55fadb015757104d21c5a086cb26d254da413b4fa3820a39ce78b3f1c7",
+  "source_file_count": 7
+}

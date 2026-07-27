@@ -1,0 +1,218 @@
+{
+  "accepted": true,
+  "c_owner_files": [
+    {
+      "mentions": 13,
+      "path": "eprover/BASICS/clb_intmap.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/BASICS/clb_intmap.h"
+    },
+    {
+      "mentions": 15,
+      "path": "eprover/CLAUSES/ccl_bce.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CLAUSES/ccl_clausepos_tree.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CLAUSES/ccl_clausepos_tree.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/CLAUSES/ccl_def_handling.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CLAUSES/ccl_def_handling.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/CLAUSES/ccl_derivation.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CLAUSES/ccl_derivation.h"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CLAUSES/ccl_eqnlist.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CLAUSES/ccl_eqnlist.h"
+    },
+    {
+      "mentions": 12,
+      "path": "eprover/CLAUSES/ccl_formulafunc.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CLAUSES/ccl_formulafunc.h"
+    },
+    {
+      "mentions": 11,
+      "path": "eprover/CLAUSES/ccl_gd_transformation.c"
+    },
+    {
+      "mentions": 5,
+      "path": "eprover/CONTROL/cco_gproc_ctrl.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CONTROL/cco_gproc_ctrl.h"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CONTROL/cco_ho_inferences.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CONTROL/cco_paramodulation.c"
+    },
+    {
+      "mentions": 6,
+      "path": "eprover/CONTROL/cco_proc_ctrl.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/CONTROL/cco_proc_ctrl.h"
+    },
+    {
+      "mentions": 3,
+      "path": "eprover/HEURISTICS/che_normsubst.h"
+    },
+    {
+      "mentions": 7,
+      "path": "eprover/HEURISTICS/che_termweight.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/HEURISTICS/che_termweight.h"
+    },
+    {
+      "mentions": 14,
+      "path": "eprover/HEURISTICS/che_termweights.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/HEURISTICS/che_termweights.h"
+    },
+    {
+      "mentions": 3,
+      "path": "eprover/HEURISTICS/che_tfidfweight.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/HEURISTICS/che_tfidfweight.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/LEARN/cle_annotations.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_annotations.h"
+    },
+    {
+      "mentions": 14,
+      "path": "eprover/LEARN/cle_annoterms.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_annoterms.h"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_classification.c"
+    },
+    {
+      "mentions": 8,
+      "path": "eprover/LEARN/cle_examplerep.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_examplerep.h"
+    },
+    {
+      "mentions": 11,
+      "path": "eprover/LEARN/cle_flatannoterms.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_flatannoterms.h"
+    },
+    {
+      "mentions": 6,
+      "path": "eprover/LEARN/cle_indexfunctions.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_indexfunctions.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/LEARN/cle_tsm.c"
+    },
+    {
+      "mentions": 1,
+      "path": "eprover/LEARN/cle_tsmio.c"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/TERMS/cte_signature.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/TERMS/cte_signature.h"
+    },
+    {
+      "mentions": 4,
+      "path": "eprover/TERMS/cte_termbanks.c"
+    },
+    {
+      "mentions": 12,
+      "path": "eprover/TERMS/cte_termfunc.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/TERMS/cte_termfunc.h"
+    }
+  ],
+  "checks": {
+    "c_owner_inventory_is_nonempty": true,
+    "debug_print_walks_topology_and_missing_children": true,
+    "direct_rust_owner_inventory_matches": true,
+    "limited_traversal_uses_tree_path_not_linear_filter": true,
+    "primary_find_and_extract_splay_on_misses": true,
+    "read_only_binary_and_max_queries_are_explicit": true,
+    "safe_index_linked_splay_representation": true,
+    "standard_tree_and_root_marker_are_removed": true
+  },
+  "direct_rust_owners": [
+    {
+      "path": "src/heuristics/normsubst.rs",
+      "type_mentions": 1
+    },
+    {
+      "path": "src/heuristics/termweights.rs",
+      "type_mentions": 4
+    },
+    {
+      "path": "src/learn/annoterms.rs",
+      "type_mentions": 2
+    },
+    {
+      "path": "src/learn/examplerep.rs",
+      "type_mentions": 2
+    },
+    {
+      "path": "src/learn/flatannoterms.rs",
+      "type_mentions": 1
+    }
+  ],
+  "schema_version": 1
+}

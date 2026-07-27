@@ -92,9 +92,20 @@ Source files reviewed: `ORDERINGS/cto_kbo.h`, `ORDERINGS/cto_kbo.c`.
 - Ordering code. Comparison outcomes, caching, precedence, and weight handling must match the C implementation because they drive simplification and inference eligibility.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- `KBOVarGreater`'s source comment describes a multiset-subset test in the wrong direction; the implementation actually accepts the `Var(s)-Var(t) >= 0` condition required for `s > t`.
+- `KBOCompare` asserts the global problem type is not higher-order, but the optimized release executable compiles that assertion out and traverses explicit higher-order term cells with the ordinary symbol/argument mechanics. Rust matches that release behavior when a user explicitly selects classic KBO for a higher-order problem; KBO6 remains the dedicated LFHO algorithm rather than an implicit replacement for the requested ordering.
+- `kbogtrnew` and `KBOCompare` both defer the whole-term variable-condition check until a weight, precedence, or lexicographic path has already found a possible strict result. Preserve that mutation-free but repeated var-hash behavior before attempting linearization.
+- `DEREF_ONCE` reaches bound terms before classic comparison in both directions, and proof control preserves an explicitly selected classic-KBO OCB even for a higher-order problem. The source audit and byte-exact FOL/optimized-THF executable checks are recorded in [`experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md`](../../../experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md).
+- Term weights are accumulated in signed `long` without overflow handling. Treat this as a portability hazard to revisit after compatibility and resource-limit policy are established.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- `KBOVarGreater`'s comment describes `vars(s) subseteq vars(t)`, while the implementation accepts the `Var(s)-Var(t) >= 0` balance needed for `s > t`. Rust follows the implementation; clean up naming or comments only after ordering reference tests make the intended public contract unambiguous.
+- Classic KBO asserts against higher-order problem mode in assertion-enabled C builds, while optimized C accepts the explicit CLI combination and treats DB/lambda/phony cells through the legacy recursive mechanics. Rust preserves that release-compatible surface. A later API should distinguish assertion-build diagnostics from optimized executable compatibility without silently substituting KBO6.
+- Classic KBO accumulates term weights with unchecked C `long` arithmetic. Rust currently mirrors this hot path with ordinary `i64` addition; revisit checked, saturating, or wrapping policy only after resource-limit and performance compatibility tests cover large weighted terms.
 
 ### Porting Focus
 

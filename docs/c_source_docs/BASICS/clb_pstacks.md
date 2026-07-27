@@ -162,10 +162,21 @@ Source files reviewed: `BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PStackFindP` performs raw pointer identity comparison, while `PStackFindInt` compares integer payload values. Rust keeps these as distinct helpers so borrowed-object searches do not accidentally become structural equality checks.
+- `PStackTop`, `PStackTopAddr`, `PStackBelowTop`, `PStackPop`, `PStackElement`, `PStackElementRef`, `PStackDiscardTop`, and `PStackDiscardElement` assert their non-empty/range preconditions before reading or mutating the backing stack. Rust compatibility-shaped methods keep those as panics rather than optional access, while retaining a separate option-returning drain helper for Rust-owned control flow.
+- `PStackGetTopSP` is a signed macro returning `current - 1`, so an empty stack reports `-1`; it is not an optional value in C.
+- `PStackPrintInt` and `PStackPrintP` are thin loops over the live stack pointer that pass each payload to caller-supplied `fprintf` formats. The current C tree only calls `PStackPrintInt` with `"%4ld."`; Rust ports that concrete integer rendering, provides a `%p`-shaped pointer-address renderer for pointer payloads, and exposes a safe element-writer hook for other typed renderers.
+- `PStackAlloc` reserves 128 `IntOrP` entries, so the C allocation is 128 pointer-sized words regardless of the logical payload. Rust `PStack<T>` preserves the logical 128-entry growth boundary but normally limits its initial physical capacity to the number of wide typed entries that fit in the same byte count. Clause derivation stacks start at the six-entry occupancy assumed by C's `PSTACK_AVG_MEM`; formula derivation stacks follow `WFormulaPushDerivation`'s explicit `PStackVarAlloc(3)` element count and three-to-six growth point. Typed `Vec` storage avoids hundreds of megabytes of eager wide derivation metadata on large generated-clause queues.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `PStack` mixes assertion-backed operations (`Top`, `Pop`, indexed access, and discard) with callers that often conceptually want checked draining. Rust keeps both shapes represented; future Rust-only helpers should use explicit `try_` names so optional control flow is not confused with the original stack contract.
+- The C print helpers accept arbitrary `fprintf` format strings for integer and pointer payloads. Rust intentionally avoids a generic printf parser for now because checked call sites only require the `"%4ld."` integer format and the pointer helper only covers `%p`-style address rendering; add a small audited compatibility parser later if more C-format call sites become reachable.
+- `PSTACK_DEFAULT_SIZE` eagerly allocates 128 pointer words even though common clause derivation stacks contain only two or three entries, while `PSTACK_AVG_MEM` budgets only six entries in `CLAUSECELL_MEM`; Rust uses that estimate for clause derivations while retaining the C logical growth boundary. Formula derivations instead use the source's explicit three-entry allocation. Both implementations should eventually benchmark a small inline buffer or demand-grown clause derivation store, and C's aggregate memory accounting should be reconciled with its actual eager allocation.
 <!-- END MANUAL REVIEW: c_source_docs -->

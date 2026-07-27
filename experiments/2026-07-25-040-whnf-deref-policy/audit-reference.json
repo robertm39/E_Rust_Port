@@ -1,0 +1,32 @@
+{
+  "checks": {
+    "c_subst_selects_whnf_for_ho": true,
+    "c_tb_insert_opt_selects_whnf_for_ho_always": true,
+    "clause_and_formula_collection_use_bank_aware_normalization": true,
+    "eqn_and_eqnlist_expose_bank_aware_normalization": true,
+    "paramodulation_uses_bank_aware_normalization": true,
+    "resolution_and_factoring_use_bank_aware_normalization": true,
+    "rust_subst_accepts_explicit_bank_and_problem_type": true,
+    "rust_subst_has_ho_beta_regression": true,
+    "rust_subst_retains_fo_fast_path": true,
+    "rust_tb_insert_opt_has_ho_beta_regression": true,
+    "rust_tb_insert_opt_retains_unshared_ground_safety": true,
+    "rust_tb_insert_opt_uses_c_policy": true,
+    "temporary_bindings_are_backtracked_on_errors": true
+  },
+  "passed": 13,
+  "schema_version": 1,
+  "source_digest": "e575ccfe38ea03da7283b4bfb9b35b29151604b3567c6c5dd49249989c8aa609",
+  "source_files": [
+    "src/terms/subst.rs",
+    "src/terms/termbanks.rs",
+    "src/clauses/eqn.rs",
+    "src/clauses/eqnlist.rs",
+    "src/clauses/clause.rs",
+    "src/clauses/clausefunc.rs",
+    "src/clauses/eqnresolution.rs",
+    "src/clauses/factor.rs",
+    "src/clauses/paramodulation.rs"
+  ],
+  "total": 13
+}

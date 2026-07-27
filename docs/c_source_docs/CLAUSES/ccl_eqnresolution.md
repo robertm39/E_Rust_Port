@@ -72,7 +72,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for multi-CSU higher-order trace coverage on 2026-07-15; reconciled with an eligible branching-CSU regression on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution.c`.
 
@@ -84,6 +84,25 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- Rust now ports the single-result `ComputeEqRes` MGU path used by destructive equality resolution through bank-aware `SubstMguComplete`, including higher-order arrow-variable and applied-variable rigid-prefix bindings plus `SubstHasHOBinding` propagation to higher-order `DCDesEqRes`.
+- Rust now ports `ComputeAllEqnResolvents` generation over the higher-order CSU iterator in higher-order mode, including C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, `EqnListLambdaNormalize` before false-literal and duplicate cleanup, negative-literal iteration with an explicit maximal-literal filter, C stack-pop insertion order, aggregate `subst_is_ho` propagation to higher-order `DCEqRes`, proof-state-owned `freshvars` reuse for proof-control generation, and insertion into a caller-owned clause set.
+- The all-resolvent wrapper and destructive variable-normalization wrapper expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
+- Proof-control destructive equality-resolution normalization now also routes the proof-state-owned `freshvars` bank through the helper path.
+- The branching-CSU trace in `experiments/2026-07-15-002-equality-resolution-multicsu/` verifies C/Rust maximal-literal eligibility, zero equality resolvents, five total generated clauses, unchanged two-factor proof order, and a `1.078x` Rust/C median for seven alternating native-Linux 200-run batches. Production Rust now threads the parsed higher-order problem type into ordering creation so C's higher-order `set_maximal_0` skip remains active.
+- The eligible branching regression in `experiments/2026-07-17-025-equality-resolution-branching-csu/` resolves `F(a)!=a` while retaining `F(b)=e`, producing distinct projection (`b=e`) and imitation (`a=e`) resolvents. It pins C's CSU-result stack reversal, consecutive proof-documentation order, and aggregate higher-order derivation flag. The prepared C/Rust executable trace could not run in the reconciliation session because that Windows user exposed no WSL distribution; the direct C executable comparison remains reproducible through `trace.sh`, while the source-shaped Rust regression covers the previously missing enumerating branch.
+
+### Change Later
+
+- `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust's proof-control paths now pass the proof-state-owned paired `freshvars` bank and reset variable counts at the C `ComputeEqRes` boundary; standalone helper entry points still use a scratch fresh-normalization bank so isolated callers do not need a proof-state owner. Keep that split visible until all inference callers have stable proof-session ownership.
+- `build_resolvent` normalizes copied resolvent literals before removing false and duplicate literals, so DB-lambda beta/eta reduction can affect which literals are cleaned up and can trigger `EqnMap` truth/polarity side effects. Rust preserves that ordering explicitly through `EqnList::lambda_normalize`.
+- `EqResOnMaximalLiteralsOnly` is a mutable C global controlling the public literal iterators. Rust exposes the default-filter behavior as an explicit boolean argument for now; revisit the API once option/global-state ownership is centralized.
+- C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust separates these into single-resolvent and all-resolvent helpers so callers do not depend on a null-stack mode switch.
+- In the higher-order path, C pushes each CSU resolvent onto `res_cls` and `ComputeAllEqnResolvents` later pops that stack, reversing CSU enumeration order before insertion. Rust mirrors this with a temporary vector and `pop`; preserve or intentionally revise the reversal only with proof-output trace data.
+- C ORs `subst_is_ho` across all CSU results for one selected literal before derivation entries are pushed, so one higher-order binding marks every popped resolvent from that literal as higher-order. Rust mirrors that aggregate flag; a cleaned internal API could track the flag per resolvent after drop-in proof compatibility is secured.
+- C stores generated-resolvent parent pointers in the derivation stack. Rust records compact clause references in `DCEqRes` entries; replace them with stable handles before proof reconstruction traverses parent clauses.
 
 ### Porting Focus
 

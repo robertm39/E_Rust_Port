@@ -1,0 +1,35 @@
+{
+  "all_namespace_records_closed": true,
+  "checks": {
+    "clauses_reconciliation_is_exact": true,
+    "compatibility_milestone_is_closed": true,
+    "detailed_change_later_epic_is_closed": true,
+    "final_full_lifecycle_is_zero_unexpected": true,
+    "status_ledger_records_compatibility_and_final_reconciliation": true
+  },
+  "descendant_count": 2175,
+  "direct_root_child_count": 7,
+  "namespace_count": 2176,
+  "namespace_digest": "576a6b6e5a16348d186122a8c0cd9a8501ef1e8b00d7109ae1e0d74971951cae",
+  "namespace_status_counts": {
+    "closed": 2176
+  },
+  "parent_child_counts": {
+    "E_Rust_Port-j76.1": 47,
+    "E_Rust_Port-j76.2": 140,
+    "E_Rust_Port-j76.3": 649,
+    "E_Rust_Port-j76.4": 1327,
+    "E_Rust_Port-j76.5": 5
+  },
+  "parent_nonclosed_counts": {
+    "E_Rust_Port-j76.1": 0,
+    "E_Rust_Port-j76.2": 0,
+    "E_Rust_Port-j76.3": 0,
+    "E_Rust_Port-j76.4": 0,
+    "E_Rust_Port-j76.5": 0
+  },
+  "root_close_reason": "All 2,175 descendant records in the migrated port namespace are closed. Pending, known-gap, summarized revisit, detailed Change Later, quality-policy, and compatibility/performance owners are evidence-backed; the maintained 50-case main and 216-case tool matrices have zero unexpected differences and the main prover is 1.0801753448x C.",
+  "schema_version": 1,
+  "source_digest": "ccae67bb075750e9ffa1f6efd92453622df76350d5a50d903a84047e1352407a",
+  "source_file_count": 11
+}

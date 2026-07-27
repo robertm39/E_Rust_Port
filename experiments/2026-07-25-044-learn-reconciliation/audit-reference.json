@@ -1,0 +1,16 @@
+{
+  "content_hashes_verified": 5,
+  "decision_count": 5,
+  "decision_digest": "411eb1129a35dc152df3c22b34fdc0467e2e7f7368e90735ac50c3341f741381",
+  "evidence_checks": {
+    "duplicate_partial_insert_is_preserved_and_tested": true,
+    "flatten_zero_result_is_documented_and_tested": true,
+    "latest_full_validation_covers_learn_paths": true,
+    "parser_and_destination_term_ownership_is_explicit_and_tested": true,
+    "source_count_cast_and_input_domain_are_explicit": true,
+    "user_facing_kb_tools_reject_duplicate_names_first": true
+  },
+  "schema_version": 1,
+  "source_digest": "44ffd33b2c00682175a0b2d8ebd4ea9a58ef4546bf97e105bd8558bdc66000da",
+  "source_file_count": 12
+}

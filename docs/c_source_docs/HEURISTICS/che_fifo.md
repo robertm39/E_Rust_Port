@@ -86,6 +86,18 @@ Source files reviewed: `HEURISTICS/che_fifo.h`, `HEURISTICS/che_fifo.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `FIFOEvalCompute` ignores the clause pointer and increments the mutable double counter before returning it, so the first computed value is `1.0`. Rust mirrors this with `FifoEvaluator` state and WFCB-backed evaluation.
+
+### Rust Port Status Notes
+
+- `src/heuristics/fifo.rs` ports FIFO evaluator allocation, stateful compute behavior, WFCB initialization, priority-function parsing inside brackets, and the no-op exit hook over owned Rust state.
+
+### Change Later
+
+- C heap-allocates a single `double` for the FIFO counter and frees it through a callback even though the state is just one scalar. Rust stores the scalar directly inside the typed evaluator; keep that safer ownership shape unless a future C-ABI compatibility layer needs callback-owned opaque data.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

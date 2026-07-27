@@ -1,0 +1,7 @@
+"implementation","run","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"baseline","1","0","Unsatisfiable","4.52321","4.515625","247024","10344",""
+"candidate","1","0","Unsatisfiable","4.753156","4.640625","239608","10344",""
+"candidate","2","0","Unsatisfiable","3.57014","3.546875","239140","10344",""
+"baseline","2","0","Unsatisfiable","3.485457","3.453125","247680","10344",""
+"baseline","3","0","Unsatisfiable","3.563106","3.5","247404","10344",""
+"candidate","3","0","Unsatisfiable","3.559921","3.53125","239396","10344",""

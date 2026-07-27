@@ -81,6 +81,24 @@ Source files reviewed: `PROVER/ekb_delete.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- The user-visible options are `-h`/`--help`, `--version`, `-v`/`--verbose[=level]`, and `-k`/`--knowledge-base=<path>`. `OPT_NAME` appears in the enum and switch but has no option-table entry, so it is not reachable from the command line.
+- The executable reads and rewrites only `problems` and `clausepatterns`; existing `description`, `signature`, and stored example files other than `FILES/<name>` are not inspected or rewritten during deletion.
+- C removes annotations and the proof-example entry in memory before calling `FileRemove` on `KBFileName(kb_name, "FILES/") + ex_name`, then writes `clausepatterns` before `problems`. If file removal fails, the fatal error happens before either metadata file is rewritten.
+- `FileRemove` prints its verbose progress through the generic file helper and reports unlink failure with two diagnostics: one for `Cannot remove file <path>` and then a generic temporary-file message.
+
+### Rust Port Notes
+
+- Rust ports this executable as `src/prover/ekb_delete.rs` with a thin `src/bin/ekb_delete.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, one-argument validation, unreachable `OPT_NAME` omission, read/remove/write order, and C-shaped KB output formatting.
+- Filesystem tests cover deletion of the selected `FILES/<name>` payload, retention of unrelated stored examples, problem-list rewriting, annotation removal by source id, missing-example rejection before file removal, help/version text, and verbose progress output.
+
+### Change Later
+
+- Consider making KB deletion transactional once compatibility is established. The C flow mutates in-memory metadata first, removes the example file next, then rewrites metadata; a crash or fatal I/O error can leave stale metadata or partially updated files depending on where it occurs.
+- Replace the generic `FileRemove` temporary-file wording for non-temporary KB files in a modernized mode. The current second diagnostic says "temporary file" even when deleting a stored problem file.
+- Remove or wire up the dead `OPT_NAME` path if the command-line surface is ever cleaned; for compatibility it should stay invisible.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -137,7 +137,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for vector/packed-clause ownership separation on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_freqvectors.h`, `CLAUSES/ccl_freqvectors.c`.
 
@@ -152,6 +152,20 @@ Source files reviewed: `CLAUSES/ccl_freqvectors.h`, `CLAUSES/ccl_freqvectors.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- C aliases `FreqVector_p` and `FVPackedClause_p` to one struct whose clause field is described as an unprotected reference. Ordinary `FreqVectorFree` never frees that clause, while `FVPackedClauseFreeReal` does and `FVUnpackClause` transfers it before freeing the vector shell. Rust makes the destructor contract structural: `FreqVector` owns only coordinates plus an optional numeric identity snapshot, while the distinct non-`Clone` `FvPackedClause` always owns one `Clause` and transfers it through `into_clause`/`fv_unpack_clause`.
+- Computed vectors never retain a relocatable clause reference. Compatibility-facing LOP/TPTP/TSTP rendering borrows the current clause explicitly; identifier-only debug output remains usable after the source clause is dropped without becoming a dangling alias.
+- Packed clauses move through forward contraction and clause-set insertion as owners. FV-index leaves retain deliberate independent `Clause` snapshots because the Rust clause store may relocate; indexed-set insertion/extraction maintains those snapshots and the owning set clause together. Raw-pointer/stable-address emulation is not required for the packed-clause contract.
+- `FvIndexAnchor::insert` now borrows the packed vector and mutable owned clause as disjoint fields, avoiding the previous full vector clone. The clause snapshot retained by the index is still necessary for safe leaf queries and rendering.
+- Focused ownership coverage mutates a clause through the packed owner before unpacking it and drops a source clause before reading its vector identity snapshot. Existing tests retain exact optional-clause rendering, feature layouts, permutation projection, collection, and BillPlus behavior.
+
+### Change Later
+
+- `FreqVectorCell` conflates a borrowed clause reference with the conditionally owning `FVPackedClause` shell, so correct C destruction depends on which alias and free function the caller remembers to use. Rust's distinct snapshot/vector and single-owner packed types are the completed port decision; splitting the C API into explicit borrowed and owning types remains tracked by `E_Rust_Port-j76.4.285`.
+- `FreqVectorPrint` is documented with no global variables, but its optional `ClausePrint` call observes the process-global `OutputFormat` and TSTP printing observes the process-global problem type. Rust keeps those dependencies explicit through output-format and problem-type parameters.
+- The existing Rust identifier-based vector debug string is not the C `FreqVectorPrint` shape when a clause pointer is present. Prefer the explicit optional-clause renderer for compatibility-facing output.
 
 ### Porting Focus
 

@@ -1,0 +1,49 @@
+{
+  "candidate_kind": "windows-rust",
+  "contracts": {
+    "auto_classification_precedes_formula_clausification": true,
+    "auto_owner_classification_regression_present": true,
+    "clause_wrapper_cnf_pushes_fof_quote": true,
+    "clause_wrapper_marks_clause_and_moves_info": true,
+    "formula_archive_copy_pushes_fof_quote": true,
+    "formula_owner_and_proof_regressions_present": true,
+    "main_parser_keeps_parsed_formulas_in_f_axioms": true
+  },
+  "exact_cases": [
+    {
+      "candidate_exit_code": 0,
+      "candidate_status": "Theorem",
+      "expected_mismatches": [],
+      "mismatches": [],
+      "mode": "fol",
+      "name": "ALL_RULES.p",
+      "normalized_output_equal": true,
+      "reference_exit_code": 0,
+      "reference_status": "Theorem"
+    },
+    {
+      "candidate_exit_code": 0,
+      "candidate_status": "Theorem",
+      "expected_mismatches": [],
+      "mismatches": [],
+      "mode": "fol",
+      "name": "ans_test06.p",
+      "normalized_output_equal": true,
+      "reference_exit_code": 0,
+      "reference_status": "Theorem"
+    },
+    {
+      "candidate_exit_code": 0,
+      "candidate_status": "Theorem",
+      "expected_mismatches": [],
+      "mismatches": [],
+      "mode": "fol",
+      "name": "socrates.p",
+      "normalized_output_equal": true,
+      "reference_exit_code": 0,
+      "reference_status": "Theorem"
+    }
+  ],
+  "schema_version": 1,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

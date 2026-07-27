@@ -1,0 +1,22 @@
+{
+  "accepted": true,
+  "checks": {
+    "c_shaped_find_and_binary_find_are_distinct": true,
+    "clause_print_collector_uses_identity_and_c_stack_order": true,
+    "direct_owners_are_the_two_formula_collectors": true,
+    "formula_collector_uses_identity_and_c_stack_order": true,
+    "identity_is_live_rc_allocation_address": true,
+    "ptree_uses_safe_index_links": true
+  },
+  "direct_production_owners": [
+    {
+      "path": "src/clauses/clause.rs",
+      "type_mentions": 1
+    },
+    {
+      "path": "src/clauses/clausefunc.rs",
+      "type_mentions": 1
+    }
+  ],
+  "schema_version": 1
+}

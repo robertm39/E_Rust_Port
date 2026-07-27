@@ -119,4 +119,15 @@ Source files reviewed: `BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- C stores `problemType` as process-global state and parser paths set it as first-order or higher-order syntax is observed. Rust keeps the same implicit lookup within one execution thread, but the production cell is thread-local so the deduction server's thread-per-client sessions receive the same parser-dialect isolation that C obtains by forking. Supported proof work remains on the parsing thread, so lower-level ordering, indexing, matching, and inference helpers see the C-shaped value without synchronization or hot-path atomic loads.
+- `StrDistance`, `StringStartsWith`, and `StringIndex` operate on C strings, so embedded NUL bytes terminate comparisons. Rust preserves this for the public simple-string helpers while keeping sentinel-array stopping for `StringIndex`/`StringArrayCardinality`.
+
+### Change Later
+
+- `problemType` is convenient C global state but awkward for repeated in-process runs and parallel solving. Rust resets the thread-local value at parser roots and gives each deduction-server client its own thread, matching C's fork isolation without sharing the dialect across clients; replace this compatibility shim with an explicit proof-session/parser context before moving parsing or inference work between threads.
+- `JKISSSeed(NULL, ...)` seeds the file-static `rand_state` cell, but `JKISSRand(NULL)` and `JKISSRand(state)` advance separate file-static `xstate`/`ystate`/`zstate`/`cstate` words and ignore the selected `RandState_p`. Rust preserves this exported sequence quirk; a cleaned RNG API should either use caller-provided state consistently or expose an explicit global generator.
+- `StrDistance`, `StringStartsWith`, and `StringIndex` conflate text strings with NUL-terminated byte strings. A cleaned Rust API should either reject embedded NULs at the boundary or expose separate byte-slice helpers where C-string truncation is intentional.
 <!-- END MANUAL REVIEW: c_source_docs -->

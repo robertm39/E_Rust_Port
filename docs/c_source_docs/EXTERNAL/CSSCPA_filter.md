@@ -83,6 +83,25 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are represented in `src/external/csscpa.rs`.
+- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: exact C-shaped full help text through the shared option renderer, C-shaped option parsing for version/verbose/output/silent/output-level/rant, including C's negative `--output-level` truthiness below `OUTPRINT(1)`, stdout or output-file routing, default `-` stdin handling, C source-confirmed `TSTPFormat` file scanner setup, sequential input processing over one CSSCPA state, replay of C's state/process-clause trace flush points, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `SysError`-style two-line input/output file-open diagnostics, C `OutClose` output-stream error wording on final flush failure, and `InitIO`/`ExitIO` initialization.
+- WSL comparison covers a non-silent command stream with `state:`, output-level changes, forced acceptance, a subsumed `check improve(...)`, the historical buffering plea, and final state output; normalized C and Rust output is exact for that trace as well as help, version, silent acceptance, and missing-input diagnostics. The live 72-clause-command stateful case has one declared correctness difference: the C FOL build reaches a compiled-away reserved signature code and renders an ordinary predicate as `$let`, while Rust's unified FOL/HO runtime reserves the internal block and retains the predicate. The field-exact decision is retained in [`experiment 127`](../../../experiments/2026-07-18-127-support-tool-matrix-closure/FINDINGS.md).
+
+### Change Later
+
+- The exact `Please process clauses now, I beg you, great shining CSSCPA, wonder of the world, most beautiful program ever written.` input sequence is an input-buffering workaround. The Rust parser should accept it for compatibility, but a later interface can replace it with an explicit flush/control command.
+- `--rant-about-input-buffering` intentionally writes informal complaint text to `stderr`. Keep it isolated in the CLI compatibility layer rather than exposing it through the CSSCPA state API.
+- `process_options` mutates process-global `outname`, `OutputLevel`, `Verbose`, `OutputFormat`, and the dummy `app_encode = false` global. Rust should keep those as layered configuration after compatibility tests establish the exact option order and diagnostic wording.
+- `--output-level` rejects only values greater than 1, so negative values remain possible in C. Most CSSCPA trace branches use nonzero truthiness, but the unit-contradiction banner uses `OUTPRINT(1)` and is skipped for negative values. Rust preserves this quirk; a cleaned CLI should use a typed verbosity enum only outside drop-in mode.
+- `main` sets the scanner format to `TSTPFormat`, while historical `.csscpa` inputs can use old `input_clause(...)` statements. Rust keeps a narrow compatibility bridge for that legacy clause form only under filter TSTP mode and covers both the core loop and standalone wrapper paths; a cleaned parser should avoid mixing dialects implicitly.
+- C flushes `GlobalOut` from inside `print_csscpa_state` and again after every `CSSCPAProcessClause`, even when the current output level produced no trace bytes. Rust preserves those flush boundaries in the wrapper with trace offsets; a later non-drop-in interface can expose explicit CSSCPA events instead of writer flushing.
+- Rust exposes output routing through explicit writers and file creation rather than the process-global `GlobalOut`. This is cleaner for tests, but exact `OpenGlobalOut`/`OutClose` ownership and error wording should still be audited when byte-compatible CLI diagnostics are required.
+- Rust now mirrors C's two-line `SysError` shape for CSSCPA input/output file-open failures by embedding the program-prefixed OS error line in the diagnostic. A later process-level diagnostic layer could represent fatal system errors structurally instead of carrying the second line as text.
+- Rust file scanners currently load each file or stdin into memory before scanning. C reads through a `FILE*` stream; large CSSCPA inputs should be benchmarked before treating the eager path as final.
+- The rant option description contains a source-level double space in `the  rant-intensity`; because the shared option renderer wraps source text, that whitespace changes the help layout. Rust preserves it for byte compatibility, but cleaned help should not depend on accidental internal spacing.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

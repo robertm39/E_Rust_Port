@@ -92,9 +92,15 @@ Source files reviewed: `ORDERINGS/cto_lpo_debug.h`, `ORDERINGS/cto_lpo_debug.c`.
 - Ordering code. Comparison outcomes, caching, precedence, and weight handling must match the C implementation because they drive simplification and inference eligibility.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- This debug LPO implementation has no recursion-depth guard and its same-head tail checks use `MAX(s->arity,t->arity)` while indexing only the remaining arguments from one side. Rust should keep the intended LPO tail condition without out-of-bounds access; revisit only if this debug path becomes externally observable.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- The debug LPO implementation has no recursion-depth guard and its same-head tail checks can index past the shorter argument vector when arities differ. Rust should preserve intended LPO results without reproducing unsafe memory access; if this path becomes externally visible, decide whether to keep it as a compatibility-only debug feature or retire it in favor of the production LPO implementation.
+- `D_LPOCompare` and related helpers duplicate old LPO logic without the production path's later LFHO and recursion-limit behavior. Avoid extending this copy unless a reference comparison requires it; a cleaned implementation should share the maintained comparison core and keep debug tracing separate.
 
 ### Porting Focus
 

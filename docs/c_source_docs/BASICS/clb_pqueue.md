@@ -138,10 +138,23 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PQueueGetNext` and `PQueueGetLast` return an `IntOrP` by value and only move `tail`/`head`; they do not clear the backing ring slot. `PQueueReset` likewise only rewinds `head` and `tail`. Absolute-slot access through `PQueueElement` can still observe old payload words after extraction or reset, and Rust preserves this compatibility shape by cloning/copying extracted payloads.
+- `PQueueGetNext`, `PQueueGetLast`, `PQueueLook`, and `PQueueLookLast` assert that the queue is non-empty before accessing the backing ring. Rust preserves these as explicit panics on the C-shaped methods.
+- `PQueueElement` is raw absolute-slot access (`queue->queue[index]`) with no optional result. Valid callers supply an allocated slot that has been initialized by earlier store/bury activity; out-of-range or never-initialized slots are invariant violations in the Rust compatibility surface.
+- `PQueueIncIndex` applies raw C modulo arithmetic to the supplied absolute slot and only returns `-1` when the resulting next slot equals `head`. Rust preserves that modulo shape for representable indices instead of treating invalid raw indices as checked lookup failures.
+- `PQueueGrow` doubles the ring, copies slots before `head` to the same absolute indexes, copies slots from `head..size` to `old_size`-shifted indexes, and then adds the old size to `tail`. Rust now exposes this raw layout helper as a compatibility method; direct non-full calls preserve the C state-shape hazard by leaving the newly logical slots uninitialized.
+- The exported C `PQueueGrow` has no direct production callers: only the inline `pqueue_store` and `pqueue_bury` helpers call it, immediately after insertion makes `head == tail`. Rust has the same two automatic call sites and no production `grow_c_raw` caller. Four Rust owners retain `PQueue` where C-shaped bury, stack-view, or mixed tag/payload behavior matters; proof derivation, server sessions, and TCP channels use `VecDeque` for their pure FIFO subset. Exact full/wrapped/non-full growth layouts and the complete owner mapping are retained in [`experiment 121`](../../../experiments/2026-07-18-121-pqueue-grow-boundary/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+- Future non-compatibility queue APIs should avoid exposing stale absolute slots after extraction or reset and can drop/reset owned Rust payloads eagerly, but that must stay separate from the C-shaped `PQueue` surface.
+
+### Change Later
+
+- Empty queue extraction/look operations are assertion failures in the C API. The Rust compatibility surface now panics the same way, but higher-level Rust-only callers that naturally model optional work queues should use a separate `try_` API rather than weakening the C-shaped methods.
+- Absolute-slot access exposes stale payloads after extraction/reset, and `PQueueIncIndex` can alias out-of-range raw indices through modulo arithmetic. A cleaned queue API should hide absolute slots behind iteration or return checked `Option` values outside the compatibility layer.
+- Direct `PQueueGrow` calls on a non-full queue can make uninitialized backing slots appear live because the function blindly shifts `tail` after copying the old layout. No C or Rust production owner makes such a call. Rust keeps that exported compatibility behavior quarantined in `grow_c_raw`, represents unreadable slots as `None`, and panics instead of reading undefined memory; ordinary callers should continue growing only through `store`/`bury` or use a checked capacity-reserve API if one is added later.
 <!-- END MANUAL REVIEW: c_source_docs -->

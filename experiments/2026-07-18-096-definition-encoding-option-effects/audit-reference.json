@@ -1,0 +1,215 @@
+{
+  "checks": {
+    "app-encode:c-cli": true,
+    "app-encode:c:eprover/PROVER/eprover.c:FormulaSetAppEncode(stdout, proofstate->f_axioms);": true,
+    "app-encode:c:eprover/PROVER/eprover.c:app_encode = true;": true,
+    "app-encode:rust-cli": true,
+    "app-encode:rust:src/clauses/formulasets.rs:app_encode_string_with_type_suffixes(": true,
+    "app-encode:rust:src/prover/eprover.rs:config.encoding.app_encode = true": true,
+    "app-encode:rust:src/prover/eprover.rs:let status = run_app_encode(output, runtime_config)?;": true,
+    "arg-cong:c-cli": true,
+    "arg-cong:c:eprover/CONTROL/cco_ho_inferences.c:ComputeArgCong(state, control, orig_clause);": true,
+    "arg-cong:c:eprover/PROVER/eprover.c:h_parms->arg_cong = AllLits;": true,
+    "arg-cong:rust-cli": true,
+    "arg-cong:rust:src/heuristics/proofcontrol.rs:compute_arg_cong(terms, clause": true,
+    "arg-cong:rust:src/prover/eprover.rs:higher_order.arg_cong = mode": true,
+    "c_distinct_argument_errors_use_current_token": true,
+    "c_extension_errors_exit_zero": true,
+    "c_pos_ext_preserves_neg_ext_gate": true,
+    "define-heuristic:c-cli": true,
+    "define-heuristic:c:eprover/PROVER/eprover.c:PStackPushP(hcb_definitions, arg);": true,
+    "define-heuristic:c:eprover/PROVER/eprover.c:fvi_parms, wfcb_definitions, hcb_definitions);": true,
+    "define-heuristic:rust-cli": true,
+    "define-heuristic:rust:src/prover/eprover.rs:heuristic_definitions.push(value);": true,
+    "define-heuristic:rust:src/prover/eprover.rs:let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();": true,
+    "define-heuristic:rust:src/prover/eprover.rs:proof_control_init_with_formula_axioms(": true,
+    "define-weight-function:c-cli": true,
+    "define-weight-function:c:eprover/PROVER/eprover.c:PStackPushP(wfcb_definitions, arg);": true,
+    "define-weight-function:c:eprover/PROVER/eprover.c:fvi_parms, wfcb_definitions, hcb_definitions);": true,
+    "define-weight-function:rust-cli": true,
+    "define-weight-function:rust:src/prover/eprover.rs:.weight_function_definitions\n                .push(value);": true,
+    "define-weight-function:rust:src/prover/eprover.rs:let wfcb_defs = &config.search.heuristic.weight_function_definitions;": true,
+    "define-weight-function:rust:src/prover/eprover.rs:proof_control_init_with_formula_axioms(": true,
+    "definitional-cnf:c-cli": true,
+    "definitional-cnf:c:eprover/PROVER/eprover.c:h_parms->formula_def_limit =": true,
+    "definitional-cnf:c:eprover/PROVER/eprover.c:h_parms->formula_def_limit,": true,
+    "definitional-cnf:rust-cli": true,
+    "definitional-cnf:rust:src/prover/eprover.rs:.with_def_limit(params.formula_def_limit)": true,
+    "definitional-cnf:rust:src/prover/eprover.rs:config.preprocessing.formula_def_limit =": true,
+    "fool-unroll:c-cli": true,
+    "fool-unroll:c:eprover/PROVER/eprover.c:h_parms->fool_unroll = CLStateGetBoolArg": true,
+    "fool-unroll:c:eprover/PROVER/eprover.c:h_parms->fool_unroll);": true,
+    "fool-unroll:rust-cli": true,
+    "fool-unroll:rust:src/clauses/formulasets.rs:if options.fool_unroll": true,
+    "fool-unroll:rust:src/prover/eprover.rs:config.preprocessing.fool_unroll =": true,
+    "fool-unroll:rust:src/prover/eprover.rs:params.fool_unroll,": true,
+    "free-numbers:c-cli": true,
+    "free-numbers:c:eprover/PROVER/eprover.c:ProofStateAlloc(free_symb_prop_local);": true,
+    "free-numbers:c:eprover/PROVER/eprover.c:free_symb_prop|FPIsInteger|FPIsRational|FPIsFloat": true,
+    "free-numbers:rust-cli": true,
+    "free-numbers:rust:src/prover/eprover.rs:FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT": true,
+    "free-numbers:rust:src/prover/eprover.rs:proof_state_alloc(config.free_symbol_properties)?": true,
+    "free-objects:c-cli": true,
+    "free-objects:c:eprover/PROVER/eprover.c:ProofStateAlloc(free_symb_prop_local);": true,
+    "free-objects:c:eprover/PROVER/eprover.c:free_symb_prop|FPIsObject": true,
+    "free-objects:rust-cli": true,
+    "free-objects:rust:src/prover/eprover.rs:config.free_symbol_properties |= FP_IS_OBJECT;": true,
+    "free-objects:rust:src/prover/eprover.rs:proof_state_alloc(config.free_symbol_properties)?": true,
+    "miniscope-limit:c-cli": true,
+    "miniscope-limit:c:eprover/PROVER/eprover.c:h_parms->miniscope_limit =": true,
+    "miniscope-limit:c:eprover/PROVER/eprover.c:h_parms->miniscope_limit,": true,
+    "miniscope-limit:rust-cli": true,
+    "miniscope-limit:rust:src/clauses/formulasets.rs:drain.options.miniscope_limit": true,
+    "miniscope-limit:rust:src/prover/eprover.rs:config.preprocessing.miniscope_limit =": true,
+    "miniscope-limit:rust:src/prover/eprover.rs:params.miniscope_limit,": true,
+    "neg-ext:c-cli": true,
+    "neg-ext:c:eprover/CONTROL/cco_ho_inferences.c:ComputeNegExt(state, control, orig_clause);": true,
+    "neg-ext:c:eprover/PROVER/eprover.c:h_parms->neg_ext = AllLits;": true,
+    "neg-ext:rust-cli": true,
+    "neg-ext:rust:src/heuristics/proofcontrol.rs:compute_neg_ext(terms, clause": true,
+    "neg-ext:rust:src/prover/eprover.rs:higher_order.neg_ext = mode": true,
+    "pos-ext:c-cli": true,
+    "pos-ext:c:eprover/CONTROL/cco_ho_inferences.c:ComputePosExt(state, control, orig_clause);": true,
+    "pos-ext:c:eprover/PROVER/eprover.c:h_parms->pos_ext = AllLits;": true,
+    "pos-ext:rust-cli": true,
+    "pos-ext:rust:src/heuristics/proofcontrol.rs:compute_pos_ext(terms, clause": true,
+    "pos-ext:rust:src/prover/eprover.rs:higher_order.pos_ext = mode": true,
+    "print-types:c-cli": true,
+    "print-types:c:eprover/PROVER/eprover.c:TermPrintTypes = true;": true,
+    "print-types:c:eprover/TERMS/cte_termfunc.c:if(TermPrintTypes)": true,
+    "print-types:rust-cli": true,
+    "print-types:rust:src/prover/eprover.rs:.with_print_types(config.encoding.print_types)": true,
+    "print-types:rust:src/prover/eprover.rs:config.encoding.print_types = true": true,
+    "rust_distinct_argument_errors_use_current_token": true,
+    "rust_extension_errors_exit_zero": true,
+    "rust_pos_ext_preserves_neg_ext_gate": true
+  },
+  "option_routes": {
+    "app-encode": {
+      "c": [
+        "eprover/PROVER/eprover.c: app_encode = true;",
+        "eprover/PROVER/eprover.c: FormulaSetAppEncode(stdout, proofstate->f_axioms);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.encoding.app_encode = true",
+        "src/prover/eprover.rs: let status = run_app_encode(output, runtime_config)?;",
+        "src/clauses/formulasets.rs: app_encode_string_with_type_suffixes("
+      ]
+    },
+    "arg-cong": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->arg_cong = AllLits;",
+        "eprover/CONTROL/cco_ho_inferences.c: ComputeArgCong(state, control, orig_clause);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: higher_order.arg_cong = mode",
+        "src/heuristics/proofcontrol.rs: compute_arg_cong(terms, clause"
+      ]
+    },
+    "define-heuristic": {
+      "c": [
+        "eprover/PROVER/eprover.c: PStackPushP(hcb_definitions, arg);",
+        "eprover/PROVER/eprover.c: fvi_parms, wfcb_definitions, hcb_definitions);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: heuristic_definitions.push(value);",
+        "src/prover/eprover.rs: let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();",
+        "src/prover/eprover.rs: proof_control_init_with_formula_axioms("
+      ]
+    },
+    "define-weight-function": {
+      "c": [
+        "eprover/PROVER/eprover.c: PStackPushP(wfcb_definitions, arg);",
+        "eprover/PROVER/eprover.c: fvi_parms, wfcb_definitions, hcb_definitions);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: .weight_function_definitions\n                .push(value);",
+        "src/prover/eprover.rs: let wfcb_defs = &config.search.heuristic.weight_function_definitions;",
+        "src/prover/eprover.rs: proof_control_init_with_formula_axioms("
+      ]
+    },
+    "definitional-cnf": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->formula_def_limit =",
+        "eprover/PROVER/eprover.c: h_parms->formula_def_limit,"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.preprocessing.formula_def_limit =",
+        "src/prover/eprover.rs: .with_def_limit(params.formula_def_limit)"
+      ]
+    },
+    "fool-unroll": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->fool_unroll = CLStateGetBoolArg",
+        "eprover/PROVER/eprover.c: h_parms->fool_unroll);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.preprocessing.fool_unroll =",
+        "src/prover/eprover.rs: params.fool_unroll,",
+        "src/clauses/formulasets.rs: if options.fool_unroll"
+      ]
+    },
+    "free-numbers": {
+      "c": [
+        "eprover/PROVER/eprover.c: free_symb_prop|FPIsInteger|FPIsRational|FPIsFloat",
+        "eprover/PROVER/eprover.c: ProofStateAlloc(free_symb_prop_local);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT",
+        "src/prover/eprover.rs: proof_state_alloc(config.free_symbol_properties)?"
+      ]
+    },
+    "free-objects": {
+      "c": [
+        "eprover/PROVER/eprover.c: free_symb_prop|FPIsObject",
+        "eprover/PROVER/eprover.c: ProofStateAlloc(free_symb_prop_local);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.free_symbol_properties |= FP_IS_OBJECT;",
+        "src/prover/eprover.rs: proof_state_alloc(config.free_symbol_properties)?"
+      ]
+    },
+    "miniscope-limit": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->miniscope_limit =",
+        "eprover/PROVER/eprover.c: h_parms->miniscope_limit,"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.preprocessing.miniscope_limit =",
+        "src/prover/eprover.rs: params.miniscope_limit,",
+        "src/clauses/formulasets.rs: drain.options.miniscope_limit"
+      ]
+    },
+    "neg-ext": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->neg_ext = AllLits;",
+        "eprover/CONTROL/cco_ho_inferences.c: ComputeNegExt(state, control, orig_clause);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: higher_order.neg_ext = mode",
+        "src/heuristics/proofcontrol.rs: compute_neg_ext(terms, clause"
+      ]
+    },
+    "pos-ext": {
+      "c": [
+        "eprover/PROVER/eprover.c: h_parms->pos_ext = AllLits;",
+        "eprover/CONTROL/cco_ho_inferences.c: ComputePosExt(state, control, orig_clause);"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: higher_order.pos_ext = mode",
+        "src/heuristics/proofcontrol.rs: compute_pos_ext(terms, clause"
+      ]
+    },
+    "print-types": {
+      "c": [
+        "eprover/PROVER/eprover.c: TermPrintTypes = true;",
+        "eprover/TERMS/cte_termfunc.c: if(TermPrintTypes)"
+      ],
+      "rust": [
+        "src/prover/eprover.rs: config.encoding.print_types = true",
+        "src/prover/eprover.rs: .with_print_types(config.encoding.print_types)"
+      ]
+    }
+  },
+  "sha256": "f00e74a44161b04d7bbec5c1500c3852fe525f3005523db20bbbbcd2349ca2ef"
+}

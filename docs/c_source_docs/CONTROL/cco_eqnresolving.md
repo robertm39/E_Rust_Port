@@ -68,7 +68,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for multi-CSU higher-order trace coverage on 2026-07-15.
 
 Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c`.
 
@@ -79,6 +79,21 @@ Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c
 - Proof-control code. These units connect preprocessing, inference generation, contraction, scheduling, and proof output, so behavior is often defined by call ordering.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- Rust now ports `ClauseERNormalizeVar` for the bank-aware single-MGU destructive equality-resolution path used by generated-clause insertion and selected-clause replacement: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, emits represented `DocClauseModificationDefault(..., inf_eres, clause)` output for opt-in proof-documentation callers, and returns the inference count so the caller can requeue the mutated clause.
+- Rust now ports the `ComputeAllEqnResolvents` insertion wrapper: it skips clauses with no negative literals or `CPNoGeneration`, iterates candidate negative literals through the explicit maximal-literal filter, inserts generated resolvents into a caller-owned clause set, copies proof depth/size, TPTP type, and SOS state, and returns the generated count.
+- Higher-order problem mode now uses the ported CSU iterator for all-resolvent equality resolution, including aggregate `subst_is_ho` propagation to higher-order `DCEqRes` derivation entries, lambda normalization before cleanup, and C stack-pop insertion order.
+- Derivation pushes are ported for `DCEqRes` on generated resolvents and `DCDesEqRes` on destructive equality-resolution replacements, and both the all-resolvent creation and destructive-replacement modification proof-documentation branches are available through opt-in wrappers.
+- Executable proof-control initialization now passes the parsed higher-order problem type into ordering creation. This preserves C's higher-order `set_maximal_0` skip and therefore the maximal-negative-literal filter observed by `ComputeAllEqnResolvents`; the branching-CSU trace records matching C/Rust counts of zero equality resolutions and five generated clauses.
+
+### Change Later
+
+- C `ClauseERNormalizeVar` mutates the original clause and inserts that same pointer into the supplied store only if at least one inference fired. Rust returns the owned mutated clause plus count so the proof-control caller can reinsert it into `tmp_store`; revisit the API once proof-state clause ownership has stable in-set handles.
+- The C routine increments proof depth and proof size on the mutated clause for every destructive equality-resolution step but accounts generated/resolution statistics in callers such as `insert_new_clauses`. Rust keeps that split between the clause helper and proof-control statistics.
+- `DCDesEqRes` carries no parent pointer in C because the modified clause is its own implicit premise. Rust records only the operation entry for each destructive step; revisit if proof-output reconstruction later needs an explicit self-reference.
+- C `ComputeAllEqnResolvents` shares one `subst_is_ho` flag across every CSU result for a selected literal, so one higher-order binding marks all resolvents popped for that literal as higher-order. Rust preserves this aggregate flag for compatibility; a cleaner internal API could track the flag per generated resolvent after proof-output parity is secured.
 
 ### Porting Focus
 

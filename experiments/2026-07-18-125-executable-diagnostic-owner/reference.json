@@ -1,0 +1,26 @@
+{
+  "accepted": true,
+  "c": {
+    "exit_code": 5,
+    "stderr": "eprover: Unknown Option: --definitely-invalid-option (Use -h for a list of valid options)\n",
+    "stdout": ""
+  },
+  "invalid_option": "--definitely-invalid-option",
+  "reference": {
+    "c_binary_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+    "c_eprover_sha256": "29b1a1542447242166f80fc7d37863b5737c0df212326f7590783566f9eb1c61",
+    "clb_error_c_sha256": "a5bbf98c9990b1277e936b61785ad297b0335a597d52139cd07f4e6b0a31c5ca",
+    "clb_error_h_sha256": "f68d62b997ba10397f1d66a0d830d6a38ae2192ec5bbf05391bfd8bf761d50c5",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "unchanged C under WSL 2; Rust on Windows",
+    "rust_eprover_entry_sha256": "53d8ff44a4a94bd63ac1097d48761538901a02b7aeb4f949af056468933fe11a",
+    "rust_error_sha256": "5a999eb2eb69fd60c1bc1a7406d66854e62a25096f10de97d0cc283a09a26049",
+    "rust_runtime_test_sha256": "3df4fc53f7b0fbeca605ecbbe35fa88aec054bba67d0b1ab7326c5cccb6257ad"
+  },
+  "rust": {
+    "exit_code": 5,
+    "stderr": "eprover: Unknown Option: --definitely-invalid-option (Use -h for a list of valid options)\n",
+    "stdout": ""
+  },
+  "schema_version": 1
+}

@@ -117,6 +117,12 @@ Source files reviewed: `HEURISTICS/che_wfcbadmin.h`, `HEURISTICS/che_wfcbadmin.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 
+### Compatibility Notes
+
+- `WeightFunParse` dispatches by parallel compile-time tables of names and parser function pointers. Rust keeps the table order and dispatches every current parser entry. Production proof control now supplies clause axioms, represented formula axioms, and the live signature through an explicit `WeightParseContext`; this covers every option-defined and inline WFCB, including relevance-level formula consumers and TSM/TSMR signature consumers. Context-free wrappers remain low-level APIs and diagnose state-dependent parser names instead of fabricating an owner. The production boundary and 47/47 executable C/Rust matrix are recorded in [`experiments/2026-07-17-056-weight-parser-context-matrix/FINDINGS.md`](../../../experiments/2026-07-17-056-weight-parser-context-matrix/FINDINGS.md).
+- `WeightFunDefParse` duplicates explicit definition names before `WFCBAdminAddWFCB`, which duplicates them again, and it passes stack-local anonymous names only because `WFCBAdminAddWFCB` immediately duplicates the string. Rust stores owned `String` names directly; revisit only if strategy parsing allocation cost becomes visible.
+- C parser failures are fatal diagnostics from the current scanner position. Rust returns `Diagnostic` values but keeps the token-consumption boundary explicit so strategy parsing can later choose whether to abort like C.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -1,0 +1,197 @@
+{
+  "all_exact": true,
+  "exact_case_count": 3,
+  "exact_cases": [
+    {
+      "all_exact": true,
+      "c": {
+        "exit_code": 5,
+        "stderr_bytes": 88,
+        "stderr_sha256": "9f61423193b233f93ac8d90bc71b602a634f0213a2b9ee157a8b79cc94395709",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "display_args": [
+        "--verbose=1",
+        "--memory-limit=0",
+        "--cpu-limit=1",
+        "--soft-cpu-limit=1",
+        "--lop-in",
+        "$FIXTURE"
+      ],
+      "name": "memory_verbose_before_error",
+      "rust": {
+        "exit_code": 5,
+        "stderr_bytes": 88,
+        "stderr_sha256": "9f61423193b233f93ac8d90bc71b602a634f0213a2b9ee157a8b79cc94395709",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "exit_code": 5,
+        "stderr_bytes": 63,
+        "stderr_sha256": "acca1945e842ff635bddf6e8125830fcf3b1bd4d5a5ecd7753a8213d5ebb26da",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "display_args": [
+        "--memory-limit=0",
+        "--verbose=1",
+        "--cpu-limit=1",
+        "--soft-cpu-limit=1",
+        "--lop-in",
+        "$FIXTURE"
+      ],
+      "name": "memory_before_verbose_error",
+      "rust": {
+        "exit_code": 5,
+        "stderr_bytes": 63,
+        "stderr_sha256": "acca1945e842ff635bddf6e8125830fcf3b1bd4d5a5ecd7753a8213d5ebb26da",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "exit_code": 5,
+        "stderr_bytes": 89,
+        "stderr_sha256": "34d85ee9adfb224e03307691a97b2c88a9db3ddcded5fcd4b453f6d17728a1d4",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "display_args": [
+        "--verbose=1",
+        "--memory-limit=-1",
+        "--cpu-limit=1",
+        "--soft-cpu-limit=1",
+        "--lop-in",
+        "$FIXTURE"
+      ],
+      "name": "negative_memory_verbose_before_error",
+      "rust": {
+        "exit_code": 5,
+        "stderr_bytes": 89,
+        "stderr_sha256": "34d85ee9adfb224e03307691a97b2c88a9db3ddcded5fcd4b453f6d17728a1d4",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "exact_matching_cases": 3,
+  "normalized_case": {
+    "all_exact": true,
+    "c": {
+      "exit_code": 0,
+      "normalized_stdout_bytes": 256,
+      "normalized_stdout_sha256": "ee7245ad9f7454ae3f82e591766404c2efb9465efcf400454814ea0996ffeec6",
+      "resident_line_normalized": true,
+      "resource_line_count": 3,
+      "stderr": ""
+    },
+    "display_args": [
+      "--syntax-only",
+      "--lop-in",
+      "--resources-info",
+      "--memory-limit=0",
+      "$FIXTURE"
+    ],
+    "name": "resources_info_host_values_normalized",
+    "normalization": "three CPU seconds and target-dependent resident value",
+    "rust": {
+      "exit_code": 0,
+      "normalized_stdout_bytes": 256,
+      "normalized_stdout_sha256": "ee7245ad9f7454ae3f82e591766404c2efb9465efcf400454814ea0996ffeec6",
+      "resident_line_normalized": true,
+      "resource_line_count": 3,
+      "stderr": ""
+    }
+  },
+  "projected_cases": [
+    {
+      "all_exact": true,
+      "c": {
+        "exit_code": 5,
+        "limit_is_truncated_eighty_percent": true,
+        "stderr_ends_with_limit_order_error": true,
+        "stdout": "",
+        "two_memory_lines_before_error": true
+      },
+      "display_args": [
+        "--verbose=1",
+        "--memory-limit=Auto",
+        "--cpu-limit=1",
+        "--soft-cpu-limit=1",
+        "--lop-in",
+        "$FIXTURE"
+      ],
+      "name": "auto_memory_host_projection",
+      "projection": "host physical-memory values excluded; line order and 80-percent derivation retained",
+      "rust": {
+        "exit_code": 5,
+        "limit_is_truncated_eighty_percent": true,
+        "stderr_ends_with_limit_order_error": true,
+        "stdout": "",
+        "two_memory_lines_before_error": true
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "contains_hard_failure": false,
+        "exit_code": 9,
+        "soft_banner_count": 1,
+        "soft_banner_is_suffix": true,
+        "stderr": ""
+      },
+      "display_args": [
+        "--lop-in",
+        "--auto",
+        "--soft-cpu-limit=0",
+        "--cpu-limit=1",
+        "--memory-limit=0",
+        "$LUSK6_FIXTURE"
+      ],
+      "name": "soft_zero_platform_projection",
+      "projection": "asynchronous/cooperative stop phase excluded; user-resource suffix, status, stderr, and exit retained",
+      "rust": {
+        "contains_hard_failure": false,
+        "exit_code": 9,
+        "soft_banner_count": 1,
+        "soft_banner_is_suffix": true,
+        "stderr": ""
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "contains_soft_failure": false,
+        "direct_banner_count": 1,
+        "direct_banner_is_prefix": true,
+        "exit_code": 8,
+        "stderr": "eprover: CPU time limit exceeded, terminating\n"
+      },
+      "display_args": [
+        "--lop-in",
+        "--auto",
+        "--cpu-limit=0",
+        "--memory-limit=0",
+        "$LUSK6_FIXTURE"
+      ],
+      "name": "hard_zero_platform_projection",
+      "projection": "signal/cooperative stop phase excluded; direct banner, status, diagnostic, and exit retained",
+      "rust": {
+        "contains_soft_failure": false,
+        "direct_banner_count": 1,
+        "direct_banner_is_prefix": true,
+        "exit_code": 8,
+        "stderr": "eprover: CPU time limit exceeded, terminating\n"
+      }
+    }
+  ],
+  "schema_version": 1,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

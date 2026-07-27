@@ -93,8 +93,13 @@ Source files reviewed: `HEURISTICS/che_orientweight.h`, `HEURISTICS/che_orientwe
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `ClauseOrientWeightCompute` and `OrientLMaxWeightCompute` call `ClauseCondMarkMaximalTerms(local->ocb, clause)` before applying unorientable/maximal-literal penalties; both Rust initializers install banked callbacks that preserve this order with the active proof-control OCB, mutable owner bank, and clause. The shared diversity/orient owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-067-diversity-orient-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-067-diversity-orient-owner-context/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- The immutable orient-weight scoring callbacks remain low-level/test adapters for clauses whose orientation flags are already current. Removing those public compatibility surfaces after an API review is optional cleanup; production HCB evaluation already uses the banked owner path.
 
 ### Porting Focus
 

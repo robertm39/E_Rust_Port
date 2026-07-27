@@ -83,6 +83,17 @@ Source files reviewed: `PROVER/termprops.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/termprops.rs` and `src/bin/termprops.rs` port the standalone `termprops` executable over the existing Rust term bank, including exact C-shaped full help text, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, default stdin input through `-`, sequential file processing through one shared term bank, checked `TBTermParse`-style term parsing, per-term simple printing, C `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity symmetry detection for binary terms, C-shaped file-open diagnostics, no explicit final `OutClose`-style output check, and the final count/average/max summary line including the zero-count `nan` path. The support-tool matrix now includes empty input and an isolated missing input; comparison keeps the complete stable line strict while canonicalizing only known host not-found suffixes and the two NaN-valued `ASize`/`ADepth` fields. The platform evidence and normalization boundary are recorded in [`experiments/2026-07-16-036-termprops-platform-output/FINDINGS.md`](../../../experiments/2026-07-16-036-termprops-platform-output/FINDINGS.md).
+
+### Change Later
+
+- The C `com` flag checks `term->args[0]->arity == 1` and then reads `term->args[0]->args[1]`, which is past the unary child argument list. Rust treats that missing second nested argument as `false` instead of reproducing undefined memory access; if reference traces ever show the flag is consumed by users, decide whether the intended test was `args[0]` or an old internal term-layout artifact.
+- C calls `OpenGlobalOut(outname)` after inserting the default `-` input but before scanner creation, so `-o` can create/truncate the output path before later input failures while `-o -` stays on stdout. Rust preserves that side effect with an explicit output owner; transactional output belongs outside drop-in mode.
+- C does not call `OutClose(GlobalOut)` before `ExitIO()`, so final flush/close errors are not reported through the usual output-close diagnostic. Rust preserves that absence; a cleaned library API should expose explicit flush/close results instead of inheriting executable process-exit behavior.
+- `termprops` divides by the term count when printing averages, so an empty input exposes the C library's non-finite formatting. Rust emits `nan`; glibc-family reference output can emit `-nan`, and the legacy Microsoft CRT probe emits `-1.#IND00`/`1.#QNAN0`. This spelling is not a cross-platform byte contract. The comparison normalizer is deliberately scoped to the `ASize` and `ADepth` values on the `% Terms:` summary and does not canonicalize unrelated NaNs.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

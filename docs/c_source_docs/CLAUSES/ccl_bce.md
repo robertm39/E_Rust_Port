@@ -81,7 +81,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for bank-aware complete MGU on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 
@@ -94,6 +94,20 @@ Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- `src/clauses/bce.rs` ports the clause-level blocked-clause elimination helper over the current Rust `ClauseSet` owner, including predicate occurrence maps with C's max-occurrence cutoff behavior, per-literal BCE tasks over disjoint parent copies, minimum-remaining-candidate task scheduling, blocker resumption after archive moves, non-equational L-resolvent checks through bank-aware complete MGU plus complementary-literal closure, equational same-head L-resolvent construction through generated argument disequalities, and the C-shaped `% BCE start` / `% BCE eliminated` output wrapper.
+- Supported executable `--bce` preprocessing now calls the helper for first-order prune/proof-search clause-list paths after represented SInE/relevance pruning and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. It covers represented FOF formula-origin clauses after formula-owner CNF emits represented clauses. First-order-shaped clauses lowered from THF skip BCE because the process problem type remains higher-order, exactly as in C. Eliminated clauses move to the represented proof-state archive, and progress uses the executable stdout side channel.
+- C runs `FormulaSetCNF2` before `ProofStateClausalPreproc`, so BCE has no separate formula-set entry point to add. Rust preserves the same ownership boundary: represented formula owners are drained through CNF before the clause-only preprocessing stage, and the later BCE call is gated on the syntactic first-order process type. Permanent proof-search regressions pin both the FOF route and the THF skip boundary.
+- C's raw occurrence, task, candidate, blocker, and archive pointers are represented by generation-qualified `ClauseDerivationRef` handles. Same-visible-ID/different-generation parents remain distinct during self-candidate checks, blocker resumption, and archive moves.
+- The equational checker's `ClauseIsTautologyReal(..., false)` caller now receives a bank-local work clause in Rust, preserving C's canonical-truth pointer comparison across Rust's distinct source and scratch-bank `$true` handles. The retained executable fixture is exact against unchanged C.
+
+### Change Later
+
+- C stores BCE tasks, blockers, and occurrence maps through raw clause pointers, so duplicate identifiers and archive/requeue aliases remain distinct. Rust now uses stable `ClauseDerivationRef` handles and rebuilds no task snapshots during BCE; future scheduling changes must preserve exact handle identity and the current blocker-resumption order.
+- `EliminateBlockedClauses` writes progress directly to `stdout` rather than the prover's main output stream. Rust preserves that visible behavior through the executable stdout side channel; keep this isolated if the eventual output layer stops mirroring C's global stream leakage.
+- C gates BCE on `PROBLEM_FO` and comments that higher-order syntax may still contain first-order problems. Rust preserves that syntactic gate: represented FOF formula-origin clauses can reach BCE after lowering, while first-order-shaped THF clauses skip it. Future formula-owner changes must not replace this with a lowered-clause shape test unless C changes the compatibility contract.
 
 ### Porting Focus
 

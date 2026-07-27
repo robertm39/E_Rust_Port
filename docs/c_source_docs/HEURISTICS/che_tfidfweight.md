@@ -98,6 +98,9 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `ConjectureTermTfIdfWeightCompute` lazily initializes TF-IDF data, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, scores through `ClauseTermExtWeight`, and only then appends generated-clause document terms when `update_docs` is set; the Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. The shared six-family owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md).
+- The Rust document-frequency path now uses the shared `src/clauses/pdtrees.rs` `TermLRTraverseNext` key extraction and trie ref-counts, matching C's use of `PDTreeMatchPrefix(...)->ref_count` for IDF.
+- All four `RelatedTermSet` modes now have active-HCB coverage and a six-family executable matrix. The defined C formula is byte-exact with Rust in all 24 cases. Stock C is exact in 20 cases but leaves `TfIdfWeightParamCell.tf_fact` uninitialized in `ConjectureTermTfIdfWeightInit`; Rust intentionally uses the parsed factor instead of reproducing allocator-dependent undefined behavior. The source evidence, one-line isolated-C validation patch, raw report, and strict reference are recorded in [`experiments/2026-07-17-081-related-term-set-matrix/FINDINGS.md`](../../../experiments/2026-07-17-081-related-term-set-matrix/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
 ### Porting Focus
@@ -105,4 +108,9 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- All production heuristic evaluation sites now use the banked lazy-init/mark/score/optional-document-update path. Removing immutable already-marked-clause adapters is optional public-API simplification, not missing proof-search ownership behavior.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,181 @@
+{
+  "all_exact": true,
+  "case_count": 2,
+  "cases": [
+    {
+      "all_exact": true,
+      "c": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "preprocessing_classes": [
+          "FSSSSMSSSSSNFFN"
+        ],
+        "preprocessing_time_reported": true,
+        "resource_footer_count": 2,
+        "resource_footers_after_proof": true,
+        "resource_totals_nondecreasing": true,
+        "schedule_summaries": [
+          [
+            1,
+            1,
+            300,
+            300
+          ],
+          [
+            6,
+            1,
+            300,
+            300
+          ]
+        ],
+        "search_classes": [
+          "FUHPF-FFSF00-SFFFFFNN"
+        ],
+        "started_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ],
+        "status": "% SZS status Unsatisfiable",
+        "stderr": "",
+        "winning_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ]
+      },
+      "display_args": [
+        "--auto-schedule=1",
+        "--resources-info",
+        "--tstp-in",
+        "$FIXTURE"
+      ],
+      "name": "proof_search",
+      "rust": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "preprocessing_classes": [
+          "FSSSSMSSSSSNFFN"
+        ],
+        "preprocessing_time_reported": true,
+        "resource_footer_count": 2,
+        "resource_footers_after_proof": true,
+        "resource_totals_nondecreasing": true,
+        "schedule_summaries": [
+          [
+            1,
+            1,
+            300,
+            300
+          ],
+          [
+            6,
+            1,
+            300,
+            300
+          ]
+        ],
+        "search_classes": [
+          "FUHPF-FFSF00-SFFFFFNN"
+        ],
+        "started_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ],
+        "status": "% SZS status Unsatisfiable",
+        "stderr": "",
+        "winning_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ]
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "preprocessing_classes": [
+          "FSSSSMSSSSSNFFN"
+        ],
+        "preprocessing_time_reported": true,
+        "resource_footer_count": 2,
+        "resource_footers_after_proof": true,
+        "resource_totals_nondecreasing": true,
+        "schedule_summaries": [
+          [
+            1,
+            1,
+            300,
+            300
+          ],
+          [
+            6,
+            1,
+            300,
+            300
+          ]
+        ],
+        "search_classes": [
+          "FUHPF-FFSF00-SFFFFFNN"
+        ],
+        "started_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ],
+        "status": "% SZS status Unsatisfiable",
+        "stderr": "",
+        "winning_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ]
+      },
+      "display_args": [
+        "--auto-schedule=1",
+        "--resources-info",
+        "--cnf",
+        "--tstp-in",
+        "$FIXTURE"
+      ],
+      "name": "cnf_nested_preprocessing_proof",
+      "rust": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "preprocessing_classes": [
+          "FSSSSMSSSSSNFFN"
+        ],
+        "preprocessing_time_reported": true,
+        "resource_footer_count": 2,
+        "resource_footers_after_proof": true,
+        "resource_totals_nondecreasing": true,
+        "schedule_summaries": [
+          [
+            1,
+            1,
+            300,
+            300
+          ],
+          [
+            6,
+            1,
+            300,
+            300
+          ]
+        ],
+        "search_classes": [
+          "FUHPF-FFSF00-SFFFFFNN"
+        ],
+        "started_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ],
+        "status": "% SZS status Unsatisfiable",
+        "stderr": "",
+        "winning_strategies": [
+          "G-E--_302_C18_F1_URBAN_RG_S04BN",
+          "SAT001_MinMin_p005000_rr_RG"
+        ]
+      }
+    }
+  ],
+  "matching_cases": 2,
+  "schema_version": 1
+}

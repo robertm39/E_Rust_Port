@@ -90,7 +90,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`.
 
@@ -109,4 +109,9 @@ Source files reviewed: `BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `PObjMapFind`, `PObjMapInsert`, and `do_extract_entry` splay the raw root as a side effect, including miss-nearest rebalancing. Rust now preserves the complete topology with safe index-linked arena nodes, including `NULL`-shaped value slots, failed lookup, and failed extraction. Existing equivalent keys remain owned by the stored node while only values are replaced. Exact topology and ownership evidence is retained in [`experiment 115`](../../../experiments/2026-07-18-115-obj-splay-topology/FINDINGS.md).
+- `PObjMapGetRef` allocates a candidate node before discovering duplicate keys and frees it again on hits. Rust allocates only after the splay proves a miss, while preserving the visible update flag, original-key retention, and null-slot behavior. The transient C allocator churn has no semantic effect and generic `ObjMap` currently has no direct Rust production owner; revisit only if a future owner demonstrates a measured allocator dependency.
 <!-- END MANUAL REVIEW: c_source_docs -->

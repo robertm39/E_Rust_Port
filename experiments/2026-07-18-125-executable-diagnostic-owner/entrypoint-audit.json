@@ -1,0 +1,252 @@
+{
+  "accepted": true,
+  "canonical_name_entrypoint_count": 22,
+  "checks": {
+    "all_c_initializers_match_expected_mode": true,
+    "all_rust_bins_use_shared_fatal_reporter": true,
+    "all_rust_initializers_match_c_mode": true,
+    "cargo_declares_exactly_26_audited_bins": true,
+    "fatal_runtime_tests_cover_both_name_modes": true,
+    "global_error_owner_is_owned_and_poison_tolerant": true,
+    "invocation_owned_entries_are_exactly_four": true
+  },
+  "entrypoint_count": 26,
+  "invocation_name_entrypoint_count": 4,
+  "records": [
+    {
+      "c_file": "eprover/PROVER/eprover.c",
+      "c_initialization_matches": true,
+      "cargo_name": "eprover",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/eprover.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/EXTERNAL/CSSCPA_filter.c",
+      "c_initialization_matches": true,
+      "cargo_name": "CSSCPA_filter",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/csscpa_filter.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_stratpar.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_stratpar",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_stratpar.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_ltb_runner.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_ltb_runner",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_ltb_runner.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/termprops.c",
+      "c_initialization_matches": true,
+      "cargo_name": "termprops",
+      "name_mode": "invocation",
+      "rust_file": "src/bin/termprops.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/SIMPLE_APPS/term2dag.c",
+      "c_initialization_matches": true,
+      "cargo_name": "term2dag",
+      "name_mode": "invocation",
+      "rust_file": "src/bin/term2dag.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/SIMPLE_APPS/ex_commandline.c",
+      "c_initialization_matches": true,
+      "cargo_name": "ex_commandline",
+      "name_mode": "invocation",
+      "rust_file": "src/bin/ex_commandline.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/epclextract.c",
+      "c_initialization_matches": true,
+      "cargo_name": "epclextract",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/epclextract.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/epclanalyse.c",
+      "c_initialization_matches": true,
+      "cargo_name": "epclanalyse",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/epclanalyse.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/checkproof.c",
+      "c_initialization_matches": true,
+      "cargo_name": "checkproof",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/checkproof.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/epcllemma.c",
+      "c_initialization_matches": true,
+      "cargo_name": "epcllemma",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/epcllemma.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/edpll.c",
+      "c_initialization_matches": true,
+      "cargo_name": "edpll",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/edpll.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/eground.c",
+      "c_initialization_matches": true,
+      "cargo_name": "eground",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/eground.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/classify_problem.c",
+      "c_initialization_matches": true,
+      "cargo_name": "classify_problem",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/classify_problem.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/tsm_classify.c",
+      "c_initialization_matches": true,
+      "cargo_name": "tsm_classify",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/tsm_classify.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/direct_examples.c",
+      "c_initialization_matches": true,
+      "cargo_name": "direct_examples",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/direct_examples.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_client.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_client",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_client.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_deduction_server.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_deduction_server",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_deduction_server.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_server.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_server",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_server.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/e_axfilter.c",
+      "c_initialization_matches": true,
+      "cargo_name": "e_axfilter",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/e_axfilter.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/enormalizer.c",
+      "c_initialization_matches": true,
+      "cargo_name": "enormalizer",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/enormalizer.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/epatternize.c",
+      "c_initialization_matches": true,
+      "cargo_name": "epatternize",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/epatternize.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/ekb_create.c",
+      "c_initialization_matches": true,
+      "cargo_name": "ekb_create",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/ekb_create.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/ekb_delete.c",
+      "c_initialization_matches": true,
+      "cargo_name": "ekb_delete",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/ekb_delete.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/ekb_insert.c",
+      "c_initialization_matches": true,
+      "cargo_name": "ekb_insert",
+      "name_mode": "canonical",
+      "rust_file": "src/bin/ekb_insert.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    },
+    {
+      "c_file": "eprover/PROVER/ekb_ginsert.c",
+      "c_initialization_matches": true,
+      "cargo_name": "ekb_ginsert",
+      "name_mode": "invocation",
+      "rust_file": "src/bin/ekb_ginsert.rs",
+      "rust_initialization_matches": true,
+      "rust_uses_shared_fatal_reporter": true
+    }
+  ],
+  "schema_version": 1
+}

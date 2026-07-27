@@ -91,4 +91,9 @@ Source files reviewed: `CONTRIB/picosat-965/picomus.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The MUS utility drives PicoSAT through iterative core extraction while keeping parser state, reduction rounds, and warning output in one command-line program. Rust should keep this separate from the prover's internal SAT abstraction unless the vendored utility is intentionally exposed.
+- Compile-time trace support changes available behavior in this file. If the utility is ported, expose trace/core-output capability as an explicit option or feature rather than depending on C preprocessor state.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,81 @@
+{
+  "cases": [
+    {
+      "exit_code": 0,
+      "mode": "fol",
+      "name": "fof-nand-nor-xor.p",
+      "normalized_output_equal": true,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 0,
+      "mode": "fol",
+      "name": "fof-nested-connectives.p",
+      "normalized_output_equal": true,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 0,
+      "mode": "fol",
+      "name": "tcf-quantified-clause.p",
+      "normalized_output_equal": true,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 0,
+      "mode": "ho",
+      "name": "thf-applied-lambda.p",
+      "normalized_output_equal": false,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 3,
+      "mode": "ho",
+      "name": "thf-choice.p",
+      "normalized_output_equal": true,
+      "status": null
+    },
+    {
+      "exit_code": 3,
+      "mode": "ho",
+      "name": "thf-description.p",
+      "normalized_output_equal": true,
+      "status": null
+    },
+    {
+      "exit_code": 0,
+      "mode": "ho",
+      "name": "thf-function-equality.p",
+      "normalized_output_equal": false,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 0,
+      "mode": "ho",
+      "name": "thf-lambda-argument.p",
+      "normalized_output_equal": false,
+      "status": "Theorem"
+    },
+    {
+      "exit_code": 0,
+      "mode": "ho",
+      "name": "thf-quantified-predicate.p",
+      "normalized_output_equal": true,
+      "status": "Theorem"
+    }
+  ],
+  "c_reference": {
+    "fol_sha256": "9c51973e063376736fda62486f2dae57b65838cf13c6f5c0b7bcdad76911360a",
+    "ho_sha256": "9eaf614dbae15ffe042c2104dbf1a5d76caf5eebe0ff2ee75d52efaeb05683ff",
+    "source": "unchanged vendored worktree snapshot"
+  },
+  "comparison": {
+    "exit_and_status_matches": 9,
+    "normalized_output_matches": 6,
+    "normalized_proof_document_differences": 3
+  },
+  "created_utc": "2026-07-26T19:31:52Z",
+  "rust_snapshot_sha256": "341962a30a7cc815f467c747f14045824089456913a15d4206f43a4e10938106",
+  "schema_version": 1,
+  "worker": "e-rust-codex-260726-191044-7524"
+}

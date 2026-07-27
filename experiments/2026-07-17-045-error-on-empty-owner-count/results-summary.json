@@ -1,0 +1,18 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "modes": [
+    "--tstp-in --error-on-empty --syntax-only",
+    "--tstp-in --error-on-empty --cnf --silent"
+  ],
+  "cases": {
+    "comment_only": false,
+    "type_only": true,
+    "true_only": true,
+    "watchlist_only": false,
+    "ordinary_clause": true,
+    "comment_then_ordinary": true
+  },
+  "comparisons": 12,
+  "all_outcomes_match": true,
+  "all_exact_match": true
+}

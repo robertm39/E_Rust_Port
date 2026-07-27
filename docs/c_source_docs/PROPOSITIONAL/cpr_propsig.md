@@ -83,7 +83,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled against the complete propositional ownership path and exact edpll matrix on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_propsig.h`, `PROPOSITIONAL/cpr_propsig.c`.
 
@@ -103,4 +103,16 @@ Source files reviewed: `PROPOSITIONAL/cpr_propsig.h`, `PROPOSITIONAL/cpr_propsig
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/propositional/propsig.rs` ports `PropSigAlloc`, `PropSigAtomNumber`, `PropSigGetAtomEnc`, `PropSigInsertAtom`, `PropSigGetAtomName`, and `PropSigPrint`.
+- The Rust port preserves the reserved encoding `0` slot by storing `None` at vector index `0`; a fresh signature therefore reports atom number `1`, the first inserted atom receives encoding `1`, and unknown-name lookups return `PLiteralNoLit`.
+- Duplicate insertion returns the existing encoding without changing insertion/printing order. `PropSigPrint` rendering uses encoding order rather than name order, matching the C loop over `enc_to_name`. Owned strings plus deterministic lookup are the completed safe representation: C's shared `char*` identity and lookup-time splay-tree reorganization have no semantic consumer in the propositional or `edpll` path.
+
+### Change Later
+
+- `PropSigAtomNumber` is the raw stack pointer and includes the reserved null slot, so it is one larger than the number of usable atoms. Rust preserves this exact count, but later higher-level APIs should expose a clearer atom count when compatibility does not require the C macro shape.
+- `PropSigGetAtomEnc`'s source comment says lookup has no side effects, then notes that it reorganizes `name_to_enc`; this comes from `StrTreeFind`'s splay-style behavior. Rust uses a deterministic map without lookup reorganization, which should be unobservable except for performance locality. Revisit only if DPLL signature lookup becomes a measured hot path.
+- `PropSigInsertAtom` stores the same allocated `char*` in both the stack and the string tree. Rust owns separate safe string data behind the vector and map; if future FFI or pointer-identity-sensitive code appears, this ownership boundary should be revisited with an explicit interning handle.
 <!-- END MANUAL REVIEW: c_source_docs -->

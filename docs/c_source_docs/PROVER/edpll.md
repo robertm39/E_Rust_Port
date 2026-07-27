@@ -90,4 +90,24 @@ Source files reviewed: `PROVER/edpll.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/edpll.rs` and `src/bin/edpll.rs` port the standalone executable wrapper over the existing Rust `propositional::{dpllformula,dpll}` state-shell modules, including exact C-shaped full help text with the legacy support-tool footer.
+- The C executable parses input clauses, prints the `DPLLFormulaParseLOP` `New clause: ...accepted` / `...discarded (tautology)` trace, allocates a `DPLLState`, and exits without calling a solver. The Rust executable intentionally preserves that incomplete behavior.
+- `--dimacs` sets C's `dimacs_format` global but no later code reads it; Rust accepts the flag as a parsed no-op and keeps output identical to the default trace.
+- `--version` prints `classify_problem VERSION` in C even though the executable name is `edpll`; Rust keeps that visible typo for drop-in CLI compatibility.
+- The Rust wrapper preserves default stdin through `-`, output-file routing including `-o -` as stdout, two-line `SysError`-style scanner/output open diagnostics, early output-file creation before later input-open failures, C `OutClose` wording on final flush failure, the C loop's loose treatment of non-clause trailing input, and the historical empty procedural-tail diagnostic text from `ClauseParse`.
+- `DPLLFormulaParseLOP()` writes each completed clause trace directly to `GlobalOut`. Rust now exposes an incremental trace sink so an accepted clause remains visible when parsing a later clause fails; batching a whole file's trace would incorrectly erase that prefix.
+- Resource review pins C's two hard/soft ordering messages (including `softtime`/`hardtime`), the verbose `Auto` memory lines that print a byte count with an `MB` label, two `RLIMIT_DATA` calls whose second warning is labeled `RLIMIT_AS`, and the intentional masking of failed `RLIMIT_DATA` warnings. Rust preserves the deterministic text and memory outcomes. Direct POSIX CPU/core setup failures require host fault injection, and the native Windows port does not apply a CPU job limit to this no-search helper because that limit terminates the process with a Windows status before C-shaped diagnostics can run.
+- The permanent comparison matrix has 15 cases. An archived real C/Rust report proves exact help, version, LOP, and old-TPTP behavior; the expanded malformed/resource/filesystem cases and platform decisions are documented in `experiments/2026-07-16-045-edpll-expanded-comparison/FINDINGS.md`.
+- The compatibility milestone deliberately does not add a solver mode. `edpll.c` never calls a search function, `cpr_dpll.c` implements only state allocation/free plus an assignment shell whose clause-update helpers return zero without mutation, and `DPLLRetractLastAss` is declared but not defined. Rust pins the resulting observable contract with contradictory positive/negative units: both traces are printed, exit status is zero, and no SAT/UNSAT result appears. A working driver remains a post-compatibility product extension, as recorded in `experiments/2026-07-16-046-edpll-no-solver-contract/FINDINGS.md`.
+
+### Change Later
+
+- Decide whether `edpll` should become a working standalone DPLL driver or remain a legacy parser/state-construction helper. Completing it will require changing user-visible behavior from the current "Not completed yet!" C path.
+- If a completed driver is desired, wire `--dimacs` to actual `DPLLFormulaPrint`/DIMACS output deliberately instead of treating the currently unused flag as a hidden output mode.
+- `OpenGlobalOut(outname)` runs before the default `-` input is inserted and before any scanner is created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
+- `DPLLFormulaParseLOP()` stops when `ClauseStartsMaybe()` is false and does not require end-of-file, so trailing non-clause tokens are silently ignored. Rust preserves this parser boundary; strict validation should be a deliberate non-compatibility behavior.
+- Resource-limit handling is copied into this small C program even though the current executable does not run a search loop. A cleaned CLI could share one resource-limit owner with `eprover` after compatibility mode is separated from modernized behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->

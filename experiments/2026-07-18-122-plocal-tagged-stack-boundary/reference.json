@@ -1,0 +1,49 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_plocalstacks_c_sha256": "c9cfcc70b8d456ed89be39bbe691662dd2ca6ad3aa88f3ed26f795df24beaf76",
+    "clb_plocalstacks_h_sha256": "6670b09c0587e2282d3c7943eb1d5573e9416ab1021e251f837bfc3346f6da2a",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "makefile_vars_sha256": "e7867c6db10be14792f27ba14876b200df7c511cbac8dede06259ed15862f2e6",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "aea7b56552e366e3c8b2fe8a9aa6204780ee98cd6cd4ea78ccabc6e347f6a74b"
+  },
+  "results": [
+    {
+      "compile_mode": "tagged",
+      "exit_code": 0,
+      "record": {
+        "allocated_bytes": 512,
+        "checksum": 4160,
+        "current": 40,
+        "entry_slots": 1,
+        "mode": "tagged",
+        "pointer_bytes": 8,
+        "size": 64,
+        "tag_bits": 2,
+        "tag_mask": 3
+      },
+      "stderr": "",
+      "stdout": "mode=tagged,pointer_bytes=8,tag_bits=2,tag_mask=3,size=64,current=40,entry_slots=1,allocated_bytes=512,checksum=4160\n"
+    },
+    {
+      "compile_mode": "portable",
+      "exit_code": 0,
+      "record": {
+        "allocated_bytes": 2048,
+        "checksum": 4160,
+        "current": 80,
+        "entry_slots": 2,
+        "mode": "portable",
+        "pointer_bytes": 8,
+        "size": 256,
+        "tag_bits": 2,
+        "tag_mask": 3
+      },
+      "stderr": "",
+      "stdout": "mode=portable,pointer_bytes=8,tag_bits=2,tag_mask=3,size=256,current=80,entry_slots=2,allocated_bytes=2048,checksum=4160\n"
+    }
+  ],
+  "schema_version": 1
+}

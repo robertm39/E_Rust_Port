@@ -1,0 +1,29 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"compact-paged-debug","1","0x7ff749640000","-1073740791",,"62.987108","60.21875","2058020","0","memory allocation of 83886080 bytes failed
+stack backtrace:
+   0:     0x7ff749ae48a2 - <unknown>
+   1:     0x7ff749aee801 - <unknown>
+   2:     0x7ff749ac85a4 - <unknown>
+   3:     0x7ff749ad9e87 - <unknown>
+   4:     0x7ff749ad9f4c - <unknown>
+   5:     0x7ff749ad696f - <unknown>
+   6:     0x7ff749ad9f1b - <unknown>
+   7:     0x7ff749ac5a78 - <unknown>
+   8:     0x7ff749afe300 - <unknown>
+   9:     0x7ff749afe31a - <unknown>
+  10:     0x7ff749af8e5a - <unknown>
+  11:     0x7ff74996157a - <unknown>
+  12:     0x7ff74996333f - <unknown>
+  13:     0x7ff7496824e2 - <unknown>
+  14:     0x7ff7496b7a92 - <unknown>
+  15:     0x7ff7496d9039 - <unknown>
+  16:     0x7ff7496a98f7 - <unknown>
+  17:     0x7ff7496ac430 - <unknown>
+  18:     0x7ff7496bc42f - <unknown>
+  19:     0x7ff7496f45c9 - <unknown>
+  20:     0x7ff749717b86 - <unknown>
+  21:     0x7ff749ac98cf - <unknown>
+  22:     0x7ff7496f49dc - <unknown>
+  23:     0x7ff749af817f - <unknown>
+  24:     0x7ffc37c7e957 - <unknown>
+  25:     0x7ffc38f0ad6c - <unknown>"

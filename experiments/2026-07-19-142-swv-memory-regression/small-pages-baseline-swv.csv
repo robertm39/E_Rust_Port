@@ -1,0 +1,9 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"small-pages-baseline-swv","1","0x7ff722770000","-1073740791",,"57.763539","54.796875","2307792","0","memory allocation of 8 bytes failed
+memory allocation of 30 bytes failed
+skipping backtrace printing to avoid potential recursion"
+"small-pages-baseline-swv","2","0x7ff722770000","-1073740791",,"54.364033","52.78125","2305904","0","memory allocation of 168 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"small-pages-baseline-swv","3","0x7ff722770000","-1073740791",,"54.629191","53.140625","2305836","0","memory allocation of 168 bytes failed
+memory allocation of 30 bytes failed
+skipping backtrace printing to avoid potential recursion"

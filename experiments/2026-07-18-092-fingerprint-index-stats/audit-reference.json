@@ -1,0 +1,26 @@
+{
+  "all_passed": true,
+  "contracts": {
+    "c_distribution_handles_null_index": true,
+    "c_dot_prints_nodes_edges_then_payloads": true,
+    "c_flattened_payload_is_default": true,
+    "c_optional_block_feature_gate": true,
+    "cargo_exposes_optional_feature": true,
+    "disabled_index_regression": true,
+    "distribution_regression": true,
+    "dot_graph_regression": true,
+    "flattened_payload_regression": true,
+    "flattened_subterm_payload_renderer": true,
+    "fp_tree_distribution_shape": true,
+    "fp_tree_dot_nodes_edges_payloads": true,
+    "fp_tree_generic_payload_renderer": true,
+    "global_optional_block_regression": true,
+    "global_writer_handles_disabled_indexes": true,
+    "global_writer_preserves_four_line_order": true,
+    "global_writer_prints_only_pm_from_graph": true,
+    "prover_feature_dispatches_final_statistics": true
+  },
+  "passed": 18,
+  "schema_version": 1,
+  "total": 18
+}

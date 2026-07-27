@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,cursor_exclusive,pop_frame_exclusive,c_rust_ratio,processed_clauses
+parent,12557467650,0,0.0000,1582253858,284175947,2.3899,4873
+compact_frame_revisit,12525374625,-32093025,-0.2556,1556297359,279148494,2.3838,4873

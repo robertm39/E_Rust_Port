@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_partial_orderings_c_sha256": "b60c36108ef82536ebbd55d3d5197833c846c46433dd836289fcae3f32e005dd",
+    "clb_partial_orderings_h_sha256": "84a5295dcf9c033233d8022d1187ac0acd64563df04cf3a6c1316dab1070f9d4",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "9decc9145ad72e23b2330589234fb0d67d974f3e1796abc71cfa046d2ae6630d"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "enum=0,1,2,3,4,5,6\nsymbols=0:*u*|1:=/=|2: = |3: > |4: < \ninverse=1:1|2:2|3:4|4:3|5:6|6:5\nq_to_part=-7:4|0:2|9:3\n"
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,87 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "case_count": 2,
+  "matching_cases": 2,
+  "results": [
+    {
+      "case": "prune_owner_order",
+      "labels_match": true,
+      "statistics_match": true,
+      "status_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "labels": [
+          "goal",
+          "formula_bridge",
+          "clause_bridge"
+        ],
+        "statistics": {},
+        "stdout_bytes": 592,
+        "stdout_sha256": "9d511564d2e0587b995226df85a0e49ff8653b738b3cb3d37284d6f259c866a3",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "labels": [
+          "goal",
+          "formula_bridge",
+          "clause_bridge"
+        ],
+        "statistics": {},
+        "stdout_bytes": 602,
+        "stdout_sha256": "85723758f0ef4212e2ddaa88a45f0dc1c12c2eac4ca1894a07413657908883ab",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "case": "cnf_owner_accounting",
+      "labels_match": true,
+      "statistics_match": true,
+      "status_match": true,
+      "stderr_match": true,
+      "rust": {
+        "exit_code": 0,
+        "labels": [
+          "i_0_4",
+          "i_0_5",
+          "i_0_3"
+        ],
+        "statistics": {
+          "Parsed axioms": 5,
+          "Removed by relevancy pruning/SinE": 2,
+          "Initial clauses": 3,
+          "Initial clauses in saturation": 3,
+          "Current number of unprocessed clauses": 3,
+          "Current number of archived formulas": 0
+        },
+        "stdout_bytes": 2941,
+        "stdout_sha256": "074c8bc1796908c52e8d2b0266163635fd5721294d70ad3b2e44a6657b816377",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "labels": [
+          "i_0_4",
+          "i_0_5",
+          "i_0_3"
+        ],
+        "statistics": {
+          "Parsed axioms": 5,
+          "Removed by relevancy pruning/SinE": 2,
+          "Initial clauses": 3,
+          "Initial clauses in saturation": 3,
+          "Current number of unprocessed clauses": 3,
+          "Current number of archived formulas": 0
+        },
+        "stdout_bytes": 2941,
+        "stdout_sha256": "2a8743d88e9427c19b2cfe6acdebb902951f45546ccb54c8037ed7b1982a6ee6",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "content_hashes_verified": 6,
+  "decision_count": 6,
+  "decision_digest": "61437e62814b605721de15cee5a4ebe0180d837b88a4756415fe7f415c5fc1f9",
+  "evidence_checks": {
+    "eager_scanner_has_one_shared_input_allocation_and_a_large_benchmark": true,
+    "exact_csscpa_and_full_port_compatibility_evidence_is_retained": true,
+    "legacy_input_clause_bridge_is_narrow_and_tested_at_both_boundaries": true,
+    "loop_output_level_keeps_the_c_zero_one_mutation_rule": true,
+    "negative_cli_output_level_keeps_split_truthy_and_threshold_gates": true,
+    "persistent_signature_synchronized_tautology_bank_matches_c": true,
+    "requested_status_is_confined_to_loop_state_reporting": true
+  },
+  "schema_version": 1,
+  "source_digest": "a8b6dd98534406a83b676ea461af0aef997718a57cec0b907ac245446dd2fdc8",
+  "source_file_count": 12
+}

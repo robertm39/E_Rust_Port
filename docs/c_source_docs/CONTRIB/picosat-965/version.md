@@ -73,4 +73,8 @@ Source files reviewed: `CONTRIB/picosat-965/version.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `picosat_version` and `picosat_config` return compile-time string constants from the vendored build. Rust's runtime-loaded PicoSAT path reads the loaded library's version string instead; keep tests tolerant of deployment-specific version/config text unless a bundled library becomes mandatory.
 <!-- END MANUAL REVIEW: c_source_docs -->

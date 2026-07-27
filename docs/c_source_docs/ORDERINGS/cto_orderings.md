@@ -97,6 +97,19 @@ Source files reviewed: `ORDERINGS/cto_orderings.h`, `ORDERINGS/cto_orderings.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TOGreater` and `TOCompare` are pure dispatchers over the concrete ordering implementation selected in `ocb->type`. Rust covers KBO, KBO6, standard LPO, LPOCopy, LPO4, LPO4Copy, and Empty dispatch, including C's optimized-release classic-KBO behavior for an explicit higher-order problem. Bank-backed dispatch is required only for the KBO6/LPO4 paths that normalize through the live term bank. RPO is present in the enum/name-table and strategy-parameter surfaces, but upstream C has no concrete RPO algorithm: both dispatchers explicitly assert `RPO not yet implemented!`. Rust's explicit panic is therefore the completed drop-in behavior, not an unported C implementation. The audit is recorded in [`experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md`](../../../experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md).
+- `TOGreater` has no explicit `EMPTY` switch case in C. In release builds this effectively returns the initialized `false` value after the default assertion path; Rust returns `false` directly for Empty.
+- `TOPrecedenceParse` and `TOWeightsParse` only start parsing when the first token is `Identifier`, even though `SigParseKnownOperator`/`FuncSymbParse` can parse quoted, string, or numeric function symbols. Later symbols inside a comparison chain or weight assignment still go through the broader known-operator parser.
+- `TOSymbolComparisonChainParse` reports precedence conflicts at the position of the left/previous symbol in the conflicting pair, not at the relation token or right symbol. Rust preserves that diagnostic anchor.
+- `TOSymbolComparisonChainParse` returns the last value returned by `OCBPrecedenceAddTuple`, so a successful newly inserted chain can return `1` rather than the actual matrix state-stack pointer. This follows the C `OCBPrecedenceAddTuple` return surface.
+- `TOSymbolWeightParse` accepts only positive integer weights, multiplies by `W_DEFAULT_WEIGHT`, and stores the result directly in the OCB weight vector. C copies the scanner's unsigned numeric value into `long`; Rust rejects values that do not fit signed `long` instead of importing implementation-defined unsigned-to-signed conversion.
+
+### Change Later
+
+- `RPO` is listed in the ordering enum/name table and can appear in strategy-parameter parsing, but `TOGreater`/`TOCompare` assert when dispatch reaches it because upstream does not implement the algorithm. Rust preserves the visible executable rejection and downstream panic for compatibility; removing the advertised surface or implementing RPO would be a deliberate post-compatibility change with new tests, not remaining port work.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

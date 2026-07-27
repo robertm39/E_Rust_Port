@@ -116,4 +116,12 @@ Source files reviewed: `HEURISTICS/che_clausefeatures.h`, `HEURISTICS/che_clause
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `ClauseInfoPrint` labels field `d6` as variable occurrences, but computes it through `ClauseWeight(..., max_term_multiplier=0, vweight=1, fweight=1, ...)`, so the value includes the corrected equality-predicate contribution and follows orientation/maximality weight semantics rather than a direct variable-occurrence count.
+- `ClauseLinePrint` adds exactly ` COMCHARRAW ` plus `ClauseInfoPrint` when `printinfo` is true, then always writes a trailing newline. Rust now provides caller-rendered assembly, the default LOP clause-rendering wrapper, and explicit LOP/TPTP/TSTP output-format dispatch.
+- `ClauseLinePrint` is documented with no global variables, but its `ClausePrint` call observes the process-global `OutputFormat`. Rust keeps this as an explicit output-format parameter; keep that boundary unless executable reference tests require hidden global state.
+- `ClausePropInfoPrint` prefixes `ClausePCLPrint` with `COMCHAR` and emits its statistics through fixed `%6ld`/`%6d` fields and the compile-time `COMCHAR` prefix. Rust now provides both caller-rendered PCL assembly and a default PCL wrapper over the explicit clause renderer; process-global output state remains intentionally avoided.
+- The production print call graph is complete and narrow: `ClauseInfoPrint` is internal to `ClauseLinePrint`; its three filtered-set callers feed `ProofStatePrintSelective` and then `eprover`; `ClausePropInfoPrint` feeds `PCLProtPropDataPrint` and then `epclanalyse`. Rust passes explicit output format, problem type, and equation options through the saturated-output path and retains fixed PCL rendering for property analysis. A static source audit plus strict LOP/TPTP/TSTP/PCL executable comparisons are 4/4 exact in [`experiments/2026-07-17-085-clause-feature-output-callers/FINDINGS.md`](../../../experiments/2026-07-17-085-clause-feature-output-callers/FINDINGS.md).
 <!-- END MANUAL REVIEW: c_source_docs -->

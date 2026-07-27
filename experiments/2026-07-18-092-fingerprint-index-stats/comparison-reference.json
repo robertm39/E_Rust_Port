@@ -1,0 +1,39 @@
+{
+  "all_exact": true,
+  "cases": [
+    {
+      "block_lines": 33,
+      "block_sha256": "eddb382c923c3b81707e8e5932b77cbdf5103308c46b627f3fe0dcde2ab8a493",
+      "c_sha256": "bed2d3762cc42c25391caf187e4be27450427ff72c02c38c662be2c15a0d850c",
+      "exact": true,
+      "graph_nodes": 4,
+      "name": "fp1",
+      "payload_records": 3,
+      "rust_sha256": "bed2d3762cc42c25391caf187e4be27450427ff72c02c38c662be2c15a0d850c"
+    },
+    {
+      "block_lines": 69,
+      "block_sha256": "0d46759bc7dd4fb4ed40914f449356b6836999a279c008b23c9a9e889cc5a08b",
+      "c_sha256": "1d818a15087020e6568b9154bec08f422210f0e745623c7c68c90917f5edadd7",
+      "exact": true,
+      "graph_nodes": 22,
+      "name": "fp7",
+      "payload_records": 3,
+      "rust_sha256": "1d818a15087020e6568b9154bec08f422210f0e745623c7c68c90917f5edadd7"
+    },
+    {
+      "block_lines": 33,
+      "block_sha256": "e294b7252a2a0fa59277a011258cabaec49d1c00af4001bcc589cc6dcd2ad339",
+      "c_sha256": "93e6476357c142469b8ef52a7bea5d62e574af94ce606e2f3d98d0857b67b60a",
+      "exact": true,
+      "graph_nodes": 4,
+      "name": "null_paramod_into",
+      "payload_records": 3,
+      "rust_sha256": "93e6476357c142469b8ef52a7bea5d62e574af94ce606e2f3d98d0857b67b60a"
+    }
+  ],
+  "exact_count": 3,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1,
+  "total": 3
+}

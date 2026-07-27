@@ -79,9 +79,19 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-17.
 
 Source files reviewed: `TERMS/cte_termpos.h`, `TERMS/cte_termpos.c`.
+
+### Compatibility Notes
+
+- `TermPosDebugPrint` treats `sig == NULL` as address-debug mode and `sig != NULL` as term-debug mode. Rust exposes those branches as explicit address-backed and term-bank-backed helpers. Address mode preserves the comment markers, hexadecimal identity spelling, and child index. Term mode prints each stored superterm twice, first with `DEREF_NEVER`, then after a literal `...` with `DEREF_ALWAYS`, followed by `Subterm <index>`.
+- The term-backed mode delegates to the conventional problem-type printer just as C delegates to `TermPrint`. It therefore inherits first-order `$let`/FOOL rendering and higher-order FOOL/lambda rendering. In particular, C's higher-order path does not call `print_let`, so a higher-order `$let` remains an ordinary `@` application; Rust has an explicit regression for that distinction.
+
+### Change Later
+
+- The nullable `Sig_p` mode switch combines raw address diagnostics and dereferenced term rendering in one API. Rust preserves both modes through explicit helpers; a later cleaned diagnostic API could separate these concerns once drop-in compatibility is established.
+- Term-position debug output depends on the full conventional `TermPrint` surface, so it inherits C's problem-type formatting split rather than owning a stable diagnostic grammar. Keep this dependency visible until all term/formula printer callers have reference-output coverage.
 
 ### Review Notes
 

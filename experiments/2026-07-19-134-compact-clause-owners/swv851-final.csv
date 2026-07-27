@@ -1,0 +1,2 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"final-single-link","1","0x7ff7265a0000","8","ResourceOut","61.792397","61","1996208","359","eprover: CPU time limit exceeded, terminating"

@@ -112,7 +112,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for safe protocol storage and traversal semantics on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_protocol.h`, `PCL2/pcl_protocol.c`.
 
@@ -133,4 +133,22 @@ Source files reviewed: `PCL2/pcl_protocol.h`, `PCL2/pcl_protocol.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/protocol.rs`, covering protocol-owned term-bank initialization, full-step insertion/find/extract/delete, deterministic serialization by C-shaped PCL-id comparison, positive-id protocol parsing, scanner-comment forwarding through explicit output-aware parsing, duplicate-id rejection, ordered PCL/TSTP/TPTP/LOP rendering, FOF-parent detection, FOF stripping with justification reset, tree-data reset, recursive full-expression precondition collection, direct quoted-argument lookup, proof-step marking, bulk property mutation, property counting/collection, property-filtered printing, and output-format-aware example printing.
+- Rust stores steps in a sorted `Vec<PclStep>` and re-sorts on demand rather than a raw-pointer `PTree` plus cached `PStack`. The public operations still preserve sorted traversal and C-comparator duplicate detection.
+- The vector is the canonical owner rather than a second raw-pointer cache. Binary search preserves C-comparator lookup/duplicate semantics, common increasing-id protocol input appends without shifting, extraction returns ownership directly, and Rust borrows prevent callers from retaining invalid step references across mutation. Boxed clause content remains address-stable if the vector relocates a step.
+- Duplicate parse errors leave Rust's stored count equal to actual membership. C increments `number` before detecting the duplicate and then terminates through `Error`, so the inconsistent count is not observable to a continuing successful caller.
+- Output-aware parsing is wired through `epclextract` when comment forwarding is enabled. Precondition collection rejects dangling identifiers before traversal, deduplicates them, and uses deterministic C-comparator PCL-id order; the current consumers only mark/query properties, so C's raw-pointer-tree extraction order has no output effect.
+- FOF stripping intentionally resets a dependent clause's justification to `initial` without setting `PCLIsInitial`, matching C's property/justification split.
+
+### Change Later
+
+- `PCLProtInsertStep` increments `prot->number` before `PTreeObjStore` reports a duplicate. The parser immediately raises a fatal duplicate-id error, but the count mutation is observable before unwinding in C. Rust rejects duplicate insertion without changing the stored step count; revisit only if a nonfatal duplicate-insertion API becomes necessary.
+- `PCLProtParse` echoes scanner comments to `GlobalOut` when `ignore_comments` is false. Rust exposes equivalent behavior through an explicit output-aware parse wrapper, and `epclextract` routes that wrapper through its configured output owner when comments are enabled; retain the explicit output boundary instead of reintroducing `GlobalOut`.
+- `PCLExprCollectPreconds` stores the result of `PCLProtFindStep` without an explicit null check. Dangling quoted parents can therefore feed a null pointer into later proof-marking traversal. Rust reports a syntax diagnostic for dangling references instead of modeling the null crash surface.
+- `PCLProtStripFOF` resets dependent clause justifications to `initial` when a FOF parent is removed, but it does not set `PCLIsInitial` on those steps. Rust preserves the justification-only reset; later proof analysis should decide whether property and justification should be kept consistent.
+- C stores preconditions in pointer-ordered `PTree` nodes; Rust uses deterministic PCL-id ordering. This should be unobservable for current property marking, but revisit if future proof traversal emits parent-processing order.
+- `PCLProtPrintExamples` passes the zero-based serialized stack index as the example id and renders clauses through the global `OutputFormat` via `PCLStepPrintExample`/`ClausePrint`. Rust preserves the zero-based index and exposes output-format-aware example printing explicitly; executable integration should pass the active output format rather than adding hidden global state.
 <!-- END MANUAL REVIEW: c_source_docs -->

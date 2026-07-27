@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,cursor_pop_aggregate,aggregate_delta,aggregate_percent,c_rust_ratio,native_executable_bytes
+parent,10984397728,0,0.000000,1767547917,0,0.000000,2.090530,8648704
+force_inline_pdt_frame_pop,10914678029,-69719699,-0.634716,1697827541,-69720376,-3.944469,2.077261,8650240

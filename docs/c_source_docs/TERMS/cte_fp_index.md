@@ -162,6 +162,20 @@ Source files reviewed: `TERMS/cte_fp_index.h`, `TERMS/cte_fp_index.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- Rust ports the fingerprint-trie insertion/find/delete/search/distribution core, plus C-shaped `FPIndexPrint`/`FPIndexDistribPrint` writer-style rendering with string helpers layered on top.
+- Rust ports `FPIndexDistribDataPrint` as compact distribution-data formatting with a fallible writer path and keeps the existing string helper layered over it.
+- Rust uses the generic DOT scaffolding plus term-bank-backed flattened subterm and overlap-index payload renderers for `eprover`'s optional `PRINT_INDEX_STATS`/`print-index-stats` path; other payload renderers should still be added only when a C diagnostic path needs them.
+
+### Change Later
+
+- `FPIndexPrintDot` uses raw pointer addresses as DOT node identifiers and does not escape symbol labels; this is useful for C-debug parity but should not become the final reproducible user-facing graph format without a compatibility decision.
+- `FPIndexPrintDot` connects payload boxes only for structural leaves collected by `FPIndexCollectLeaves`, while `FPIndexDistribPrint`/`FPIndexPrint` visit every node with a payload. Preserve that split for compatibility, but consider a clearer diagnostic renderer after the clause/subterm payload printers are integrated.
+- `FPIndexDistribPrint` computes `entries/leaves` directly, so an empty index is an unguarded floating-point division. A cleaned wrapper should handle empty indexes explicitly once callers are known.
+- `FPIndexDistribDataPrint` treats a null index as an all-zero distribution, while `FPIndexPrint` and `FPIndexPrintDot` dereference the index. Keep that nullable diagnostic behavior localized instead of making every fingerprint-index printer nullable by default.
+- C stores a live raw `Sig_p` in every fingerprint index, and discrimination-tree candidate traversal reads symbol arities through it, including for symbols generated after index construction. Rust avoids that hidden lifetime dependency: the owned index stores only its trie and fingerprint function, while arity-sensitive queries receive the live term-bank signature explicitly. Keep the explicit query dependency after compatibility is secured; reintroducing a cached signature snapshot would make generated-symbol lookup stale, while a stored raw/shared pointer would obscure mutation and teardown ordering.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

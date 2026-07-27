@@ -109,7 +109,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 
@@ -122,10 +122,22 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Rust may use narrowly scoped unsafe external DLL/shared-library interop for this unit when a native platform API is required; keep those calls behind safe wrappers and document pointer/initialization invariants at the boundary.
+- The C performance-counter macros expand to process-global microsecond accumulators only when `INSTRUMENT_PERF_CTR` is defined. Rust maps that debug surface to the non-default `instrument-perf-ctr` Cargo feature in `src/basics/perf_counters.rs`, with the exact 13 printed names and order, C's process-CPU clock, one start slot per counter, and the same main-saturation `SatTimer` owner. Instrumented executable evidence is retained in [`experiments/2026-07-18-114-os-wrapper-perf-boundary/FINDINGS.md`](../../../experiments/2026-07-18-114-os-wrapper-perf-boundary/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Rust mirrors that duplicated `RLIMIT_DATA` behavior on Linux as the exact unchanged-C default; executable diagnostics and output are covered by [`experiment 107`](../../../experiments/2026-07-18-107-resource-limit-ownership/FINDINGS.md), and the source-owner decision is retained by experiment 114.
+- `SetSoftRlimitErr` suppresses failed `RLIMIT_DATA` warnings, warns when limits are reduced, and includes `strerror(errno)` for unmasked failures. Rust now carries the errno code from the Linux `getrlimit`/`setrlimit` boundary to the executable warning layer, formats it through `strerror`, and preserves the failed-`RLIMIT_DATA` mask.
+- Native Windows has no POSIX `setrlimit` equivalent. Rust maps `SetMemoryLimit`-style process memory limits to a retained Kernel32 Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY`; this can fail when the current process cannot be assigned to a new job or an outer job policy forbids the limit. Because C charges only `RLIMIT_DATA` while the Job Object charges total private process commit, Rust adds a bounded non-data allowance of 25% up to 512 MiB for the executable, stacks, and allocator segments. The safe wrapper also exposes current private commit from `K32GetProcessMemoryInfo` relative to the configured Job Object ceiling, allowing sparse-page allocation guards to distinguish ordinary CPU lookahead from genuine memory pressure. Rust deliberately has no `JOB_OBJECT_LIMIT_PROCESS_TIME` path for `--cpu-limit`, because Windows can terminate the process before the C-shaped hard-timeout banner, SZS status, stderr diagnostic, and exit code are produced. The cooperative executable deadline and memory-only quota are the retained platform contract, covered by native unit tests plus experiments 107, 114, 145, and 147.
+- Rust's Linux resource-usage path now uses a narrow `getrusage` boundary for the C-shaped resource footer, with `/proc/self/stat` and `/proc/self/status` retained only as fallback. Exact target units for maximum resident set size remain a compatibility detail to keep visible in output tests.
+- Rust's Linux `GetUSecClock` path now uses C `clock()` semantics for process CPU time. Unsupported targets still fall back to a monotonic process-relative wall clock, which should remain documented as a portability fallback rather than exact C behavior.
+- Rust's Linux `GetCoreNumber`, `GetSystemPageSize`, `GetSystemPhysMemory`, and `/proc` CPU-tick conversion paths use C-shaped `sysconf` queries, with safe Rust or `/proc` fallbacks if those calls fail. The hard-coded Linux/glibc selector values, including `_SC_CLK_TCK`, are the normative pinned-reference choice and should be revisited only if non-glibc Linux targets become supported.
+- `PERF_CTR_ENTRY` stores one process-CPU start timestamp slot per counter name and `PERF_CTR_EXIT` consumes that slot, so nested or overlapping entries for the same counter can overwrite the earlier start time. Rust preserves that shape with one atomic start slot per counter and RAII exit, and the exact 13 printed counters plus their production owners are locked by source and instrumented executable evidence in experiment 114.
 <!-- END MANUAL REVIEW: c_source_docs -->

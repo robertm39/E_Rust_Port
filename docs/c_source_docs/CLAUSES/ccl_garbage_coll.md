@@ -65,7 +65,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for formula-CNF registered-root behavior on 2026-07-16.
 
 Source files reviewed: `CLAUSES/ccl_garbage_coll.h`, `CLAUSES/ccl_garbage_coll.c`.
 
@@ -77,6 +77,16 @@ Source files reviewed: `CLAUSES/ccl_garbage_coll.h`, `CLAUSES/ccl_garbage_coll.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- `TBGCCollect` marks every clause and formula set registered in `bank->gc`, even when called from a helper such as `FormulaSetSimplify` that receives only one active set. GEO288 tracing showed this global root coverage is compatibility-visible: omitting the pre-CNF archive reclaimed 897 additional nodes, shifted later collections, and left Rust with 39 additional unique term entries after CNF.
+- Rust proof-state CNF now supplies a typed owner context that resolves all 12 registered clause owners and all four registered formula owners. Standalone tools use a separate local context for their registered active/archive/clause trio. Both contexts preserve clause-before-formula marking and check live registration before sweeping; explicit helper root slices remain only in low-level compatibility tests.
+
+### Change Later
+
+- `TBGCCollect` dispatches through untyped pointers stored in the term bank's GC admin and assumes every registered pointer still names a live `ClauseSet` or `FormulaSet`. Rust now avoids that hazard for represented proof-state and standalone owners through typed contexts and stable handles; a future C cleanup should likewise bind registration to typed owner lifetimes.
+- GC retention depends on all sets currently registered with the bank, not on roots named by the caller. This makes local transformations sensitive to unrelated owner-registration timing. Rust now makes the effective proof-state and standalone root domains explicit; retain that distinction if the C registry is later redesigned.
 
 ### Porting Focus
 

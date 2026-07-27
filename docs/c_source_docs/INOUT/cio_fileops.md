@@ -100,6 +100,19 @@ Source files reviewed: `INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/fileops.rs` ports `InputOpen`/`InputClose`, file loading, concatenation, copying, removal, printing, existence checks, and the slash-only filename helpers.
+- The Rust input-open helper preserves `NULL`/`-` as stdin, the fail-or-null behavior, regular-file checks, and C-shaped file diagnostics while representing inputs as safe `Read` owners.
+- `InputClose` skips stdin like C and releases owned file inputs through safe Rust ownership. Unlike C `fclose`, safe `File` drop does not expose close-time input errors; output close and flush diagnostics remain represented by `OutClose`.
+- Tests cover stdin selection, missing-file fail-or-null behavior, directory rejection, explicit input close, byte-preserving load/concat/copy/print helpers, remove errors, read-open based existence checks, and the Unix-style directory/base/suffix helper quirks.
+
+### Change Later
+
+- C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this in the low-level helper API even on Windows, while scanner file opening now applies a narrow Windows-native path normalization before C-style default-directory/include resolution; keep any broader path-aware behavior at explicit executable or scanner boundaries instead of changing these compatibility helpers.
+- C `FileExists` is a race-prone readability probe implemented by opening the path. Rust keeps the same observable "can open for reading" meaning; avoid replacing it with metadata-only existence checks in compatibility paths.
+- C `InputClose` calls `fclose()` and can turn close-time input errors into fatal diagnostics. Rust currently drops owned input files because safe ownership preserves the required observable behavior without an unsafe `FILE*` bridge; if a future bridge or explicit descriptor-close API is introduced, re-audit whether close-time read diagnostics are observable enough to preserve.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

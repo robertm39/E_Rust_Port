@@ -153,7 +153,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for priority-helper port notes on 2026-06-29.
 
 Source files reviewed: `HEURISTICS/che_prio_funs.h`, `HEURISTICS/che_prio_funs.c`.
 
@@ -168,10 +168,26 @@ Source files reviewed: `HEURISTICS/che_prio_funs.h`, `HEURISTICS/che_prio_funs.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Priority functions feed clause scheduling directly, so preserve externally visible names, integer priority values, and small order-sensitive quirks until proof-search reference tests say otherwise.
+- Several functions use clause/literal layout assumptions from the C allocation order rather than only semantic predicates. Treat those as compatibility constraints when porting.
+- Higher-order priority helpers inspect derivation stacks and process-global `problemType`; tests that mutate this global state need serialization.
+
+### Rust Port Status Notes
+
+- `src/heuristics/prio_funs.rs` ports the C priority constants, name table, parser lookup surface, and the currently represented clause priority functions over an explicit `&TermBank`. The explicit shared borrow is the completed Rust replacement for recovering the bank through C's `eq->bank` back-pointer: it identifies the actual proof-state owner without storing a pointer that can become stale when Rust owners move, and it adds no allocation or term traversal. Production HCB evaluation supplies the same owner bank through the banked callback path; the ownership audit is recorded in [`experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md`](../../../experiments/2026-07-17-055-explicit-bank-wfcb-ownership/FINDINGS.md).
+- `PrioFunPreferEasyHO` now preserves the C normal-result behavior for non-ArgCong clauses and returns `PrioBest` for represented `DCArgCong` derivations when the process problem type is higher-order. Production ArgCong generation writes `DCArgCong` plus the exact clause-parent reference, and focused tests pin both generation metadata and the unset/first-order/higher-order priority split.
+
+### Change Later
+
+- `PrioFunPreferHOSteps` scans the derivation stack and computes a higher-order-step flag, but the computed flag is not used before returning `PrioNormal`. Rust preserves the observable result; revisit only with scheduler traces that show whether this was intended.
+- `PrioFunPreferEasyHO` computes formula/non-pattern preferences after the ArgCong special case, then discards them through `prio = PrioPrefer ? PrioNormal : PrioDefer`, making every non-ArgCong path return `PrioNormal`. Rust preserves this quirk while documenting it as a later heuristic cleanup candidate.
+- `PrioFunPreferEasyHO` walks the raw C derivation `PStack` by reading an opcode and skipping argument slots according to opcode bits. Rust uses tagged derivation entries and compares `op_code(entry)` with `DOArgCong`; keep that compatibility comparison, but avoid exposing raw stack-layout stepping as a general Rust API.
+- `PrioFunByNegLitDist` returns fixed priority `400` as soon as it sees any positive literal, so C's literal ordering makes most non-goal clauses skip the accumulated negative-literal distance. Rust mirrors this order-sensitive result until clause-ordering reference tests justify a semantic rewrite.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+- Before replacing a priority rule with a more obviously named semantic rule, pin down the C result with focused tests because small priority changes can alter proof search.
 <!-- END MANUAL REVIEW: c_source_docs -->

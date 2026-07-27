@@ -129,10 +129,20 @@ Source files reviewed: `BASICS/clb_newmem.h`, `BASICS/clb_newmem.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `SizeMallocReal` compares the effective byte size, not `mem_index`, against `MEM_CHUNKLIMIT` (`4096 / 16 == 256`). Consequently requests below 256 bytes receive 1,024-block chunks, while a 256-byte request does not, even though both 255 and 256 round to bucket 16. Rust preserves this exact threshold. The pinned old/new policy probe and safe-owner audit are retained in [`experiment 123`](../../../experiments/2026-07-18-123-memory-policy-boundary/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `MemFlushFreeList` is intentionally a dummy in `clb_newmem.c`, unlike the old allocator in `clb_memory.c`. Rust's `newmem` facade preserves the no-op while the shared memory state still supports real flushing for the old policy.
+- `SizeMallocReal` rounds requests up to `MEM_ALIGN` buckets and fills empty buckets with `MEM_MULTIPLIER` blocks only when the effective byte request is below 256. The header's `4096 / MEM_ALIGN` spelling can suggest a 4,096-byte object threshold, but the implementation compares bytes directly. This is a hot-path performance policy and documentation hazard; replace or clarify it only with benchmark evidence.
+- Large newmem blocks are stored in the same `free_mem_list[mem_index]` shape as chunked blocks even when created one at a time. Rust models the bucketed reuse with safe `MemoryBlock`s, but not allocator-address identity or debug poison words.
+- `MemAddNewChunk` computes `MEM_MULTIPLIER * mem_index * MEM_ALIGN` with C `int` arithmetic. Rust checks overflow and exposes the fatal wrapper plus `try_*` helper split; cleaned allocator APIs should avoid accepting raw bucket indices from ordinary callers.
+- The header notes that `SizeMallocReal` blocks are not freeable with plain `free()`, while `SecureMalloc` blocks are. Rust's owned block type prevents mixing those deallocation paths; future typed arenas should keep that distinction private.
+- As with `clb_memory`, allocation exhaustion ultimately terminates through the C error path. Rust keeps C-shaped panic wrappers and separate `try_*` helpers until executable-wide fatal-error routing owns allocation failures.
 <!-- END MANUAL REVIEW: c_source_docs -->

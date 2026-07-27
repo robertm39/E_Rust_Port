@@ -1,0 +1,20 @@
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+Breakpoint 1 at 0x8abd9
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+TRACE call=34 ident=80 count=33 eval=[40:14][30:84][40:9][40:23]
+TRACE call=35 ident=70 count=34 eval=[40:21][30:120][40:14][40:24]
+TRACE call=36 ident=71 count=35 eval=[40:21][30:120][40:14][40:25]
+TRACE call=37 ident=81 count=36 eval=[40:21][30:120][40:14][40:26]
+TRACE call=38 ident=82 count=37 eval=[40:21][30:120][40:14][40:27]
+TRACE call=39 ident=67 count=38 eval=[40:18][30:112][40:12][40:28]
+TRACE call=41 ident=99 count=40 eval=[40:14][30:84][40:9][40:30]
+TRACE call=42 ident=100 count=41 eval=[40:14][30:84][40:9][40:31]
+TRACE call=43 ident=92 count=42 eval=[40:14][30:88][40:8][40:32]
+TRACE call=44 ident=93 count=43 eval=[40:22][30:132][40:15][40:33]
+[Inferior 1 (process 434) exited with code 011]

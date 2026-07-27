@@ -1,0 +1,66 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "source_audit": {
+    "checks": {
+      "c_identity_map_balance_transitions": true,
+      "rust_identity_map_balance_transitions": true,
+      "map_only_reset_matches_c": true,
+      "kbo6_lambda_reset_uses_ocb_map": true,
+      "c_proof_control_single_ordering_owner_call": true,
+      "rust_proof_control_owner_bridges": true,
+      "ocb_identity_reset_regression_present": true,
+      "proof_control_lambda_owner_regression_present": true
+    },
+    "expected": {
+      "c_identity_map_balance_transitions": true,
+      "rust_identity_map_balance_transitions": true,
+      "map_only_reset_matches_c": true,
+      "kbo6_lambda_reset_uses_ocb_map": true,
+      "c_proof_control_single_ordering_owner_call": true,
+      "rust_proof_control_owner_bridges": true,
+      "ocb_identity_reset_regression_present": true,
+      "proof_control_lambda_owner_regression_present": true
+    },
+    "passed": true
+  },
+  "case_count": 2,
+  "exact_count": 2,
+  "comparisons": [
+    {
+      "case": "fol_kbo6",
+      "exact_match": true,
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 126,
+        "stdout_sha256": "901a3e88278126a4a02f3d7bd93527354189fcc2b46dfdc06fc0f937a71e30f9",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 126,
+        "stdout_sha256": "901a3e88278126a4a02f3d7bd93527354189fcc2b46dfdc06fc0f937a71e30f9",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "case": "thf_lambda_kbo6",
+      "exact_match": true,
+      "rust": {
+        "exit_code": 0,
+        "stdout_bytes": 120,
+        "stdout_sha256": "03b0577f032d430eca95b1efe043900820314778787ac73f6b5b3f21e7231703",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "c": {
+        "exit_code": 0,
+        "stdout_bytes": 120,
+        "stdout_sha256": "03b0577f032d430eca95b1efe043900820314778787ac73f6b5b3f21e7231703",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ]
+}

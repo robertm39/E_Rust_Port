@@ -86,9 +86,23 @@ Source files reviewed: `BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SysDate` is a signed C `long` used as a monotone event date, with `0` as creation time and `-1` as invalid time.
+- `SysDateInc(sd)` increments the pointed-to date first and then asserts the result is nonzero, so incrementing `SysDateInvalidTime()` mutates it to the creation-time sentinel before failing.
+- `SysDatePrint` uses `%5lu`, so a negative date is rendered through unsigned-C-long formatting rather than signed decimal formatting.
+
+### Rust Port Status Notes
+
+- `src/basics/sysdate.rs` ports the sentinel constructors, comparisons, maximum operation, raw conversion boundary, C-shaped increment assertion helper, reportable increment helper, unsigned-C-long print shape, and tests for sentinel, assertion, overflow, and print behavior.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SysDateInc` uses signed `long` increment without overflow handling. Rust treats overflow as a panic/reportable state instead of importing C undefined behavior; future date APIs should make resource-limit/overflow policy explicit.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -92,4 +92,17 @@ Source files reviewed: `PROVER/direct_examples.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/direct_examples.rs` and `src/bin/direct_examples.rs` port the standalone executable over the shared Rust PCL protocol and analysis modules used by `ekb_ginsert`.
+- The Rust wrapper preserves the C command-line surface, including `-V`/`--version`, optional `--verbose`, `-o` output redirection including `-o -`, C-shaped file-open and output-close diagnostics, `InputOpen`'s pre-open regular-file `stat` boundary, default stdin input through `-`, negative-example count/proportion options, and the typo-preserving negative-proportion diagnostic.
+- The executable parses each input as TPTP-format PCL with shared external variable-name mapping for compressed clause input, strips FOF steps, resets tree data, marks proof clauses, computes proof distance/reference data, selects examples, then prints `% Axioms:` followed by initial clauses, a standalone `.`, and `% Examples:` followed by selected training examples.
+- Archived-C comparison covers help/version, the original stdin workload, a 12-step branching protocol, and an isolated missing-input case; the expanded 14-case learning-tool report has no mismatches.
+
+### Change Later
+
+- `main()` sets `ClausesHaveLocalVariables = false` before parsing so compressed PCL input can share name-to-variable mappings. Rust now expresses this through explicit `PclStepParseOptions`/`ClauseParseOptions` and has compatibility coverage for reused names; keep the C global switch documented as a candidate for cleanup after executable parity is locked down.
+- C calls both `GlobalOut = OutOpen(outname)` and `OpenGlobalOut(outname)` before parsing. Rust uses one explicit output writer while preserving the important early create/truncate side effect; decide later whether the double-open is observable on any supported platform.
+- Negative-example selection uses `proof_steps ? neg_proportion*proof_steps : neg_examples`, with C floating-point-to-`long` truncation and no clamp. Keep this for compatibility, but a cleaned API should use explicit positive and negative selection limits.
 <!-- END MANUAL REVIEW: c_source_docs -->

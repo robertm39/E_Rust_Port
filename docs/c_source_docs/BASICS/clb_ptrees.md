@@ -146,4 +146,10 @@ Source files reviewed: `BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `PTreeCell` stores `key` last to work around an old GCC/memory-manager interaction described in the header. Rust does not mirror that field-layout workaround; keep any future raw-pointer arena representation behind a documented compatibility boundary instead of carrying the historical layout into safe code.
+- `PTreeToPStack` and `PTreeDebugPrint` use root-right-left explicit-stack traversal even though the C comment calls the order arbitrary. Rust now preserves the actual top-down splay topology with safe vector-index links and keeps sorted traversal separate. The resulting C order still depends on raw pointer values and temporary lookup history; a cleaned container API should distinguish unordered identity-set use from callers that deliberately consume compatibility traversal order.
+- `PTreeMerge` destroys its `add` tree while `PTreeInsertTree` leaves the same pointer-shaped argument alive; that ownership distinction exists only in comments and caller convention. Rust preserves it with a by-value consuming merge and a borrowed insertion API. A later C API should make transfer explicit in the type/signature or replace the pair with separately named move/copy operations.
 <!-- END MANUAL REVIEW: c_source_docs -->

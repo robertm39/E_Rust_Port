@@ -81,4 +81,15 @@ Source files reviewed: `CONTROL/cco_diseq_decomp.h`, `CONTROL/cco_diseq_decomp.c
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/clauses/diseq_decomp.rs` ports `ComputeDisEqDecompositions`: it gates on `ClauseLiteralNumber(clause) <= diseq_decomposition`, scans compact literal positions in C order, checks for negative equational literals with matching non-null top symbols and an arity no larger than `diseq_decomp_maxarity`, inserts generated clauses into the caller-owned `ClauseSet`, and returns the number generated.
+- The wrapper preserves C's metadata boundary: derivation metadata is attached by the lower-level `ClauseDisEqDecomposition` builder, not copied or pushed in `ComputeDisEqDecompositions`.
+
+### Change Later
+
+- The size threshold is an enable-up-to limit, not a minimum: C decomposes only when the current clause has at most `diseq_decomposition` literals. Rust mirrors that exact comparison.
+- The control wrapper does not copy parent proof depth, proof size, TPTP type, or SOS status onto generated decompositions; it relies on the lower-level builder for derivation metadata. Preserve this until proof/reference tests show whether generated metadata should be normalized across inference wrappers.
+- The C wrapper checks only left-term arity after confirming equal top symbols; the lower-level builder asserts equal arity. Rust mirrors the wrapper gate and leaves the arity equality invariant to `clause_dis_eq_decomposition`.
 <!-- END MANUAL REVIEW: c_source_docs -->

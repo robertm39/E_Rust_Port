@@ -1,0 +1,9 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"streaming-rebuild-swv","1","0x7ff7caab0000","-1073740791",,"58.739511","57.4375","2308636","0","memory allocation of 168 bytes failed
+memory allocation of 30 bytes failed
+skipping backtrace printing to avoid potential recursion"
+"streaming-rebuild-swv","2","0x7ff7caab0000","-1073740791",,"58.502717","57.109375","2308480","0","memory allocation of 168 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"streaming-rebuild-swv","3","0x7ff7caab0000","-1073740791",,"57.808885","56.5","2306532","0","memory allocation of 8 bytes failed
+memory allocation of 30 bytes failed
+skipping backtrace printing to avoid potential recursion"

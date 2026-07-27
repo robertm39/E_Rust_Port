@@ -1,0 +1,17 @@
+pair,variant,seconds,exit_code
+1,parent,2.8788634,0
+1,force_inline,2.6814620,0
+2,force_inline,2.7717867,0
+2,parent,2.7479700,0
+3,parent,2.8077530,0
+3,force_inline,2.8355420,0
+4,force_inline,2.8573583,0
+4,parent,2.8049495,0
+5,parent,2.8745046,0
+5,force_inline,2.7849456,0
+6,force_inline,2.8182165,0
+6,parent,2.8424045,0
+7,parent,2.8302437,0
+7,force_inline,2.7524766,0
+8,force_inline,2.7574212,0
+8,parent,2.7590466,0

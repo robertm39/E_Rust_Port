@@ -1,0 +1,49 @@
+division.category LTB.HOL
+division.category.training_directory /home/tptp/CASC/24/TrainingData.HOL
+% SZS start BatchConfiguration
+execution.order ordered
+output.required Proof
+limit.time.problem.wc 30
+limit.time.overall.wc 240
+% SZS end BatchConfiguration
+% SZS start BatchIncludes
+include('Axioms/HOL001+0.ax').
+include('Axioms/HOL002+0.ax').
+include('Axioms/HOL003+0.ax').
+% SZS end BatchIncludes
+% SZS start BatchProblems
+Problems/HOL004+1.p HOL004+1
+Problems/HOL034+1.p HOL034+1
+Problems/HOL035+1.p HOL035+1
+Problems/HOL036+1.p HOL036+1
+Problems/HOL077+1.p HOL077+1
+Problems/HOL080+1.p HOL080+1
+Problems/HOL091+1.p HOL091+1
+Problems/HOL092+1.p HOL092+1
+% SZS end BatchProblems
+% SZS start BatchConfiguration
+execution.order ordered
+output.required Proof
+limit.time.problem.wc 60
+limit.time.overall.wc 720
+% SZS end BatchConfiguration
+% SZS start BatchIncludes
+include('Axioms/HOL001+0.ax').
+include('Axioms/HOL002+0.ax').
+include('Axioms/HOL003+0.ax').
+include('Axioms/HOL004+0.ax').
+% SZS end BatchIncludes
+% SZS start BatchProblems
+Problems/HOL101+1.p HOL101+1
+Problems/HOL102+1.p HOL102+1
+Problems/HOL103+1.p HOL103+1
+Problems/HOL104+1.p HOL104+1
+Problems/HOL105+1.p HOL105+1
+Problems/HOL106+1.p HOL106+1
+Problems/HOL107+1.p HOL107+1
+Problems/HOL111+1.p HOL111+1
+Problems/HOL113+1.p HOL113+1
+Problems/HOL114+1.p HOL114+1
+Problems/HOL115+1.p HOL115+1
+Problems/HOL116+1.p HOL116+1
+% SZS end BatchProblems

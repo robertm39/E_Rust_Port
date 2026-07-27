@@ -1,0 +1,2 @@
+fof(inner_selected, axiom, p(a)).
+fof(outer_selected, axiom, q(a)).

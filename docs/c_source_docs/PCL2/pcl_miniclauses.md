@@ -84,7 +84,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for compact ownership, count width, and rendering equivalence on 2026-07-17.
 
 Source files reviewed: `PCL2/pcl_miniclauses.h`, `PCL2/pcl_miniclauses.c`.
 
@@ -105,4 +105,21 @@ Source files reviewed: `PCL2/pcl_miniclauses.h`, `PCL2/pcl_miniclauses.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/miniclauses.rs`, covering compact literal snapshots, conversion from and back to ordinary clauses, owned minify/unminify wrappers, explicit `MiniClausePrint` LOP/TPTP/TSTP rendering, and PCL/TSTP-core rendering through temporary rebuilt clauses.
+- Rust stores one vector of owned `MiniLiteral` values instead of C's separately allocated `short` sign array and borrowed two-`Term_p` array. Each cloned `Term` is a shared identity handle, so the snapshot preserves the exact banked term cells after the source clause is freed while preventing dangling pointers and double frees.
+- The vector length is the authoritative `usize` literal count. It cannot disagree with storage or truncate at C's signed-`short` boundary; focused coverage retains 32,768 literals. Emulating C's overflow would only recreate invalid allocation/loop bounds and has no valid serialized effect.
+- Mini clauses capture only literal signs and term pairs. Clause-level properties are not preserved because the C `properties` field is commented out and `MiniClauseToClause` creates a fresh `ClauseAlloc` result. Rust regression coverage requires reconstruction to return `CPIgnoreProps`/unknown role even when the source was a negated conjecture.
+- The Rust printer methods intentionally rebuild a full `Clause` before calling the already-ported clause printers, matching the C implementation's simple temporary-clause strategy. Output format, problem type, and equation-print options are explicit call arguments; repeated LOP/TPTP/LOP rendering proves the selection cannot leak process-global state.
+
+### Change Later
+
+- `MiniClauseCell.literal_no` is a C `short` even though it is assigned from `ClauseLiteralNumber`; very large clauses can truncate or overflow. Rust intentionally retains the full safe count; any attempt to reproduce the invalid boundary remains tracked by `E_Rust_Port-j76.4.943`.
+- The compact representation drops role/source/indexing metadata exactly like C. Whether a future proof format should retain it remains tracked by `E_Rust_Port-j76.4.944`.
+- C borrows raw `Term_p` pointers and relies on the term bank outliving every mini clause. Rust keeps term cells alive with shared handles while the owning mini protocol supplies the rendering bank; alternative lifetime modeling remains tracked by `E_Rust_Port-j76.4.945`.
+- `MiniClausePrint`, `MiniClausePCLPrint`, and `MiniClauseTSTPCorePrint` rebuild a complete `Clause` just to print it. Rust retains that compatibility path; a measured direct compact printer remains tracked by `E_Rust_Port-j76.4.946`.
+- `MiniClausePrint` reaches C's process-global output format and problem type. Rust's explicit controls preserve per-call behavior without leakage; any global-state emulation remains tracked by `E_Rust_Port-j76.4.947`.
+- `MiniClauseAddTerms` duplicates most of `ClauseToMiniClause`, is not declared in the header, and has no callers in the vendored tree. Rust factors the literal-copy path instead of exposing dead surface; reconsideration remains tracked by `E_Rust_Port-j76.4.948`.
 <!-- END MANUAL REVIEW: c_source_docs -->

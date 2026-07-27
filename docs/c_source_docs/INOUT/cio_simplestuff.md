@@ -78,6 +78,18 @@ Source files reviewed: `INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/simplestuff.rs` ports `ReadTextBlock` with C-shaped `fgets(buf, 256, ...)` chunking, append-without-clearing semantics, C-string terminator comparison and NUL-truncated append behavior, and false-on-EOF behavior.
+- `TCPReadTextBlock` is represented both as an iterator-backed helper for already received message strings and as a network-backed helper over the ported `TcpMessage` receive loop, preserving the same C-string terminator/append behavior at the text-block boundary.
+- Tests cover append preservation, EOF after partial append, 255-byte chunk boundaries, embedded-NUL C-string truncation, iterator-backed TCP text blocks, network-message text blocks, receive-failure diagnostics, and a real-loopback deduction-server `RUN` exchange that consumes command, formula and exact terminator frames before sending the captured C response frames.
+
+### Change Later
+
+- Both C functions require the caller-supplied terminator to include the trailing newline for ordinary line-based input to stop. Rust keeps C-string terminator matching for compatibility; a later higher-level API could make the line terminator policy explicit instead of relying on callers to remember the newline.
+- Both C functions use `strcmp` and `DStrAppendStr`, so embedded NUL bytes truncate comparison and appended content even though file/network reads can carry later bytes in the same chunk/message. Rust preserves that C-string behavior for compatibility; a cleaned text-block API should reject or explicitly model binary payloads instead.
+- C `TCPReadTextBlock` calls `TCPStringRecvX`, so receive errors are fatal and the function returns `true` once a terminator is seen. Rust's network-backed helper returns a diagnostic on receive failure; keep any future executable-facing compatibility wrapper responsible for converting that diagnostic back into C's fatal-error surface.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

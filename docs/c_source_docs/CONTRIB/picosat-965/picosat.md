@@ -379,4 +379,10 @@ Source files reviewed: `CONTRIB/picosat-965/picosat.h`, `CONTRIB/picosat-965/pic
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- E's C build vendors the full PicoSAT implementation in-tree, while Rust currently treats PicoSAT as an optional runtime-loaded shared library behind a narrow FFI wrapper and falls back to the internal solver when no library is found. After drop-in compatibility is secured, decide whether vendoring, runtime loading, or a Cargo feature should be the supported deployment model.
+- PicoSAT exposes a large mutable solver object with custom allocator hooks, optional trace/core support, and many compile-time feature branches. Rust should keep the safe wrapper focused on the API calls E actually uses; broader API coverage should be added only with lifecycle tests for ownership, reset behavior, and trace/core semantics.
+- The C solver uses extensive internal assertions and process-level diagnostics. If Rust ever ports the solver itself instead of loading it, model solver-state invariants explicitly rather than translating assertion failures into ordinary recoverable errors.
 <!-- END MANUAL REVIEW: c_source_docs -->

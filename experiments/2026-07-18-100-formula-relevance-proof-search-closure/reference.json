@@ -1,0 +1,44 @@
+{
+  "all_exact": true,
+  "c": {
+    "completion": "% Clause set closed under restricted calculus!",
+    "exit_code": 10,
+    "statistics": {
+      "Current number of archived formulas": 0,
+      "Current number of processed clauses": 3,
+      "Current number of unprocessed clauses": 0,
+      "Initial clauses": 3,
+      "Initial clauses in saturation": 3,
+      "Parsed axioms": 5,
+      "Processed clauses": 3,
+      "Removed by relevancy pruning/SinE": 2
+    },
+    "status": "% SZS status GaveUp",
+    "stderr": ""
+  },
+  "display_args": [
+    "--tstp-in",
+    "--tstp-out",
+    "--no-generation",
+    "--print-statistics",
+    "--rel-pruning-level=3",
+    "$FIXTURE"
+  ],
+  "rust": {
+    "completion": "% Clause set closed under restricted calculus!",
+    "exit_code": 10,
+    "statistics": {
+      "Current number of archived formulas": 0,
+      "Current number of processed clauses": 3,
+      "Current number of unprocessed clauses": 0,
+      "Initial clauses": 3,
+      "Initial clauses in saturation": 3,
+      "Parsed axioms": 5,
+      "Processed clauses": 3,
+      "Removed by relevancy pruning/SinE": 2
+    },
+    "status": "% SZS status GaveUp",
+    "stderr": ""
+  },
+  "schema_version": 1
+}

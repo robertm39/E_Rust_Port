@@ -93,6 +93,23 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DDArrayDebugPrint` calls `DDArrayElement` for every printed position, so asking it to print beyond the current allocation enlarges and zero-fills the array as a side effect. Rust preserves this in the explicit debug-string helper.
+- `DDArrayDebugPrint` takes a signed `long size`, loops while `i < size`, and always prints a final newline. Rust keeps a signed compatibility helper where zero or negative sizes produce only that trailing newline.
+- `DDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment macros inherit that assertion while always succeeding for nonnegative indices.
+- `DDArraySelectPart` asserts that `part` is in the inclusive `[0, 1]` range, `size` is positive, and the allocated array already covers the requested prefix before partitioning the backing array in place.
+- `DDArraySelectPart` computes its final interpolated result as `(arr[start] + tmp) / 2`, so large finite values can overflow to infinity before the divide. Rust preserves this sum-then-divide behavior instead of using an overflow-avoiding midpoint helper.
+- Rust keeps a signed `DDArraySelectPart` wrapper so negative C `long size` inputs hit the same assertion-shaped failure as zero-size inputs instead of being unrepresentable at the call boundary.
+- `DDArayEnlarge` is exported with the historical misspelling and is normally reached through `DDArrayElementRef` only for uncovered indices. A direct call on an already covered index can compute a smaller target size before copying the old allocation. Rust exposes an explicit raw compatibility helper for the target-size calculation, but reports that under-allocation case as a panic instead of reproducing the C buffer overrun.
+- `DDArrayAdd` takes a signed `long limit` and uses a plain `for(i=0; i<limit; i++)` loop, so zero and negative limits perform no work. Rust keeps that exact loop surface in a signed compatibility helper while leaving the existing `usize` helper for ordinary prefix addition.
+
+### Change Later
+
+- Negative `DDArray` access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while future Rust-only checked accessors should be separate wrappers instead of weakening the C-shaped array API.
+- `DDArraySelectPart` treats invalid percentile/range requests as assertion failures. The compatibility-shaped Rust method should keep panicking, while user-facing statistics APIs should validate inputs before calling it or expose a separate checked wrapper.
+- `DDArraySelectPart` uses a C-style sum-then-divide final average, which can overflow even when the mathematical midpoint is finite. A cleaned statistics helper should use an overflow-aware midpoint only outside the compatibility surface.
+- `DDArrayDebugPrint` silently treats nonpositive sizes as empty output plus the final newline because of its signed loop condition. A cleaned diagnostic helper should prefer an unsigned length or explicit validation.
+- Direct `DDArayEnlarge` calls rely on an implicit uncovered-index precondition that the function itself does not assert. A cleaned API should hide the misspelled helper, assert the precondition, or route all growth through the element-ref/accessor path instead of preserving the hazardous direct-call shape.
+- `DDArrayAdd` silently treats nonpositive limits as empty prefixes because of its signed loop condition. A cleaned Rust-facing API should keep using an unsigned prefix length or return a validation error for negative caller input.
 
 ### Porting Focus
 

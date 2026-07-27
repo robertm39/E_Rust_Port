@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_pqueue_c_sha256": "7107104119a4d8e8c6a4483ac37936ad24134aa25cbde702a8562508d2f9db65",
+    "clb_pqueue_h_sha256": "22c09ef61cbcb0c17aa1c946384d90aed6b8508345b848648027956c933e980e",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "a6378f08b8f4ecc605bc5573dc466d643adbd8fdd9537cafd25cc93550e45066"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "store=size:8,head:0,tail:4,card:4,slots:10,20,30,40,drain:10,20,30,40\nbury=size:8,head:0,tail:4,card:4,slots:40,30,20,10,drain:40,30,20,10\nwrapped=size:8,head:1,tail:5,card:4,copied:5,2,3,4,drain:2,3,4,5\ndirect_full=size:8,head:1,tail:5,card:4,copied:4,1,2,3,drain:1,2,3,4\ndirect_nonfull=size:8,head:2,tail:4,card:6,copied:10,20,30,40,indices:4,5,6,7,0,1\n"
+  },
+  "schema_version": 1
+}

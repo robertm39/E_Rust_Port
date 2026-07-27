@@ -1,0 +1,163 @@
+{
+  "all_exact": true,
+  "cases": {
+    "cleanup": {
+      "c": {
+        "counters": {
+          "Other redundant clauses eliminated": 0,
+          "Processed clauses": 2,
+          "Propositional unsat checks": 0,
+          "Total rewrite steps": 1
+        },
+        "events": [
+          {
+            "clause": "(p(h(b))|p(h(b)))",
+            "kind": "rw",
+            "parents": [
+              "external",
+              "external"
+            ]
+          },
+          {
+            "clause": "(p(h(b)))",
+            "kind": "cn",
+            "parents": [
+              "event:0"
+            ]
+          }
+        ],
+        "exit_code": 10,
+        "proof_before_maintenance_status": true,
+        "status": "GaveUp",
+        "stderr": ""
+      },
+      "display_args": [
+        "--output-level=6",
+        "--print-statistics",
+        "--no-preprocessing",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--detsort-rw",
+        "--detsort-new",
+        "--forward-contract-limit=0",
+        "--processed-clauses-limit=2",
+        "$FIXTURE"
+      ],
+      "exact": true,
+      "expected_kinds": [
+        "rw",
+        "cn"
+      ],
+      "rust": {
+        "counters": {
+          "Other redundant clauses eliminated": 0,
+          "Processed clauses": 2,
+          "Propositional unsat checks": 0,
+          "Total rewrite steps": 1
+        },
+        "events": [
+          {
+            "clause": "(p(h(b))|p(h(b)))",
+            "kind": "rw",
+            "parents": [
+              "external",
+              "external"
+            ]
+          },
+          {
+            "clause": "(p(h(b)))",
+            "kind": "cn",
+            "parents": [
+              "event:0"
+            ]
+          }
+        ],
+        "exit_code": 10,
+        "proof_before_maintenance_status": true,
+        "status": "GaveUp",
+        "stderr": ""
+      }
+    },
+    "sat_check_normalize": {
+      "c": {
+        "counters": {
+          "Other redundant clauses eliminated": 0,
+          "Processed clauses": 1,
+          "Propositional unsat checks": 0,
+          "Total rewrite steps": 1
+        },
+        "events": [
+          {
+            "clause": "($false)",
+            "kind": "rw",
+            "parents": [
+              "external",
+              "external"
+            ]
+          },
+          {
+            "clause": "($false)",
+            "kind": "cn",
+            "parents": [
+              "event:0"
+            ]
+          }
+        ],
+        "exit_code": 0,
+        "proof_before_maintenance_status": null,
+        "status": "Unsatisfiable",
+        "stderr": ""
+      },
+      "display_args": [
+        "--output-level=6",
+        "--print-statistics",
+        "--no-preprocessing",
+        "--no-generation",
+        "--expert-heuristic=(1*FIFOWeight(ConstPrio))",
+        "--detsort-rw",
+        "--detsort-new",
+        "--satcheck=GlobalMin",
+        "--satcheck-proc-interval=1",
+        "--satcheck-normalize-unproc",
+        "$FIXTURE"
+      ],
+      "exact": true,
+      "expected_kinds": [
+        "rw",
+        "cn"
+      ],
+      "rust": {
+        "counters": {
+          "Other redundant clauses eliminated": 0,
+          "Processed clauses": 1,
+          "Propositional unsat checks": 0,
+          "Total rewrite steps": 1
+        },
+        "events": [
+          {
+            "clause": "($false)",
+            "kind": "rw",
+            "parents": [
+              "external",
+              "external"
+            ]
+          },
+          {
+            "clause": "($false)",
+            "kind": "cn",
+            "parents": [
+              "event:0"
+            ]
+          }
+        ],
+        "exit_code": 0,
+        "proof_before_maintenance_status": null,
+        "status": "Unsatisfiable",
+        "stderr": ""
+      }
+    }
+  },
+  "exact_cases": 2,
+  "schema_version": 1,
+  "total_cases": 2
+}

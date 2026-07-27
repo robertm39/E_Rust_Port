@@ -1,0 +1,27 @@
+{
+  "accepted": true,
+  "checks": {
+    "c_stack_merge_and_postorder_free_are_explicit": true,
+    "fp_leaf_is_the_direct_objtree_storage_owner": true,
+    "immutable_owner_queries_use_binary_lookup": true,
+    "marker_and_standard_tree_models_are_removed": true,
+    "objmap_find_and_extract_splay_on_misses": true,
+    "objmap_has_no_direct_rust_production_owner": true,
+    "objmap_uses_safe_index_links": true,
+    "objtree_mutating_and_binary_lookup_are_distinct": true,
+    "objtree_uses_safe_index_links": true,
+    "owned_payloads_do_not_require_clone": true
+  },
+  "direct_objmap_type_owners": [],
+  "direct_objtree_type_owners": [
+    {
+      "path": "src/clauses/overlap_index.rs",
+      "type_mentions": 2
+    },
+    {
+      "path": "src/terms/fp_index.rs",
+      "type_mentions": 18
+    }
+  ],
+  "schema_version": 1
+}

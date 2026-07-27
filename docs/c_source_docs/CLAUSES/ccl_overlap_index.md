@@ -125,4 +125,21 @@ Source files reviewed: `CLAUSES/ccl_overlap_index.h`, `CLAUSES/ccl_overlap_index
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- Rust currently ports the fingerprint-index wrapper shape, direct compact-position insert/delete, clause occurrence deletion, into/from term collection, stable clause-identifier keys for cloned clause snapshots in occurrence payloads, and the split normal-term versus negative-atom into-index helpers.
+- Into-term collectors count every non-variable occurrence visited but store terms in a pointer-identity set, so the returned count can exceed the number of stored unique terms. Rust preserves that count-versus-storage split.
+- Into-position collection skips descent under lambda terms, while the non-position into-term collector recurses through all arguments. Rust mirrors that asymmetry.
+- `term_collect_into_terms2` and `term_collect_into_terms_pos2` send only the top negative non-equational atom term to the `natoms` collection; its subterms are collected into the normal term collection. Rust preserves that top-only split.
+- `OverlapIndexInsertIntoClause` and `OverlapIndexInsertFromClause` collect positions onto a stack and then pop them for insertion, reversing insertion traversal order. Rust iterates the collected positions in reverse when inserting.
+- Indexed paramodulation collects unifiable fingerprint leaves onto a C `PStack` and then pops them before traversing the subterm trees. Rust now reverses the leaf collection before flattening occurrence payloads so generated indexed-paramodulation candidates follow the same stack-pop order.
+- Rust exposes an `OverlapIndexFPLeafPrint`-style renderer for fingerprint leaf paths, direct term counts, subterm entries, and compact clause-position payloads using an explicit term bank and problem type.
+
+### Change Later
+
+- `ClauseCollectIntoTerms2` depends on `EqnIsEquLit(lit)` through the literal's owning term bank in C. Rust has no equation back-pointer yet, so the split collectors take an explicit `&TermBank`; replace this with a typed owner handle once clause/literal ownership can provide the bank safely.
+- C overlap indexes group occurrence positions by raw clause pointer. Rust cannot use borrowed wrapper addresses for cloned clause values, so it uses stable clause identifiers for current cloned snapshots; replace cloned payloads with stable clause handles before long-lived proof-state indexes depend on deletion order or duplicate identifiers.
+- The C debug printers expose pointer addresses and splay-tree shape. Rust now renders the leaf path, term count, term text, and compact-position payload content, but does not recreate byte-identical raw tree-node layout; add that only if diagnostics or reference-output tests require it.
+- `OverlapIndexFPLeafPrint` allocates and frees a local `PStack` named `iter` without using it. Rust intentionally omits that no-op allocation; if allocation side effects ever become visible in C debug builds, treat that as compatibility-only behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -90,4 +90,9 @@ Source files reviewed: `TERMS/cte_dbvars.h`, `TERMS/cte_dbvars.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `_RequestDBVar()` stores shared DB variables in nested `IntMap` objects keyed first by DB index and then by type UID. Rust preserves the same uniqueness boundary, but a cleaned owner could use one typed key `(db_index, type_uid)` and make the nonnegative-index and valid-type preconditions ordinary validation at the API boundary.
+- `mk_db()` records the DB index both as `entry_no` and `f_code`, while ordinary variables use negative function codes elsewhere. Rust mirrors the C shape because lambda/DB printing and sharing code observes it; a cleaned term representation should make DB-variable identity a distinct typed field instead of overloading ordinary term-code slots.
 <!-- END MANUAL REVIEW: c_source_docs -->

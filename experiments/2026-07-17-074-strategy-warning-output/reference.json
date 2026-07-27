@@ -1,0 +1,52 @@
+{
+  "all_exact": true,
+  "cases": {
+    "proof_search": {
+      "c": {
+        "exit_code": 1,
+        "stderr": "eprover: Warning: Config misses ordertype\n\neprover: Warning: Config misses db_w\n\n",
+        "stderr_sha256": "7C9DEBA6A22B7FDCB13209F235AA4389A7766FC2657535D02B546CEE6C679277",
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n\n% No proof found!\n% SZS status Satisfiable\n",
+        "stdout_sha256": "E0CB9978F236C6D96CE8B69AED7BCD4641FA3850EAA1907D9686C465F24ED221"
+      },
+      "display_args": [
+        "--output-level=0",
+        "--lop-in",
+        "--parse-strategy=$STRATEGY",
+        "$PROBLEM"
+      ],
+      "exact_match": true,
+      "rust": {
+        "exit_code": 1,
+        "stderr": "eprover: Warning: Config misses ordertype\n\neprover: Warning: Config misses db_w\n\n",
+        "stderr_sha256": "7C9DEBA6A22B7FDCB13209F235AA4389A7766FC2657535D02B546CEE6C679277",
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n\n% No proof found!\n% SZS status Satisfiable\n",
+        "stdout_sha256": "E0CB9978F236C6D96CE8B69AED7BCD4641FA3850EAA1907D9686C465F24ED221"
+      }
+    },
+    "selection_error": {
+      "c": {
+        "exit_code": 11,
+        "stderr": "eprover: Warning: Config misses ordertype\n\neprover: Warning: Config misses db_w\n\neprover: Error: Configuration name Missing not found.\n",
+        "stderr_sha256": "123606B5340648C335C21F11364AE4DDA9289445DA0B6EDC2969F64E068C9898",
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n",
+        "stdout_sha256": "47967A8133A91A3D663FEAC76E24DEAEB083969AC9006A4C8CD6577A4BA887D4"
+      },
+      "display_args": [
+        "--parse-strategy=$STRATEGY",
+        "--select-strategy=Missing",
+        "--print-strategy=>current-strategy<"
+      ],
+      "exact_match": true,
+      "rust": {
+        "exit_code": 11,
+        "stderr": "eprover: Warning: Config misses ordertype\n\neprover: Warning: Config misses db_w\n\neprover: Error: Configuration name Missing not found.\n",
+        "stderr_sha256": "123606B5340648C335C21F11364AE4DDA9289445DA0B6EDC2969F64E068C9898",
+        "stdout": "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n",
+        "stdout_sha256": "47967A8133A91A3D663FEAC76E24DEAEB083969AC9006A4C8CD6577A4BA887D4"
+      }
+    }
+  },
+  "fixture_sha256": "C85ACAF3C3A65D2D4461FAF8BC5A57C93D7D4EAD6302ADA70E3F378F6FAAE54B",
+  "schema_version": 1
+}

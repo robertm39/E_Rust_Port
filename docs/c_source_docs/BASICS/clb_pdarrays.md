@@ -122,6 +122,17 @@ Source files reviewed: `BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment/integer-increment macros inherit that assertion while always succeeding for nonnegative indices.
+- `PDArrayEnlarge` is exported but is normally reached through `PDArrayElementRef` only for uncovered indices. A direct call on an already covered fixed-growth array can compute a smaller target size before copying the old allocation. Rust exposes an explicit raw compatibility helper for the target-size calculation, but reports that under-allocation case as a panic instead of reproducing the C buffer overrun.
+- `PDArrayElementClear` writes directly to `array[idx].p_val` without calling `PDArrayElementRef`, so it neither grows the array nor checks bounds. Rust exposes this as a raw pointer-slot clear helper for already allocated indices and panics on invalid indices instead of reproducing the C out-of-bounds write.
+- `PDArrayAdd` takes a signed `long limit` and uses a plain `for(i=0; i<limit; i++)` loop, so zero and negative limits perform no work. Rust keeps that exact loop surface in a signed compatibility helper while leaving the existing `usize` helper for ordinary prefix addition.
+
+### Change Later
+
+- Negative `PDArray` access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while future Rust-only checked accessors should be separate wrappers instead of weakening the C-shaped array API.
+- Direct `PDArrayEnlarge` calls rely on an implicit uncovered-index precondition that the function itself does not assert. A cleaned API should hide the helper, assert the precondition, or route all growth through the element-ref/accessor path instead of preserving the hazardous direct-call shape.
+- `PDArrayElementClear` bypasses the otherwise central grow-on-access path and can write outside the allocation if a caller passes an uncovered index. Prefer the checked delete helper for ordinary Rust call paths and keep the raw clear helper quarantined for compatibility-only code.
+- `PDArrayAdd` silently treats nonpositive limits as empty prefixes because of its signed loop condition. A cleaned Rust-facing API should keep using an unsigned prefix length or return a validation error for negative caller input.
 
 ### Porting Focus
 

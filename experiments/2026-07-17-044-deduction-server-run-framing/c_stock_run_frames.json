@@ -1,0 +1,26 @@
+{
+  "c_source_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "build": "default configure options",
+  "prover": "the eprover binary built from the same source commit",
+  "command": "RUN reference_job",
+  "input_frames": [
+    "RUN reference_job",
+    "fof(reference_axiom, axiom, p(a)).\n",
+    "GO\n"
+  ],
+  "response_frames": [
+    {
+      "index": 0,
+      "payload_length": 40,
+      "payload": "\n% Processing started for reference_job\n",
+      "wire_hex": "0000002c0a252050726f63657373696e67207374617274656420666f72207265666572656e63655f6a6f620a"
+    },
+    {
+      "index": 1,
+      "payload_length": 17,
+      "payload": "200 ok : success\n",
+      "wire_hex": "00000015323030206f6b203a20737563636573730a"
+    }
+  ],
+  "server_stderr": "e_deduction_server: Cannot get eprover PID\n"
+}

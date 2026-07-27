@@ -126,6 +126,23 @@ Source files reviewed: `HEURISTICS/che_axfilter.h`, `HEURISTICS/che_axfilter.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `AxFilterAlloc` initializes all ordinary GSinE fields but leaves `threshold` unset; the C threshold parser assigns it before use. Rust initializes `threshold` to `0` so the safe allocation-shaped value is deterministic before parsing.
+- `GeneralityMeasureNames` contains the spellings `CoutPosFormulas` and `CoutNegFormulas`, and lookup returns `GMNoMeasure` for any unknown spelling. Rust preserves those spellings for lookup/printing; cleaned aliases should be added only as compatibility mappings.
+- `AxFilterPrintBuf` formats GSinE with `%f`-style six-decimal floats and prints `Threshold(<n>)`. Its `AFLambdaDefines` branch formats `LambdaDef` but then falls through to the default assertion because there is no `break`; Rust returns `LambdaDef` to keep filter-set printing usable until reference tests show the assertion itself is observable.
+- `AxFilterDefParse` uses a file-static unsigned counter for anonymous `axfilter_auto%4lu` names, including the width-padding spaces for small counters, and does not check generated names against user-supplied names. Rust preserves the process-global counter and generated-name shape; a cleaned collision-free name policy should wait for parser/reference tests.
+- `AxFilterDefaultSet` is one large C string assembled with line-splice syntax and mostly separated by whitespace, not explicit delimiters. Rust keeps an internal default-set string that parses to the same 21 named filters; preserve this scanner-driven construction until control-layer callers can exercise the default strategy set end to end.
+- The live `cco_sine.c` filter resolver accepts a direct inline filter only when the second token is `(`, so it uses `AxFilterDefParse` for `Threshold(...)` but rejects `name=Threshold(...)` as an unknown default-name lookup. Rust's `sine_get_filter` helper preserves that normal-build behavior and returns the default set plus any anonymous inline filter; the executable preprocessing path now uses that resolver for threshold, represented GSinE, and represented `LambdaDef` before relevance pruning.
+- `e_axfilter` does not move or clone selected objects: `StructFofSpec` owns its clause/formula sets for the complete output operation and returns borrowed identities for immediate rendering. The destructive proof-state caller uses process-unique clause identifiers and allocation-unique formula entry ids, preserves duplicate-pointer tail relinking through last-occurrence order, and bulk-drains each owner once. Repeated non-moving selection plus 2,048-object clause and formula regressions close the earlier stable-handle concern; the complete FOL/HO executable matrix is 9/9 exact in [`experiments/2026-07-18-098-axfilter-owner-closure/FINDINGS.md`](../../../experiments/2026-07-18-098-axfilter-owner-closure/FINDINGS.md).
+
+### Change Later
+
+- `GSinEParse` recognizes the full `GeneralityMeasureNames` table but immediately rejects every measure except `GMTerms` and `GMFormulas` with "Generality measure not yet implemented"; the later D-relation code also asserts on the same unsupported measures. Rust preserves the parser rejection, but a cleaned implementation should either implement the remaining measures end to end or remove the apparent parser surface.
+- `AxFilterAlloc` leaves `threshold` uninitialized, `AxFilterPrintBuf` falls through after the `AFLambdaDefines` case, and anonymous filter names can collide with user-supplied names. Rust makes these deterministic while keeping compatibility notes; revisit them only if exact allocation or assertion behavior becomes observable in reference tests.
+- The public spelling table contains `CoutPosFormulas` and `CoutNegFormulas`; add corrected aliases only as compatibility mappings after strategy-file tests cover existing misspelled names.
+- The live SInE resolver's refusal of inline named definitions is probably an accidental consequence of checking only `LookToken(in,1) == OpenBracket`. Keep it for compatibility in the wired threshold path and later GSinE/LambdaDef paths; a later user-facing extension can accept named inline filters deliberately.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

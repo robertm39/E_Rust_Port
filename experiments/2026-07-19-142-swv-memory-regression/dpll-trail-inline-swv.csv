@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"dpll-trail-inline-swv","1","0x7ff65c380000","8","ResourceOut","62.918436","60.9375","2088428","359","eprover: CPU time limit exceeded, terminating"
+"dpll-trail-inline-swv","2","0x7ff65c380000","8","ResourceOut","65.790303","64.6875","2145876","359","eprover: CPU time limit exceeded, terminating"
+"dpll-trail-inline-swv","3","0x7ff65c380000","8","ResourceOut","65.604245","64.734375","2146960","359","eprover: CPU time limit exceeded, terminating"

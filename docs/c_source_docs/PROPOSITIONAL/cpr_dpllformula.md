@@ -85,7 +85,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled against the complete propositional ownership path and exact edpll matrix on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_dpllformula.h`, `PROPOSITIONAL/cpr_dpllformula.c`.
 
@@ -106,4 +106,17 @@ Source files reviewed: `PROPOSITIONAL/cpr_dpllformula.h`, `PROPOSITIONAL/cpr_dpl
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/propositional/dpllformula.rs` ports `DPLLFormulaAlloc`, `dpll_form_add_atom_space`, `DPLLRegisterClauseLiteral`, `DPLLFormulaInsertClause`, `DPLLFormulaPrint`, and `DPLLFormulaParseLOP` adapted to Rust's explicit `TermBank` parser ownership.
+- Rust stores owned `DpllClause` values and indexes active-clause sets by clause index instead of raw clause pointers. This is the completed stable-ownership representation: duplicate clause registration still asserts, preserving the `PTreeStore` duplicate-entry invariant, while allocation-independent indices support every implemented C lookup and state-shell consumer.
+- Atom-table growth preserves C's lazy first allocation of 500 cells and subsequent 1.5x growth shape. Occurrence counters and positive/negative active sets are split per atom as in C.
+- `parse_lop` returns the C progress text that `DPLLFormulaParseLOP` writes to `GlobalOut`, including the already-printed clause period followed by `...accepted` or `...discarded (tautology)`.
+
+### Change Later
+
+- `DPLLRegisterClauseLiteral` computes `atom = ABS(lit)` but grows the atom table with `while(form->atom_no <= lit)`, so negative literals can skip allocation before indexing `atoms[ABS(lit)]`. Rust grows by the absolute atom code to avoid reproducing a memory hazard; add reference coverage before deciding whether any legacy path depends on the buggy signed condition.
+- `DPLLFormulaPrint` prints `pos_occur` twice in the atom-debug table instead of printing `neg_occur` in the second column. Rust preserves that observable rendering for compatibility; a later diagnostic API should either fix the second column or label the output as legacy.
+- `DPLLFormulaParseLOP` allocates a temporary term bank around a borrowed `Sig_p`, then clears `terms->sig` before freeing the bank. Rust keeps the term bank explicit at the call boundary as the completed ownership design. The exact `edpll` parser matrix shows no need for C's borrowed-signature lifetime; revisit only for a future FFI boundary, not ordinary drop-in behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->

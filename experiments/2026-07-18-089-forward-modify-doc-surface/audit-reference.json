@@ -1,0 +1,26 @@
+{
+  "all_passed": true,
+  "contracts": {
+    "c_ac_resolution_emits_docs": true,
+    "c_condensation_emits_docs": true,
+    "c_forward_modify_calls_normalform": true,
+    "c_forward_modify_emits_minimize_docs": true,
+    "c_ho_normalization_is_doc_silent": true,
+    "c_ho_pruning_is_doc_silent": true,
+    "c_local_rewrite_is_doc_silent": true,
+    "c_negative_sr_emits_docs": true,
+    "c_normalform_emits_rewrite_docs": true,
+    "c_positive_sr_emits_docs": true,
+    "rust_ac_dispatches_docs": true,
+    "rust_all_direct_owners_use_optional_docs": true,
+    "rust_both_sr_directions_dispatch_docs": true,
+    "rust_condense_dispatches_docs": true,
+    "rust_documenting_event_regressions_present": true,
+    "rust_minimize_dispatches_docs": true,
+    "rust_normalform_dispatches_docs": true,
+    "rust_silent_mutation_regressions_present": true
+  },
+  "passed": 18,
+  "schema_version": 1,
+  "total": 18
+}

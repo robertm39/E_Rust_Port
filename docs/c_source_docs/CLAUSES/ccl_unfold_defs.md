@@ -85,7 +85,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for complete executable caller ownership on 2026-07-17.
 
 Source files reviewed: `CLAUSES/ccl_unfold_defs.h`, `CLAUSES/ccl_unfold_defs.c`.
 
@@ -98,6 +98,22 @@ Source files reviewed: `CLAUSES/ccl_unfold_defs.h`, `CLAUSES/ccl_unfold_defs.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- `src/clauses/unfold_defs.rs` currently ports the `ClauseSetPreprocess` subset: `ClauseSetRemoveSuperfluousLiterals`, `ClauseSetFilterTautologies`, optional `ClauseSetReplaceInjectivityDefs`, and `ClauseSetCanonize`, returning the number of clauses removed by tautology filtering just as the C helper does.
+- The same Rust unit now ports the first-order and represented higher-order equality-definition unfolding paths: `ClauseUnfoldEqDef`, `ClauseSetUnfoldEqDef`, `ClauseSetUnfoldAllEqDefs`, and `ClauseSetUnfoldEqDefNormalize`, including definition removal into the archive, `DCUnfold` derivation entries, live `DocClauseEqUnfold` emission for clause-backed active/passive changes when proof output is active, higher-order `ClauseExtractHODefinition`-style symbol/lambda extraction through `AbstractVars`, tautology refiltering, and canonization after successful unfolding.
+- Supported executable proof search applies the clause-set preprocessing subset when `--no-preprocessing` is absent, then applies `ClauseSetUnfoldEqDefNormalize` regardless of that flag unless the unfolding gates disable it. `--eq-unfold-limit`, `--eq-unfold-maxclauses`, and `--no-eq-unfolding` drive this proof-state normalization path; inline and file watchlists are passed as the passive set, live unfolding documentation advances the subsequent initial-documentation id, and `% Removed in clause preprocessing` includes removed definitions. The `--prune` branch exits after the preprocessing prefix, before equality-definition normalization, matching its C control-flow boundary.
+- `classify_problem` is a distinct C caller: after formula-owner CNF it invokes only `ClauseSetPreprocess` under `--no-preprocessing`, and never invokes `ClauseSetUnfoldEqDefNormalize`. Rust now preserves that boundary for both direct CNF and represented FOF-origin definitions. The focused feature vectors, symbolic classes, exit codes, and stderr match isolated C in [`experiments/2026-07-17-076-classifier-eqdef-boundary`](../../../experiments/2026-07-17-076-classifier-eqdef-boundary/FINDINGS.md).
+
+### Change Later
+
+- `ClauseSetPreprocess` keeps `passive`, `eqdef_incrlimit`, and `eqdef_maxclauses` parameters even though this current C body does not use them; Rust preserves the public helper's observable behavior with ignored gate parameters. Only callers that separately invoke `ClauseSetUnfoldEqDefNormalize` consume those gates.
+- C `ProofStateClausalPreproc` archives copies of all input axioms before clause preprocessing, then later moves eliminated/unfolded definitions to the regular archive. Rust mirrors this for supported proof-search runs. Formula-origin definitions have already become owned clauses through `FormulaSetCNF2` at this boundary in both implementations; stable clause handles remain a representation cleanup, not missing formula-backed compatibility.
+- The C source comments say `ClauseSetPreprocess` performs definition unfolding, but the current function body only does literal cleanup, tautology filtering, optional injectivity replacement, and canonization. The actual equality-definition unfolding lives in `ClauseSetUnfoldEqDefNormalize`, which C calls separately after `ClauseSetPreprocess`.
+- `term_top_unfold_def_fo` assumes same-headed definition candidates match and has a C debug assertion for that internal invariant. The Rust preprocessing bridge can encounter same-headed but nonmatching first-order targets after the broader represented definition scan, so it leaves those occurrences unchanged instead of panicking; a full proof-session owner should tighten definition selection or preserve this no-op guard explicitly.
+- C `DocClauseEqUnfold` ignores the actual demodulator positions and repeats the same demodulator id once per recorded stack entry. Rust preserves that proof-output shape for compatibility, but a future structured proof API should expose the actual unfolded positions instead.
+- Higher-order unfolding uses `ClauseExtractHODefinition`, lambda-shaped definitions, named-lambda-to-DB conversion, and top-level lambda normalization instead of the first-order matching path. Rust ports this clause-backed path; C exposes no formula-set unfolding entry point, and formula-origin definitions reach it only after CNF in production callers.
 
 ### Porting Focus
 

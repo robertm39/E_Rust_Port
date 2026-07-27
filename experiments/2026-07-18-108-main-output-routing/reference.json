@@ -1,0 +1,308 @@
+{
+  "all_exact": true,
+  "exact_case_count": 8,
+  "exact_cases": [
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 109,
+        "configured_output_created": true,
+        "configured_output_sha256": "5dd5ea7802e3d7295c80cb87086a39bd500380c78ec3281326e97038e3396d4a",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "satisfiable",
+      "rust": {
+        "configured_output_bytes": 109,
+        "configured_output_created": true,
+        "configured_output_sha256": "5dd5ea7802e3d7295c80cb87086a39bd500380c78ec3281326e97038e3396d4a",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 96,
+        "configured_output_created": true,
+        "configured_output_sha256": "cf0adf18ab3b5ccf92f75a68df1021478eb17e9e53cabddfb2f7a1fb8620d9f2",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "proof_found",
+      "rust": {
+        "configured_output_bytes": 96,
+        "configured_output_created": true,
+        "configured_output_sha256": "cf0adf18ab3b5ccf92f75a68df1021478eb17e9e53cabddfb2f7a1fb8620d9f2",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 402,
+        "configured_output_created": true,
+        "configured_output_sha256": "a88006f2dbf45d3fc34d3ecc464894fab21d402069d4a7196a42722ebe471db5",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--cnf",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "ac_cnf",
+      "rust": {
+        "configured_output_bytes": 402,
+        "configured_output_created": true,
+        "configured_output_sha256": "a88006f2dbf45d3fc34d3ecc464894fab21d402069d4a7196a42722ebe471db5",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 2541,
+        "configured_output_created": true,
+        "configured_output_sha256": "430dbb9b61e6894ac8cb7b6410e3ee619798ef347e6c9ebccda7542a2341ebb7",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--print-statistics",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "statistics",
+      "rust": {
+        "configured_output_bytes": 2541,
+        "configured_output_created": true,
+        "configured_output_sha256": "430dbb9b61e6894ac8cb7b6410e3ee619798ef347e6c9ebccda7542a2341ebb7",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 421,
+        "configured_output_created": true,
+        "configured_output_sha256": "7d46566f4de50ae22d365e8cd2ccd4107f43740c032663b0d7bb4d15d6fc5a8a",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--tstp-out",
+        "--proof-object=1",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "proof_object",
+      "rust": {
+        "configured_output_bytes": 421,
+        "configured_output_created": true,
+        "configured_output_sha256": "7d46566f4de50ae22d365e8cd2ccd4107f43740c032663b0d7bb4d15d6fc5a8a",
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 132,
+        "configured_output_created": true,
+        "configured_output_sha256": "31ea165f4abc2237d5896d1aef8e089c79983bb994121ecf207000eef2240a2f",
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--tstp-in",
+        "--no-generation",
+        "--watchlist=Use inline watchlist type",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "inline_watchlist",
+      "rust": {
+        "configured_output_bytes": 132,
+        "configured_output_created": true,
+        "configured_output_sha256": "31ea165f4abc2237d5896d1aef8e089c79983bb994121ecf207000eef2240a2f",
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 0,
+        "configured_output_created": true,
+        "configured_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 3,
+        "stderr_bytes": 398,
+        "stderr_sha256": "908d6b2e4207292c3e7aadb1cbddd2023384bfdd1f9c600844b8182fa5838433",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "display_args": [
+        "--lop-in",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "malformed_input",
+      "rust": {
+        "configured_output_bytes": 0,
+        "configured_output_created": true,
+        "configured_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 3,
+        "stderr_bytes": 398,
+        "stderr_sha256": "908d6b2e4207292c3e7aadb1cbddd2023384bfdd1f9c600844b8182fa5838433",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "configured_output_bytes": 126,
+        "configured_output_created": true,
+        "configured_output_sha256": "e033d8a4444ec19a062f345871686bba849c99dfef0717e144844cfd141272ec",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      },
+      "display_args": [
+        "--lop-in",
+        "--print-version",
+        "--output-file=$OUTPUT",
+        "< $STDIN"
+      ],
+      "name": "print_info",
+      "rust": {
+        "configured_output_bytes": 126,
+        "configured_output_created": true,
+        "configured_output_sha256": "e033d8a4444ec19a062f345871686bba849c99dfef0717e144844cfd141272ec",
+        "exit_code": 1,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 83,
+        "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+      }
+    }
+  ],
+  "exact_matching_cases": 8,
+  "normalized_case": {
+    "all_exact": true,
+    "c": {
+      "exit_code": 1,
+      "normalized_output_bytes": 360,
+      "normalized_output_sha256": "66e3830f7482f657e8b3e3a119535ebd5468d0fb664a3af83643fa173b31fed3",
+      "preprocessing_time_normalized": true,
+      "resident_value_normalized": true,
+      "resource_time_count": 3,
+      "stderr": "",
+      "stdout_bytes": 83,
+      "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+    },
+    "display_args": [
+      "--lop-in",
+      "--resources-info",
+      "--output-file=$OUTPUT",
+      "< $STDIN"
+    ],
+    "name": "resources_info",
+    "normalization": "preprocessing/resource seconds and target-dependent resident value",
+    "rust": {
+      "exit_code": 1,
+      "normalized_output_bytes": 360,
+      "normalized_output_sha256": "66e3830f7482f657e8b3e3a119535ebd5468d0fb664a3af83643fa173b31fed3",
+      "preprocessing_time_normalized": true,
+      "resident_value_normalized": true,
+      "resource_time_count": 3,
+      "stderr": "",
+      "stdout_bytes": 83,
+      "stdout_sha256": "47967a8133a91a3d663feac76e24deaeb083969ac9006a4c8cd6577a4ba887d4"
+    }
+  },
+  "projected_case": {
+    "all_exact": true,
+    "c": {
+      "configured_output_created": true,
+      "contains_soft_failure": false,
+      "direct_banner_count": 1,
+      "exit_code": 8,
+      "stderr": "eprover: CPU time limit exceeded, terminating\n"
+    },
+    "display_args": [
+      "--lop-in",
+      "--auto",
+      "--cpu-limit=0",
+      "--memory-limit=0",
+      "--output-file=$OUTPUT",
+      "< $LUSK6_STDIN"
+    ],
+    "name": "hard_timeout",
+    "projection": "asynchronous/cooperative stop phase and stdout side-channel prefix excluded",
+    "rust": {
+      "configured_output_created": true,
+      "contains_soft_failure": false,
+      "direct_banner_count": 1,
+      "exit_code": 8,
+      "stderr": "eprover: CPU time limit exceeded, terminating\n"
+    }
+  },
+  "schema_version": 1,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

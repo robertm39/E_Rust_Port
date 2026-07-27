@@ -129,7 +129,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for inference canonicalization and rewrite-cache coupling on 2026-07-09, and TypeBank/default-sort ownership on 2026-07-17.
 
 Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 
@@ -144,9 +144,24 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `VarBankCollectVars` prints `VarBankCollectVars()...` and `...VarBankCollectVars()` directly to stdout around its collection loop, and that loop scans `i < max_var`, so a variable stored exactly at `max_var` is skipped. Rust preserves the loop-bound quirk in `VarBank::collect_vars` and exposes `collect_vars_with_output` for the C progress text while keeping the ordinary helper output-free.
+- Paired proof-state variable banks contain distinct variable cells with synchronized f-codes and types. Inference constructors reset the shadow bank's per-sort counters, bind source variables to its low canonical codes, and only then insert instantiated terms into the live term bank. This makes variable-counter state observable through shared term identity and rewrite-link caching.
+- C retains the whole `TypeBank_p`, but ordinary allocation reads it only for the bank's immutable shared `default_type`; typed allocation receives its `Type_p` explicitly. Rust retains that same shared default `Type` handle and keys variable stacks/counters dynamically by type UID. A regression constructs the Rust bank first, inserts a user sort later, then proves typed allocation uses the late shared sort while default-name allocation retains the identical `$i` handle. Parser construction therefore does not need to wait for all user sorts.
+- C stores variables in a `PDArray` indexed directly by `-f_code`. Rust now uses the same logical direct index through lazily allocated 64-entry pages: hot `VarBankVarAssertAlloc`-equivalent work falls 47.81% in the retained LUSK6 Callgrind profile, while a million-scale sparse-code regression allocates only one term page. A monolithic Rust vector was rejected because BOO020 reproduced an allocator abort near the maintained 2-GiB boundary; the paged table preserves exact focused BOO020/SWV851 `ResourceOut` behavior.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- C's `VarBankPushEnv`/`VarBankPopEnv` stack restores old external-name bindings only when `VarBankExtNameAssertAllocSort` shadows a name with a different type; same-type quantifier shadowing is handled later by the full formula variable-renaming pipeline rather than by the raw variable bank. Rust keeps the C-shaped assert-allocation helpers, but the temporary executable FOF/TFF bridge uses declaration-specific scoped allocation so same-name quantified variables cannot create self-referential Skolem bindings before the real `TFormula` owner exists.
+- C inference wrappers receive a reusable `freshvars` bank paired with the live term-bank variables, and individual inference families choose whether to reset or consume its counters. Rust uses short-lived normalization banks and mirrors the paramodulation reset, but proof-state-owned reuse remains the compatibility target once inference wrappers can borrow the state owner directly. A later API should encode reset policy in the operation type instead of relying on ambient mutable counter state.
+- `VarBankCollectVars` couples variable collection to debug progress output. Keep the output-aware wrapper for compatibility callers, but prefer the quiet collection helper for ordinary Rust code after drop-in behavior is secured.
+- Formula closure stores variable pointers in `PTree`, so same-sort quantifier order can expose raw term-cell allocation addresses even though the order is logically irrelevant. Rust mirrors the pointer-tree traversal with safe term identities, but exact C text can still differ because its arity-sized term allocator and freelist determine those addresses. A later C renderer should choose a stable alpha-order; exact compatibility work should address allocator-backed identity globally rather than special-casing variable names.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,2 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"borrowed-sat-sources-backtrace","1","0x7ff6fd0d0000","8","ResourceOut","61.896125","60.90625","2145496","359","eprover: CPU time limit exceeded, terminating"

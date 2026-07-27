@@ -123,10 +123,20 @@ Source files reviewed: `HEURISTICS/che_to_autoselect.h`, `HEURISTICS/che_to_auto
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `TOCreateOrdering` has an explicit `RPO not yet implemented!` assertion in upstream C, matching the two generic dispatcher assertions. Rust preserves that panic rather than inventing an ordering unavailable in the reference; the cross-unit audit is recorded in [`experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md`](../../../experiments/2026-07-17-070-classic-kbo-integration/FINDINGS.md).
+- A batch-GDB collector over an isolated debug build of the unchanged C source calls `init_oparms` and `OrderNextOrdering` directly. Rust matches the exact initialized field tuple, all 1,972 wildcard candidate states, the KBO-to-LPO transition, and the final wrap; the retained sequence and paired source audit are recorded in [`experiments/2026-07-17-073-autoselect-state/FINDINGS.md`](../../../experiments/2026-07-17-073-autoselect-state/FINDINGS.md).
+- All 13 legacy C `generate_auto*ordering` functions are definition-only, the command-line `OPTIMIZE_AX` assignment is commented out, and `ProofControlInit` remains the sole production `TOSelectOrdering` caller. Rust fully initializes AutoCASC/AutoDev parameter cells before applying their visible C assignments because the dormant C helpers leave other stack fields indeterminate; there is no stable accidental value to reproduce.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `TOCreateOrdering` selects matrix-backed precedence solely from `pre_precedence != NULL`. With `PNoMethod`, a predefined precedence can stay partial, and KBO weight generation can still query it through `OCBFunCompare`; revisit this only after reference tests cover first-maximal and rank-style weight methods under partial user precedence.
+- `TOCreateOrdering` assigns `params->lit_cmp` directly into `ocb->lit_cmp` as a raw enum value. A cleaned Rust boundary should validate it, but compatibility may require preserving arbitrary raw values if malformed strategy files are observable.
+- `OrderEvaluate` marks maximal terms on `state->axioms` before scoring the ordering. This side effect is part of the C function even though the source comment says it "should not really matter"; Rust preserves it in the explicit clause-set evaluator and uses the bank-backed set loop in optimization paths that can provide the live term bank.
+- `TOSelectOrdering` accepts `SpecFeature_p specs` but does not read it, and it copies `rewrite_strong_rhs_inst` from the original heuristic parameter cell after local ordering normalization or optimization. Keep this shape until the auto-schedule/proof-control path clarifies whether `specs` was an obsolete hook.
 <!-- END MANUAL REVIEW: c_source_docs -->

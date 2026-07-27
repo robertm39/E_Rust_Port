@@ -133,10 +133,20 @@ Source files reviewed: `BASICS/clb_memory.h`, `BASICS/clb_memory.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Rust exposes this allocator as an owned compatibility model rather than replacing the process allocator. No production Rust module outside `basics::memory`/`basics::newmem` constructs a `MemoryBlock`; executable owners use typed `Vec`, `Box`, and shared handles. This preserves sizing, reuse, retry, counter, string, and flush semantics without recreating C allocator-address identity, uninitialized bytes, or debug poison writes. Exact old/new policy boundaries and the complete Rust owner audit are retained in [`experiment 123`](../../../experiments/2026-07-18-123-memory-policy-boundary/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SecureMalloc`, `SecureRealloc`, `SecureStrdup`, `SecureStrndup`, and `SizeMalloc` retry after flushing the freelist and then terminate through `Error("Out of Memory", OUT_OF_MEMORY)`. Rust exposes C-shaped wrappers that panic on unrecoverable allocation/size failures and keeps `try_*` helpers for ownership adapters that need explicit errors.
+- `SizeFreeReal` requires callers to pass the exact allocation size and can corrupt the freelist when the size is wrong. Rust's `MemoryBlock` carries its allocation size and prevents mismatched frees; future arena work should keep exact-size accounting internal rather than re-exposing raw-size frees.
+- The `FREE` and `SizeFree` macros assert non-null inputs and may null the caller's local variable in debug builds. Rust ownership prevents use-after-free, but exact debug-poisoning/nulling side effects are not modeled outside tests and diagnostics.
+- `USE_SYSTEM_MEM`, `USE_NEWMEM`, debug poisoning, and memory-stat counters make multiple allocator modes observable in C. Rust currently models the old exact-size freelist and the new aligned chunk policy explicitly; any support for system-malloc-only compatibility should be added as a separate policy.
+- `SecureRealloc(ptr, 0)` returns `NULL` and records a free-shaped realloc. Rust represents that as `None`; callers that need C pointer-null tests should keep that boundary explicit.
+- `IntArrayAlloc` takes an `int` element count and multiplies by `sizeof(long)` before allocation. Rust checks the multiplication and treats overflow as a fatal C-shaped wrapper error; cleaned APIs should use slice/vector lengths directly.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,10 @@
+cnf(goal, negated_conjecture, (f(seed) = seed)).
+cnf(bridge1, axiom, (f(b1) = g(b1))).
+cnf(bridge2, axiom, (f(b2) = h(b2))).
+cnf(bridge3, axiom, (f(b3) = g(b3))).
+cnf(g1, axiom, (g(c1) = c1)).
+cnf(g2, axiom, (g(c2) = c2)).
+cnf(g3, axiom, (g(c3) = c3)).
+cnf(h1, axiom, (h(d1) = d1)).
+cnf(h2, axiom, (h(d2) = d2)).
+cnf(unrelated, axiom, (u(z) = z)).

@@ -1,0 +1,13 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "raw_stdout_match": false,
+  "normalized_stdout_match": true,
+  "exit_and_stderr_match": true,
+  "expected_shared_type_declarations": 6,
+  "c_type_comments_match_expected": true,
+  "rust_type_comments_match_expected": true,
+  "c_unexpected_type_comments": [],
+  "rust_unexpected_type_comments": [],
+  "typed_application_symbol_declarations_match": true,
+  "encoded_formula_matches": true
+}

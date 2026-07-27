@@ -111,8 +111,13 @@ Source files reviewed: `HEURISTICS/che_dagweight.h`, `HEURISTICS/che_dagweight.c
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `RDAGWeightCompute` calls `ClauseCondMarkMaximalTerms(local->ocb, clause)` before clearing `TPOpFlag` across the literal list and then scoring with `EqnDAGWeight`; the Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. `DAGWeightCompute`, `RDAGWeight2Compute`, and `RDAGWeight3Compute` do not conditionally mark in C and deliberately keep immutable callbacks in Rust. The four-family owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-068-dagweight-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-068-dagweight-owner-context/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- The immutable RDAG scoring callback remains a low-level/test adapter for clauses whose orientation flags are already current. Removing that public compatibility surface after an API review is optional cleanup; production HCB evaluation already uses the banked owner path.
 
 ### Porting Focus
 

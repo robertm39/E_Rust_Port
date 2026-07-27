@@ -102,6 +102,7 @@ Source files reviewed: `HEURISTICS/che_termweight.h`, `HEURISTICS/che_termweight
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `ConjectureRelativeTermWeightCompute` lazily initializes related-term frequencies, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, then scores through `ClauseTermExtWeight`; the Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. The shared six-family owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-066-conjecture-term-owner-context/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
 ### Porting Focus
@@ -109,4 +110,9 @@ Source files reviewed: `HEURISTICS/che_termweight.h`, `HEURISTICS/che_termweight
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- All production heuristic evaluation sites now use the banked lazy-init/mark/score path. Removing immutable already-marked-clause adapters is optional public-API simplification, not missing proof-search ownership behavior.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

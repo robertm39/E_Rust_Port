@@ -145,4 +145,21 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning, equality-definition unfolding, and eta normalization: C-shaped `ApplyTerms`, `FreshVarWArgs` as the reusable `fresh_var_with_args`, `FlattenApps`, `flatten_and_make_shared`, `UnfoldLambda`, `NamedToDB`, `PostCNFEncodeFormulas`, `DecodeFormulasForCNF`, `drop_args`, `find_min_db`, `reduce_eta_top_level`, `LambdaEtaExpandDBTopLevel`, `LambdaEtaExpandDB`, `LambdaEtaReduceDB`, `SetEtaNormalizer`, `GetEtaNormalizer`, `LambdaNormalizeDB`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, `WHNF_step`, explicit-bank `WHNF_deref`, and DB beta normalization.
+- The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
+- The represented lambda/DB normalization surface is complete through explicit-bank `WHNF_deref`; remaining formula CNF call-site integration belongs to formula ownership rather than hidden term ownership. Rust deliberately recomputes and shares weak-head results instead of storing C's LFHO-only cache pointers in every unified term cell. The semantic, layout, ordering, unification, and performance evidence for that decision is retained in [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
+
+### Change Later
+
+- C `WHNF_step` writes temporary bindings into DB-variable cells and clears them manually after substitution. Rust avoids mutating DB variable cells by carrying an explicit binding vector indexed by DB index; keep this safer representation unless profiling or C trace comparison exposes a compatibility issue.
+- C `AbstractVars` temporarily writes DB-variable bindings into free-variable cells and relies on `replace_fvars` to shift them under nested lambdas. Rust keeps the same stack order and DB-index shifting with an explicit free-variable binding map instead of mutating shared variable cells.
+- C `NamedToDB` temporarily writes DB-variable bindings into named-lambda binder variables. Rust uses an explicit binder-depth map for the same De Bruijn indexes and restores shadowed entries structurally.
+- C `PostCNFEncodeFormulas` temporarily writes DB-variable bindings into quantified free variables and shifts the matrix by the quantifier-prefix length before recursion. Rust preserves those index calculations with an explicit binding-depth map and structural restore.
+- C `DecodeFormulasForCNF` routes every recursive result through `EncodePredicateAsEqn`, including encoding `$false` as `$true!=$true`. Rust mirrors that locally in `lambda.rs`; consider unifying it with the parser-side predicate encoder when full formula ownership gives that helper a stable public home.
+- C `LambdaNormalizeDB` delegates eta behavior through a file-static normalizer function pointer. Rust mirrors the observable hook with a process-wide safe lock; if future strategy code wants scoped eta normalization, keep that scoping explicit instead of hiding additional mutable globals.
+- C `flatten_and_make_shared` repairs intermediary phony applications whose head becomes an ordinary symbol after beta/eta work. Rust now ports that repair for the recursive eta paths; audit remaining beta-only rebuilding sites if a future caller uses them independently of `LambdaNormalizeDB`.
+- The C comments contain several stale or copy-pasted descriptions around `ApplyTerms`, `UnfoldLambda`, and `GetEtaNormalizer`. Keep the source behavior, not the comments, as the compatibility reference.
 <!-- END MANUAL REVIEW: c_source_docs -->

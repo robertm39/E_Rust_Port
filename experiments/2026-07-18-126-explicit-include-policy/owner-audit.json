@@ -1,0 +1,122 @@
+{
+  "accepted": true,
+  "automatic_splicing_references": [
+    "src/inout/scanner.rs",
+    "src/inout/scanner.rs"
+  ],
+  "c_call_sites": [
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/PROVER/eprover.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/PROVER/classify_problem.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/PROVER/eground.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/PROVER/epatternize.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/PROVER/enormalizer.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 1,
+      "expected_calls": 1,
+      "file": "eprover/CONTROL/cco_sine.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 2,
+      "expected_calls": 2,
+      "file": "eprover/CONTROL/cco_einteractive_mode.c",
+      "matches": true
+    },
+    {
+      "actual_calls": 2,
+      "expected_calls": 2,
+      "file": "eprover/CONTROL/cco_batch_spec.c",
+      "matches": true
+    }
+  ],
+  "c_formula_owner_call_count": 10,
+  "checks": {
+    "app_encode_deliberately_ignores_includes_like_c": true,
+    "automatic_splicing_constructor_is_scanner_test_only": true,
+    "batch_regressions_cover_nested_skip_and_repeat_policy": true,
+    "c_formula_owner_parser_recurses_through_scanner_parse_include": true,
+    "rust_batch_and_interactive_paths_share_explicit_policy": true,
+    "rust_general_consumers_share_explicit_parser": true,
+    "rust_general_parser_has_explicit_tptp_and_tstp_include_branches": true,
+    "selector_filtering_is_one_shared_inner_to_outer_helper": true,
+    "unchanged_c_has_exactly_ten_formula_owner_calls": true
+  },
+  "rust_explicit_policy_owners": [
+    "src/prover/eprover.rs: general TPTP/TSTP formula-owner parser",
+    "src/control/batch_spec.rs: batch and interactive TSTP formula-owner parser"
+  ],
+  "rust_general_consumers": [
+    {
+      "file": "src/prover/eprover.rs",
+      "markers": [
+        "parse_input_files_into_axioms(",
+        "parse_input_files_into_formula_owners(",
+        "parse_clause_scanner_into_destination_with_options("
+      ],
+      "matches": true,
+      "policy_owner": "general_formula_owner_parser"
+    },
+    {
+      "file": "src/prover/classify_problem.rs",
+      "markers": [
+        "fn parse_real_input_scanner(",
+        "parse_clause_scanner_into_formula_set_with_options("
+      ],
+      "matches": true,
+      "policy_owner": "general_formula_owner_parser"
+    },
+    {
+      "file": "src/prover/eground.rs",
+      "markers": [
+        "fn parse_input_files_to_formula_set_with_progress(",
+        "parse_clause_scanner_into_formula_set_with_options("
+      ],
+      "matches": true,
+      "policy_owner": "general_formula_owner_parser"
+    },
+    {
+      "file": "src/prover/epatternize.rs",
+      "markers": [
+        "fn parse_input_file(",
+        "parse_clause_scanner_into_formula_set_with_options("
+      ],
+      "matches": true,
+      "policy_owner": "general_formula_owner_parser"
+    },
+    {
+      "file": "src/prover/enormalizer.rs",
+      "markers": [
+        "fn parse_rule_file(",
+        "parse_clause_scanner_into_formula_set_with_options("
+      ],
+      "matches": true,
+      "policy_owner": "general_formula_owner_parser"
+    }
+  ],
+  "schema_version": 1
+}

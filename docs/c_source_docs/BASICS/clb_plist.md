@@ -96,10 +96,18 @@ Source files reviewed: `BASICS/clb_plist.h`, `BASICS/clb_plist.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PListInsert`, `PListStore`, `PListStoreP`, `PListStoreInt`, `PListDelete`, and `PListFree` are non-optional mutation operations. The safe Rust arena keeps these as infallible-on-success operations and turns invalid handles, attached-cell reinsertion, or invalid anchors into explicit panics rather than returning ordinary optional failures.
+- `PListExtract` asserts that the element has predecessor/successor links and that neither link is the element itself. The Rust arena mirrors that asserting precondition and returns the same cell handle detached for reinsertion.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `PListExtract` asserts that the element is a linked, non-anchor cell, while `PListInsert` trusts callers not to pass an already linked cell or an uninitialized allocation. Rust preserves the asserting extraction precondition and guards insertion, but a cleaned API should make detached-cell ownership explicit or fold insertion through checked store/move operations.
+- The C API exposes raw list cells and deletion as `void`, leaving key ownership entirely to callers. Rust returns owned values from `delete` so safe code can drop or move payloads deliberately; revisit this API shape once long-lived clause/formula owners decide whether list cells should own, borrow, or merely index payloads.
+- `PListEmpty(anchor)` checks `anchor->pred == anchor` and assumes a valid anchor pointer. Future Rust-only traversal helpers should keep optional/checked handles separate from the compatibility-style raw anchor operations.
 <!-- END MANUAL REVIEW: c_source_docs -->

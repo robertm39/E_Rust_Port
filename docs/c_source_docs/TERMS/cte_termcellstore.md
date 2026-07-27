@@ -94,7 +94,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for reusable splay-chain review on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`.
 
@@ -105,6 +105,21 @@ Source files reviewed: `TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`.
 - Term code. Term sharing, banks, variable conventions, type banks, and substitution/unification behavior are core semantic constraints.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- C `TermCellHash` reads arity and the first two argument pointers directly from the cell. Rust now matches that ownership shape with one immutable argument-slice borrow and borrowed identity reads, rather than repeated `RefCell` borrows plus temporary `Rc` clones. Exact hash, proof, constrained-resource, full-matrix, and 0.9435% Callgrind evidence are retained in [`experiment 174`](../../../experiments/2026-07-21-174-borrowed-term-hash/FINDINGS.md).
+- C `TermCellStoreGCSweep` allocates one reusable deletion stack, traverses each
+  hash bucket to push only cells in the selected garbage state, and pops those
+  candidates before visiting the next bucket. Rust now preserves that
+  candidate-only collection and LIFO deletion shape rather than cloning every
+  survivor into a temporary term vector. The focused smoke profile reduces the
+  Rust sweep from 15.36 million to 4.44 million instructions, level with C's
+  4.53 million, while the same-bucket regression covers multiple candidates
+  and a survivor. Evidence and native timing are retained in
+  [`experiment 308`](../../../experiments/2026-07-25-007-termstore-gc-candidate-collection/FINDINGS.md).
+- Reusing two owned `Vec<Term>` splay chains across all store buckets reduces
+  exact LUSK6 work 0.4362%, but consistent complete-block and final-half native
+  regressions reject the delayed push/pop link-rebuild shape. The store
+  therefore retains the accepted direct-link splay path; evidence is retained
+  in [`experiment 315`](../../../experiments/2026-07-25-014-buffered-term-splay-chains/FINDINGS.md).
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 

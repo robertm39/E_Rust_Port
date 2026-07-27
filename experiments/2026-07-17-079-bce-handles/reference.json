@@ -1,0 +1,47 @@
+{
+  "all_exact": true,
+  "c": {
+    "bce_lines": [
+      "% BCE start: 3",
+      "% BCE eliminated: 2."
+    ],
+    "clauses_after_preprocessing": [
+      "(a=b)"
+    ],
+    "exit_code": 1,
+    "statistics": {
+      "Current number of archived clauses": 2,
+      "Initial clauses": 3,
+      "Initial clauses in saturation": 1,
+      "Parsed axioms": 3,
+      "Processed clauses": 1
+    },
+    "status": "% SZS status Satisfiable",
+    "stderr": ""
+  },
+  "display_args": [
+    "--bce=true",
+    "--print-statistics",
+    "$FIXTURE"
+  ],
+  "rust": {
+    "bce_lines": [
+      "% BCE start: 3",
+      "% BCE eliminated: 2."
+    ],
+    "clauses_after_preprocessing": [
+      "(a=b)"
+    ],
+    "exit_code": 1,
+    "statistics": {
+      "Current number of archived clauses": 2,
+      "Initial clauses": 3,
+      "Initial clauses in saturation": 1,
+      "Parsed axioms": 3,
+      "Processed clauses": 1
+    },
+    "status": "% SZS status Satisfiable",
+    "stderr": ""
+  },
+  "schema_version": 1
+}

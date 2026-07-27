@@ -87,6 +87,22 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves exact C-shaped full help text, the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend, captured `RUN` global/stdout side-channel output, and the C `OutClose(GlobalOut)` final flush/error check on the successful execution path.
+- The Rust TCP server starts one detached worker per accepted client. Each worker creates fresh term/control/runner state, and parser dialect state is thread-local, matching the isolation and simultaneous-service behavior of the C child-process snapshot without copying process-global mutable state between clients.
+- A real loopback regression now sends the exact framed `RUN` command, uploaded formula and `GO\n` terminator through the executable client wrapper, then compares all four intended response frames with a live C byte capture. The same WSL experiment records the stock C process-controller PID-prefix defect that Rust deliberately does not reproduce; see [`experiment 044`](../../../experiments/2026-07-17-044-deduction-server-run-framing/FINDINGS.md).
+- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under `E Server Sessions`.
+
+### Change Later
+
+- The usage string and option help say stdin/stdout will be used when `-p` is absent, but the C path calls `StartDeductionServer(spec, ctrl, server_lib, stdout, -1)`, prints `e_deduction_server: Server mode not implemented yet for stdout`, and exits without processing commands. Rust preserves this no-port message for the executable while keeping its reusable text-session helper internal; a cleaned CLI should either implement stdin/stdout mode deliberately or require `-p`.
+- The executable assigns `total_wtc_limit = 30` before option parsing, so `-w 0` later overwrites the default and disables the fallback. A future configuration API should distinguish omitted limits from explicit zero.
+- `outname` is passed to `OpenGlobalOut(outname)` but no command-line option sets it; `app_encode` is file-global and unused; `OPT_PRINT_STATISTICS` remains in the enum without an option-table entry. These look like stale or anticipatory C surfaces that should not be reproduced beyond observable compatibility.
+- The first remaining argument is treated as the prover executable and later positional arguments are ignored, despite the help text saying `[files]`. A stricter Rust CLI should wait until drop-in compatibility tests cover this behavior.
+- The TCP path forks once per accepted client. That isolates each client's uploaded axiom sets and signature mutations by process snapshot, while stdout from multiple children may interleave. Rust uses detached client threads with per-thread parser state and locked whole-report stdout writes; this deliberately gives each emitted RUN report a stronger local write boundary without changing its socket protocol. Preserve the worker-local state boundary if later process or async implementations replace these threads.
+- `process_options()` exits directly for help/version before `main()` opens and later closes `GlobalOut`, while successful execution reaches `OutClose`. Keep that split visible in the compatibility wrapper; a cleaned server API should make output ownership and shutdown explicit.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

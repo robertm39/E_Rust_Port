@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,clause_clone_calls,clone_delta,clone_percent,rust_alloc_calls,alloc_delta,alloc_percent,c_rust_ratio,native_executable_bytes
+parent,10145909203,0,0.000000,78856,0,0.000000,5086470,0,0.000000,1.930950,8645120
+detached_indexed_source_position,10089561875,-56347328,-0.555370,12174,-66682,-84.561733,4886424,-200046,-3.932904,1.920226,8638976

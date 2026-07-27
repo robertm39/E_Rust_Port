@@ -1,0 +1,54 @@
+{
+  "case_count": 2,
+  "comparisons": [
+    {
+      "args": [
+        "--raw-class",
+        "--tstp-format",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 109,
+        "stdout_sha256": "E86985A4FAD0C1EFFE94BEEC582EFCEFF0A7574927BFC97F7BD3C421501EEEDC"
+      },
+      "case": "represented_fof",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 109,
+        "stdout_sha256": "E86985A4FAD0C1EFFE94BEEC582EFCEFF0A7574927BFC97F7BD3C421501EEEDC"
+      }
+    },
+    {
+      "args": [
+        "--raw-class",
+        "--tstp-format",
+        "-"
+      ],
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 109,
+        "stdout_sha256": "4D841241CB3CCB10DAD751605F3A41B1659C706CA14FDE1F331B1BC0CB53E185"
+      },
+      "case": "represented_thf",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 109,
+        "stdout_sha256": "4D841241CB3CCB10DAD751605F3A41B1659C706CA14FDE1F331B1BC0CB53E185"
+      }
+    }
+  ],
+  "exact_count": 2,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}

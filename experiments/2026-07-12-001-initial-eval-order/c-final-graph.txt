@@ -1,0 +1,41 @@
+﻿
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+Breakpoint 1 at 0xfbde0
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+% Preprocessing class: FSMSSMSSSSSNFFN.
+% Configuration: G-E--_208_C18_F1_SE_CS_SOS_SP_PS_S5PRR_RG_S04AN
+% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Auto)
+% No SInE strategy applied
+% Search class: FGHPM-FFSF21-MFFFFFNN
+% Configuration: SAT001_MinMin_p005000_rr_RG
+% Presaturation interreduction done
+
+% Proof found!
+% SZS status Theorem
+FINAL_GRAPH nodes=37
+NODE 0 clause=0x55555592ed60 ident=36 deriv=0x555555921e30 sp=2 entries=540,93824996273216,
+NODE 1 clause=0x55555592ec40 ident=35 deriv=0x55555592b730 sp=4 entries=513,93824996205136,516,93824996274416,
+NODE 2 clause=0x55555592f0f0 ident=34 deriv=0x5555559288d0 sp=3 entries=4633,93824996202208,93824996201120,
+NODE 3 clause=0x55555591e250 ident=33 deriv=0x55555591e340 sp=10 entries=513,93824996166352,516,93824996202208,516,93824996169072,516,93824996169072,1035,3,
+NODE 4 clause=0x55555591d2a0 ident=32 deriv=0x55555591d420 sp=4 entries=513,93824996169936,520,93824996169584,
+NODE 5 clause=0x55555591e090 ident=31 deriv=0x55555591e150 sp=2 entries=513,93824996169072,
+NODE 6 clause=0x55555591ded0 ident=30 deriv=0x55555591df90 sp=2 entries=513,93824996168928,
+NODE 7 clause=0x55555591dd10 ident=29 deriv=0x55555591ddd0 sp=2 entries=513,93824996168784,
+NODE 8 clause=0x55555591d6e0 ident=28 deriv=0x55555591d830 sp=7 entries=513,93824996170288,516,93824996203296,13,9,9,
+NODE 9 clause=0x555555914ad0 ident=27 deriv=0x555555915f40 sp=5 entries=513,93824996171296,518,93824996169328,13,
+NODE 10 clause=0x555555915770 ident=26 deriv=0x55555590efc0 sp=2 entries=257,93824996119872,
+NODE 11 clause=0x5555559158d0 ident=25 deriv=0x55555590f1b0 sp=2 entries=257,93824996136544,
+NODE 12 clause=0x555555915570 ident=24 deriv=0x55555590ed30 sp=2 entries=257,93824996117904,
+NODE 13 clause=0x5555559154e0 ident=23 deriv=0x55555590ec30 sp=2 entries=257,93824996117024,
+NODE 14 clause=0x555555915450 ident=22 deriv=0x55555590eb30 sp=2 entries=257,93824996113344,
+NODE 15 clause=0x55555591db20 ident=21 deriv=0x55555591dc10 sp=5 entries=513,93824996170688,516,93824996095776,13,
+NODE 16 clause=0x555555915a30 ident=20 deriv=0x55555590f3a0 sp=2 entries=257,93824996136688,
+NODE 17 clause=0x555555915670 ident=19 deriv=0x55555590ee30 sp=2 entries=257,93824996118704,
+NODE 18 clause=0x555555915e20 ident=18 deriv=0x555555911e70 sp=2 entries=290,93824996155056,
+NODE 20 clause=0x555555903720 ident=16 deriv=0x55555590e0b0 sp=2 entries=257,93824996112144,
+NODE 21 clause=0x555555915bc0 ident=15 deriv=0x555555910f40 sp=2 entries=290,93824996144432,

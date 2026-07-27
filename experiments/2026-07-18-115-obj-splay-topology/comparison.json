@@ -1,0 +1,40 @@
+{
+  "c": {
+    "exit_code": 0,
+    "proof_found": true,
+    "stderr": "",
+    "stdout_bytes": 378,
+    "stdout_sha256": "b50bfb29a2fa3728792a422be2bd83a54c436fa1536c79b8d95c1c1f8c7f427d",
+    "theorem_status": false
+  },
+  "exact": true,
+  "first_difference": null,
+  "reference": {
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "executable_sha256": "dc183edafdd6779324eee8131e3eded40fd6127deaf6b5627c41e30d62034f4b",
+    "platform": "Linux under WSL 2"
+  },
+  "rust": {
+    "executable_sha256": "5db89a25b80f94dec62ec332150ec97d8c32665c8ccdbe5ebe624a1b68fc89c2",
+    "platform": "native Windows"
+  },
+  "rust_result": {
+    "exit_code": 0,
+    "proof_found": true,
+    "stderr": "",
+    "stdout_bytes": 378,
+    "stdout_sha256": "b50bfb29a2fa3728792a422be2bd83a54c436fa1536c79b8d95c1c1f8c7f427d",
+    "theorem_status": false
+  },
+  "schema_version": 1,
+  "workload": {
+    "fixture": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6.lop",
+    "fixture_sha256": "3262acc5e0178c62f6f93556ac3f1a66ecdd2b7485f2766366e1c6f3679f5d7c",
+    "input_transport": "stdin",
+    "options": [
+      "--auto",
+      "--silent"
+    ],
+    "owner": "fingerprint-index leaf ObjTree payloads"
+  }
+}

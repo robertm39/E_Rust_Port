@@ -1,0 +1,80 @@
+{
+  "case_count": 4,
+  "comparisons": [
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 477,
+        "stdout_sha256": "D7D89D6A62E6ED06F5D8EBE6D8D07EA246B033BBD0738ED15E443BEDCF1ADCD0"
+      },
+      "case": "eprover_lop",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 477,
+        "stdout_sha256": "D7D89D6A62E6ED06F5D8EBE6D8D07EA246B033BBD0738ED15E443BEDCF1ADCD0"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 511,
+        "stdout_sha256": "5EC15741E836156ED9145A3CD6AB0101DDD1F3B65DEEEACAC7E6CC4B86A93282"
+      },
+      "case": "eprover_tptp",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 511,
+        "stdout_sha256": "5EC15741E836156ED9145A3CD6AB0101DDD1F3B65DEEEACAC7E6CC4B86A93282"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 494,
+        "stdout_sha256": "E4343A9B7603DD8C5370AD537CB6D9B178510F403819FAD5ACFA1226EA44C40B"
+      },
+      "case": "eprover_tstp",
+      "exact": true,
+      "rust": {
+        "exit_code": 9,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 494,
+        "stdout_sha256": "E4343A9B7603DD8C5370AD537CB6D9B178510F403819FAD5ACFA1226EA44C40B"
+      }
+    },
+    {
+      "c": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 1240,
+        "stdout_sha256": "8B9B142A9DFC53D7EB2D3E15EF60599EF7FBE93BC1546915B64267B95B8342DF"
+      },
+      "case": "epclanalyse_pcl",
+      "exact": true,
+      "rust": {
+        "exit_code": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+        "stdout_bytes": 1240,
+        "stdout_sha256": "8B9B142A9DFC53D7EB2D3E15EF60599EF7FBE93BC1546915B64267B95B8342DF"
+      }
+    }
+  ],
+  "exact_count": 4,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1
+}

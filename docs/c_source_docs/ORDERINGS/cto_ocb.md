@@ -131,6 +131,27 @@ Source files reviewed: `ORDERINGS/cto_ocb.h`, `ORDERINGS/cto_ocb.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Compatibility Notes
+
+- `OCBAlloc` stores a borrowed `Sig_p` and snapshots `sig->f_count` into `sig_size`; symbols inserted into the signature after allocation are still compared through fallback rules. Rust keeps `sig_size` in the OCB and passes the live signature explicitly for property/type lookups.
+- `alloc_precedence` allocates `prec_weights` with `SizeMalloc` when precedence is represented by weights, but does not initialize the array in this unit. Normal C construction fills it through precedence generation before use; Rust initializes the vector deterministically and should preserve generated values once OCB mutation is wired in.
+- `OCBFunWeight` returns `OCB_FUN_DEFAULT_WEIGHT` for symbols whose f-code is greater than the OCB's saved `sig_size`. `OCBFunCompareMatrix` treats old symbols as greater than later symbols, and two later symbols are ordered by `Q_TO_PART(f2-f1)`, making higher/newer f-codes lesser.
+- `OCBFunCompare` gives `$true` a special lowest-precedence result before distinct-symbol handling. Distinct object/integer properties override both precedence weights and matrix ordering by comparing the right distinct flag minus the left distinct flag.
+- `OCBPrecedenceAddTuple` is documented as returning the new stack pointer, but the implementation returns the old stack pointer for an already-present relation, `1` for a newly inserted successful relation, and `0` for conflict/failure. Rust preserves this return surface for now.
+- On transitive-closure failure, `OCBPrecedenceAddTuple` pops and clears only the most recent stored pair instead of rolling the matrix all the way back to the saved old state. Keep this compatibility hazard visible before changing rollback semantics.
+- `OCBFindMinConst` is named/commented as finding a minimal constant, but the scan replaces the candidate when `OCBFunCompare(i, cand) == to_greater`. Rust therefore records the precedence-greater matching constant as the designated one.
+- `OCBSetMinConst` is declared in the header but has no implementation in `cto_ocb.c`; Rust provides an explicit setter for internal use, but C-linkage compatibility should treat the missing C definition as a source inconsistency.
+- `OCBTermMaxFunCode` skips argument zero in its recursive scan (`for(i=1; i<term->arity; i++)`). Rust preserves this exactly; decide later whether a corrected traversal belongs behind a compatibility switch once ordering reference tests cover the affected callers.
+- `OCBDebugPrint` handles a null `ocb->sig` for the signature and weight sections, but the precedence-matrix section still calls `OCBFunCompare`, which uses `ocb->sig` for distinct-symbol checks. Rust keeps the signature outside the OCB and uses raw matrix cells when debug-printing without one; revisit only if null-signature OCB diagnostics become observable.
+- Under `LAMBDA_ORDER`, C's `ho_vb` map keys fluid variables by term pointer identity and stores signed occurrence balances; increment/decrement update `pos_bal`, `neg_bal`, and `wb`, while `OCBResetHOVarMap` frees only the map and leaves those aggregate counters for the enclosing KBO6 reset. Rust uses stable term-identity keys and preserves the same transition/reset boundary. C has exactly one production `TOSelectOrdering` caller, in `ProofControlInit`; Rust's clause-only and clause/formula proof-control entry points both select and store the OCB before parsing weight/heuristic definitions. The source audit, focused regressions, and exact FOL/THF executable comparisons are recorded in [`experiments/2026-07-17-069-ocb-owner-integration/FINDINGS.md`](../../../experiments/2026-07-17-069-ocb-owner-integration/FINDINGS.md).
+
+### Change Later
+
+- `OCBPrecedenceAddTuple` has a surprising return surface: already-present relations return the old state, newly inserted successful relations return `1`, and conflicts return `0`. It also rolls back only the most recent stored pair on transitive-closure failure rather than restoring the whole saved matrix state. Rust preserves this for compatibility; a later precedence API should return a typed result and make rollback atomic.
+- `OCBSetMinConst` is declared in the header but not implemented in `cto_ocb.c`. Rust has an explicit setter for internal use; treat the missing C definition as a source inconsistency until link-level compatibility or dead-declaration cleanup decides whether the symbol should exist.
+- `OCBTermMaxFunCode` skips the first argument during recursive scanning. Keep the C-compatible traversal until reference ordering/search tests prove whether this affects callers, then consider a corrected traversal behind an explicit compatibility switch.
+- `OCBDebugPrint` partially handles `ocb->sig == NULL` but can still reach `OCBFunCompare` paths that dereference the signature. Rust avoids that null-dereference shape in diagnostics; if null-signature OCBs become observable, keep the safer rendering and document the compatibility deviation.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

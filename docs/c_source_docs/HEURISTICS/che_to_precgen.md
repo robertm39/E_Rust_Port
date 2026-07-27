@@ -126,6 +126,17 @@ Source files reviewed: `HEURISTICS/che_to_precgen.h`, `HEURISTICS/che_to_precgen
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TOGeneratePrecedence` builds an `FCodeFeatureArray`, applies occurrence/symbol key modifiers before method-specific keys, sorts from `SIG_TRUE_CODE + 1`, and then writes array positions to OCB precedence weights or tuple precedence. Rust ports both the pure key generation/sorted low-to-high symbol order and the OCB installation helper.
+- In precedence-weight mode, `compute_precedence_from_array` seeds `ocb->min_constants` while iterating raw f-codes `i`, not while iterating sorted `array->array[i].symbol`. This records the first suitable constant by f-code insertion order rather than by generated precedence; preserve until min-constant behavior is covered by reference ordering tests.
+- `PNoMethod` falls through to `PUnaryFirst` only when no predefined precedence string was supplied. If `predefined` is present, C parses it into the OCB first and then performs no generated-precedence pass.
+- `POrientAxioms` reports `Not yet implemented`; Rust should keep this as an explicit diagnostic until the C path exists.
+- `generate_invfreq_conjmin_precedence` has comments describing conjecture symbols as larger, but the implemented key puts conjecture symbols in the lower sorted class than non-conjecture symbols. Preserve the implementation before changing names or comments.
+- The LFHO type-frequency methods allocate the type-count array from the current type-bank size before collecting type distribution, so callers rely on type traversal not introducing out-of-range type ids.
+- `ENABLE_LFHO` inserts `typefreq`, `invtypefreq`, `combfreq`, and `invcombfreq` into the middle of `TOPrecGenNames`; a non-LFHO executable rejects those names and omits them from diagnostics. Rust intentionally exposes the union in one executable, and the complete method/diagnostic surface is reference-tested against matching FOL and higher-order C builds.
+- An isolated `-DPRINT_PRECEDENCE` build of the unchanged C source exposes each generated user-symbol order. Eighteen retained snapshots cover all implemented ordinary methods, the four LFHO type/combined-frequency variants, and every ArrayOpt name class; the paired permanent Rust regression matches each reversed low-to-high order exactly. Rank-backed and tuple-matrix OCB installation remain pinned independently. The instrumentation and results are recorded in [`experiments/2026-07-17-072-precgen-state/FINDINGS.md`](../../../experiments/2026-07-17-072-precgen-state/FINDINGS.md).
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

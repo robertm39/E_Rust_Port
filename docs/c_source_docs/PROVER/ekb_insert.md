@@ -83,6 +83,27 @@ Source files reviewed: `PROVER/ekb_insert.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- User-visible options are `-h`/`--help`, `-V`/`--version`, `-v`/`--verbose[=level]`, `-n`/`--name=<name>`, and `-k`/`--knowledge-base=<path>`.
+- If no input names remain after option parsing, the program inserts one synthetic `-` input after the old KB files have been parsed. A stdin example with no explicit name is named `__problem__<proof_examples->count+1>`.
+- The `-n`/`--name` global is cleared after each loop iteration, so an explicit name applies only to the first inserted input. Later files infer their names from the input basename or from the default stdin pattern.
+- File-derived names use `FileFindBaseName`, which recognizes only `/` as a path separator and keeps the filename extension.
+- Each example file is copied into `FILES/<example-name>` before `KBParseExampleFile` parses that stored copy. `clausepatterns` and `problems` are written only after all inputs have been copied and parsed.
+- The executable reads `signature` before parsing old `clausepatterns`, but it rewrites only `clausepatterns` and `problems`; the `signature` file is not updated after inserted examples are parsed.
+
+### Rust Port Notes
+
+- Rust ports this executable as `src/prover/ekb_insert.rs` with a thin `src/bin/ekb_insert.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only `--name` behavior, basename selection, duplicate-name rejection before copy, stored-file parse flow, and C-shaped KB output formatting.
+- Filesystem tests cover stdin insertion, file insertion, first-use name override, duplicate rejection before file copy, stored example payloads, problem-list rewriting, annotation output, help/version text, and verbose progress output.
+
+### Change Later
+
+- Make insertion transactional after compatibility is secured. C copies each input into `FILES/` before parsing it and writes metadata only after the full loop, so a parse or I/O failure can leave stored files without matching `problems`/`clausepatterns` entries.
+- Revisit the one-use `--name` behavior for multi-file insertion. It follows the C global reset, but it is surprising for users and should be made explicit or replaced in a modernized interface.
+- Decide whether the `signature` file should be updated when inserted examples introduce symbols not present in the old KB signature. C mutates the in-memory signature during parsing but does not write that file back.
+- Replace char-by-char `CopyFile`-style copying with a buffered or atomic copy path in any non-compatibility mode.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -1,0 +1,27 @@
+{
+  "compatibility": {
+    "main_cases": 50,
+    "main_expected_differences": 1,
+    "main_mismatches": 0,
+    "support_tool_cases": 216,
+    "support_tool_expected_differences": 15,
+    "support_tool_mismatches": 0
+  },
+  "linux": {
+    "eprover_sha256": "8706e23a757691b9374001605527fff28c758a2a00fbff61a81d5eb4f851f3b3",
+    "integration_tests": 11,
+    "library_tests": 4416,
+    "rust_version": "1.97.1",
+    "source_snapshot_sha256": "2c0fee77927f5188f026b95e27984351df19725f9296e1b2fbc007ae699aca38",
+    "total_tests": 4427
+  },
+  "schema_version": 1,
+  "windows_gnu_x64": {
+    "compile_only": true,
+    "eprover_exe_sha256": "03d3e4ed29c2646fe2f026542c7f1b1af660eb275ac69866c1422c388d23f7c0",
+    "file_kind": "PE32+ executable (console) x86-64",
+    "release_bins": "pass",
+    "test_targets": "pass"
+  },
+  "worker": "e-rust-codex-260726-191044-7524"
+}

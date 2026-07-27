@@ -1,0 +1,5 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"headroom-stop","1","0x7ff7cca20000","-1073740791",,"59.131429","57.6875","2480436","0","memory allocation of 196608 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+"headroom-stop","2","0x7ff7cca20000","8","ResourceOut","57.524941","56.875","2480896","428","eprover: CPU time limit exceeded, terminating"
+"headroom-stop","3","0x7ff7cca20000","8","ResourceOut","58.248999","57.59375","2480252","428","eprover: CPU time limit exceeded, terminating"

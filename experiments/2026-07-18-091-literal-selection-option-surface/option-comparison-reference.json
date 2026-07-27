@@ -1,0 +1,72 @@
+{
+  "all_exact": true,
+  "cases": [
+    {
+      "c_sha256": "9d9cd9e742987ef44f96f9013438400c24a49ec98b03b523c39aedeb1604281d",
+      "exact": true,
+      "exit": 0,
+      "name": "literal_selection_limits",
+      "rust_sha256": "9d9cd9e742987ef44f96f9013438400c24a49ec98b03b523c39aedeb1604281d"
+    },
+    {
+      "c_sha256": "abc74eeebc77483655c8b8c0d0241af74c404640aa26e7c85f748e45da023ea6",
+      "exact": true,
+      "exit": 0,
+      "name": "expert_heuristic",
+      "rust_sha256": "abc74eeebc77483655c8b8c0d0241af74c404640aa26e7c85f748e45da023ea6"
+    },
+    {
+      "c_sha256": "678afbbfbe84aa87a70e7cdc81bedd8d8dd50b2f002e561fb577da24a9faa505",
+      "exact": true,
+      "exit": 0,
+      "name": "no_generation_override",
+      "rust_sha256": "678afbbfbe84aa87a70e7cdc81bedd8d8dd50b2f002e561fb577da24a9faa505"
+    },
+    {
+      "c_sha256": "33024c81f1a043b17322963c8f663df4c0b30c50655ba188fc35a58435010486",
+      "exact": true,
+      "exit": 0,
+      "name": "inference_and_splitting",
+      "rust_sha256": "33024c81f1a043b17322963c8f663df4c0b30c50655ba188fc35a58435010486"
+    },
+    {
+      "c_sha256": "b5c188e6106b551f2b0879df794b157ecdd2e10a5801d6f2e428f3063c8f0a34",
+      "exact": true,
+      "exit": 0,
+      "name": "simul_paramod",
+      "rust_sha256": "b5c188e6106b551f2b0879df794b157ecdd2e10a5801d6f2e428f3063c8f0a34"
+    },
+    {
+      "c_sha256": "a2cea8f692bca62c4bfd50638048ca5e2bb2fe81830040aad7e17ee79cb735f9",
+      "exact": true,
+      "exit": 0,
+      "name": "oriented_simul_paramod",
+      "rust_sha256": "a2cea8f692bca62c4bfd50638048ca5e2bb2fe81830040aad7e17ee79cb735f9"
+    },
+    {
+      "c_sha256": "96138522c98ab3d74cbb858b37e0cea4e6bbdae7ab5733891bb9e64ff87ee2ed",
+      "exact": true,
+      "exit": 0,
+      "name": "supersimul_paramod",
+      "rust_sha256": "96138522c98ab3d74cbb858b37e0cea4e6bbdae7ab5733891bb9e64ff87ee2ed"
+    },
+    {
+      "c_sha256": "2aa6e261657dd61d781b3753de5474850e81713aaf1425c6d2c391875487b582",
+      "exact": true,
+      "exit": 0,
+      "name": "oriented_supersimul_paramod",
+      "rust_sha256": "2aa6e261657dd61d781b3753de5474850e81713aaf1425c6d2c391875487b582"
+    },
+    {
+      "c_sha256": "0cd0c547c2c49d860b1b34e53e1829750c81d0aa97db017bf7bc34bb04c410b0",
+      "exact": true,
+      "exit": 10,
+      "name": "assume_incompleteness",
+      "rust_sha256": "0cd0c547c2c49d860b1b34e53e1829750c81d0aa97db017bf7bc34bb04c410b0"
+    }
+  ],
+  "exact_count": 9,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "schema_version": 1,
+  "total": 9
+}

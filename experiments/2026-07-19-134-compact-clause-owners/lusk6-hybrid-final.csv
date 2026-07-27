@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"hybrid-final","1","0x7ff660720000","0","Unsatisfiable","3.714436","3.6875","240904","10344",""
+"hybrid-final","2","0x7ff660720000","0","Unsatisfiable","3.562516","3.546875","241364","10344",""
+"hybrid-final","3","0x7ff660720000","0","Unsatisfiable","3.691248","3.625","240960","10344",""

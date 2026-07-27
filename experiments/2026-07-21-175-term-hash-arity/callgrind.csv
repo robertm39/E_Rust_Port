@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,insert_exclusive,processed_clauses
+parent,12407202652,0,0.0000,107487162,4873
+hash_and_arity,12409617540,2414888,0.0195,110923956,4873

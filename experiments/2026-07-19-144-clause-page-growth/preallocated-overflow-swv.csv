@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"preallocated-overflow-swv","1","0x7ff606610000","8","ResourceOut","61.766734","60.96875","2144952","359","eprover: CPU time limit exceeded, terminating"
+"preallocated-overflow-swv","2","0x7ff606610000","8","ResourceOut","61.588689","60.828125","2144980","359","eprover: CPU time limit exceeded, terminating"
+"preallocated-overflow-swv","3","0x7ff606610000","8","ResourceOut","61.764036","60.953125","2145760","359","eprover: CPU time limit exceeded, terminating"

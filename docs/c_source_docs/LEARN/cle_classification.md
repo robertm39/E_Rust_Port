@@ -81,6 +81,22 @@ Source files reviewed: `LEARN/cle_classification.h`, `LEARN/cle_classification.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TSMTermClassify` prints `Evaluation: %7.4f ` to `stdout` as a side effect before returning the `TSMEvalNormalize` result as a `double`.
+- `TSMTermClassify` uses `admin->eval_limit`, not `admin->limit`, for the classification threshold.
+- `TSMClassifiedTermCheck` compares the predicted `-1/+1` class directly to `term->eval`, so training/evaluation sets used with this helper must store class labels in `eval` rather than arbitrary scores.
+- `TSMClassifySet` prints `OKOK ` or `FAIL ` plus a term rendering for each entry while returning the sum of `sources` for successful classifications.
+
+### Rust Port Notes
+
+- Rust exposes separate quiet and writer-taking classification helpers so library callers can avoid the C stdout side effect, while `tsm_classify` deliberately uses the writer path to preserve executable output.
+
+### Change Later
+
+- Separate classification from presentation in the C-shaped API. The comments claim no side effects, but `TSMTermClassify`, `TSMClassifiedTermCheck`, and `TSMClassifySet` all write progress directly to stdout, making redirection and embedding harder than necessary.
+- Replace the raw floating-point `-1.0`/`1.0` class comparison with a typed class label once learned-data compatibility and reference traces are covered.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

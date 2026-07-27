@@ -93,4 +93,19 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/e_ltb_runner.rs` and `src/bin/e_ltb_runner.rs` port the standalone runner wrapper over the Rust batch backend, including global output redirection through `-o`, the `-o -` stdout route, C-shaped `OutOpen` diagnostics for configured output files, the C ordering where configured output is opened before positional usage validation, and the C `OutClose(GlobalOut)` final flush/error check on the execution path.
+
+### Change Later
+
+- `e_ltb_runner` parses `division.category.training_data`, but the paired batch-spec printer writes `division.category.training_directory`. Official JJT/VBT parser fixtures and an older HOL rejection fixture now pin that current-C mismatch. Rust preserves it for drop-in compatibility; any future round-trip normalization is a product extension and must retain an explicit legacy mode.
+- The optional second positional argument is honored here as the prover executable path, unlike `e_stratpar` where the same-looking argument is ignored. Keep those executable-specific differences visible when common runner option handling is introduced.
+- C opens `GlobalOut` after option parsing and before validating the positional argument count, so `-o file` can create or truncate the output file even when the command later reports a usage error, while `-o -` routes to stdout instead of a literal file. Rust now preserves those side effects in the compatibility wrapper; a future cleaned CLI should avoid them only outside the drop-in mode.
+- The help banner calls the first positional argument `[Batchfile] [PATH_TO_EPROVER]`, while the fatal usage diagnostic calls the same surface `<spec> [<path-to-eprover>]`. Rust preserves the mismatch for drop-in behavior; a cleaned CLI should use one spelling once byte-compatible help output is no longer required.
+- Several option descriptions are historical competition text, including the duplicate-word interactive description and "very specific hack" variant wording. Rust preserves them for visible CLI compatibility; a cleaned help path should separate modern user-facing descriptions from the legacy drop-in text.
+- A global wall-clock limit from `-w/--wtc-limit` is copied into a parsed spec only when the spec omits `limit.time.overall.wc`; the per-problem limit is still required unless one of those total limits is positive. Later configuration code should represent that precedence explicitly instead of mutating parsed specs in place.
+- Runner state is stored in process globals such as `outname`, `outdir`, `total_wtc_limit`, `interactive`, `use_variants`, and `provers`. A future Rust runner should make those fields explicit while preserving option timing and output behavior.
+- `process_options()` exits directly for help/version before `main()` opens and later closes `GlobalOut`, while ordinary execution reports close-time output errors through `OutClose`. Keep that split visible in compatibility wrappers; a cleaned API should expose explicit output ownership instead of inheriting executable control flow.
 <!-- END MANUAL REVIEW: c_source_docs -->

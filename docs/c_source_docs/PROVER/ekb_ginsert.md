@@ -92,4 +92,23 @@ Source files reviewed: `PROVER/ekb_ginsert.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- The executable reads `problems` and `description` first, determines the generated example name, then writes the generated `FILES/<name>` payload before it parses `signature` and `clausepatterns`.
+- Without `--name`, the name is taken from the first remaining input argument before the no-argument stdin default is inserted. If stdin is the effective input, the fallback name is `__problem__<proof_examples->count+1>`.
+- All input protocol files are accumulated into one `PCLProt` and inserted as one KB example. The C usage string says `[name]`, but the remaining arguments are treated as protocol input files.
+- Negative examples use `kb_desc->neg_proportion * proof_steps` assigned to a `long`, so fractional results are truncated by the C conversion. Failed or proofless runs use `kb_desc->fail_neg_examples`.
+- The generated file format is visible compatibility surface: a `% Axioms:` section printed in LOP format, one standalone `.`, then a `% Examples:` section printed by `PCLProtPrintExamples`.
+- The C code sets `ClausesHaveLocalVariables = false` before parsing protocols so variable names map consistently across this generated example workflow. Rust now preserves this with explicit `PclStepParseOptions`/`ClauseParseOptions`.
+- `main()` sets the process-global `OutputLevel` to `0` before option processing even though this executable exposes no silent/output-level option. Rust preserves the hidden startup side effect for in-process compatibility.
+
+### Change Later
+
+- Make generation and integration transactional. The C flow can leave a generated `FILES/<name>` without matching `problems`/`clausepatterns` metadata if a later parse or write step fails.
+- Consider whether multi-file input should stay a single generated example or become an explicit batch mode after drop-in compatibility is secured.
+- Replace the implicit floating-point-to-`long` negative-example budget with a named policy that documents truncation and boundary behavior.
+- Revisit the signal/temp-file setup and global `ClausesHaveLocalVariables` mutation when the Rust executable surface has a unified process-lifetime and parser-state model; the Rust port currently keeps the variable policy as explicit parser configuration.
+- Replace the hidden `OutputLevel = 0` executable startup mutation with explicit local output state in any cleaned API that is not trying to be a drop-in replacement.
+- The current WSL C reference aborts with glibc `double free or corruption (out)` on the comparison harness's small stdin protocol after creating partial KB output, while the ownership-safe Rust path completes. Do not reproduce the heap corruption; isolate whether the trigger is malformed legacy input or a protocol/KB ownership defect before promoting this fixture to an exact-output baseline.
 <!-- END MANUAL REVIEW: c_source_docs -->

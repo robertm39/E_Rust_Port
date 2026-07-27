@@ -1,0 +1,164 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "case_count": 15,
+  "cases": [
+    {
+      "case": "late_user_override",
+      "exit_code": 0,
+      "weights": {
+        "a": 9,
+        "f": 2,
+        "b": 3,
+        "g": 2
+      }
+    },
+    {
+      "case": "partial_precedence",
+      "exit_code": 0,
+      "weights": {
+        "a": 1,
+        "f": 2,
+        "b": 1,
+        "g": 1
+      }
+    },
+    {
+      "case": "partial_inverse_precedence",
+      "exit_code": 0,
+      "weights": {
+        "a": 1,
+        "f": 1,
+        "b": 1,
+        "g": 2
+      }
+    },
+    {
+      "case": "partial_precrank5",
+      "exit_code": 0,
+      "weights": {
+        "a": 5,
+        "f": 5,
+        "b": 5,
+        "g": 5
+      }
+    },
+    {
+      "case": "inverse_conjecture_frequency_rank",
+      "exit_code": 0,
+      "weights": {
+        "a": 1,
+        "f": 1,
+        "b": 1,
+        "g": 2
+      }
+    },
+    {
+      "case": "frequency_rank_square",
+      "exit_code": 0,
+      "weights": {
+        "a": 1,
+        "f": 1,
+        "b": 1,
+        "g": 0
+      }
+    },
+    {
+      "case": "inverse_modified_frequency_rank",
+      "exit_code": 0,
+      "weights": {
+        "a": 1,
+        "f": 1,
+        "b": 1,
+        "g": 4
+      }
+    },
+    {
+      "case": "typefreqrank",
+      "exit_code": 10,
+      "weights": {
+        "cat": 4,
+        "dog": 4,
+        "a": 3,
+        "f": 3,
+        "g": 2
+      }
+    },
+    {
+      "case": "typefreqcount",
+      "exit_code": 10,
+      "weights": {
+        "cat": 4,
+        "dog": 4,
+        "a": 2,
+        "f": 2,
+        "g": 1
+      }
+    },
+    {
+      "case": "invtypefreqrank",
+      "exit_code": 10,
+      "weights": {
+        "cat": 1,
+        "dog": 1,
+        "a": 2,
+        "f": 2,
+        "g": 3
+      }
+    },
+    {
+      "case": "invtypefreqcount",
+      "exit_code": 10,
+      "weights": {
+        "cat": 1,
+        "dog": 1,
+        "a": 3,
+        "f": 3,
+        "g": 4
+      }
+    },
+    {
+      "case": "combfreqrank",
+      "exit_code": 10,
+      "weights": {
+        "cat": 4,
+        "dog": 3,
+        "a": 3,
+        "f": 3,
+        "g": 2
+      }
+    },
+    {
+      "case": "combfreqcount",
+      "exit_code": 10,
+      "weights": {
+        "cat": 10,
+        "dog": 6,
+        "a": 6,
+        "f": 6,
+        "g": 3
+      }
+    },
+    {
+      "case": "invcombfreqrank",
+      "exit_code": 10,
+      "weights": {
+        "cat": 1,
+        "dog": 2,
+        "a": 2,
+        "f": 2,
+        "g": 3
+      }
+    },
+    {
+      "case": "invcombfreqcount",
+      "exit_code": 10,
+      "weights": {
+        "cat": 1,
+        "dog": 5,
+        "a": 5,
+        "f": 5,
+        "g": 8
+      }
+    }
+  ]
+}

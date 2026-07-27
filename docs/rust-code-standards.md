@@ -6,51 +6,62 @@ This file is the canonical Rust standards document for the port. Do not add a se
 
 ## Required Checks
 
-Once a Rust crate exists, all Rust code changes must pass:
+Do not format, compile, test, execute, benchmark, or profile Rust or C on the
+local computer or under WSL. Every Rust code change must use the comprehensive
+ephemeral-Linode lifecycle:
 
 ```powershell
-cargo fmt --check
-cargo test --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
+.\linode-runner.ps1 run
 ```
 
-Treat clippy pedantic findings as design feedback. Prefer small, explicit fixes that keep the port close to the original implementation model.
+The local PowerShell command only provisions, uploads, orchestrates, downloads
+artifacts, and tears down. On Ubuntu 24.04 the worker runs Rustfmt, all-target
+and all-feature tests, Clippy with warnings and pedantic findings denied,
+release builds for every binary, native C/Rust compatibility matrices, timing
+benchmarks, and Callgrind. It also compiles all binaries and test targets for
+`x86_64-pc-windows-gnu` without executing them. Treat Clippy pedantic findings
+as design feedback and prefer small, explicit fixes that keep the port close to
+the original implementation model.
 
-Executable changes must also build the release binary once the `eprover` target exists:
-
-```powershell
-cargo build --locked --release --bin eprover
-```
-
-Drop-in compatibility work must compare the Rust executable with the C reference:
-
-```powershell
-.\e-interop.ps1 build-reference
-.\e-interop.ps1 compare -RustExe .\target\release\eprover.exe
-```
-
-Performance-sensitive or executable-path work must also run the benchmark harness when the Linux Rust toolchain is available:
-
-```powershell
-.\e-interop.ps1 benchmark -Runs 5
-```
+This rule also prohibits quick local smoke tests and running the toolchain in
+WSL, a local container, or another local virtual machine. Normal validation
+must use `.\linode-runner.ps1 run`. If focused work needs an individual remote
+command, use the runbook's guarded `up`/`sync`/`exec`/`down` lifecycle and put
+`down` in a PowerShell `finally` block. Never use a direct local Cargo, Rust,
+C, prover, benchmark, Valgrind, or Callgrind command as a preliminary check.
 
 Docs-only changes should run the Markdown link checker from `DOCS.md`.
 
+## Platform Support
+
+Native Linux is the only supported execution platform and the authority for
+behavioral and performance comparisons with upstream E. Windows GNU x64 is a
+compile-only portability target. Windows executables must never be run as part
+of project validation, including on the Linode through Wine or another
+emulator, and the project makes no Windows runtime, behavioral, performance,
+or MSVC guarantee.
+
+Keep the `x86_64-pc-windows-gnu` build working, including Windows-gated code,
+but do not add Windows-specific behavior solely to mimic results that are not
+tested. Cross-platform abstractions should preserve the upstream Linux
+contract first.
+
 ## Unsafe Rust
 
-Unsafe Rust is not permitted.
+Unsafe Rust is permitted when there is a concrete reason that safe Rust cannot adequately satisfy. Valid reasons include interoperability, compatibility with the original C implementation, correctness requirements that cannot be expressed safely, and measured performance needs. Convenience alone is not sufficient. Prefer a safe design whenever it can meet the same requirements.
 
-Do not add:
+This permission covers unsafe blocks and functions, definitions and implementations of unsafe traits, FFI, and calls to unsafe APIs exposed by dependencies. Implementing an unsafe trait is permitted when the implementation satisfies and documents every invariant required by that trait.
 
-- `unsafe` blocks
-- `unsafe fn`
-- `unsafe impl`
-- `unsafe trait`
-- Calls to unsafe APIs through wrapper code
-- Other unsafe Rust constructs
+Keep unsafe implementation details narrowly scoped and contained behind safe APIs. Every externally usable boundary must be safe and must validate, encode, or otherwise uphold the preconditions of the unsafe implementation. Internal unsafe functions may exist only within that contained implementation, with all callers required to uphold their documented contracts.
 
-If a porting task appears to require unsafe Rust, document the blocker and look for a safe design first. Do not add unsafe code without a project-level standards change.
+Every use of unsafe Rust must document both why unsafe code is justified and why it cannot result in Undefined Behavior:
+
+- Put a `SAFETY:` comment immediately next to each unsafe operation or block. State the applicable invariants and explain how the code establishes them.
+- Put a `SAFETY:` comment next to each unsafe trait implementation that addresses every safety requirement imposed by the trait.
+- Give every unsafe function and unsafe trait a `# Safety` documentation section that states the caller or implementer obligations.
+- Address pointer provenance, validity, alignment, initialization, aliasing, lifetimes, thread safety, ABI contracts, and other relevant sources of Undefined Behavior rather than relying on a generic assurance.
+
+Keep `#![deny(unsafe_code)]` at the crate level. An item or module that genuinely needs unsafe Rust may use the smallest practical local `allow(unsafe_code)`, accompanied by a comment identifying the reason, the safe API boundary, and the documented invariants that make the implementation sound.
 
 ## Panics And Fatal Errors
 
@@ -71,7 +82,7 @@ When the C executable reports an observable fatal error, the Rust port should ma
 ## Compatibility Rules
 
 - Preserve stdout/stderr structure, SZS status output, proof-output order, parser diagnostics, include handling, stdin behavior, and line-ending normalization.
-- Preserve CLI option parsing, environment-variable behavior, resource-limit handling, timeout behavior, and file path semantics closely enough for `.\e-interop.ps1 compare` to pass.
+- Preserve CLI option parsing, environment-variable behavior, resource-limit handling, timeout behavior, and file path semantics closely enough for the native-Linux Linode compatibility matrices to pass.
 - Keep deterministic ordering explicit. Do not rely on hash-map iteration order, filesystem traversal order, pointer addresses, or thread scheduling when output or proof search can observe the result.
 - Choose integer widths and conversions deliberately. Match the C contract for overflow, truncation, signedness, sentinel values, and boundary checks; use checked, saturating, or wrapping operations only when they match the original behavior.
 - Preserve proof-search state transitions and mutation order when they affect clause selection, simplification, indexing, ordering, scheduling, or proof objects.
@@ -88,7 +99,7 @@ Prefer the Rust standard library and small, focused crates. Add a dependency onl
 
 Before adding a crate, review and document its license, maintenance status, transitive dependency impact, feature flags, and whether it changes compatibility or deployment assumptions. Use minimal features where practical.
 
-A dependency must not bypass this project's unsafe-Rust ban through project wrapper code. If a crate exposes unsafe APIs, keep their use out of this project unless the unsafe policy is formally changed.
+A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. Calls to unsafe dependency APIs are permitted only for a concrete reason allowed by the policy above, must remain behind a safe project API, and must document why all safety requirements are upheld and Undefined Behavior cannot occur.
 
 ## Documentation Expectations
 

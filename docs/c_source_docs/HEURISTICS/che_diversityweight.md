@@ -88,8 +88,14 @@ Source files reviewed: `HEURISTICS/che_diversityweight.h`, `HEURISTICS/che_diver
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `DiversityWeightCompute` calls `ClauseCondMarkMaximalTerms(local->ocb, clause)` before `ClauseWeight`, then computes function-symbol and variable diversity penalties from the marked clause; the Rust initializer installs a banked callback that preserves this order with the active proof-control OCB, mutable owner bank, and clause. The shared diversity/orient owner audit, proof-control regression, and exact executable comparison are recorded in [`experiments/2026-07-17-067-diversity-orient-owner-context/FINDINGS.md`](../../../experiments/2026-07-17-067-diversity-orient-owner-context/FINDINGS.md).
+- The private production WFCB counts function and variable diversity in one operation-local subterm traversal. Non-variable terms retain `ClauseReturnFCodes`' operation-flag visit/reset behavior, while free variables are recorded independently so a stale variable flag cannot suppress their count. Public C-shaped collection helpers remain unchanged, only the bounded variable-ID vector is retained, and exact/replicated native measurements improve whole-prover instructions by 1.82% and native wall/CPU means by 1.61%/1.49%. Proof determinism and the maintained 50-case matrix remain exact; evidence is recorded in [`experiments/2026-07-24-013-fused-diversity-traversal/FINDINGS.md`](../../../experiments/2026-07-24-013-fused-diversity-traversal/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- The immutable diversity scoring callback remains a low-level/test adapter for clauses whose orientation flags are already current. Removing that public compatibility surface after an API review is optional cleanup; production HCB evaluation already uses the banked owner path.
 
 ### Porting Focus
 

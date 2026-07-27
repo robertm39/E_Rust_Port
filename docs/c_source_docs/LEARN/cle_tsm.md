@@ -152,6 +152,26 @@ Source files reviewed: `LEARN/cle_tsm.h`, `LEARN/cle_tsm.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TSMEvalNormalize(eval, limit)` uses a strict `< limit` comparison; values exactly equal to the limit classify as positive.
+- `TSMRemainderEntropy` computes a weighted average over non-empty partition buckets and divides by `global_count` without an empty-partition guard, so an empty partition yields NaN while `parts` remains zero.
+- `TSMPartitionSet` assigns `FlatAnnoTerm.next` links as scratch bucket chains. Any Rust implementation that keeps flat annotation terms shared must preserve or isolate this mutation carefully.
+- `TSMPartitionSet` prepends each traversed flat annotation term to its bucket, so per-bucket list order is the reverse of `NumTree` traversal for terms with the same key.
+- Non-null partition caches store `key + 1` by `term->entry_no`; zero means "not cached". The caller must keep caches aligned with the index shape because a cached entry bypasses `TSMIndexInsert`.
+- `evaluate_index` returns zero for a single non-empty partition. For a perfect split, its denominator can become zero and the C double result is positive infinity.
+- `TSMFindOptimalIndex` updates the incumbent only on strict `>` gains, so earlier candidates win ties. With `IndexDynamic`, this means arity, symbol, identity, then top variants/depths are considered in C source order.
+- If only one concrete arity/symbol/identity index is requested, `TSMFindOptimalIndex` returns it without forcing the output depth to zero; the caller's incoming depth is preserved even though that depth is irrelevant to the selected index.
+- `TSMCreateSubtermSet` asserts that every listed term has the selected direct subterm, then inserts borrowed subterms as new flat annotations using the source term's eval, eval weight, and source count.
+- `cle_tsm.h` declares `TSMFindPartLimit`, but no implementation appears in this checkout. Treat it as header-only surface until a caller or reference implementation requires it.
+- `TSMAdminAlloc` creates `emptytsm` before `admin->subst` is set, so `TSMIndexAlloc(IndexEmpty, ...)` receives a null substitution pointer even though the non-empty index kinds assume stable total substitutions.
+- `TSMAdminCell.subst` is shared by every non-empty recursive TSM and by the index terms below it; it is not copied by `tsmbasealloc`. Rust now encodes that lifetime with one `Rc<PatternSubst>` across the admin and recursive indexes. On the 10,000+10,000-term corpus this ownership correction reduced maximum RSS from 175,316 to 44,912 KiB without changing output.
+- `TSMAdminAlloc` only initializes `tsmstack`/`cachestack` for `TSMTypeRecurrentLocal`; the non-recurrent-local `cachestack` field is left unused. `TSMAdminBuildTSM` then appends the fixed recurrent-local arity/symbol/top stack and its caches in source order.
+- `TSACreate` shares child TSM pointers for flat, recurrent, and recurrent-local modes and allocates owned child TSMs only for recursive mode. `TSAFree` mirrors this by recursively freeing child maps only when `admin->tsmtype == TSMTypeRecursive`.
+- `TSMAdminAlloc` creates a private `TBAlloc(sig)` index bank that shares the live signature pointer, and `TSMAdminFree` nulls `index_bank->sig` before freeing that bank. Any cleanup should make this signature/session ownership explicit.
+- `tsm_rec_eval_no_weight` calls the weighted `tsm_rec_eval` for matched child nodes and for recurrent unmapped descent, so its unweighted behavior applies only to the current matched node.
+- `TSMPrintRek` calls `TSMIndexPrint(stdout, ...)` instead of using its `out` parameter for the index section, and it has no cycle guard for recurrent maps.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

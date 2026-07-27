@@ -126,10 +126,18 @@ Source files reviewed: `BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `IntMapIterAlloc` clamps the public iterator bounds, but for array-backed maps it initializes the scan cursor from the raw caller `lower_key`; `IntMapIterNext` then calls `PDRangeArrElementP` while scanning, so iterating below the current range-array offset can allocate and shift backing storage without changing map bounds or entries.
+- Rust production owners are limited to FV-index storage accounting and PDT function alternatives. They use insertion, immutable lookup, constant-memory estimates, guarded slot creation, and known-child deletion; neither owner calls the mutating lookup or C-shaped mutating iterator. The exact representation, null-count, range-growth, storage, and original owner boundaries are retained in [`experiment 124`](../../../experiments/2026-07-18-124-intmap-compatibility-boundary/FINDINGS.md). The PD-tree now stores actual function-child indices in its `IntMap`, matching C's split function/object alternative ownership; performance and full compatibility evidence are retained in [`experiment 166`](../../../experiments/2026-07-21-166-pdt-function-intmap/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `IntMapGetVal` and `IntMapDelKey` call `PDRangeArrElementP` for array-backed maps whenever `key <= max_key`, so a failed read or delete below the current range-array offset can allocate and shift the backing array without changing `min_key`, `max_key`, or `entry_no`. Rust preserves this through mutable lookup/delete and storage-estimate tests. The complete owner audit found no production mutating-lookup caller and only known-child PDT deletion, so this behavior remains quarantined in the compatibility API; PD-tree search uses the explicit immutable accessor and cannot grow storage through an unsuccessful read.
+- Array-backed `IntMap` iteration can allocate and shift backing storage during a read-only-looking traversal when the requested lower bound is below the current range-array offset. Rust quarantines this behavior in an explicit C-shaped mutating iterator while ordinary Rust iteration is side-effect-free; neither production owner calls the mutating iterator.
+- The `IMSingle` branch in `IntMapGetRef` calls `switch_to_array(key, min_key, max_key, 2)` rather than passing the previous min/max in order. Inserting keys 0 then 100 therefore creates a 104-slot array, while inserting the same keys in reverse creates a two-node tree. Rust preserves this because FV-index and PDT storage counters observe the resulting 460-versus-68-byte constant-memory estimates; a cleaned logical container must remain separate from that compatibility counter.
 <!-- END MANUAL REVIEW: c_source_docs -->

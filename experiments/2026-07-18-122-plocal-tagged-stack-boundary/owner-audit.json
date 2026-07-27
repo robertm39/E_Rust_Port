@@ -1,0 +1,26 @@
+{
+  "accepted": true,
+  "c_tagged_stack_owner_files": [
+    "eprover/ORDERINGS/cto_kbolin.c"
+  ],
+  "checks": {
+    "c_has_both_one_and_two_slot_macro_variants": true,
+    "c_tagged_stack_has_one_production_owner": true,
+    "existing_profile_measured_live_kbo_traversal": true,
+    "ordinary_c_build_enables_tagged_pointers": true,
+    "rust_boundary_contains_no_unsafe_code": true,
+    "rust_generic_tagged_stack_has_no_production_owner": true,
+    "rust_kbo_uses_typed_term_deref_frames": true,
+    "rust_pins_two_slot_constants_frame_and_growth": true
+  },
+  "profile_evidence": {
+    "accepted_instruction_reduction_percent": 0.87,
+    "mfy_vwb_argument_helper_calls": 1306910,
+    "path": "experiments/2026-07-16-066-main-eprover-profile/FINDINGS.md"
+  },
+  "rust_external_compatibility_owner_files": [],
+  "rust_live_owner_files": [
+    "src/orderings/cto_kbolin.rs"
+  ],
+  "schema_version": 1
+}

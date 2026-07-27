@@ -1,0 +1,106 @@
+{
+  "candidate_kind": "windows-rust-tools",
+  "case_count": 216,
+  "expected_difference_count": 8,
+  "expected_differences": [
+    {
+      "mismatches": [
+        "normalized_stdout"
+      ],
+      "name": "CSSCPA_filter/large-stateful-corpus",
+      "reference_mode": "fol"
+    },
+    {
+      "mismatches": [
+        "normalized_stdout"
+      ],
+      "name": "checkproof/real-e-single-percent-marker-success",
+      "reference_mode": "fol"
+    },
+    {
+      "mismatches": [
+        "normalized_stdout"
+      ],
+      "name": "checkproof/e-single-percent-marker-success",
+      "reference_mode": "fol"
+    },
+    {
+      "mismatches": [
+        "exit_code",
+        "shape",
+        "normalized_stdout",
+        "normalized_stderr"
+      ],
+      "name": "classify_problem/fool-term-let",
+      "reference_mode": "ho"
+    },
+    {
+      "mismatches": [
+        "exit_code",
+        "shape",
+        "normalized_stdout",
+        "normalized_stderr"
+      ],
+      "name": "classify_problem/merged-positive-fool",
+      "reference_mode": "ho"
+    },
+    {
+      "mismatches": [
+        "exit_code",
+        "shape",
+        "normalized_stderr",
+        "output_files"
+      ],
+      "name": "ekb_ginsert/stdin-protocol",
+      "reference_mode": "fol"
+    },
+    {
+      "mismatches": [
+        "exit_code",
+        "shape",
+        "normalized_stderr",
+        "output_files"
+      ],
+      "name": "epatternize/multi-file-output",
+      "reference_mode": "fol"
+    },
+    {
+      "mismatches": [
+        "normalized_stdout"
+      ],
+      "name": "term2dag/shared-typed-boundary",
+      "reference_mode": "ho"
+    }
+  ],
+  "mismatch_count": 0,
+  "schema_version": 1,
+  "tool_case_counts": {
+    "CSSCPA_filter": 6,
+    "checkproof": 16,
+    "classify_problem": 27,
+    "direct_examples": 5,
+    "e_axfilter": 9,
+    "e_client": 3,
+    "e_deduction_server": 3,
+    "e_ltb_runner": 3,
+    "e_server": 3,
+    "e_stratpar": 3,
+    "edpll": 15,
+    "eground": 22,
+    "ekb_create": 3,
+    "ekb_delete": 4,
+    "ekb_ginsert": 3,
+    "ekb_insert": 3,
+    "enormalizer": 26,
+    "epatternize": 16,
+    "epclanalyse": 5,
+    "epclextract": 6,
+    "epcllemma": 15,
+    "ex_commandline": 7,
+    "term2dag": 4,
+    "termprops": 4,
+    "tsm_classify": 5
+  },
+  "tool_count": 25,
+  "upstream_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+}

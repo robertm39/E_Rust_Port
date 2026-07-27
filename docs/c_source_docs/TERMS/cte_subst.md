@@ -100,7 +100,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for release-assertion parity on 2026-07-20, reusable normalization-stack ownership on 2026-07-21, and borrowed normalization traversal on 2026-07-25.
 
 Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 
@@ -113,6 +113,18 @@ Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Compatibility Notes
+
+- Optimized C builds compile the `SubstAddBinding` and single-backtrack assertions out under `NDEBUG`. Rust keeps the free-variable, unbound-variable, type-equality, and stack-entry invariants as `debug_assert!` checks, avoiding release-path type-handle clones while retaining assertion-build diagnostics.
+- `SubstBindAppVar` calls `TermCreatePrefix`, overwrites the returned prefix type with the bound variable's type, and inserts any newly created non-shared prefix with `TBTermTopInsert` before storing it as the variable binding. Rust mirrors this with an explicit term-bank parameter and preserves the existing substitution-stack backtracking shape.
+- `SubstNormTerm` selects `WHNF_deref` for higher-order problems and `TermDerefAlways` otherwise before walking arguments right-to-left on its stack. Rust currently preserves the first-order path and binding order with generic `term_deref(Always)`; higher-order WHNF parity remains open because Rust's function does not yet receive the mutable term bank required by `whnf_deref`.
+- C keeps normalization traversal in one local stack and pushes argument pointers directly. Rust retains equivalent reusable `Vec` capacity in each substitution and now stores private non-owning cursors to stable `Rc<TermCell>` allocations rather than acquiring and releasing an owned handle for every pushed argument and dereferenced node. The safe normalization entry point owns the complete unsafe scope: its live input root retains structural descendants, bindings are only added rather than cleared, argument slots never change, and owned applied-variable expansion roots survive until the cursor stack is empty. An RAII guard clears pending cursors during unwinding before those expansion roots are released, and a catch-and-reuse regression pins that boundary. Only newly freshened source variables become owned substitution entries. Exact LUSK6 normalizer work falls 13.4601%, whole-program work falls 0.9643%, 128 native pairs improve about 1.35%, and proof/resource/full-matrix evidence is retained in [`experiment 312`](../../../experiments/2026-07-25-011-borrowed-subst-normalization/FINDINGS.md). The earlier in-place scratch-owner result remains recorded in [`experiment 184`](../../../experiments/2026-07-21-184-in-place-norm-scratch/FINDINGS.md).
+
+### Change Later
+
+- Because `TermCreatePrefix` can return the original already-shared term or the hidden head of an applied variable, `SubstBindAppVar` can mutate type metadata on a term it did not allocate. Keep this for compatibility, but a future cleaned API should consider returning a typed prefix view or fresh prefix only when type adjustment is required.
+- `SubstNormTerm` accepts an unused `Sig_p sig` parameter and selects `WHNF_deref` versus `TermDerefAlways` through process-global `problemType`. A later API should remove the unused signature and accept the problem type or dereference strategy explicitly, while retaining the allocation-free direct reversed argument pushes, 64-slot inline `PLocalStack`, and resulting left-to-right binding order.
 
 ### Porting Focus
 

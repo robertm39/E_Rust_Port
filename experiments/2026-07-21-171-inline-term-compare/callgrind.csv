@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,comparator_exclusive,splay_exclusive,processed_clauses
+parent,12525374625,0,0.0000,529064108,218226418,4873
+inline_hint,12526334535,959910,0.0077,529030745,218299417,4873

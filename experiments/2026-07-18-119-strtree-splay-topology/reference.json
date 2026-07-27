@@ -1,0 +1,17 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_stringtrees_c_sha256": "837411ca94bbb5149ed2970fe1314c573cdaac1c4b12ef9cbb2c639ec1d4045a",
+    "clb_stringtrees_h_sha256": "942113cfdf8e78f66fb5ef21304cd2cfaa2d9c1976fdcb4df01b212156f4b3b7",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "dc630aa7088298986b2c7cd4d187d7685a4a7d0d2db243f1a1eb027a53f5cbe8"
+  },
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "empty=.\nstore_d=[d](.,.)\nstore_b=[b](.,[d](.,.))\nstore_f=[f]([d]([b](.,.),.),.)\nstore_c=[c]([b](.,.),[d](.,[f](.,.)))\nduplicate_d=0\nduplicate_d_tree=[d]([c]([b](.,.),.),[f](.,.))\nvalues_d=40,400\nfind_b=1\nfind_b_tree=[b](.,[c](.,[d](.,[f](.,.))))\nmiss_a=0\nmiss_a_tree=[b](.,[c](.,[d](.,[f](.,.))))\nmiss_z=0\nmiss_z_tree=[f]([c]([b](.,.),[d](.,.)),.)\nfind_d=1\nfind_d_tree=[d]([c]([b](.,.),.),[f](.,.))\nextract_miss_e=0\nextract_miss_e_tree=[f]([d]([c]([b](.,.),.),.),.)\nextract_c=1\nextract_c_tree=[b](.,[d](.,[f](.,.)))\nall=a,c,e,g\nembedded_store=1\nembedded_stored_length=5\nembedded_duplicate_alpha=0\nembedded_find=1\nembedded_extract_key=alpha\nbyte_order=alpha,zeta,\\xc3\\xa9clair\n"
+  },
+  "schema_version": 1
+}

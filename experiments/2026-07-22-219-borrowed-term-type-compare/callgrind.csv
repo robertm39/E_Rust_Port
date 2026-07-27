@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,comparator_aggregate_exclusive,aggregate_delta,aggregate_percent,percent_total_gain_explained,pdt_cursor_exclusive,norm_term_exclusive,c_rust_ratio,native_executable_bytes
+parent,10632641385,0,0.000000,284017905,0,0.000000,0.000000,1697827541,437245456,2.023584,8645120
+borrowed_term_type_compare,10611008030,-21633355,-0.203462,262384106,-21633799,-7.617055,100.002052,1697827541,437245456,2.019467,8632320

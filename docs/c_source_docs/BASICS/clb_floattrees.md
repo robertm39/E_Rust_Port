@@ -85,7 +85,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`.
 
@@ -97,10 +97,18 @@ Source files reviewed: `BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`.
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- The top-down splay routine reorganizes the tree on duplicate insertion, successful lookup, nearest miss, and successful or failed extraction. Rust now preserves the exact root/child topology with safe arena indices and free-slot reuse.
+- C structural comparisons subtract `double` keys and treat an unordered NaN result like equality for splay stopping and duplicate insertion, but `FloatTreeFind` and extraction then use IEEE equality. Rust preserves that separation without defining an unlawful total `Ord` for floats.
+- Consequently, a NaN inserted into an empty tree becomes an unfindable, unextractable root that causes every later insertion to be rejected as a duplicate. A NaN inserted into a nonempty tree is rejected as a duplicate of the current root. Signed zeros are valid duplicate keys and retain the bit representation of the first stored node.
+- Neither the unchanged C tree nor the generic Rust tree has a direct production owner outside its compatibility module. Exact ordered-key topology, signed-zero, infinity, NaN, and owner-audit evidence is retained in [`experiments/2026-07-18-118-floattree-splay-topology`](../../../experiments/2026-07-18-118-floattree-splay-topology/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `splay_tree` and `FloatTreeInsert` compare keys by subtracting `double` values and testing the result against zero. The exact accidental NaN behavior is now regression-pinned in both C and Rust. If a future owner accepts external float keys, reject NaN at that higher-level boundary rather than silently changing this low-level compatibility API.
 <!-- END MANUAL REVIEW: c_source_docs -->

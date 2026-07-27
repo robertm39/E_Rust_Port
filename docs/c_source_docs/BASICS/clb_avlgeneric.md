@@ -82,4 +82,8 @@ Source files reviewed: `BASICS/clb_avlgeneric.h`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The `AVL_TRAVERSE_*` macros are named for AVL trees even though the header comment says the generated traversal is now generic binary-search-tree traversal over E's splay-tree nodes. Rust preserves the historical module/source naming for traceability; a cleaned internal API could expose this as ordinary in-order tree iteration without the obsolete AVL name.
 <!-- END MANUAL REVIEW: c_source_docs -->

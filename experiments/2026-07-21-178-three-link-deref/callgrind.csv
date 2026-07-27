@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,deref_if_changed_exclusive,deref_always_exclusive,deref_step_exclusive,combined_deref_exclusive,deref_always_calls,processed_clauses
+parent,11993700044,0,0.0000,418535431,328211680,201738620,948485731,20963152,4873
+three_link_window,12112284087,118584043,0.9887,418320466,436856988,201738620,1056916074,20939267,4873

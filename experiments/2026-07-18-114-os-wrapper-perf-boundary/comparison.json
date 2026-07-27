@@ -1,0 +1,159 @@
+{
+  "accepted": true,
+  "c": {
+    "counter_names": [
+      "MguTimer",
+      "SatTimer",
+      "ParamodTimer",
+      "PMIndexTimer",
+      "IndexUnifTimer",
+      "BWRWTimer",
+      "BWRWIndexTimer",
+      "IndexMatchTimer",
+      "FreqVecTimer",
+      "FVIndexTimer",
+      "SubsumeTimer",
+      "SetSubsumeTimer",
+      "ClauseEvalTimer"
+    ],
+    "counter_values_seconds": {
+      "BWRWIndexTimer": "0.001015",
+      "BWRWTimer": "0.002314",
+      "ClauseEvalTimer": "0.007072",
+      "FVIndexTimer": "0.000287",
+      "FreqVecTimer": "0.000476",
+      "IndexMatchTimer": "0.000483",
+      "IndexUnifTimer": "0.003384",
+      "MguTimer": "0.012211",
+      "PMIndexTimer": "0.001439",
+      "ParamodTimer": "0.084442",
+      "SatTimer": "0.221756",
+      "SetSubsumeTimer": "0.000363",
+      "SubsumeTimer": "0.000083"
+    },
+    "exit_code": 0,
+    "proof_found": true,
+    "stderr": "",
+    "stdout_sha256": "f71cf1d64e53bc2e9f863c26b5b76e4326ee05ccc262b6f70baeaa5645d2c13b"
+  },
+  "reference": {
+    "build_flag": "-DINSTRUMENT_PERF_CTR",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "executable_sha256": "04f46281bd545e91db592ee8aafec5f05b76200143add5125024c0f1b8604dac",
+    "platform": "Linux under WSL 2"
+  },
+  "rust": {
+    "cargo_feature": "instrument-perf-ctr",
+    "executable_sha256": "7244d0534da7a9be5f0a998162c33f446d000515b6bc233875d550929eaa6b02",
+    "platform": "native Windows"
+  },
+  "rust_result": {
+    "counter_names": [
+      "MguTimer",
+      "SatTimer",
+      "ParamodTimer",
+      "PMIndexTimer",
+      "IndexUnifTimer",
+      "BWRWTimer",
+      "BWRWIndexTimer",
+      "IndexMatchTimer",
+      "FreqVecTimer",
+      "FVIndexTimer",
+      "SubsumeTimer",
+      "SetSubsumeTimer",
+      "ClauseEvalTimer"
+    ],
+    "counter_values_seconds": {
+      "BWRWIndexTimer": "0.000000",
+      "BWRWTimer": "0.015625",
+      "ClauseEvalTimer": "0.015625",
+      "FVIndexTimer": "0.000000",
+      "FreqVecTimer": "0.000000",
+      "IndexMatchTimer": "0.000000",
+      "IndexUnifTimer": "0.015625",
+      "MguTimer": "0.000000",
+      "PMIndexTimer": "0.000000",
+      "ParamodTimer": "0.296875",
+      "SatTimer": "0.843750",
+      "SetSubsumeTimer": "0.000000",
+      "SubsumeTimer": "0.000000"
+    },
+    "exit_code": 0,
+    "proof_found": true,
+    "stderr": "",
+    "stdout_sha256": "3d8bc9a9bb5b77bb116f13d7a061a83a676b379307cb7e5823e956dad032b127"
+  },
+  "schema_version": 1,
+  "stable_contract": {
+    "accepted": true,
+    "c": {
+      "counter_names": [
+        "MguTimer",
+        "SatTimer",
+        "ParamodTimer",
+        "PMIndexTimer",
+        "IndexUnifTimer",
+        "BWRWTimer",
+        "BWRWIndexTimer",
+        "IndexMatchTimer",
+        "FreqVecTimer",
+        "FVIndexTimer",
+        "SubsumeTimer",
+        "SetSubsumeTimer",
+        "ClauseEvalTimer"
+      ],
+      "exit_code": 0,
+      "proof_found": true,
+      "stderr": ""
+    },
+    "reference": {
+      "build_flag": "-DINSTRUMENT_PERF_CTR",
+      "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+      "executable_sha256": "04f46281bd545e91db592ee8aafec5f05b76200143add5125024c0f1b8604dac",
+      "platform": "Linux under WSL 2"
+    },
+    "rust": {
+      "cargo_feature": "instrument-perf-ctr",
+      "executable_sha256": "7244d0534da7a9be5f0a998162c33f446d000515b6bc233875d550929eaa6b02",
+      "platform": "native Windows"
+    },
+    "rust_result": {
+      "counter_names": [
+        "MguTimer",
+        "SatTimer",
+        "ParamodTimer",
+        "PMIndexTimer",
+        "IndexUnifTimer",
+        "BWRWTimer",
+        "BWRWIndexTimer",
+        "IndexMatchTimer",
+        "FreqVecTimer",
+        "FVIndexTimer",
+        "SubsumeTimer",
+        "SetSubsumeTimer",
+        "ClauseEvalTimer"
+      ],
+      "exit_code": 0,
+      "proof_found": true,
+      "stderr": ""
+    },
+    "workload": {
+      "fixture": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6.lop",
+      "fixture_sha256": "3262acc5e0178c62f6f93556ac3f1a66ecdd2b7485f2766366e1c6f3679f5d7c",
+      "input_transport": "stdin",
+      "options": [
+        "--silent",
+        "--print-statistics"
+      ]
+    }
+  },
+  "workload": {
+    "fixture": "eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6.lop",
+    "fixture_sha256": "3262acc5e0178c62f6f93556ac3f1a66ecdd2b7485f2766366e1c6f3679f5d7c",
+    "input_transport": "stdin",
+    "options": [
+      "--silent",
+      "--print-statistics"
+    ]
+  }
+}

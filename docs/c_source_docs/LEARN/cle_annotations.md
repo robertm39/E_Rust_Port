@@ -106,6 +106,12 @@ Source files reviewed: `LEARN/cle_annotations.h`, `LEARN/cle_annotations.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `AnnotationCombine` iterates `i=1; i<=length; i++`, so it reads and writes one slot beyond the parsed/printed element range for an annotation with `length` values. Rust preserves this because later LEARN code also touches the same one-past slot.
+- `AnnotationEval` intentionally skips slot `0` and evaluates only `length - 1` slots (`1..length-1`) against the supplied weights. A value stored at slot `length` by `AnnotationCombine` or `cle_tsmio` is therefore not included in evaluation.
+- `AnnotationListPrint` initializes a separator but never changes it, so entries are concatenated without commas or spaces. Rust preserves the printer shape for compatibility.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

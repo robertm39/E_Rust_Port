@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,mgu_queue_exclusive,aggregate_delta,aggregate_percent,rust_alloc_calls,c_rust_ratio
+parent,10644647204,0,0.000000,97184034,0,0.000000,6312342,2.025869
+two_inline_mgu_jobs,10660225939,15578735,0.146353,100890552,3706518,3.813917,6360517,2.028834

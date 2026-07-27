@@ -1,0 +1,118 @@
+{
+  "all_exact": true,
+  "case_count": 2,
+  "cases": [
+    {
+      "all_exact": true,
+      "c": {
+        "completion": "% Clause set closed under restricted calculus!",
+        "exit_code": 10,
+        "formula_docs_before_initialization": true,
+        "statistics": {
+          "Current number of archived formulas": 0,
+          "Current number of processed clauses": 0,
+          "Current number of unprocessed clauses": 0,
+          "Initial clauses": 0,
+          "Initial clauses in saturation": 0,
+          "Parsed axioms": 2,
+          "Processed clauses": 0,
+          "Removed by relevancy pruning/SinE": 2
+        },
+        "status": "% SZS status GaveUp",
+        "stderr": "",
+        "strategy": "% SinE strategy is Threshold(1)",
+        "surviving_formula_owners": []
+      },
+      "display_args": [
+        "--tstp-in",
+        "--tstp-out",
+        "--no-generation",
+        "--print-statistics",
+        "--output-level=4",
+        "--sine=Threshold(1)",
+        "$FIXTURE"
+      ],
+      "name": "threshold",
+      "rust": {
+        "completion": "% Clause set closed under restricted calculus!",
+        "exit_code": 10,
+        "formula_docs_before_initialization": true,
+        "statistics": {
+          "Current number of archived formulas": 0,
+          "Current number of processed clauses": 0,
+          "Current number of unprocessed clauses": 0,
+          "Initial clauses": 0,
+          "Initial clauses in saturation": 0,
+          "Parsed axioms": 2,
+          "Processed clauses": 0,
+          "Removed by relevancy pruning/SinE": 2
+        },
+        "status": "% SZS status GaveUp",
+        "stderr": "",
+        "strategy": "% SinE strategy is Threshold(1)",
+        "surviving_formula_owners": []
+      }
+    },
+    {
+      "all_exact": true,
+      "c": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "formula_docs_before_initialization": true,
+        "statistics": {
+          "Current number of archived formulas": 0,
+          "Current number of processed clauses": 0,
+          "Current number of unprocessed clauses": 2,
+          "Initial clauses": 3,
+          "Initial clauses in saturation": 3,
+          "Parsed axioms": 4,
+          "Processed clauses": 1,
+          "Removed by relevancy pruning/SinE": 1
+        },
+        "status": "% SZS status Theorem",
+        "stderr": "",
+        "strategy": "% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+        "surviving_formula_owners": [
+          "goal",
+          "link",
+          "far"
+        ]
+      },
+      "display_args": [
+        "--tstp-in",
+        "--tstp-out",
+        "--no-generation",
+        "--print-statistics",
+        "--output-level=4",
+        "--sine=GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+        "$FIXTURE"
+      ],
+      "name": "gsine",
+      "rust": {
+        "completion": "% Proof found!",
+        "exit_code": 0,
+        "formula_docs_before_initialization": true,
+        "statistics": {
+          "Current number of archived formulas": 0,
+          "Current number of processed clauses": 0,
+          "Current number of unprocessed clauses": 2,
+          "Initial clauses": 3,
+          "Initial clauses in saturation": 3,
+          "Parsed axioms": 4,
+          "Processed clauses": 1,
+          "Removed by relevancy pruning/SinE": 1
+        },
+        "status": "% SZS status Theorem",
+        "stderr": "",
+        "strategy": "% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+        "surviving_formula_owners": [
+          "goal",
+          "link",
+          "far"
+        ]
+      }
+    }
+  ],
+  "matching_cases": 2,
+  "schema_version": 1
+}

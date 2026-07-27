@@ -1,0 +1,112 @@
+{
+  "all_passed": true,
+  "bead": "E_Rust_Port-j76.2.32",
+  "checks": [
+    {
+      "detail": "default C defines COMCHAR=\"%%\" and COMCHARRAW=\"%\"",
+      "name": "c_default_macro_pair",
+      "passed": true
+    },
+    {
+      "detail": "UNIX_COMMENTS changes both C macros to \"#\"",
+      "name": "c_optional_unix_macro_pair",
+      "passed": true
+    },
+    {
+      "detail": "C exposes the alternate prefix only through configure-time compilation",
+      "name": "c_unix_mode_is_build_configuration",
+      "passed": true
+    },
+    {
+      "detail": "TSTPOUT passes COMCHAR through fprintf and renders one percent sign",
+      "name": "c_formatted_status_owner",
+      "passed": true
+    },
+    {
+      "detail": "TSTPOUTFD writes COMCHAR directly and preserves two percent signs",
+      "name": "c_direct_status_owner",
+      "passed": true
+    },
+    {
+      "detail": "Rust names the rendered and direct default-build spellings explicitly",
+      "name": "rust_default_macro_pair",
+      "passed": true
+    },
+    {
+      "detail": "tstp_out_string owns the rendered single-percent status shape",
+      "name": "rust_formatted_status_owner",
+      "passed": true
+    },
+    {
+      "detail": "tstp_out_fd_chunks owns the literal double-percent descriptor shape",
+      "name": "rust_direct_status_owner",
+      "passed": true
+    },
+    {
+      "detail": "direct spelling owners: src/basics/defines.rs, src/inout/signals.rs",
+      "name": "rust_direct_owner_files_are_bounded",
+      "passed": true
+    },
+    {
+      "detail": "hard-timeout descriptor output uses the direct double-percent spelling",
+      "name": "rust_hard_timeout_is_direct",
+      "passed": true
+    },
+    {
+      "detail": "ordinary eprover stream output uses only the rendered single-percent spelling",
+      "name": "rust_eprover_stream_output_is_formatted",
+      "passed": true
+    },
+    {
+      "detail": "unit regression pins both status spellings",
+      "name": "rust_prefix_regression",
+      "passed": true
+    },
+    {
+      "detail": "Rust does not broaden its CLI or feature surface for an unsupported C build",
+      "name": "rust_has_no_speculative_unix_mode",
+      "passed": true
+    },
+    {
+      "detail": "retained format-option matrix is 18/18 byte-exact with all effects observed",
+      "name": "format_matrix_is_exact",
+      "passed": true
+    },
+    {
+      "detail": "all 34 retained non-null C/Rust statuses use one percent sign",
+      "name": "format_matrix_statuses_are_rendered",
+      "passed": true
+    },
+    {
+      "detail": "retained proof-output matrix is 15/15 byte-exact against pinned C",
+      "name": "proof_matrix_is_exact",
+      "passed": true
+    },
+    {
+      "detail": "retained reporting/limit matrix is 11/11 byte-exact against pinned C",
+      "name": "reporting_limit_matrix_is_exact",
+      "passed": true
+    },
+    {
+      "detail": "live deduction-server evidence records why direct ownership cannot be flattened",
+      "name": "default_c_direct_macro_bug_is_documented",
+      "passed": true
+    }
+  ],
+  "decision": "support_default_c_comment_build_only",
+  "input_sha256": {
+    "experiments/2026-07-17-050-reporting-strategy-limit-matrix/results-summary.json": "dc61a9aa5d6a93f0eea399d55fc68800290e96f017e5861341cdd1e241f8c8b8",
+    "experiments/2026-07-18-104-format-option-integration/reference.json": "9f319ec0eddf7a7586f94f3cd20739175525e013e5da446603511cf7012306e2",
+    "experiments/2026-07-18-105-proof-output-integration/reference.json": "eb476294f3c6a9a2488e0a68e92524920157f3c08bebf26cb194706c923e0b0e"
+  },
+  "passed_count": 18,
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "retained_exact_cases": {
+    "format_options": 18,
+    "proof_outputs": 15,
+    "reporting_and_limits": 11,
+    "total": 44
+  },
+  "schema_version": 1,
+  "total_count": 18
+}

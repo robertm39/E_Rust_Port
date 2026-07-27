@@ -1,0 +1,4 @@
+variant,instructions,delta_from_parent,percent_from_parent,c_rust_ratio,processed_clauses
+c_reference,5254361329,-7524087131,-58.8812,1.0000,4873
+parent,12778448460,0,0.0000,2.4320,4873
+pdt_function_intmap,12625510206,-152938254,-1.1968,2.4029,4873

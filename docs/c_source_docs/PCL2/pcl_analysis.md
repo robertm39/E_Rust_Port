@@ -97,4 +97,18 @@ Source files reviewed: `PCL2/pcl_analysis.h`, `PCL2/pcl_analysis.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/analysis.rs`, covering expression/step/protocol proof-distance computation, cached `proof_distance` updates, generation and simplification reference counter updates by C operator class, proof/non-proof reference counter split, example selection by proof-step priority and useless-generation/useless-simplification ratio, and the C loop behavior for zero negative-example budget.
+- The Rust implementation operates over `PclProtocol` full-step ids and safe step lookups while preserving the C analysis counters stored in `PclStepTreeData`.
+- Focused compatibility regressions now pin dangling proof-distance diagnostics, silent dangling reference-counter updates, deterministic equal-score selection, C `float` score rounding, and the zero-negative-budget loop. On a 41-step all-ties corpus, the archived glibc C tool and Rust select the same lower-id negative example and produce byte-identical output; [`experiment 062`](../../../experiments/2026-07-16-062-pcl-analysis-edges/FINDINGS.md) records the corpus and decision.
+
+### Change Later
+
+- `PCLExprProofDistance` dereferences the result of `PCLProtFindStep` for quoted parents without a null check; the archived C `direct_examples` tool terminates with `SIGSEGV` on the focused malformed corpus. Rust intentionally reports a syntax diagnostic because reproducing a null dereference is neither a supported output contract nor compatible with safe Rust.
+- `PCLExprUpdateGRefs` handles a direct quoted argument whose parent is missing by recursing into the quote expression, which is a no-op. Rust preserves the silent-ignore behavior for reference updates.
+- `PCLProtSelectExamples` uses `qsort` over the serialized stack and sets `is_ordered=false`, so equal proof steps and equal negative-example scores have unspecified portable order. Rust retains deterministic PCL-id ordering after the same comparator categories. This matches the archived glibc target byte-for-byte on the 41-step all-ties corpus and avoids making output depend on a particular libc's undocumented sorting implementation.
+- `PCLProtSelectExamples` stops immediately when `neg_examples == 0`, so it does not select proof examples despite the comment saying all proof clauses are selected. Rust preserves this loop condition.
+- Example selection scores use C `float` ratios of `useless_gen_refs/(useless_simpl_refs+1)`. Rust keeps f32-shaped scoring for compatibility; later learning code may want explicit tie-breaking and overflow/precision policy.
 <!-- END MANUAL REVIEW: c_source_docs -->

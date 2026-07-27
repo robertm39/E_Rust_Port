@@ -99,7 +99,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-07-18.
 
 Source files reviewed: `BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`.
 
@@ -111,10 +111,20 @@ Source files reviewed: `BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`.
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- The top-down splay routine reorganizes the tree on duplicate insertion, successful lookup, nearest miss, and successful or failed extraction. Rust now preserves the exact root/child topology with safe arena indices; read-only `find_binary` is reserved for Rust APIs that only expose a shared reference.
+- `NumTreeMaxNode` does not reorganize the tree. Full traversal remains ascending, while limited traversal initializes a logarithmic path to the first key greater than or equal to the supplied limit.
+- `NumTreeDebugPrint` is a preorder topology dump rather than a sorted listing. It emits explicit `[]` children only when their parent has at least one child and advances by four visible spaces per tree level. Rust preserves that shape and prints implementation-native node addresses for the diagnostic pointer fields; exact pointer text is intentionally platform- and allocation-dependent.
+- C compares `long` keys with signed subtraction, which has undefined behavior on overflow. Rust uses total `i64` comparison, matching the pinned LP64 reference for defined inputs while remaining defined at extreme keys.
+- Exact unchanged-C topology/debug evidence and the direct owner inventory are retained in [`experiments/2026-07-18-117-numtree-splay-topology`](../../../experiments/2026-07-18-117-numtree-splay-topology/FINDINGS.md).
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `NumTreeLimitedTraverseInit` comments say it returns a path to the smallest element smaller than or equal to the limit, but the implementation skips keys below the limit and initializes traversal at the first key greater than or equal to it. Rust preserves the implemented behavior; the C comment should be corrected only after compatibility tests confirm no caller relied on the wording.
+- `splay_tree` and insertion/extraction equality checks subtract signed `long` keys. Do not copy that undefined-overflow comparison idiom into Rust; if the C source is changed later, replace it with relational comparisons without changing ordinary-key topology.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -92,4 +92,12 @@ Source files reviewed: `BASICS/clb_regmem.h`, `BASICS/clb_regmem.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `RegMemAlloc` stores raw allocation pointers in a file-static `PTree` and `RegMemCleanUp` later frees every registered pointer. Rust preserves process-global cleanup semantics through opaque handles, but future typed scratch-memory owners should prefer scoped ownership where possible.
+- `RegMemRealloc` and `RegMemFree` ignore the `PTreeDeleteEntry` return value before reallocating or freeing the pointer. That leaves invalid or double-free calls to fail through allocator behavior; Rust's C-shaped `regmem_*` APIs panic for unregistered handles, while `try_regmem_*` APIs report the handle error explicitly.
+- `RegMemProvide` computes `mem+*oldsize` on a `void*`, which relies on GNU-style byte arithmetic. A cleaned C version should cast to `char*` or use a typed byte buffer.
+- `RegMemAlloc` uses `SecureMalloc`, so newly allocated bytes are not guaranteed to be zeroed, while `RegMemProvide` zero-fills only the newly grown tail. Rust's safe byte-buffer representation is initialized to zero; revisit this only if profiling shows the extra initialization matters for hot static scratch storage.
+- Rust keeps stale handles invalid across cleanup by not resetting the handle counter. C stale raw pointers after cleanup already have undefined ownership, and a later allocation may or may not reuse the same address.
 <!-- END MANUAL REVIEW: c_source_docs -->

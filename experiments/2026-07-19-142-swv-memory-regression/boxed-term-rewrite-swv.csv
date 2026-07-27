@@ -1,0 +1,5 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"boxed-term-rewrite-swv","1","0x7ff63ba10000","8","ResourceOut","63.353579","61.171875","2311856","359","eprover: CPU time limit exceeded, terminating"
+"boxed-term-rewrite-swv","2","0x7ff63ba10000","8","ResourceOut","62.21652","61.171875","2311308","359","eprover: CPU time limit exceeded, terminating"
+"boxed-term-rewrite-swv","3","0x7ff63ba10000","-1073740791",,"61.555367","60.015625","2314532","0","memory allocation of 144 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"

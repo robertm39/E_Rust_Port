@@ -1,0 +1,20 @@
+{
+  "all_passed": true,
+  "contracts": {
+    "c_executable_owns_post_saturation_filter": true,
+    "c_filter_routes_through_forward_contract_set": true,
+    "c_forward_contract_set_reuses_documenting_keep": true,
+    "executable_session_continuity_regression_present": true,
+    "rust_executable_returns_advanced_identifier": true,
+    "rust_executable_starts_successor_session": true,
+    "rust_filter_exposes_documenting_wrapper": true,
+    "rust_filter_threads_docs_into_set_contraction": true,
+    "rust_owner_updates_identifier_before_side_outputs": true,
+    "rust_set_dispatches_to_documenting_keep": true,
+    "rust_set_exposes_documenting_wrapper": true,
+    "set_level_modification_regression_present": true
+  },
+  "passed": 12,
+  "schema_version": 1,
+  "total": 12
+}

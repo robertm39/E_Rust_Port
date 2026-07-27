@@ -83,4 +83,9 @@ Source files reviewed: `CONTRIB/picosat-965/picogcnf.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The grouped-CNF utility is a standalone PicoSAT workflow with its own parser, progress messaging, and fatal-error path. Rust should not blend this utility parser into E's clause parser; port it only if the external vendored utility surface becomes part of the compatibility target.
+- Progress percentages and grouped-clause callbacks are presentation-side concerns interleaved with parsing and solving. A cleaned Rust utility could separate parsing, solver callbacks, and output formatting after byte-for-byte utility compatibility is no longer required.
 <!-- END MANUAL REVIEW: c_source_docs -->

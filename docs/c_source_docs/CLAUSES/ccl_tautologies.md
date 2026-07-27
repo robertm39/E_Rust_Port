@@ -102,4 +102,8 @@ Source files reviewed: `CLAUSES/ccl_tautologies.h`, `CLAUSES/ccl_tautologies.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/clauses/tautologies.rs` implements the ground-completion tautology path, including the public copy/no-copy flag shape. C can consume a caller-owned temporary clause on the no-copy path because scratch banks share canonical truth terms with the source bank. Rust banks own distinct canonical term handles, so both flag values create a bank-local work clause before the final pointer-identity comparison. A cross-bank complementary-predicate regression pins this ownership translation and the executable predicate-gate fixture covers the production caller.
 <!-- END MANUAL REVIEW: c_source_docs -->

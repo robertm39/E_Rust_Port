@@ -1,0 +1,225 @@
+{
+  "accepted": true,
+  "reference": {
+    "basics_archive_sha256": "c60da8747ec4e7ebd30e3c74cca77b2ecfe65455b30c01fb5b3892fa7ffb042c",
+    "clb_memory_c_sha256": "e0ad65e4bac4cd2b3385c1aa2cd6548f61f58f16461a1e883b081dd8817182ad",
+    "clb_memory_h_sha256": "8777d481dc566286c38875488dbe928d6b614173609371b651035d8d868d6b8f",
+    "clb_newmem_c_sha256": "63f3588c31a27ca2548950fe3441c2d05898c39007fee7834e9b5eb0e364cbec",
+    "clb_newmem_h_sha256": "184ea5d378ae15543e4b765ba692f561e1db856156f63a3c803854f32ac62eed",
+    "commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+    "platform": "Linux under WSL 2",
+    "probe_sha256": "2450fab3bf96c5a74e6bf83a577040c1dd4d5d6e223998b50cf296bd6f29a919"
+  },
+  "results": [
+    {
+      "compile_mode": "old",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": -1,
+        "after_flush": -1,
+        "after_free": -1,
+        "align": 0,
+        "bucket": -1,
+        "chunk_limit": 0,
+        "min": 8,
+        "mode": "old",
+        "multiplier": 0,
+        "request": 7
+      },
+      "request": 7,
+      "stderr": "",
+      "stdout": "mode=old,request=7,min=8,align=0,chunk_limit=0,multiplier=0,bucket=-1,after_alloc=-1,after_free=-1,after_flush=-1\n"
+    },
+    {
+      "compile_mode": "old",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 0,
+        "after_free": 1,
+        "align": 0,
+        "bucket": 8,
+        "chunk_limit": 0,
+        "min": 8,
+        "mode": "old",
+        "multiplier": 0,
+        "request": 8
+      },
+      "request": 8,
+      "stderr": "",
+      "stdout": "mode=old,request=8,min=8,align=0,chunk_limit=0,multiplier=0,bucket=8,after_alloc=0,after_free=1,after_flush=0\n"
+    },
+    {
+      "compile_mode": "old",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 0,
+        "after_free": 1,
+        "align": 0,
+        "bucket": 64,
+        "chunk_limit": 0,
+        "min": 8,
+        "mode": "old",
+        "multiplier": 0,
+        "request": 64
+      },
+      "request": 64,
+      "stderr": "",
+      "stdout": "mode=old,request=64,min=8,align=0,chunk_limit=0,multiplier=0,bucket=64,after_alloc=0,after_free=1,after_flush=0\n"
+    },
+    {
+      "compile_mode": "old",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 0,
+        "after_free": 1,
+        "align": 0,
+        "bucket": 8191,
+        "chunk_limit": 0,
+        "min": 8,
+        "mode": "old",
+        "multiplier": 0,
+        "request": 8191
+      },
+      "request": 8191,
+      "stderr": "",
+      "stdout": "mode=old,request=8191,min=8,align=0,chunk_limit=0,multiplier=0,bucket=8191,after_alloc=0,after_free=1,after_flush=0\n"
+    },
+    {
+      "compile_mode": "old",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": -1,
+        "after_flush": -1,
+        "after_free": -1,
+        "align": 0,
+        "bucket": -1,
+        "chunk_limit": 0,
+        "min": 8,
+        "mode": "old",
+        "multiplier": 0,
+        "request": 8192
+      },
+      "request": 8192,
+      "stderr": "",
+      "stdout": "mode=old,request=8192,min=8,align=0,chunk_limit=0,multiplier=0,bucket=-1,after_alloc=-1,after_free=-1,after_flush=-1\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 1023,
+        "after_flush": 1024,
+        "after_free": 1024,
+        "align": 16,
+        "bucket": 1,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 1
+      },
+      "request": 1,
+      "stderr": "",
+      "stdout": "mode=new,request=1,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=1,after_alloc=1023,after_free=1024,after_flush=1024\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 1023,
+        "after_flush": 1024,
+        "after_free": 1024,
+        "align": 16,
+        "bucket": 16,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 255
+      },
+      "request": 255,
+      "stderr": "",
+      "stdout": "mode=new,request=255,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=16,after_alloc=1023,after_free=1024,after_flush=1024\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 1,
+        "after_free": 1,
+        "align": 16,
+        "bucket": 16,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 256
+      },
+      "request": 256,
+      "stderr": "",
+      "stdout": "mode=new,request=256,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=16,after_alloc=0,after_free=1,after_flush=1\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 1,
+        "after_free": 1,
+        "align": 16,
+        "bucket": 256,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 4096
+      },
+      "request": 4096,
+      "stderr": "",
+      "stdout": "mode=new,request=4096,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=256,after_alloc=0,after_free=1,after_flush=1\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": 0,
+        "after_flush": 1,
+        "after_free": 1,
+        "align": 16,
+        "bucket": 8191,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 131056
+      },
+      "request": 131056,
+      "stderr": "",
+      "stdout": "mode=new,request=131056,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=8191,after_alloc=0,after_free=1,after_flush=1\n"
+    },
+    {
+      "compile_mode": "new",
+      "exit_code": 0,
+      "record": {
+        "after_alloc": -1,
+        "after_flush": -1,
+        "after_free": -1,
+        "align": 16,
+        "bucket": -1,
+        "chunk_limit": 256,
+        "min": 8,
+        "mode": "new",
+        "multiplier": 1024,
+        "request": 131057
+      },
+      "request": 131057,
+      "stderr": "",
+      "stdout": "mode=new,request=131057,min=8,align=16,chunk_limit=256,multiplier=1024,bucket=-1,after_alloc=-1,after_free=-1,after_flush=-1\n"
+    }
+  ],
+  "schema_version": 1
+}

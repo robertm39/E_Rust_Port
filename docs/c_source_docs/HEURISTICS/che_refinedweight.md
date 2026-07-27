@@ -91,8 +91,13 @@ Source files reviewed: `HEURISTICS/che_refinedweight.h`, `HEURISTICS/che_refined
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `ClauseRefinedWeightCompute` and `ClauseRefinedWeight2Compute` call `ClauseCondMarkMaximalTerms(local->ocb, clause)` before `ClauseWeight`; the Rust port preserves that ordering with explicit OCB-backed helpers and banked WFCB callbacks for mutable-clause callers that can pass the owner bank.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- Once all proof-control evaluation sites can pass both the active `OCB` and mutable owner bank, route ordinary HCB evaluation through the banked WFCB path and collapse any remaining immutable refined-weight scoring fallbacks without changing the mark-then-`ClauseWeight` sequence.
 
 ### Porting Focus
 

@@ -1,0 +1,312 @@
+{
+  "reference_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+  "case_count": 18,
+  "cases": [
+    {
+      "case": "unary_first",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "unary_freq",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "arity",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "invarity",
+      "exit_code": 1,
+      "high_to_low": [
+        "a",
+        "b",
+        "g",
+        "f"
+      ],
+      "low_to_high": [
+        "f",
+        "g",
+        "b",
+        "a"
+      ]
+    },
+    {
+      "case": "const_max",
+      "exit_code": 1,
+      "high_to_low": [
+        "a",
+        "b",
+        "g",
+        "f"
+      ],
+      "low_to_high": [
+        "f",
+        "g",
+        "b",
+        "a"
+      ]
+    },
+    {
+      "case": "const_min",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "freq",
+      "exit_code": 1,
+      "high_to_low": [
+        "a",
+        "b",
+        "g",
+        "f"
+      ],
+      "low_to_high": [
+        "f",
+        "g",
+        "b",
+        "a"
+      ]
+    },
+    {
+      "case": "invfreq",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "invconjfreq",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "a",
+        "b",
+        "f"
+      ],
+      "low_to_high": [
+        "f",
+        "b",
+        "a",
+        "g"
+      ]
+    },
+    {
+      "case": "invfreqconjmax",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "a",
+        "b",
+        "f"
+      ],
+      "low_to_high": [
+        "f",
+        "b",
+        "a",
+        "g"
+      ]
+    },
+    {
+      "case": "invfreqconjmin",
+      "exit_code": 1,
+      "high_to_low": [
+        "f",
+        "g",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "g",
+        "f"
+      ]
+    },
+    {
+      "case": "invfreqconstmin",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "invfreqhack",
+      "exit_code": 1,
+      "high_to_low": [
+        "g",
+        "f",
+        "a",
+        "b"
+      ],
+      "low_to_high": [
+        "b",
+        "a",
+        "f",
+        "g"
+      ]
+    },
+    {
+      "case": "typefreq",
+      "exit_code": 10,
+      "high_to_low": [
+        "cat",
+        "dog",
+        "a",
+        "f",
+        "g"
+      ],
+      "low_to_high": [
+        "g",
+        "f",
+        "a",
+        "dog",
+        "cat"
+      ]
+    },
+    {
+      "case": "invtypefreq",
+      "exit_code": 10,
+      "high_to_low": [
+        "g",
+        "a",
+        "f",
+        "cat",
+        "dog"
+      ],
+      "low_to_high": [
+        "dog",
+        "cat",
+        "f",
+        "a",
+        "g"
+      ]
+    },
+    {
+      "case": "combfreq",
+      "exit_code": 10,
+      "high_to_low": [
+        "cat",
+        "a",
+        "f",
+        "dog",
+        "g"
+      ],
+      "low_to_high": [
+        "g",
+        "dog",
+        "f",
+        "a",
+        "cat"
+      ]
+    },
+    {
+      "case": "invcombfreq",
+      "exit_code": 10,
+      "high_to_low": [
+        "g",
+        "a",
+        "f",
+        "dog",
+        "cat"
+      ],
+      "low_to_high": [
+        "cat",
+        "dog",
+        "f",
+        "a",
+        "g"
+      ]
+    },
+    {
+      "case": "arrayopt",
+      "exit_code": 1,
+      "high_to_low": [
+        "store",
+        "select",
+        "sk",
+        "arr",
+        "a_slot",
+        "elem",
+        "e_slot",
+        "idx",
+        "i_slot"
+      ],
+      "low_to_high": [
+        "i_slot",
+        "idx",
+        "e_slot",
+        "elem",
+        "a_slot",
+        "arr",
+        "sk",
+        "select",
+        "store"
+      ]
+    }
+  ]
+}

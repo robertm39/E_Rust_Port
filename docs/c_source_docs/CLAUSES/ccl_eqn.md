@@ -311,7 +311,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order equation subsumption, unification, and proof rendering on 2026-07-11.
 
 Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 
@@ -326,6 +326,31 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+
+### Compatibility Notes
+
+- `EqnPrint` reads mutable process-global `OutputFormat`, `EqnUseInfix`, `EqnFullEquationalRep`, and `EqnPrintOriented`, and it indirectly honors `TermPrintTypes` through full-term printing. Rust keeps the rendered LOP/TPTP behavior but passes those choices through explicit `EqnPrintOptions`; prefer that explicit API unless executable-level compatibility requires recreating process globals.
+- In the `TPTPFormat` branch, `EqnPrint` ignores `EqnFullEquationalRep` and always prints an external `++`/`--` sign plus prefix `equal(...)` only for equational literals. Rust preserves that dialect split in the TPTP option.
+- `EqnParse`/`EqnFOFParse` dispatch through `ScannerGetFormat`, with LOP accepting optional `~` plus mixfix `equal(...)`/infix syntax, TPTP CNF requiring doubled external `++`/`--`, TPTP FOF accepting optional `~`, and TSTP using optional `~` plus infix syntax. Rust preserves those control-flow branches through the banked `TBTermParse`-equivalent parser. It also exposes `EqnTBTermParse` without an intermediate literal allocation and preserves `EqnHOFParse`'s close-parenthesis continuation protocol, Boolean-left `$eq(left,$true)` encoding, and `TFormulaTSTPParse` right-operand handoff.
+- `EqnPrintDBG` delegates to `TermPrintDbg` with `DEREF_NEVER`, then appends maximal/oriented/equational markers. The equational marker uses `COMCHAR` through a `%s` argument, so the default non-`UNIX_COMMENTS` build prints the doubled string `%%`; Rust preserves that default through an explicit debug helper.
+- `EqnPrintDeref` ignores output-format globals and always prints standard infix `=`/`!=` after passing the same `DerefType` to both sides' `TermPrint`. Rust preserves this as a bank-explicit helper; broader applied-variable dereference expansion remains a term-bank concern.
+- `EqnAppEncode` creates temporary app-encoded term copies and frees them after printing, but it may still mutate the signature by allocating typed application symbols. Rust preserves source-literal immutability and exposes the signature mutation through a mutable `TermBank` argument.
+- `EqnFOFPrint` chooses infix output only for `TSTPFormat` and non-PCL `LOPFormat`; `TPTPFormat` and LOP/PCL use prefix `equal(...)`, and unlike `EqnPrint` this helper does not emit external `++`/`--` signs. Rust preserves those branches through explicit FOF print options and keeps the higher-order parenthesis global as a caller-provided switch.
+- `EqnTSTPPrint` special-cases any negative `lterm == rterm` literal as `$false` before checking equational shape, and consults the process-global `EqnPrintOriented` for `->`/`!->` output. Rust preserves the same spellings through an explicit TSTP writer and a `print_oriented` argument; the C global is a good candidate to keep explicit in future Rust call paths.
+- `EqnOrient` trusts `EPMaxIsUpToDate` as a complete cache-validity guard and returns before checking whether the current side terms still match the stored orientation bit. Rust preserves that behavior and now exposes both the original immutable-bank ordering path and a bank-backed path for callers that can supply the mutable owner `TermBank` needed by KBO6 `LAMBDA_ORDER` beta/eta preparation; later side-mutation APIs should clear the flag explicitly instead of making orientation recompute defensively.
+- `EqnMap` applies the mapper to both sides, rewrites mapped `$false` to `$true` with polarity flips, swaps `$true` away from the left side, recomputes `EPIsEquLiteral`, and clears `EPMaxIsUpToDate`/`EPIsOriented` only when the final left side changed. Rust preserves this through `Eqn::map_terms`; the same behavior is used by the ported equation-list lambda-normalization helper.
+- `compare_poseqn_negeqn` labels one mixed positive/negative lesser branch as `Buggy, changed by StS` and uses a broad disjunction over both equation sides. Rust preserves the implementation; defer cleanup until maximal-literal and proof-search comparisons can show the change is unobservable.
+- `EqnTermExtWeight` always applies `max_term_multiplier` to the left term, and applies it to the right term only when the literal is not oriented. `LiteralTermExtWeight` then applies the maximal-literal multiplier before the positive-equation multiplier. Rust preserves this order; later heuristic APIs may want names that make the left-side-as-potentially-maximal convention explicit.
+- `EqnSplitModStandardWeight` checks the full `EPIsSplitLit|EPIsPositive` property mask before using the left head symbol's special weight; it does not call `EqnIsSplitLit`, so merely marking the predicate symbol with `FPClSplitDef` is not enough. The checked C snapshot references `SigGetSpecialWeight` only from this macro and does not define it elsewhere, so later cleanup should decide whether the special weight belongs to signature state, ordering-control state, or a caller-supplied policy.
+- `EqnSubsumeDirected` and `EqnSubsume` now have explicit mutable-bank Rust variants that preserve branch-local substitution rollback while dispatching to complete higher-order matching; recursive clause subsumption uses those variants in proof-search paths.
+- `EqnUnifyDirected`, `EqnUnify`, `EqnUnifyP`, and `LiteralUnifyOneWay` now have explicit mutable-bank Rust variants that preserve C's oriented/swapped branches and temporary side restoration while dispatching to `SubstMguComplete` in higher-order mode. Production factoring, condensation, and CSSCPA use these variants; the unbanked methods remain first-order compatibility entry points.
+
+### Change Later
+
+- `EqnMap`'s left-side-only orientation/maximality invalidation can leave metadata untouched after a right-side-only rewrite. Keep this while matching C traces; after drop-in compatibility is stable, consider making any side replacement clear ordering metadata or splitting literal side mutation from truth/polarity normalization.
+- C equations carry their owner bank implicitly, so `EqnOrient`, `EqnCompare`, and `LiteralCompare` can reach owner-bank normalization through `TOCompare` without changing signatures. Rust currently keeps explicit immutable-bank and mutable-bank comparison variants; collapse that split only after term-owner metadata or proof-state ownership can provide the C context without hidden global coupling.
+- The same implicit owner-bank coupling applies to equation subsumption and unification: apparently read-only matching/unifiability checks can eta-normalize and construct shared higher-order bindings. A cleaned C interface should make that mutable context explicit rather than depending on `TermGetBank` below the equation API.
+- `EqnFOFPrint` obtains higher-order term syntax indirectly through the process-global `problemType`, while its explicit arguments cover only dereferencing and literal formatting. Rust threads `ProblemType` into proof-formula equation rendering; a cleaned C printer should make the output dialect and problem type explicit in one options value instead of combining arguments with hidden global state.
 
 ### Porting Focus
 

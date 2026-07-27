@@ -86,6 +86,20 @@ Source files reviewed: `PROVER/checkproof.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers exact C-shaped full help text, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-` with C's diagnostic name `<stdin>`, TPTP-format UPCL2 parsing with C-compatible shared external variable-name mapping for compressed clause input, C-compatible shell-PCL rejection, strict end-of-input checks, external E/Otter/SPASS verification dispatch, release-compatible `scheme-setheo` failure classification, full-FOF warning routing, pre-open `stat` checks and C-shaped temporary/file/output-close diagnostics, and the C-shaped final verification summary. The exact 16-case permanent matrix pins C's accidental doubled E proof marker, paired companion C/Rust `eprover` behavior, output-level-3 traces, and legacy Otter/SPASS problem/marker paths.
+
+### Change Later
+
+- C exposes `--version` without a `-V` shorthand here, unlike some newer E tools. Rust preserves that table; add a short alias only as an explicit non-compatibility-mode cleanup.
+- `print_help(FILE* out)` prints its option table to `stdout` instead of the `out` parameter. The executable only calls it with `stdout`, so Rust keeps the user-visible behavior without preserving the misdirected helper API.
+- The C executable mutates global `OutputFormat`, `EqnUseInfix`, and `ClausesHaveLocalVariables` while selecting Otter/SPASS checking and parsing UPCL2. Rust keeps the parser effect in explicit `PclStepParseOptions`/`ClauseParseOptions` and keeps output effects localized in proof-check rendering paths; audit again if shared global output-format state becomes part of the public Rust API.
+- `checkproof.c` relies on the process-global `SupportShellPCL` default staying false, while other PCL tools such as `epclextract` enable it explicitly. Rust keeps this as an explicit per-executable parser option; a cleaned interface should avoid hidden global defaults for proof-protocol dialect selection.
+- `scheme-setheo` is accepted by C but has no switch arm in `PCLStepCheck`. Debug C builds assert for a generated check problem; the normal `NDEBUG` release build removes that assertion and returns the initialized `CheckFail`, while assumptions still pass and split steps remain `CheckNotImplemented`. Rust matches the release result rather than its previous unchecked classification; remove or rename the option only after compatibility mode can report deprecated options.
+- C installs SIGTERM/SIGINT handlers mainly to clean temporary prover problem files. Rust uses owned temporary-file registration/removal around each prover run and still sets the equivalent handlers for executable compatibility; a later process-management layer could make cleanup ownership explicit and avoid global signal setup in library-facing paths.
+- `main()` calls `OpenGlobalOut(outname)` before inserting the default `-` argument and before scanner creation, so output redirection can create or truncate a file even if proof input later fails. Rust keeps this side effect for compatibility; a future user-facing mode could delay or atomically commit output.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

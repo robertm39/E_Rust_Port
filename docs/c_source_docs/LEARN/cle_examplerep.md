@@ -114,6 +114,17 @@ Source files reviewed: `LEARN/cle_examplerep.h`, `LEARN/cle_examplerep.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `ExampleSetInsert` stores the representation in the numeric `ident_index` before inserting the name in `name_index`. If the name insert fails because another example already uses that name, the function returns false after the numeric tree has already been changed; Rust preserves this side effect in the already-ported helper tests.
+- `set->count` is a high-water mark updated only on successful insert and is not decremented by `ExampleSetDeleteId` or `ExampleSetDeleteName`. This matters for later generated identifiers and for matching existing learned-data numbering.
+- `ExampleSetPrint` iterates the numeric tree, so output order follows example id rather than parse order or name order.
+
+### Change Later
+
+- A modernized example set should make insertion atomic across both indexes or report partial insertion explicitly. The current C behavior can leave the two indexes inconsistent after duplicate-name insertion.
+- Rename or split the `count` field if the API is cleaned up; it is not the current set size, but the maximum successfully inserted identifier.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

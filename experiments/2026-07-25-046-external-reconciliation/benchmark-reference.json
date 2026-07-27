@@ -1,0 +1,143 @@
+{
+  "binaries": {
+    "c_sha256": "cc72b8c75f9b9ce4d85dcc3e4c8e55fa79840a0a7dee258924f9ca87e8acade9",
+    "rust_baseline_sha256": "aa4d50f0eb5653d9fd978e400ebfd5e9a653b4ac605704b8dd6303389c6b1f51",
+    "rust_candidate_sha256": "7f2eabc02d654d36571673ff6373378bd40ef400108258edc700777df1067af3"
+  },
+  "cases": [
+    {
+      "candidate_minus_baseline_rss_kib": 128,
+      "candidate_over_baseline_wall_ratio": 1.0072518699991073,
+      "command_count": 1,
+      "fixture_bytes": 42,
+      "fixture_sha256": "5356a2ebc051198079aa8954169ab343862182531355afbd04859493d26d9c57",
+      "implementations": {
+        "c": {
+          "median_max_rss_kib": 2816,
+          "median_wall_seconds": 0.001415454
+        },
+        "rust": {
+          "median_max_rss_kib": 3200,
+          "median_wall_seconds": 0.001421734
+        },
+        "rust_baseline": {
+          "median_max_rss_kib": 3072,
+          "median_wall_seconds": 0.001411498
+        }
+      },
+      "rust_minus_c_rss_kib": 384,
+      "rust_over_c_wall_ratio": 1.0044367390250761
+    },
+    {
+      "candidate_minus_baseline_rss_kib": -2580,
+      "candidate_over_baseline_wall_ratio": 0.17572906603928928,
+      "command_count": 100000,
+      "fixture_bytes": 4200000,
+      "fixture_sha256": "ed441022d4a232420ebbecae86df92c4727356374cf591cba3a81ca398256cb4",
+      "implementations": {
+        "c": {
+          "max_rss_kib": [
+            2816,
+            2816,
+            2816
+          ],
+          "median_max_rss_kib": 2816,
+          "median_wall_seconds": 0.229123983,
+          "wall_seconds": [
+            0.228148118,
+            0.229885017,
+            0.229123983
+          ]
+        },
+        "rust": {
+          "max_rss_kib": [
+            8552,
+            8428,
+            8428
+          ],
+          "median_max_rss_kib": 8428,
+          "median_wall_seconds": 0.306772042,
+          "wall_seconds": [
+            0.310366126,
+            0.306772042,
+            0.304687494
+          ]
+        },
+        "rust_baseline": {
+          "max_rss_kib": [
+            11008,
+            11008,
+            11008
+          ],
+          "median_max_rss_kib": 11008,
+          "median_wall_seconds": 1.745710308,
+          "wall_seconds": [
+            1.744926949,
+            1.745710308,
+            1.750514201
+          ]
+        }
+      },
+      "rust_minus_c_rss_kib": 5612,
+      "rust_over_c_wall_ratio": 1.338891014302942
+    },
+    {
+      "candidate_minus_baseline_rss_kib": -15876,
+      "candidate_over_baseline_wall_ratio": 0.1727416774404911,
+      "command_count": 500000,
+      "fixture_bytes": 21000000,
+      "fixture_sha256": "c77a5dab2dfe70ee4ed4abdd2139c3456e5352bb888050293b54530661a52413",
+      "implementations": {
+        "c": {
+          "max_rss_kib": [
+            2816,
+            2816,
+            2816
+          ],
+          "median_max_rss_kib": 2816,
+          "median_wall_seconds": 1.135417725,
+          "wall_seconds": [
+            1.133725407,
+            1.142465706,
+            1.135417725
+          ]
+        },
+        "rust": {
+          "max_rss_kib": [
+            28028,
+            27900,
+            27900
+          ],
+          "median_max_rss_kib": 27900,
+          "median_wall_seconds": 1.5059052659998997,
+          "wall_seconds": [
+            1.4970054709992837,
+            1.5163183010008652,
+            1.5059052659998997
+          ]
+        },
+        "rust_baseline": {
+          "max_rss_kib": [
+            43776,
+            43776,
+            43776
+          ],
+          "median_max_rss_kib": 43776,
+          "median_wall_seconds": 8.717671892,
+          "wall_seconds": [
+            8.710679075,
+            8.717671892,
+            8.718246861
+          ]
+        }
+      },
+      "rust_minus_c_rss_kib": 25084,
+      "rust_over_c_wall_ratio": 1.326300649393068
+    }
+  ],
+  "host": "Linux localhost 6.8.0-134-generic x86_64 Ubuntu",
+  "repetitions": 3,
+  "schema_version": 1,
+  "workload_command_sha256": "5356a2ebc051198079aa8954169ab343862182531355afbd04859493d26d9c57",
+  "workload_command_size": 42
+}

@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"packed-boxed-boo","1","0x7ff666080000","8","ResourceOut","63.223707","61.046875","2240944","428","eprover: CPU time limit exceeded, terminating"
+"packed-boxed-boo","2","0x7ff666080000","8","ResourceOut","62.019474","61.078125","2294116","428","eprover: CPU time limit exceeded, terminating"
+"packed-boxed-boo","3","0x7ff666080000","8","ResourceOut","62.001222","61.1875","2291032","428","eprover: CPU time limit exceeded, terminating"

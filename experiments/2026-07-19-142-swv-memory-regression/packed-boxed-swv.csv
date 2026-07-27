@@ -1,0 +1,4 @@
+"implementation","run","module_base","exit_code","status","wall_seconds","cpu_seconds","sampled_peak_kib","stdout_bytes","stderr"
+"packed-boxed-swv","1","0x7ff666080000","8","ResourceOut","62.087725","61.171875","2300164","359","eprover: CPU time limit exceeded, terminating"
+"packed-boxed-swv","2","0x7ff666080000","8","ResourceOut","61.645485","61.078125","2302164","359","eprover: CPU time limit exceeded, terminating"
+"packed-boxed-swv","3","0x7ff666080000","8","ResourceOut","61.8251","61.03125","2303656","359","eprover: CPU time limit exceeded, terminating"

@@ -1,0 +1,2432 @@
+use crate::basics::pstacks::PStack;
+use crate::basics::sysdate::SysDate;
+use crate::terms::functypes::FunCode;
+use crate::terms::signature::{
+    SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
+    SIG_TRUE_CODE,
+};
+use crate::terms::simpletypes::{
+    sort_is_interpreted, type_identity_cmp, types_cmp, Type, TypeUniqueId,
+};
+use std::cell::{Cell, UnsafeCell};
+use std::cmp::Ordering;
+use std::fmt;
+use std::num::NonZeroUsize;
+use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
+use std::rc::Rc;
+
+pub const DEFAULT_VWEIGHT: i64 = 1;
+pub const DEFAULT_FWEIGHT: i64 = 2;
+pub const TERMS_INITIAL_ARGS: usize = 10;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TermProperties(u64);
+
+impl TermProperties {
+    pub const IGNORE_PROPS: Self = Self(0);
+    pub const TOP_POS: Self = Self(2);
+    pub const IS_GROUND: Self = Self(4);
+    pub const PRED_POS: Self = Self(8);
+    pub const IS_REWRITABLE: Self = Self(16);
+    pub const IS_RREWRITABLE: Self = Self(32);
+    pub const IS_SOS_REWRITTEN: Self = Self(64);
+    pub const SPECIAL_FLAG: Self = Self(128);
+    pub const OP_FLAG: Self = Self(256);
+    pub const CHECK_FLAG: Self = Self(512);
+    pub const OUTPUT_FLAG: Self = Self(1024);
+    pub const IS_SPECIAL_VAR: Self = Self(2048);
+    pub const IS_REWRITTEN: Self = Self(4096);
+    pub const IS_RREWRITTEN: Self = Self(8192);
+    pub const IS_SHARED: Self = Self(16_384);
+    pub const GARBAGE_FLAG: Self = Self(32_768);
+    pub const IS_FREE_VAR: Self = Self(65_536);
+    pub const POTENTIAL_PARAMOD: Self = Self(131_072);
+    pub const POS_POLARITY: Self = Self(1_u64 << 18);
+    pub const NEG_POLARITY: Self = Self(1_u64 << 19);
+    pub const IS_DEREFED_APP_VAR: Self = Self(1_u64 << 20);
+    pub const IS_BETA_REDUCIBLE: Self = Self(1_u64 << 21);
+    pub const IS_ETA_REDUCIBLE: Self = Self(1_u64 << 22);
+    pub const IS_DB_VAR: Self = Self(1_u64 << 23);
+    pub const HAS_LAMBDA_SUBTERM: Self = Self(1_u64 << 24);
+    pub const HAS_ETA_EXPANDABLE_SUBTERM: Self = Self(1_u64 << 25);
+    pub const HAS_DB_SUBTERM: Self = Self(1_u64 << 26);
+    pub const HAS_NON_PATTERN_VAR: Self = Self(1_u64 << 27);
+    pub const HAS_APP_VAR: Self = Self(1_u64 << 28);
+    pub const HAS_EQ_NEQ_SYM: Self = Self(1_u64 << 29);
+    pub const HAS_BOOL_SUBTERM: Self = Self(1_u64 << 30);
+    pub const IS_CONJECTURE_TERM: Self = Self(1_u64 << 31);
+
+    #[must_use]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn query(self, prop: Self) -> bool {
+        (self.0 & prop.0) == prop.0
+    }
+
+    #[must_use]
+    pub const fn is_any_set(self, prop: Self) -> bool {
+        (self.0 & prop.0) != 0
+    }
+
+    #[must_use]
+    pub const fn any_set(self, prop: Self) -> Self {
+        self.give(prop)
+    }
+
+    #[must_use]
+    pub const fn give(self, prop: Self) -> Self {
+        Self(self.0 & prop.0)
+    }
+}
+
+impl BitOr for TermProperties {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for TermProperties {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl BitAnd for TermProperties {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl Not for TermProperties {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(!self.0)
+    }
+}
+
+pub const TP_IGNORE_PROPS: TermProperties = TermProperties::IGNORE_PROPS;
+pub const TP_TOP_POS: TermProperties = TermProperties::TOP_POS;
+pub const TP_IS_GROUND: TermProperties = TermProperties::IS_GROUND;
+pub const TP_PRED_POS: TermProperties = TermProperties::PRED_POS;
+pub const TP_IS_REWRITABLE: TermProperties = TermProperties::IS_REWRITABLE;
+pub const TP_IS_RREWRITABLE: TermProperties = TermProperties::IS_RREWRITABLE;
+pub const TP_IS_SOS_REWRITTEN: TermProperties = TermProperties::IS_SOS_REWRITTEN;
+pub const TP_SPECIAL_FLAG: TermProperties = TermProperties::SPECIAL_FLAG;
+pub const TP_OP_FLAG: TermProperties = TermProperties::OP_FLAG;
+pub const TP_CHECK_FLAG: TermProperties = TermProperties::CHECK_FLAG;
+pub const TP_OUTPUT_FLAG: TermProperties = TermProperties::OUTPUT_FLAG;
+pub const TP_IS_SPECIAL_VAR: TermProperties = TermProperties::IS_SPECIAL_VAR;
+pub const TP_IS_REWRITTEN: TermProperties = TermProperties::IS_REWRITTEN;
+pub const TP_IS_RREWRITTEN: TermProperties = TermProperties::IS_RREWRITTEN;
+pub const TP_IS_SHARED: TermProperties = TermProperties::IS_SHARED;
+pub const TP_GARBAGE_FLAG: TermProperties = TermProperties::GARBAGE_FLAG;
+pub const TP_IS_FREE_VAR: TermProperties = TermProperties::IS_FREE_VAR;
+pub const TP_POTENTIAL_PARAMOD: TermProperties = TermProperties::POTENTIAL_PARAMOD;
+pub const TP_POS_POLARITY: TermProperties = TermProperties::POS_POLARITY;
+pub const TP_NEG_POLARITY: TermProperties = TermProperties::NEG_POLARITY;
+pub const TP_IS_DEREFED_APP_VAR: TermProperties = TermProperties::IS_DEREFED_APP_VAR;
+pub const TP_IS_BETA_REDUCIBLE: TermProperties = TermProperties::IS_BETA_REDUCIBLE;
+pub const TP_IS_ETA_REDUCIBLE: TermProperties = TermProperties::IS_ETA_REDUCIBLE;
+pub const TP_IS_DB_VAR: TermProperties = TermProperties::IS_DB_VAR;
+pub const TP_HAS_LAMBDA_SUBTERM: TermProperties = TermProperties::HAS_LAMBDA_SUBTERM;
+pub const TP_HAS_ETA_EXPANDABLE_SUBTERM: TermProperties =
+    TermProperties::HAS_ETA_EXPANDABLE_SUBTERM;
+pub const TP_HAS_DB_SUBTERM: TermProperties = TermProperties::HAS_DB_SUBTERM;
+pub const TP_HAS_NON_PATTERN_VAR: TermProperties = TermProperties::HAS_NON_PATTERN_VAR;
+pub const TP_HAS_APP_VAR: TermProperties = TermProperties::HAS_APP_VAR;
+pub const TP_HAS_EQ_NEQ_SYM: TermProperties = TermProperties::HAS_EQ_NEQ_SYM;
+pub const TP_HAS_BOOL_SUBTERM: TermProperties = TermProperties::HAS_BOOL_SUBTERM;
+pub const TP_IS_CONJECTURE_TERM: TermProperties = TermProperties::IS_CONJECTURE_TERM;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum DerefType {
+    Never = 0,
+    Once = 1,
+    Always = 2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum RewriteLevel {
+    NoRewrite = 0,
+    RuleRewrite = 1,
+    FullRewrite = 2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RewriteDemodulator {
+    id: NonZeroUsize,
+    generation: u64,
+}
+
+impl RewriteDemodulator {
+    /// Creates an opaque rewrite-demodulator handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is zero. The C field is a nullable pointer, so zero is
+    /// represented by `None` in Rust.
+    #[must_use]
+    pub fn new(id: usize) -> Self {
+        Self::new_with_generation(id, 0)
+    }
+
+    /// Creates a rewrite-demodulator handle with an opaque clause generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is zero.
+    #[must_use]
+    pub fn new_with_generation(id: usize, generation: u64) -> Self {
+        let id = NonZeroUsize::new(id)
+            .unwrap_or_else(|| panic!("rewrite demodulator id zero is represented by None"));
+        Self { id, generation }
+    }
+
+    #[must_use]
+    pub const fn id(self) -> usize {
+        self.id.get()
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Term(Rc<TermCell>);
+
+#[derive(Debug, Default)]
+struct TermLinkData {
+    binding: Option<Term>,
+    rw_replace: Option<Term>,
+    type_: Option<Type>,
+}
+
+#[derive(Default)]
+struct TermLinks(UnsafeCell<TermLinkData>);
+
+impl fmt::Debug for TermLinks {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermLinks(..)")
+    }
+}
+
+// `Term` uses `Rc`, so metadata access is confined to one thread. Safe
+// accessors clone or copy their result before returning and never expose a
+// reference into the cell. Borrowed traversal has a separate unsafe accessor
+// whose callers prohibit overlapping mutation.
+#[allow(
+    unsafe_code,
+    reason = "measured compact single-threaded metadata storage behind non-borrowing safe APIs"
+)]
+impl TermLinks {
+    fn get_mut(&mut self) -> &mut TermLinkData {
+        self.0.get_mut()
+    }
+
+    fn binding(&self) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).binding.clone() }
+    }
+
+    fn has_binding(&self) -> bool {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).binding.is_some() }
+    }
+
+    fn set_binding(&self, binding: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).binding = binding;
+        }
+    }
+
+    fn type_(&self) -> Option<Type> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).type_.clone() }
+    }
+
+    fn type_uid(&self) -> Option<TypeUniqueId> {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).type_.as_ref().map(Type::type_uid) }
+    }
+
+    fn set_type(&self, type_: Option<Type>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).type_ = type_;
+        }
+    }
+
+    fn rw_replace(&self) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the returned owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).rw_replace.clone() }
+    }
+
+    fn set_rw_replace(&self, replacement: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared link reference can overlap this write.
+        unsafe {
+            (*self.0.get()).rw_replace = replacement;
+        }
+    }
+
+    /// Borrows all metadata without dynamic borrow bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// No metadata setter may run until the returned reference is dead. The
+    /// containing `Rc<TermCell>` and every owner reached through the reference
+    /// must remain live for the complete borrow.
+    unsafe fn shared(&self) -> &TermLinkData {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &*self.0.get() }
+    }
+}
+
+#[derive(Default)]
+struct TermTreeLink(Cell<Option<Term>>);
+
+impl fmt::Debug for TermTreeLink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermTreeLink(..)")
+    }
+}
+
+#[derive(Debug)]
+enum TermArgs {
+    Empty,
+    One([Option<Term>; 2]),
+    Two([Option<Term>; 2]),
+    Heap(Box<[Option<Term>]>),
+}
+
+impl TermArgs {
+    fn new(arity: usize) -> Self {
+        match arity {
+            0 => Self::Empty,
+            1 => Self::One(std::array::from_fn(|_| None)),
+            2 => Self::Two(std::array::from_fn(|_| None)),
+            _ => Self::Heap(vec![None; arity].into_boxed_slice()),
+        }
+    }
+
+    fn as_slice(&self) -> &[Option<Term>] {
+        match self {
+            Self::Empty => &[],
+            Self::One(args) => &args[..1],
+            Self::Two(args) => args,
+            Self::Heap(args) => args,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [Option<Term>] {
+        match self {
+            Self::Empty => &mut [],
+            Self::One(args) => &mut args[..1],
+            Self::Two(args) => args,
+            Self::Heap(args) => args,
+        }
+    }
+
+    #[expect(
+        clippy::match_same_arms,
+        reason = "explicit variant-order arms keep the hot arity comparison auditable"
+    )]
+    fn compare_initialized_identity_order(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => Ordering::Equal,
+            (Self::Empty, _) => Ordering::Less,
+            (_, Self::Empty) => Ordering::Greater,
+            (Self::One(left), Self::One(right)) => {
+                initialized_term_identity_order(left[0].as_ref(), right[0].as_ref())
+            }
+            (Self::One(_), _) => Ordering::Less,
+            (_, Self::One(_)) => Ordering::Greater,
+            (Self::Two(left), Self::Two(right)) => {
+                let first = initialized_term_identity_order(left[0].as_ref(), right[0].as_ref());
+                if first == Ordering::Equal {
+                    initialized_term_identity_order(left[1].as_ref(), right[1].as_ref())
+                } else {
+                    first
+                }
+            }
+            (Self::Two(_), Self::Heap(_)) => Ordering::Less,
+            (Self::Heap(_), Self::Two(_)) => Ordering::Greater,
+            (Self::Heap(left), Self::Heap(right)) => {
+                let length_order = left.len().cmp(&right.len());
+                if length_order != Ordering::Equal {
+                    return length_order;
+                }
+                for (left_arg, right_arg) in left.iter().zip(right) {
+                    let order =
+                        initialized_term_identity_order(left_arg.as_ref(), right_arg.as_ref());
+                    if order != Ordering::Equal {
+                        return order;
+                    }
+                }
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+struct TermArguments(UnsafeCell<TermArgs>);
+
+impl TermArguments {
+    fn new(arity: usize) -> Self {
+        Self(UnsafeCell::new(TermArgs::new(arity)))
+    }
+}
+
+impl fmt::Debug for TermArguments {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TermArguments(..)")
+    }
+}
+
+// `Term` uses `Rc`, so argument access is confined to one thread. Safe
+// accessors clone or copy values before returning and never expose a reference
+// into the cell. Internal slice access has a separate unsafe contract whose
+// callers retain owners and prohibit overlapping structural mutation.
+#[allow(
+    unsafe_code,
+    reason = "measured compact single-threaded argument storage behind non-borrowing safe APIs"
+)]
+impl TermArguments {
+    fn get_mut(&mut self) -> &mut TermArgs {
+        self.0.get_mut()
+    }
+
+    fn arity(&self) -> usize {
+        // SAFETY: `Term` is single-threaded, this copy-only read does not
+        // overlap a structural setter, and no reference leaves the method.
+        unsafe { (&*self.0.get()).as_slice().len() }
+    }
+
+    fn argument(&self, index: usize) -> Option<Term> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and the selected owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).as_slice().get(index).cloned().flatten() }
+    }
+
+    fn set_argument_opt(&self, index: usize, argument: Option<Term>) {
+        // SAFETY: `Term` is single-threaded and safe readers never expose
+        // references, so no shared argument reference can overlap this write.
+        let arguments = unsafe { &mut *self.0.get() };
+        let slot = arguments
+            .as_mut_slice()
+            .get_mut(index)
+            .unwrap_or_else(|| panic!("term argument index {index} out of bounds"));
+        *slot = argument;
+    }
+
+    fn clones(&self) -> Vec<Option<Term>> {
+        // SAFETY: `Term` is single-threaded, this shared read does not overlap
+        // a setter, and every owner is cloned before the reference ends.
+        unsafe { (&*self.0.get()).as_slice().to_vec() }
+    }
+
+    /// Borrows the argument representation without dynamic bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// No argument setter or mutable argument borrow may run until the
+    /// returned reference is dead. The containing `Rc<TermCell>` and every
+    /// initialized argument owner must remain live for the complete borrow.
+    unsafe fn shared(&self) -> &TermArgs {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &*self.0.get() }
+    }
+
+    /// Mutably borrows the argument representation without dynamic
+    /// bookkeeping.
+    ///
+    /// # Safety
+    ///
+    /// The containing term must be structurally mutable. No other argument
+    /// read, write, or borrow may overlap the returned reference, and every
+    /// installed owner must remain valid.
+    #[allow(
+        clippy::mut_from_ref,
+        reason = "the unsafe contract excludes aliases for this single-threaded interior-mutable cell"
+    )]
+    unsafe fn mutable(&self) -> &mut TermArgs {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+#[expect(
+    clippy::inline_always,
+    reason = "the un-inlined helper added 92 million instructions in the pinned LUSK6 profile"
+)]
+#[inline(always)]
+fn initialized_term_identity_order(left: Option<&Term>, right: Option<&Term>) -> Ordering {
+    let left = left.expect("term top comparison requires initialized arguments");
+    let right = right.expect("term top comparison requires initialized arguments");
+    term_identity_cmp(left, right).cmp(&0)
+}
+
+#[derive(Debug)]
+struct TermCell {
+    f_code: Cell<FunCode>,
+    properties: Cell<TermProperties>,
+    // Term arity is fixed after allocation. The overwhelmingly common unary
+    // and binary cells keep their argument slots in the Rc allocation; larger
+    // cells retain the boxed-slice fallback.
+    args: TermArguments,
+    // C stores these five nullable pointers inline in TermCell. One compact
+    // single-threaded mutation boundary covers the colder binding/rewrite/type
+    // metadata without per-node dynamic borrow state. Safe accessors expose
+    // only cloned owners or copied values. The two hot intrusive tree links
+    // use `Cell` so splaying does not pay dynamic borrow bookkeeping.
+    links: TermLinks,
+    left: TermTreeLink,
+    right: TermTreeLink,
+    entry_no: Cell<i64>,
+    weight: Cell<i64>,
+    v_count: Cell<u32>,
+    f_count: Cell<u32>,
+    nf_date: [Cell<SysDate>; 2],
+    rw_demod: Cell<Option<RewriteDemodulator>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BorrowedTermCell(*const TermCell);
+
+impl PartialEq for Term {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Term {}
+
+impl Term {
+    #[must_use]
+    pub fn default_cell_alloc() -> Self {
+        Self::new_with_arity(0)
+    }
+
+    #[must_use]
+    pub fn default_cell_arity_alloc(arity: usize) -> Self {
+        Self::new_with_arity(arity)
+    }
+
+    #[must_use]
+    pub fn const_cell_alloc(symbol: FunCode) -> Self {
+        let term = Self::default_cell_alloc();
+        term.set_f_code(symbol);
+        term
+    }
+
+    #[must_use]
+    pub fn top_alloc(f_code: FunCode, arity: usize) -> Self {
+        let term = Self::default_cell_arity_alloc(arity);
+        term.set_f_code(f_code);
+        term
+    }
+
+    #[must_use]
+    pub fn top_copy_without_args(source: &Self) -> Self {
+        let copy = Self::default_cell_arity_alloc(source.arity());
+        copy.initialize_top_copy_without_args(source);
+        copy
+    }
+
+    pub(crate) fn initialize_top_copy_without_args(&self, source: &Self) {
+        debug_assert_eq!(
+            self.arity(),
+            source.arity(),
+            "top-copy shell arity must match its source"
+        );
+        self.set_properties(source.properties() & (TP_PRED_POS | TP_IS_DB_VAR));
+        self.set_f_code(source.f_code());
+        self.set_type(source.type_());
+    }
+
+    /// Clears a uniquely owned temporary top cell for bounded bank-local reuse.
+    ///
+    /// Returns `false` without mutation when another handle still owns the
+    /// cell. The arity representation and its allocation are retained.
+    pub(crate) fn try_reset_top_cell_for_reuse(&mut self) -> bool {
+        let Some(cell) = Rc::get_mut(&mut self.0) else {
+            return false;
+        };
+
+        cell.f_code.set(0);
+        cell.properties.set(TP_IGNORE_PROPS);
+        for argument in cell.args.get_mut().as_mut_slice() {
+            *argument = None;
+        }
+        *cell.links.get_mut() = TermLinkData::default();
+        *cell.left.0.get_mut() = None;
+        *cell.right.0.get_mut() = None;
+        cell.entry_no.set(0);
+        cell.weight.set(0);
+        cell.v_count.set(0);
+        cell.f_count.set(0);
+        cell.nf_date[0].set(SysDate::creation_time());
+        cell.nf_date[1].set(SysDate::creation_time());
+        cell.rw_demod.set(None);
+        true
+    }
+
+    #[must_use]
+    pub fn top_copy(source: &Self) -> Self {
+        let copy = Self::top_copy_without_args(source);
+        for (index, arg) in source.argument_clones().into_iter().enumerate() {
+            copy.set_argument_opt(index, arg);
+        }
+        copy
+    }
+
+    #[must_use]
+    pub fn f_code(&self) -> FunCode {
+        self.0.f_code.get()
+    }
+
+    pub fn set_f_code(&self, f_code: FunCode) {
+        self.0.f_code.set(f_code);
+    }
+
+    #[must_use]
+    pub fn arity(&self) -> usize {
+        self.0.args.arity()
+    }
+
+    #[must_use]
+    pub fn arg_num(&self) -> usize {
+        if self.is_phony_app() {
+            self.arity() - 1
+        } else {
+            self.arity()
+        }
+    }
+
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<Term> {
+        self.0.args.argument(index)
+    }
+
+    /// Assigns an argument slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is outside the term arity, matching the C flexible
+    /// array precondition.
+    pub fn set_argument(&self, index: usize, arg: Term) {
+        self.set_argument_opt(index, Some(arg));
+    }
+
+    /// Assigns an argument slot, including a temporary uninitialized value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is outside the term arity, matching the C flexible
+    /// array precondition.
+    pub fn set_argument_opt(&self, index: usize, arg: Option<Term>) {
+        self.0.args.set_argument_opt(index, arg);
+    }
+
+    /// Borrows the argument slots without cloning their owners.
+    ///
+    /// # Safety
+    ///
+    /// No argument setter or mutable argument borrow may overlap the returned
+    /// slice. This term and every initialized argument must remain owned for
+    /// the complete borrow.
+    #[must_use]
+    #[allow(
+        unsafe_code,
+        reason = "measured internal slice access is guarded by the documented ownership contract"
+    )]
+    pub(crate) unsafe fn arguments(&self) -> &[Option<Term>] {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.0.args.shared() }.as_slice()
+    }
+
+    /// Returns a non-owning cursor to this term's stable `Rc` allocation.
+    ///
+    /// Dereferencing the cursor remains unsafe because the type deliberately
+    /// carries no lifetime; the normalization traversal supplies the scoped
+    /// root and mutation restrictions that keep it valid.
+    #[must_use]
+    pub(crate) fn borrowed_cell(&self) -> BorrowedTermCell {
+        BorrowedTermCell(Rc::as_ptr(&self.0))
+    }
+
+    /// Mutably borrows the argument slots without cloning their terms.
+    ///
+    /// # Safety
+    ///
+    /// No other argument read, write, or borrow may overlap the returned
+    /// slice. The term must be unshared and every installed argument owner
+    /// must remain valid.
+    #[allow(
+        unsafe_code,
+        clippy::mut_from_ref,
+        reason = "the unsafe contract excludes aliases and the shared-term check preserves structural immutability"
+    )]
+    pub(crate) unsafe fn arguments_mut(&self) -> &mut [Option<Term>] {
+        assert!(
+            !self.is_shared(),
+            "shared term arguments are structurally immutable"
+        );
+        // SAFETY: Forwarded from this method's caller contract after checking
+        // the shared-term structural-immutability invariant.
+        unsafe { self.0.args.mutable() }.as_mut_slice()
+    }
+
+    #[must_use]
+    pub fn argument_clones(&self) -> Vec<Option<Term>> {
+        self.0.args.clones()
+    }
+
+    #[must_use]
+    pub fn binding(&self) -> Option<Term> {
+        self.0.links.binding()
+    }
+
+    pub fn set_binding(&self, binding: Option<Term>) {
+        self.0.links.set_binding(binding);
+    }
+
+    #[must_use]
+    pub fn entry_no(&self) -> i64 {
+        self.0.entry_no.get()
+    }
+
+    pub fn set_entry_no(&self, entry_no: i64) {
+        self.0.entry_no.set(entry_no);
+    }
+
+    #[must_use]
+    pub fn weight(&self) -> i64 {
+        self.0.weight.get()
+    }
+
+    pub fn set_weight(&self, weight: i64) {
+        self.0.weight.set(weight);
+    }
+
+    #[must_use]
+    pub fn v_count(&self) -> u32 {
+        self.0.v_count.get()
+    }
+
+    pub fn set_v_count(&self, count: u32) {
+        self.0.v_count.set(count);
+    }
+
+    #[must_use]
+    pub fn f_count(&self) -> u32 {
+        self.0.f_count.get()
+    }
+
+    pub fn set_f_count(&self, count: u32) {
+        self.0.f_count.set(count);
+    }
+
+    #[must_use]
+    pub fn type_(&self) -> Option<Type> {
+        self.0.links.type_()
+    }
+
+    #[must_use]
+    pub fn type_uid(&self) -> Option<TypeUniqueId> {
+        self.0.links.type_uid()
+    }
+
+    pub fn set_type(&self, type_: Option<Type>) {
+        self.0.links.set_type(type_);
+    }
+
+    #[must_use]
+    pub fn left_son(&self) -> Option<Term> {
+        let left = self.0.left.0.take();
+        let result = left.clone();
+        self.0.left.0.set(left);
+        result
+    }
+
+    pub fn set_left_son(&self, term: Option<Term>) {
+        self.0.left.0.set(term);
+    }
+
+    #[must_use]
+    pub fn right_son(&self) -> Option<Term> {
+        let right = self.0.right.0.take();
+        let result = right.clone();
+        self.0.right.0.set(right);
+        result
+    }
+
+    pub fn set_right_son(&self, term: Option<Term>) {
+        self.0.right.0.set(term);
+    }
+
+    #[must_use]
+    pub fn take_left_son(&self) -> Option<Term> {
+        self.0.left.0.take()
+    }
+
+    #[must_use]
+    pub fn take_right_son(&self) -> Option<Term> {
+        self.0.right.0.take()
+    }
+
+    pub fn clear_tree_links(&self) {
+        self.set_left_son(None);
+        self.set_right_son(None);
+    }
+
+    #[must_use]
+    pub fn nf_date(&self, level: RewriteLevel) -> SysDate {
+        let index = rewrite_index(level);
+        if self.is_rewritten() {
+            SysDate::creation_time()
+        } else {
+            self.0.nf_date[index].get()
+        }
+    }
+
+    pub fn set_nf_date(&self, level: RewriteLevel, date: SysDate) {
+        let index = rewrite_index(level);
+        self.0.nf_date[index].set(date);
+    }
+
+    #[must_use]
+    pub fn rw_replace_field(&self) -> Option<Term> {
+        self.0.links.rw_replace()
+    }
+
+    pub fn set_rw_replace_field(&self, replacement: Option<Term>) {
+        self.0.links.set_rw_replace(replacement);
+    }
+
+    #[must_use]
+    pub fn rw_demod_field(&self) -> Option<RewriteDemodulator> {
+        self.0.rw_demod.get()
+    }
+
+    pub fn set_rw_demod_field(&self, demod: Option<RewriteDemodulator>) {
+        self.0.rw_demod.set(demod);
+    }
+
+    #[must_use]
+    pub fn properties(&self) -> TermProperties {
+        self.0.properties.get()
+    }
+
+    pub fn set_properties(&self, properties: TermProperties) {
+        self.0.properties.set(properties);
+    }
+
+    pub fn set_prop(&self, prop: TermProperties) {
+        self.set_properties(self.properties() | prop);
+    }
+
+    pub fn del_prop(&self, prop: TermProperties) {
+        self.set_properties(self.properties() & !prop);
+    }
+
+    pub fn flip_prop(&self, prop: TermProperties) {
+        self.set_properties(TermProperties::from_bits(
+            self.properties().bits() ^ prop.bits(),
+        ));
+    }
+
+    pub fn assign_prop(&self, selector: TermProperties, prop: TermProperties) {
+        self.del_prop(selector);
+        self.set_prop(selector & prop);
+    }
+
+    #[must_use]
+    pub fn query_prop(&self, prop: TermProperties) -> bool {
+        self.properties().query(prop)
+    }
+
+    #[must_use]
+    pub fn is_any_prop_set(&self, prop: TermProperties) -> bool {
+        self.properties().is_any_set(prop)
+    }
+
+    #[must_use]
+    pub fn any_prop_set(&self, prop: TermProperties) -> TermProperties {
+        self.properties().any_set(prop)
+    }
+
+    #[must_use]
+    pub fn give_props(&self, prop: TermProperties) -> TermProperties {
+        self.properties().give(prop)
+    }
+
+    #[must_use]
+    pub fn is_free_var(&self) -> bool {
+        self.f_code() < 0
+    }
+
+    #[must_use]
+    pub fn is_db_var(&self) -> bool {
+        self.query_prop(TP_IS_DB_VAR)
+    }
+
+    #[must_use]
+    pub fn is_any_var(&self) -> bool {
+        self.is_free_var() || self.is_db_var()
+    }
+
+    #[must_use]
+    pub fn is_const(&self) -> bool {
+        !self.is_any_var() && self.arity() == 0
+    }
+
+    #[must_use]
+    pub fn is_phony_app(&self) -> bool {
+        !self.is_db_var() && self.f_code() == SIG_PHONY_APP_CODE
+    }
+
+    #[must_use]
+    pub fn is_applied_free_var(&self) -> bool {
+        self.is_phony_app() && self.argument(0).is_some_and(|arg| arg.is_free_var())
+    }
+
+    #[must_use]
+    pub fn is_applied_db_var(&self) -> bool {
+        self.is_phony_app() && self.argument(0).is_some_and(|arg| arg.is_db_var())
+    }
+
+    #[must_use]
+    pub fn is_applied_any_var(&self) -> bool {
+        self.is_phony_app() && self.argument(0).is_some_and(|arg| arg.is_any_var())
+    }
+
+    #[must_use]
+    pub fn is_lambda(&self) -> bool {
+        !self.is_db_var() && matches!(self.f_code(), SIG_NAMED_LAMBDA_CODE | SIG_DB_LAMBDA_CODE)
+    }
+
+    #[must_use]
+    pub fn is_db_lambda(&self) -> bool {
+        !self.is_db_var() && self.f_code() == SIG_DB_LAMBDA_CODE
+    }
+
+    #[must_use]
+    pub fn is_top_level_free_var(&self) -> bool {
+        self.is_free_var() || self.is_applied_free_var()
+    }
+
+    #[must_use]
+    pub fn is_top_level_db_var(&self) -> bool {
+        self.is_db_var() || self.is_applied_db_var()
+    }
+
+    #[must_use]
+    pub fn is_top_level_any_var(&self) -> bool {
+        self.is_any_var() || self.is_applied_any_var()
+    }
+
+    #[must_use]
+    pub fn is_phony_app_target(&self) -> bool {
+        self.is_any_var()
+            || self.is_lambda()
+            || matches!(self.f_code(), SIG_ITE_CODE | SIG_LET_CODE)
+    }
+
+    #[must_use]
+    pub fn is_pattern(&self) -> bool {
+        !self.query_prop(TP_HAS_NON_PATTERN_VAR)
+    }
+
+    #[must_use]
+    pub fn is_non_fo_pattern(&self) -> bool {
+        self.is_pattern() && (self.has_lambda_subterm() || self.has_db_subterm())
+    }
+
+    #[must_use]
+    pub fn is_rewritten(&self) -> bool {
+        self.query_prop(TP_IS_REWRITTEN)
+    }
+
+    #[must_use]
+    pub fn is_rrewritten(&self) -> bool {
+        self.query_prop(TP_IS_RREWRITTEN)
+    }
+
+    #[must_use]
+    pub fn is_top_rewritten(&self) -> bool {
+        self.is_rewritten() && self.rw_demod_field().is_some()
+    }
+
+    #[must_use]
+    pub fn is_shared(&self) -> bool {
+        self.query_prop(TP_IS_SHARED)
+    }
+
+    #[must_use]
+    pub fn has_eq_neq(&self) -> bool {
+        self.query_prop(TP_HAS_EQ_NEQ_SYM)
+    }
+
+    #[must_use]
+    pub fn has_bool_subterm(&self) -> bool {
+        self.query_prop(TP_HAS_BOOL_SUBTERM)
+    }
+
+    #[must_use]
+    pub fn has_lambda_subterm(&self) -> bool {
+        self.query_prop(TP_HAS_LAMBDA_SUBTERM)
+    }
+
+    #[must_use]
+    pub fn has_eta_expandable_subterm(&self) -> bool {
+        self.query_prop(TP_HAS_ETA_EXPANDABLE_SUBTERM)
+    }
+
+    #[must_use]
+    pub fn has_db_subterm(&self) -> bool {
+        self.query_prop(TP_HAS_DB_SUBTERM)
+    }
+
+    #[must_use]
+    pub fn has_app_var(&self) -> bool {
+        self.query_prop(TP_HAS_APP_VAR)
+    }
+
+    #[must_use]
+    pub fn has_higher_order_ordering_surface(&self) -> bool {
+        let mut stack = vec![self.clone()];
+        while let Some(term) = stack.pop() {
+            if term.is_db_var() || term.is_lambda() || term.is_phony_app() {
+                return true;
+            }
+            stack.extend(term.argument_clones().into_iter().flatten());
+        }
+        false
+    }
+
+    #[must_use]
+    pub fn is_beta_reducible(&self) -> bool {
+        self.query_prop(TP_IS_BETA_REDUCIBLE)
+    }
+
+    #[must_use]
+    pub fn is_eta_reducible(&self) -> bool {
+        self.query_prop(TP_IS_ETA_REDUCIBLE)
+    }
+
+    fn new_with_arity(arity: usize) -> Self {
+        Self(Rc::new(TermCell {
+            f_code: Cell::new(0),
+            properties: Cell::new(TP_IGNORE_PROPS),
+            args: TermArguments::new(arity),
+            links: TermLinks::default(),
+            left: TermTreeLink::default(),
+            right: TermTreeLink::default(),
+            entry_no: Cell::new(0),
+            weight: Cell::new(0),
+            v_count: Cell::new(0),
+            f_count: Cell::new(0),
+            nf_date: [
+                Cell::new(SysDate::creation_time()),
+                Cell::new(SysDate::creation_time()),
+            ],
+            rw_demod: Cell::new(None),
+        }))
+    }
+}
+
+// This private cursor is the smallest practical unsafe boundary for matching
+// C's measured non-owning term traversals. Every production caller retains the
+// complete reachable ownership graph and forbids structural or removing
+// mutation while a cursor can be dereferenced.
+#[allow(
+    unsafe_code,
+    reason = "measured C-shaped read-only traversal of stable Rc allocations"
+)]
+impl BorrowedTermCell {
+    /// Returns the term cell addressed by this cursor.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must originate from `Term::borrowed_cell`. The corresponding
+    /// `Rc<TermCell>` allocation must remain live, aligned, and initialized for
+    /// the returned borrow, and no mutable reference to the cell may exist.
+    unsafe fn cell<'a>(self) -> &'a TermCell {
+        // SAFETY: The caller provides allocation liveness, provenance,
+        // alignment, initialization, and shared-alias validity.
+        unsafe { &*self.0 }
+    }
+
+    /// Fully follows ordinary bindings and expands a bound applied free
+    /// variable through the existing owned dereference helper.
+    ///
+    /// # Safety
+    ///
+    /// This cursor and every binding reached from it must satisfy `cell`'s
+    /// contract. Binding slots followed here must not be cleared or replaced
+    /// during the traversal. `expansion_roots` must remain live until no raw
+    /// cursor can refer to an expansion it owns.
+    pub(crate) unsafe fn deref_always(self, expansion_roots: &mut Vec<Term>) -> Self {
+        let mut current = self;
+        loop {
+            // SAFETY: Forwarded from this method's caller contract.
+            let cell = unsafe { current.cell() };
+            if cell.f_code.get() < 0 {
+                // SAFETY: The traversal contract prohibits binding mutation,
+                // and the addressed graph remains owned for the whole walk.
+                let links = unsafe { cell.links.shared() };
+                let Some(binding) = links.binding.as_ref() else {
+                    return current;
+                };
+                current = binding.borrowed_cell();
+                continue;
+            }
+
+            let bound_applied_free_var = cell.properties.get().give(TP_IS_DB_VAR)
+                == TP_IGNORE_PROPS
+                && cell.f_code.get() == SIG_PHONY_APP_CODE
+                // SAFETY: The traversal contract prohibits argument mutation
+                // and retains the complete addressed graph.
+                && unsafe { cell.args.shared() }
+                    .as_slice()
+                    .first()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|head| head.f_code() < 0 && head.0.links.has_binding());
+            if !bound_applied_free_var {
+                return current;
+            }
+
+            // SAFETY: Forwarded from this method's caller contract; incrementing
+            // the strong count converts the valid borrowed allocation into an
+            // ordinary owned handle without changing aliasing.
+            let owner = unsafe { current.to_owned() };
+            expansion_roots.push(term_deref_always(&owner));
+            return expansion_roots.last().map_or(current, Term::borrowed_cell);
+        }
+    }
+
+    /// Follows ordinary first-order variable bindings for one dereference
+    /// mode without acquiring reference-counted ownership.
+    ///
+    /// # Safety
+    ///
+    /// This cursor and every binding reached from it must satisfy `cell`'s
+    /// contract. Binding slots followed here must not be cleared or replaced
+    /// during the traversal. The addressed graph must be first-order, so it
+    /// cannot require applied-variable expansion.
+    pub(crate) unsafe fn deref_first_order(self, deref: &mut DerefType) -> Self {
+        if *deref == DerefType::Never {
+            return self;
+        }
+
+        let mut current = self;
+        loop {
+            // SAFETY: Forwarded from this method's caller contract.
+            let cell = unsafe { current.cell() };
+            debug_assert!(
+                cell.f_code.get() < 0 || !cell.links.has_binding(),
+                "only variables may have active bindings"
+            );
+            if cell.f_code.get() >= 0 {
+                return current;
+            }
+
+            // SAFETY: The traversal contract prohibits binding mutation, and
+            // the addressed graph remains owned for the whole walk.
+            let links = unsafe { cell.links.shared() };
+            let Some(binding) = links.binding.as_ref() else {
+                return current;
+            };
+            current = binding.borrowed_cell();
+            if *deref == DerefType::Once {
+                *deref = DerefType::Never;
+                return current;
+            }
+        }
+    }
+
+    /// Returns the addressed term's function code.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn f_code(self) -> FunCode {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.f_code.get()
+    }
+
+    /// Returns whether the addressed term is a free variable.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn is_free_var(self) -> bool {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.f_code.get() < 0
+    }
+
+    /// Returns whether the addressed term has all requested property bits.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn query_prop(self, prop: TermProperties) -> bool {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.properties.get().query(prop)
+    }
+
+    /// Clones the addressed term's type handle.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn type_(self) -> Option<Type> {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.links.type_()
+    }
+
+    /// Returns the addressed term's type UID without cloning its type owner.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract.
+    pub(crate) unsafe fn type_uid(self) -> Option<TypeUniqueId> {
+        // SAFETY: Forwarded from this method's caller contract.
+        unsafe { self.cell() }.links.type_uid()
+    }
+
+    /// Returns cached standard weight for a shared term, or the fixed
+    /// standard variable weight for a free variable.
+    ///
+    /// `None` indicates an unshared compound term whose weight must be
+    /// computed structurally.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract. Cached shared metadata must
+    /// be complete and immutable.
+    pub(crate) unsafe fn cached_standard_weight(self) -> Option<i64> {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        if cell.properties.get().query(TP_IS_SHARED) {
+            Some(cell.weight.get())
+        } else if cell.f_code.get() < 0 {
+            Some(DEFAULT_VWEIGHT)
+        } else {
+            None
+        }
+    }
+
+    /// Pushes initialized arguments from right to left without acquiring
+    /// reference-counted ownership.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has been consumed.
+    pub(crate) unsafe fn push_arguments_reversed(self, stack: &mut Vec<Self>) {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
+        match arguments {
+            TermArgs::Empty => {}
+            TermArgs::One(args) => {
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
+            TermArgs::Two(args) => {
+                if let Some(argument) = args[1].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
+            TermArgs::Heap(args) => {
+                for argument in args.iter().rev().flatten() {
+                    stack.push(argument.borrowed_cell());
+                }
+            }
+        }
+    }
+
+    /// Pushes every argument from right to left without acquiring
+    /// reference-counted ownership and returns the arity.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has either been consumed or retained by an owner.
+    /// Every argument slot must be initialized.
+    pub(crate) unsafe fn push_initialized_arguments_reversed(self, stack: &mut Vec<Self>) -> usize {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
+        let arity = arguments.as_slice().len();
+        for (index, argument) in arguments.as_slice().iter().enumerate().rev() {
+            let argument = argument
+                .as_ref()
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            stack.push(argument.borrowed_cell());
+        }
+        arity
+    }
+
+    /// Pushes initialized first-order arguments from right to left with one
+    /// shared dereference mode and without acquiring reference-counted
+    /// ownership.
+    ///
+    /// # Safety
+    ///
+    /// The cursor and all initialized argument allocations must satisfy
+    /// `cell`'s contract. Argument slots must not be replaced or cleared until
+    /// every pushed cursor has been consumed.
+    pub(crate) unsafe fn push_first_order_arguments_reversed(
+        self,
+        stack: &mut Vec<(Self, DerefType)>,
+        deref: DerefType,
+    ) {
+        // SAFETY: Forwarded from this method's caller contract.
+        let cell = unsafe { self.cell() };
+        // SAFETY: The caller prohibits structural mutation while pushed
+        // cursors can refer to these owned arguments.
+        let arguments = unsafe { cell.args.shared() };
+        match arguments {
+            TermArgs::Empty => {}
+            TermArgs::One(args) => {
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
+            TermArgs::Two(args) => {
+                if let Some(argument) = args[1].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+                if let Some(argument) = args[0].as_ref() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
+            TermArgs::Heap(args) => {
+                for argument in args.iter().rev().flatten() {
+                    stack.push((argument.borrowed_cell(), deref));
+                }
+            }
+        }
+    }
+
+    /// Compares two shared terms by standard weight, variable/type shape,
+    /// arity, and recursive argument shape without acquiring argument or type
+    /// owners.
+    ///
+    /// # Safety
+    ///
+    /// Both cursors and all structural descendants must satisfy `cell`'s
+    /// contract and remain shared for the complete call. No argument, type, or
+    /// shared/DB-variable metadata may be mutated, and no argument or type
+    /// `RefMut` may be live or created until the comparison returns.
+    pub(crate) unsafe fn compare_shared_struct_weight(self, other: Self) -> i64 {
+        // SAFETY: Forwarded from this method's caller contract.
+        let left = unsafe { self.cell() };
+        // SAFETY: Forwarded from this method's caller contract.
+        let right = unsafe { other.cell() };
+        debug_assert!(left.properties.get().query(TP_IS_SHARED));
+        debug_assert!(right.properties.get().query(TP_IS_SHARED));
+
+        if left.f_code.get() == SIG_TRUE_CODE {
+            return if right.f_code.get() == SIG_TRUE_CODE {
+                0
+            } else {
+                -1
+            };
+        }
+        if right.f_code.get() == SIG_TRUE_CODE {
+            return 1;
+        }
+
+        let weight_cmp = left.weight.get() - right.weight.get();
+        if weight_cmp != 0 {
+            return weight_cmp;
+        }
+
+        if left.f_code.get() < 0 {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            return unsafe { compare_borrowed_cell_types(left, right) };
+        }
+
+        let left_db = left.properties.get().query(TP_IS_DB_VAR);
+        let right_db = right.properties.get().query(TP_IS_DB_VAR);
+        let db_cmp = i64::from(!left_db) - i64::from(!right_db);
+        if db_cmp != 0 {
+            return db_cmp;
+        }
+        if left_db {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            return unsafe { compare_borrowed_cell_types(left, right) };
+        }
+
+        // SAFETY: The caller excludes structural mutation and active mutable
+        // argument borrows while both allocation-backed slices are compared.
+        let left_args = unsafe { left.args.shared() }.as_slice();
+        // SAFETY: Identical argument for the right cursor.
+        let right_args = unsafe { right.args.shared() }.as_slice();
+        let arity_cmp = i64::from(left_args.len() > right_args.len())
+            - i64::from(left_args.len() < right_args.len());
+        if arity_cmp != 0 {
+            return arity_cmp;
+        }
+
+        for (left_arg, right_arg) in left_args.iter().zip(right_args) {
+            let Some((left_arg, right_arg)) = left_arg.as_ref().zip(right_arg.as_ref()) else {
+                continue;
+            };
+            // SAFETY: Shared terms retain every structural descendant, and
+            // the caller forbids structural/type mutation for the traversal.
+            let cmp = unsafe {
+                left_arg
+                    .borrowed_cell()
+                    .compare_shared_struct_weight(right_arg.borrowed_cell())
+            };
+            if cmp != 0 {
+                return cmp;
+            }
+        }
+        0
+    }
+
+    /// Compares two term tops by function code, optional higher-order type,
+    /// arity, and argument allocation identity without acquiring argument or
+    /// type owners.
+    ///
+    /// # Safety
+    ///
+    /// Both cursors and every initialized argument handle must satisfy
+    /// `cell`'s contract for the complete call. No argument or type `RefMut`
+    /// may be live or created, and no argument or type metadata may be mutated
+    /// until the comparison returns. Every argument slot must be initialized.
+    pub(crate) unsafe fn compare_top_order(self, other: Self, higher_order: bool) -> Ordering {
+        // SAFETY: Forwarded from this method's caller contract.
+        let left = unsafe { self.cell() };
+        // SAFETY: Forwarded from this method's caller contract.
+        let right = unsafe { other.cell() };
+
+        let mut result = left.f_code.get().cmp(&right.f_code.get());
+        if result != Ordering::Equal {
+            return result;
+        }
+
+        if higher_order {
+            // SAFETY: The caller excludes type mutation and active mutable
+            // link borrows for the complete comparison.
+            let left_type =
+                unsafe { borrowed_cell_type(left) }.expect("term top comparison requires types");
+            // SAFETY: Identical argument for the right cell.
+            let right_type =
+                unsafe { borrowed_cell_type(right) }.expect("term top comparison requires types");
+            result = type_identity_cmp(left_type, right_type).cmp(&0);
+            if result != Ordering::Equal {
+                return result;
+            }
+        } else {
+            #[cfg(debug_assertions)]
+            {
+                // SAFETY: The caller excludes type mutation and active
+                // mutable link borrows for the complete comparison.
+                let left_type = unsafe { borrowed_cell_type(left) }
+                    .expect("term top comparison requires types");
+                // SAFETY: Identical argument for the right cell.
+                let right_type = unsafe { borrowed_cell_type(right) }
+                    .expect("term top comparison requires types");
+                debug_assert_eq!(
+                    type_identity_cmp(left_type, right_type),
+                    0,
+                    "first-order term types must match"
+                );
+            }
+        }
+
+        // SAFETY: The caller excludes structural mutation and active mutable
+        // argument borrows for the complete comparison. Pairwise dispatch
+        // preserves arity ordering and unrolls the dominant inline shapes.
+        let left_args = unsafe { left.args.shared() };
+        // SAFETY: Identical argument for the right cursor.
+        let right_args = unsafe { right.args.shared() };
+        left_args.compare_initialized_identity_order(right_args)
+    }
+
+    /// Acquires one owned `Term` handle for the addressed allocation.
+    ///
+    /// # Safety
+    ///
+    /// The cursor must satisfy `cell`'s contract and must have originated from
+    /// `Rc::as_ptr` for this exact `TermCell` allocation.
+    pub(crate) unsafe fn to_owned(self) -> Term {
+        // SAFETY: The caller guarantees this pointer came from a live
+        // `Rc<TermCell>`. Incrementing before `from_raw` creates exactly one
+        // new strong handle and preserves the original owner's count.
+        unsafe {
+            Rc::increment_strong_count(self.0);
+            Term(Rc::from_raw(self.0))
+        }
+    }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "read-only comparison behind a scoped shared-term cursor"
+)]
+unsafe fn compare_borrowed_cell_types(left: &TermCell, right: &TermCell) -> i64 {
+    // SAFETY: The caller guarantees that no metadata mutation or type
+    // mutation can overlap these shared reads.
+    let left_links = unsafe { left.links.shared() };
+    // SAFETY: Identical argument for the right cell.
+    let right_links = unsafe { right.links.shared() };
+    match (left_links.type_.as_ref(), right_links.type_.as_ref()) {
+        (Some(left_type), Some(right_type)) => i64::from(types_cmp(left_type, right_type)),
+        (None, Some(_)) => -1,
+        (Some(_), None) => 1,
+        (None, None) => 0,
+    }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "read-only type access behind a scoped term-cell cursor"
+)]
+unsafe fn borrowed_cell_type(cell: &TermCell) -> Option<&Type> {
+    // SAFETY: The caller guarantees that no metadata mutation or type
+    // mutation can overlap this shared read.
+    unsafe { cell.links.shared() }.type_.as_ref()
+}
+
+#[must_use]
+pub fn term_identity_id(term: &Term) -> usize {
+    Rc::as_ptr(&term.0).cast::<()>() as usize
+}
+
+#[must_use]
+pub fn term_identity_cmp(left: &Term, right: &Term) -> i32 {
+    cmp_usize(term_identity_id(left), term_identity_id(right))
+}
+
+/// Dereferences a term according to the requested limit.
+///
+/// Applied free-variable dereferencing follows the C LFHO top-node expansion
+/// shape without populating the C owner-bank binding cache. Bank insertion
+/// paths still use `TermBank` helpers when they need shared cache terms.
+///
+/// # Panics
+///
+/// In debug builds, panics if a non-variable term has an active binding.
+/// Dereferencing an applied-variable shape with uninitialized arguments also
+/// panics in all builds.
+#[must_use]
+pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
+    term_deref_if_changed(term, deref).unwrap_or_else(|| term.clone())
+}
+
+/// Fully dereference a term without routing through the mutable dereference-
+/// mode dispatcher.
+#[must_use]
+#[expect(
+    clippy::inline_always,
+    reason = "whole-prover measurements require this sole-caller boundary with allocation-free clause partitioning"
+)]
+#[inline(always)]
+pub(crate) fn term_deref_always(term: &Term) -> Term {
+    debug_assert!(
+        term.is_top_level_any_var() || term.binding().is_none(),
+        "only variables may have active bindings"
+    );
+    term_deref_always_if_changed(term).unwrap_or_else(|| term.clone())
+}
+
+/// Dereference an owned term without cloning it when dereferencing makes no
+/// change.
+#[must_use]
+pub(crate) fn term_deref_owned(term: Term, deref: &mut DerefType) -> Term {
+    term_deref_if_changed(&term, deref).unwrap_or(term)
+}
+
+#[must_use]
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot dispatcher is forced inline"
+)]
+#[inline(always)]
+pub(crate) fn term_deref_if_changed(term: &Term, deref: &mut DerefType) -> Option<Term> {
+    debug_assert!(
+        term.is_top_level_any_var() || term.binding().is_none(),
+        "only variables may have active bindings"
+    );
+    if *deref == DerefType::Always {
+        return term_deref_always_if_changed(term);
+    }
+
+    if *deref == DerefType::Never {
+        return None;
+    }
+
+    let originally_app_var = term.is_applied_free_var();
+    let current = deref_step(term)?;
+    if originally_app_var {
+        return Some(current);
+    }
+
+    *deref = DerefType::Never;
+    Some(current)
+}
+
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot loop is forced inline"
+)]
+#[inline(always)]
+fn term_deref_always_if_changed(term: &Term) -> Option<Term> {
+    let mut current = deref_always_step(term)?;
+    while let Some(next) = deref_always_step(&current) {
+        current = next;
+    }
+    Some(current)
+}
+
+/// Sets properties on every term cell reachable from `term`.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+pub fn term_set_prop(term: &Term, deref: DerefType, prop: TermProperties) {
+    assert_ne!(deref, DerefType::Once);
+    walk_terms_with_deref(term, deref, |current| current.set_prop(prop));
+}
+
+#[must_use]
+pub fn term_search_prop(term: &Term, deref: DerefType, prop: TermProperties) -> bool {
+    walk_terms_with_deref_until(term, deref, |current| current.query_prop(prop))
+}
+
+/// Verifies that all reachable cells have exactly `expected` under `prop`.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+#[must_use]
+pub fn term_verify_prop(
+    term: &Term,
+    deref: DerefType,
+    prop: TermProperties,
+    expected: TermProperties,
+) -> bool {
+    assert_ne!(deref, DerefType::Once);
+    !walk_terms_with_deref_until(term, deref, |current| current.give_props(prop) != expected)
+}
+
+/// Deletes properties on every term cell reachable from `term`.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+pub fn term_del_prop(term: &Term, deref: DerefType, prop: TermProperties) {
+    assert_ne!(deref, DerefType::Once);
+    walk_terms_with_deref(term, deref, |current| current.del_prop(prop));
+}
+
+pub fn term_del_prop_opt(term: &Term, prop: TermProperties) {
+    walk_terms(term, |current| current.del_prop(prop));
+}
+
+/// Sets properties on every free variable reachable from `term`.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+pub fn term_var_set_prop(term: &Term, deref: DerefType, prop: TermProperties) {
+    assert_ne!(deref, DerefType::Once);
+    walk_terms_with_deref(term, deref, |current| {
+        if current.is_free_var() {
+            current.set_prop(prop);
+        }
+    });
+}
+
+/// Searches for properties on reachable free variables.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+#[must_use]
+pub fn term_var_search_prop(term: &Term, deref: DerefType, prop: TermProperties) -> bool {
+    assert_ne!(deref, DerefType::Once);
+    walk_terms_with_deref_until(term, deref, |current| {
+        current.is_free_var() && current.query_prop(prop)
+    })
+}
+
+/// Deletes properties on every free variable reachable from `term`.
+///
+/// # Panics
+///
+/// Panics if `deref` is `DerefType::Once`, matching the C assertion that this
+/// traversal is never called with one-step dereferencing.
+pub fn term_var_del_prop(term: &Term, deref: DerefType, prop: TermProperties) {
+    assert_ne!(deref, DerefType::Once);
+    walk_terms_with_deref(term, deref, |current| {
+        if current.is_free_var() {
+            current.del_prop(prop);
+        }
+    });
+}
+
+#[must_use]
+pub fn term_has_interpreted_symbol(term: &Term) -> bool {
+    walk_terms_until(term, |current| {
+        current
+            .type_()
+            .is_some_and(|type_| sort_is_interpreted(type_.f_code()))
+    })
+}
+
+#[must_use]
+pub fn term_is_prefix(candidate: Option<&Term>, term: &Term) -> bool {
+    let Some(candidate) = candidate else {
+        return false;
+    };
+    if candidate.is_any_var() {
+        return if term.is_any_var() {
+            candidate == term
+        } else {
+            term.is_phony_app() && term.argument(0).is_some_and(|arg| &arg == candidate)
+        };
+    }
+
+    if candidate.arity() > term.arity() || candidate.f_code() != term.f_code() {
+        return false;
+    }
+    candidate
+        .argument_clones()
+        .into_iter()
+        .zip(term.argument_clones())
+        .take(candidate.arity())
+        .all(|(left, right)| left.zip(right).is_some_and(|(left, right)| left == right))
+}
+
+pub fn term_stack_set_props(stack: &PStack<Term>, prop: TermProperties) {
+    for term in stack.as_slice() {
+        term.set_prop(prop);
+    }
+}
+
+pub fn term_stack_del_props(stack: &PStack<Term>, prop: TermProperties) {
+    for term in stack.as_slice() {
+        term.del_prop(prop);
+    }
+}
+
+fn deref_step(term: &Term) -> Option<Term> {
+    if term.is_free_var() {
+        return term.binding();
+    }
+    if term.is_applied_free_var()
+        && term
+            .argument(0)
+            .is_some_and(|head| head.binding().is_some())
+    {
+        return Some(deref_applied_free_var_no_cache(term));
+    }
+    None
+}
+
+#[expect(
+    clippy::inline_always,
+    reason = "pinned whole-prover and native measurements improve when this hot helper is forced inline"
+)]
+#[allow(
+    unsafe_code,
+    reason = "bounded binding-window reads retain owners and prohibit mutation until the cloned result leaves"
+)]
+#[inline(always)]
+fn deref_always_step(term: &Term) -> Option<Term> {
+    if !term.is_free_var() {
+        if term.is_phony_app()
+            && term
+                .argument(0)
+                .is_some_and(|head| head.is_free_var() && head.binding().is_some())
+        {
+            return Some(deref_applied_free_var_no_cache(term));
+        }
+        return None;
+    }
+    // SAFETY: `term` owns this cell, the helper performs no metadata mutation,
+    // and no borrowed reference escapes the cloned return value.
+    let links = unsafe { term.0.links.shared() };
+    let next = links.binding.as_ref()?;
+    if !next.is_free_var() {
+        return Some(next.clone());
+    }
+    // SAFETY: The first link keeps `next` owned, the helper performs no
+    // metadata mutation, and the selected result is cloned before returning.
+    let next_links = unsafe { next.0.links.shared() };
+    Some(next_links.binding.as_ref().unwrap_or(next).clone())
+}
+
+fn deref_applied_free_var_no_cache(term: &Term) -> Term {
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+    assert!(term.arity() > 1, "applied variable must have arguments");
+    let head = term.argument(0).expect("applied variable has a head");
+    let binding = head.binding().expect("applied variable head is bound");
+
+    let expanded = if binding.is_any_var() || binding.is_lambda() {
+        let expanded = Term::top_alloc(term.f_code(), term.arity());
+        expanded.set_properties(term.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        expanded.set_argument(0, binding);
+        for index in 1..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            expanded.set_argument(index, arg);
+        }
+        expanded
+    } else {
+        let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+        expanded.set_properties(binding.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        for index in 0..binding.arity() {
+            let arg = binding
+                .argument(index)
+                .unwrap_or_else(|| panic!("binding argument {index} is uninitialized"));
+            expanded.set_argument(index, arg);
+        }
+        for index in 1..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            expanded.set_argument(binding.arity() + index - 1, arg);
+        }
+        expanded
+    };
+    expanded.set_prop(TP_IS_DEREFED_APP_VAR);
+    expanded
+}
+
+fn rewrite_index(level: RewriteLevel) -> usize {
+    match level {
+        RewriteLevel::RuleRewrite => 0,
+        RewriteLevel::FullRewrite => 1,
+        RewriteLevel::NoRewrite => panic!("rewrite level has no date slot"),
+    }
+}
+
+fn cmp_usize(left: usize, right: usize) -> i32 {
+    i32::from(left > right) - i32::from(left < right)
+}
+
+fn walk_terms(term: &Term, mut visit: impl FnMut(&Term)) {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        visit(&current);
+        for arg in current.argument_clones().into_iter().flatten() {
+            stack.push(arg);
+        }
+    }
+}
+
+fn walk_terms_until(term: &Term, mut visit: impl FnMut(&Term) -> bool) -> bool {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if visit(&current) {
+            return true;
+        }
+        for arg in current.argument_clones().into_iter().flatten() {
+            stack.push(arg);
+        }
+    }
+    false
+}
+
+fn walk_terms_with_deref(term: &Term, deref: DerefType, mut visit: impl FnMut(&Term)) {
+    let mut stack = vec![(term.clone(), deref)];
+    while let Some((candidate, mut current_deref)) = stack.pop() {
+        let current = term_deref(&candidate, &mut current_deref);
+        visit(&current);
+        for arg in current.argument_clones().into_iter().flatten() {
+            stack.push((arg, current_deref));
+        }
+    }
+}
+
+fn walk_terms_with_deref_until(
+    term: &Term,
+    deref: DerefType,
+    mut visit: impl FnMut(&Term) -> bool,
+) -> bool {
+    let mut stack = vec![(term.clone(), deref)];
+    while let Some((candidate, mut current_deref)) = stack.pop() {
+        let current = term_deref(&candidate, &mut current_deref);
+        if visit(&current) {
+            return true;
+        }
+        for arg in current.argument_clones().into_iter().flatten() {
+            stack.push((arg, current_deref));
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        term_del_prop, term_has_interpreted_symbol, term_is_prefix, term_search_prop,
+        term_set_prop, term_stack_del_props, term_stack_set_props, term_var_del_prop,
+        term_var_search_prop, term_var_set_prop, term_verify_prop, DerefType, RewriteLevel, Term,
+        DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TERMS_INITIAL_ARGS, TP_CHECK_FLAG, TP_HAS_BOOL_SUBTERM,
+        TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_IGNORE_PROPS, TP_IS_DB_VAR, TP_IS_DEREFED_APP_VAR,
+        TP_IS_REWRITTEN, TP_IS_SHARED, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
+    };
+    use crate::basics::pstacks::PStack;
+    use crate::basics::sysdate::SysDate;
+    use crate::terms::signature::SIG_PHONY_APP_CODE;
+    use crate::terms::simpletypes::{alloc_simple_sort, ST_INTEGER};
+    use crate::terms::termvars::VarBank;
+    use crate::terms::typebanks::TypeBank;
+    use std::rc::Rc;
+
+    #[test]
+    fn constants_match_c_header_values() {
+        assert_eq!(DEFAULT_VWEIGHT, 1);
+        assert_eq!(DEFAULT_FWEIGHT, 2);
+        assert_eq!(TERMS_INITIAL_ARGS, 10);
+        assert_eq!(TP_IGNORE_PROPS.bits(), 0);
+        assert_eq!(TP_TOP_POS.bits(), 2);
+        assert_eq!(TP_PRED_POS.bits(), 8);
+        assert_eq!(TP_IS_SHARED.bits(), 16_384);
+        assert_eq!(TP_HAS_ETA_EXPANDABLE_SUBTERM.bits(), 1_u64 << 25);
+        assert_eq!(TP_HAS_BOOL_SUBTERM.bits(), 1_u64 << 30);
+
+        let props = TP_PRED_POS | TP_IS_SHARED;
+        assert!(props.is_any_set(TP_IS_SHARED | TP_OUTPUT_FLAG));
+        assert_eq!(props.any_set(TP_IS_SHARED | TP_OUTPUT_FLAG), TP_IS_SHARED);
+        assert_eq!(props.give(TP_PRED_POS | TP_OUTPUT_FLAG), TP_PRED_POS);
+    }
+
+    #[test]
+    fn allocation_and_top_copy_preserve_c_cell_shape() {
+        let source = Term::top_alloc(7, 2);
+        let left = Term::const_cell_alloc(1);
+        let right = Term::const_cell_alloc(2);
+        source.set_argument(0, left.clone());
+        source.set_argument(1, right.clone());
+        source.set_prop(TP_PRED_POS | TP_OUTPUT_FLAG | TP_IS_DB_VAR);
+
+        let without_args = Term::top_copy_without_args(&source);
+        assert_eq!(without_args.f_code(), 7);
+        assert_eq!(without_args.arity(), 2);
+        assert!(without_args.query_prop(TP_PRED_POS | TP_IS_DB_VAR));
+        assert!(!without_args.query_prop(TP_OUTPUT_FLAG));
+        assert_eq!(
+            without_args.any_prop_set(TP_PRED_POS | TP_OUTPUT_FLAG),
+            TP_PRED_POS
+        );
+        assert!(without_args.argument(0).is_none());
+
+        let copy = Term::top_copy(&source);
+        assert_eq!(copy.argument(0), Some(left));
+        assert_eq!(copy.argument(1), Some(right));
+        assert!(copy.left_son().is_none());
+        assert!(copy.right_son().is_none());
+    }
+
+    #[test]
+    fn dropping_top_handle_releases_wrapper_but_retains_borrowed_child() {
+        let child = Term::const_cell_alloc(1);
+        let child_weak = Rc::downgrade(&child.0);
+        let root = Term::top_alloc(2, 1);
+        let root_weak = Rc::downgrade(&root.0);
+        root.set_argument(0, child.clone());
+
+        drop(root);
+
+        assert!(root_weak.upgrade().is_none());
+        assert!(child_weak.upgrade().is_some());
+        drop(child);
+        assert!(child_weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn dropping_unshared_tree_retains_varbank_owned_variables() {
+        let types = TypeBank::new();
+        let vars = VarBank::new(&types);
+        let variable = vars.var_assert_alloc(-2, &types.default_type());
+        let variable_weak = Rc::downgrade(&variable.0);
+        let nested = Term::top_alloc(2, 1);
+        let nested_weak = Rc::downgrade(&nested.0);
+        nested.set_argument(0, variable.clone());
+        let root = Term::top_alloc(1, 1);
+        let root_weak = Rc::downgrade(&root.0);
+        root.set_argument(0, nested.clone());
+        drop(nested);
+        drop(variable);
+
+        drop(root);
+
+        assert!(root_weak.upgrade().is_none());
+        assert!(nested_weak.upgrade().is_none());
+        assert!(variable_weak.upgrade().is_some());
+        drop(vars);
+        assert!(variable_weak.upgrade().is_none());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn term_links_retain_compact_single_threaded_mutation_boundary() {
+        assert_eq!(std::mem::size_of::<Term>(), std::mem::size_of::<usize>());
+        assert_eq!(
+            std::mem::size_of::<Option<Term>>(),
+            std::mem::size_of::<Term>()
+        );
+        assert_eq!(std::mem::size_of::<super::TermLinkData>(), 24);
+        assert_eq!(std::mem::size_of::<super::TermLinks>(), 24);
+        assert_eq!(std::mem::size_of::<super::TermArgs>(), 24);
+        assert_eq!(std::mem::size_of::<super::TermArguments>(), 24);
+        assert_eq!(
+            std::mem::size_of::<std::cell::UnsafeCell<super::TermLinkData>>(),
+            std::mem::size_of::<super::TermLinks>()
+        );
+        assert_eq!(
+            std::mem::size_of::<super::TermTreeLink>(),
+            std::mem::size_of::<Term>()
+        );
+        assert_eq!(
+            std::mem::size_of::<std::cell::UnsafeCell<super::TermArgs>>(),
+            std::mem::size_of::<super::TermArguments>()
+        );
+        assert_eq!(std::mem::size_of::<super::TermCell>(), 136);
+
+        let term = Term::const_cell_alloc(1);
+        let binding = Term::const_cell_alloc(2);
+        let replacement = Term::const_cell_alloc(3);
+        let left = Term::const_cell_alloc(4);
+        let right = Term::const_cell_alloc(5);
+        let type_ = alloc_simple_sort(ST_INTEGER);
+
+        term.set_binding(Some(binding.clone()));
+        term.set_rw_replace_field(Some(replacement.clone()));
+        term.set_type(Some(type_.clone()));
+        term.set_left_son(Some(left.clone()));
+        term.set_right_son(Some(right.clone()));
+
+        assert_eq!(term.binding(), Some(binding));
+        assert_eq!(term.rw_replace_field(), Some(replacement));
+        assert_eq!(term.type_uid(), Some(type_.type_uid()));
+        assert_eq!(term.type_(), Some(type_));
+        assert_eq!(term.left_son(), Some(left.clone()));
+        assert_eq!(term.right_son(), Some(right.clone()));
+        let debug = format!("{term:?}");
+        assert!(debug.contains("TermArguments(..)"));
+        assert!(debug.contains("TermLinks(..)"));
+        assert!(debug.contains("TermTreeLink(..)"));
+        assert_eq!(term.left_son(), Some(left.clone()));
+        assert_eq!(term.right_son(), Some(right.clone()));
+        assert_eq!(term.take_left_son(), Some(left));
+        assert_eq!(term.take_right_son(), Some(right));
+    }
+
+    #[test]
+    fn term_metadata_reads_clone_owners_before_replacement() {
+        let term = Term::const_cell_alloc(1);
+        let binding = Term::const_cell_alloc(2);
+        let binding_weak = Rc::downgrade(&binding.0);
+        term.set_binding(Some(binding.clone()));
+        drop(binding);
+
+        let retained_binding = term.binding().expect("binding remains installed");
+        term.set_binding(None);
+        assert!(binding_weak.upgrade().is_some());
+        drop(retained_binding);
+        assert!(binding_weak.upgrade().is_none());
+
+        let replacement = Term::const_cell_alloc(3);
+        let replacement_weak = Rc::downgrade(&replacement.0);
+        term.set_rw_replace_field(Some(replacement.clone()));
+        drop(replacement);
+
+        let retained_replacement = term
+            .rw_replace_field()
+            .expect("rewrite replacement remains installed");
+        term.set_rw_replace_field(None);
+        assert!(replacement_weak.upgrade().is_some());
+        drop(retained_replacement);
+        assert!(replacement_weak.upgrade().is_none());
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "the representation regression owns and leaves each test term structurally unchanged during inspection"
+    )]
+    #[test]
+    fn term_arguments_use_inline_slots_and_heap_fallback() {
+        for arity in 0..=4 {
+            let term = Term::default_cell_arity_alloc(arity);
+            assert_eq!(term.arity(), arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                term.set_argument(index, Term::const_cell_alloc(code));
+            }
+            // SAFETY: `term` and all initialized arguments remain owned and
+            // structurally unchanged until both inspections finish.
+            let arguments = unsafe { term.arguments() };
+            assert_eq!(arguments.len(), arity);
+            assert_eq!(term.argument_clones().len(), arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                assert_eq!(term.argument(index).unwrap().f_code(), code);
+            }
+
+            // SAFETY: The same immutable owner scope covers the private
+            // representation check, and no argument setter runs here.
+            let args = unsafe { term.0.args.shared() };
+            assert!(matches!(
+                (args, arity),
+                (super::TermArgs::Empty, 0)
+                    | (super::TermArgs::One(_), 1)
+                    | (super::TermArgs::Two(_), 2)
+                    | (super::TermArgs::Heap(_), 3..)
+            ));
+        }
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "the regression directly verifies the performance-only borrowed cursor boundary"
+    )]
+    #[test]
+    fn borrowed_first_order_argument_push_preserves_all_arity_shapes() {
+        for arity in 0..=4 {
+            let term = Term::default_cell_arity_alloc(arity);
+            for index in 0..arity {
+                let code = i64::try_from(index).expect("small test arity fits i64") + 1;
+                term.set_argument(index, Term::const_cell_alloc(code));
+            }
+
+            let mut stack = Vec::new();
+            // SAFETY: `term` and all of its initialized arguments remain
+            // owned and structurally unchanged until every cursor is read.
+            unsafe {
+                term.borrowed_cell()
+                    .push_first_order_arguments_reversed(&mut stack, DerefType::Once);
+            }
+
+            let actual = stack
+                .into_iter()
+                .map(|(argument, deref)| {
+                    assert_eq!(deref, DerefType::Once);
+                    // SAFETY: The owning `term` remains alive and unchanged
+                    // for the complete cursor read.
+                    unsafe { argument.f_code() }
+                })
+                .collect::<Vec<_>>();
+            let expected = (1..=arity)
+                .rev()
+                .map(|code| i64::try_from(code).expect("small test arity fits i64"))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "the regression enters the unsafe mutation boundary only to verify its shared-term guard"
+    )]
+    #[test]
+    #[should_panic(expected = "shared term arguments are structurally immutable")]
+    fn shared_term_arguments_reject_mutable_borrows() {
+        let term = Term::top_alloc(1, 1);
+        term.set_prop(TP_IS_SHARED);
+        // SAFETY: The method must reject the shared term before exposing a
+        // mutable slice; the expected panic verifies that precondition.
+        let _arguments = unsafe { term.arguments_mut() };
+    }
+
+    #[test]
+    fn property_traversals_use_deref_and_cover_variables_separately() {
+        let root = Term::top_alloc(10, 2);
+        let var = Term::const_cell_alloc(-2);
+        let bound = Term::const_cell_alloc(11);
+        let leaf = Term::const_cell_alloc(12);
+        var.set_binding(Some(bound.clone()));
+        root.set_argument(0, var.clone());
+        root.set_argument(1, leaf.clone());
+
+        term_set_prop(&root, DerefType::Always, TP_CHECK_FLAG);
+        assert!(root.query_prop(TP_CHECK_FLAG));
+        assert!(bound.query_prop(TP_CHECK_FLAG));
+        assert!(leaf.query_prop(TP_CHECK_FLAG));
+        assert!(!var.query_prop(TP_CHECK_FLAG));
+        assert!(term_search_prop(&root, DerefType::Always, TP_CHECK_FLAG));
+        assert!(term_verify_prop(
+            &root,
+            DerefType::Always,
+            TP_CHECK_FLAG,
+            TP_CHECK_FLAG
+        ));
+
+        term_del_prop(&root, DerefType::Always, TP_CHECK_FLAG);
+        assert!(!term_search_prop(&root, DerefType::Always, TP_CHECK_FLAG));
+
+        term_var_set_prop(&root, DerefType::Never, TP_TOP_POS);
+        assert!(var.query_prop(TP_TOP_POS));
+        assert!(term_var_search_prop(&root, DerefType::Never, TP_TOP_POS));
+        term_var_del_prop(&root, DerefType::Never, TP_TOP_POS);
+        assert!(!var.query_prop(TP_TOP_POS));
+    }
+
+    #[test]
+    fn deref_once_updates_remaining_limit_like_c() {
+        let var = Term::const_cell_alloc(-2);
+        let bound = Term::const_cell_alloc(4);
+        var.set_binding(Some(bound.clone()));
+
+        let mut deref = DerefType::Once;
+        assert_eq!(super::term_deref(&var, &mut deref), bound);
+        assert_eq!(deref, DerefType::Never);
+    }
+
+    #[test]
+    fn deref_if_changed_avoids_owning_unchanged_terms() {
+        let constant = Term::const_cell_alloc(4);
+        let mut deref = DerefType::Always;
+        assert_eq!(super::term_deref_if_changed(&constant, &mut deref), None);
+        assert_eq!(deref, DerefType::Always);
+
+        let variable = Term::const_cell_alloc(-2);
+        let binding = Term::const_cell_alloc(5);
+        variable.set_binding(Some(binding.clone()));
+        assert_eq!(
+            super::term_deref_if_changed(&variable, &mut deref),
+            Some(binding)
+        );
+        assert_eq!(deref, DerefType::Always);
+    }
+
+    #[test]
+    fn deref_always_borrows_long_free_variable_chains() {
+        let variables: Vec<_> = (1_i64..=20)
+            .map(|index| Term::const_cell_alloc(-2 * index))
+            .collect();
+        let terminal = Term::const_cell_alloc(5);
+        for pair in variables.windows(2) {
+            pair[0].set_binding(Some(pair[1].clone()));
+        }
+        variables
+            .last()
+            .unwrap()
+            .set_binding(Some(terminal.clone()));
+
+        let mut always = DerefType::Always;
+        assert_eq!(super::term_deref(&variables[0], &mut always), terminal);
+        assert_eq!(always, DerefType::Always);
+        assert_eq!(super::term_deref_always(&variables[0]), terminal);
+
+        let mut once = DerefType::Once;
+        assert_eq!(super::term_deref(&variables[0], &mut once), variables[1]);
+        assert_eq!(once, DerefType::Never);
+    }
+
+    #[test]
+    fn deref_once_expands_applied_free_var_without_consuming_limit() {
+        let var = Term::const_cell_alloc(-2);
+        let prefix = Term::top_alloc(20, 1);
+        let prefix_arg = Term::const_cell_alloc(21);
+        prefix.set_argument(0, prefix_arg.clone());
+        var.set_binding(Some(prefix));
+        let suffix_arg = Term::const_cell_alloc(22);
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, var);
+        app.set_argument(1, suffix_arg.clone());
+        app.set_prop(TP_PRED_POS);
+
+        let mut deref = DerefType::Once;
+        let expanded = super::term_deref(&app, &mut deref);
+
+        assert_eq!(deref, DerefType::Once);
+        assert_eq!(expanded.f_code(), 20);
+        assert_eq!(expanded.arity(), 2);
+        assert_eq!(expanded.argument(0), Some(prefix_arg));
+        assert_eq!(expanded.argument(1), Some(suffix_arg));
+        assert!(expanded.query_prop(TP_IS_DEREFED_APP_VAR));
+        assert!(!expanded.query_prop(TP_PRED_POS));
+    }
+
+    #[test]
+    fn deref_always_repeatedly_expands_bound_applied_free_var_heads() {
+        let x = Term::const_cell_alloc(-2);
+        let y = Term::const_cell_alloc(-4);
+        let prefix = Term::top_alloc(30, 1);
+        let prefix_arg = Term::const_cell_alloc(31);
+        prefix.set_argument(0, prefix_arg.clone());
+        y.set_binding(Some(prefix));
+        x.set_binding(Some(y));
+        let suffix_arg = Term::const_cell_alloc(32);
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, x);
+        app.set_argument(1, suffix_arg.clone());
+
+        let mut deref = DerefType::Always;
+        let expanded = super::term_deref(&app, &mut deref);
+
+        assert_eq!(deref, DerefType::Always);
+        assert_eq!(expanded.f_code(), 30);
+        assert_eq!(expanded.arity(), 2);
+        assert_eq!(expanded.argument(0), Some(prefix_arg));
+        assert_eq!(expanded.argument(1), Some(suffix_arg));
+    }
+
+    #[test]
+    fn optional_delete_and_stack_helpers_touch_only_present_cells() {
+        let root = Term::top_alloc(10, 1);
+        let leaf = Term::const_cell_alloc(11);
+        root.set_argument(0, leaf.clone());
+        root.set_prop(TP_CHECK_FLAG);
+        leaf.set_prop(TP_CHECK_FLAG);
+
+        super::term_del_prop_opt(&root, TP_CHECK_FLAG);
+        assert!(!root.query_prop(TP_CHECK_FLAG));
+        assert!(!leaf.query_prop(TP_CHECK_FLAG));
+
+        let mut stack = PStack::new();
+        stack.push(root.clone());
+        stack.push(leaf.clone());
+        term_stack_set_props(&stack, TP_TOP_POS);
+        assert!(root.query_prop(TP_TOP_POS));
+        assert!(leaf.query_prop(TP_TOP_POS));
+        term_stack_del_props(&stack, TP_TOP_POS);
+        assert!(!root.query_prop(TP_TOP_POS));
+        assert!(!leaf.query_prop(TP_TOP_POS));
+    }
+
+    #[test]
+    fn interpreted_symbol_search_checks_term_types() {
+        let root = Term::top_alloc(10, 1);
+        let leaf = Term::const_cell_alloc(11);
+        root.set_argument(0, leaf.clone());
+        assert!(!term_has_interpreted_symbol(&root));
+
+        leaf.set_type(Some(alloc_simple_sort(ST_INTEGER)));
+        assert!(term_has_interpreted_symbol(&root));
+    }
+
+    #[test]
+    fn prefix_checks_match_pointer_identity_cases() {
+        let f = Term::top_alloc(20, 2);
+        let a = Term::const_cell_alloc(1);
+        let b = Term::const_cell_alloc(2);
+        f.set_argument(0, a.clone());
+        f.set_argument(1, b);
+
+        let prefix = Term::top_alloc(20, 1);
+        prefix.set_argument(0, a.clone());
+        assert!(term_is_prefix(Some(&prefix), &f));
+
+        let different_a = Term::const_cell_alloc(1);
+        let not_prefix = Term::top_alloc(20, 1);
+        not_prefix.set_argument(0, different_a);
+        assert!(!term_is_prefix(Some(&not_prefix), &f));
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        let var = Term::const_cell_alloc(-2);
+        app.set_argument(0, var.clone());
+        app.set_argument(1, a);
+        assert!(term_is_prefix(Some(&var), &app));
+    }
+
+    #[test]
+    fn rewrite_date_and_rewrite_flag_follow_macro_shape() {
+        let term = Term::const_cell_alloc(1);
+        assert_eq!(
+            term.nf_date(RewriteLevel::RuleRewrite),
+            SysDate::creation_time()
+        );
+        term.set_prop(TP_IS_REWRITTEN);
+        assert_eq!(
+            term.nf_date(RewriteLevel::FullRewrite),
+            SysDate::creation_time()
+        );
+    }
+
+    #[test]
+    fn free_var_and_higher_order_predicates_match_macro_shapes() {
+        let var = Term::const_cell_alloc(-2);
+        assert!(var.is_free_var());
+        assert!(var.is_any_var());
+        assert!(var.is_top_level_free_var());
+
+        let db = Term::const_cell_alloc(3);
+        db.set_prop(TP_IS_DB_VAR);
+        assert!(db.is_db_var());
+        assert!(db.is_any_var());
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 1);
+        app.set_argument(0, var);
+        assert!(app.is_phony_app());
+        assert!(app.is_applied_free_var());
+        assert_eq!(app.arg_num(), 0);
+    }
+
+    #[test]
+    fn tree_links_and_identity_comparison_are_handle_based() {
+        let parent = Term::const_cell_alloc(1);
+        let left = Term::const_cell_alloc(2);
+        let right = Term::const_cell_alloc(3);
+
+        parent.set_left_son(Some(left.clone()));
+        parent.set_right_son(Some(right.clone()));
+        assert_eq!(parent.left_son(), Some(left.clone()));
+        assert_eq!(parent.right_son(), Some(right.clone()));
+        assert_eq!(super::term_identity_cmp(&left, &left), 0);
+        assert_ne!(super::term_identity_cmp(&left, &right), 0);
+
+        assert_eq!(parent.take_left_son(), Some(left));
+        parent.clear_tree_links();
+        assert!(parent.left_son().is_none());
+        assert!(parent.right_son().is_none());
+    }
+}

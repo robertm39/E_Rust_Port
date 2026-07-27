@@ -124,10 +124,21 @@ Source files reviewed: `ORDERINGS/cto_lpo.h`, `ORDERINGS/cto_lpo.c`.
 - Ordering code. Comparison outcomes, caching, precedence, and weight handling must match the C implementation because they drive simplification and inference eligibility.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- Standard `lpo_greater` returns the internal `to_notgteq` value for "not greater-or-equal"; public `LPOCompare` only then tries the reverse direction. Preserve that two-step result flow rather than collapsing it into ordinary incomparability too early.
+- `lpo_greater` uses a file-static `recursion_depth` counter with global `LPORecursionDepthLimit`, which makes the C helper non-reentrant. A Rust comparison-local depth counter is a sensible cleanup as long as the observable limit result is preserved.
+- Standard LPO and LPO4/copy variants are separate implementations. A standard-LPO port does not cover the polynomial LPO4 algorithm or copy wrappers; Rust ports LPO4/copy separately and now includes the visible LFHO head-class subset plus the explicit mutable-bank normalization path for context-term LPO4.
+- C asserts standard LPO and copy-wrapper entry points are not used for higher-order problems, but optimized release builds compile those assertions out and expose `LPO`, `LPOCopy`, and `LPO4Copy` for explicit higher-order runs. Rust matches that executable surface by letting the legacy algorithms traverse visible DB/lambda/phony cells with their existing recursive mechanics. Context-term LPO4 still owns the dedicated `ENABLE_LFHO` branches, and the explicit-bank LPO4 entry points remain responsible for recursive WHNF/beta/eta preparation and applied-variable instantiation.
+- Context-term LPO4 interleaves first-order comparison with `ENABLE_LFHO` branches for WHNF dereferencing, beta/eta reduction, applied-variable instantiation, and head-class ordering. Rust preserves the head classes and hidden offsets, and its production mutable-bank path applies `DEREF_ONCE` instantiation, recursive WHNF preparation, beta-normalized subterm checks, and eta reduction. All 18 higher-order forward-modification ordering configurations are exact against C; hidden owner lookup and cache mutation are replaced by the measured explicit-bank decision in [experiment 336](../../../experiments/2026-07-25-035-lfho-explicit-bank-cache-decision/FINDINGS.md).
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Change Later
+
+- Standard LPO uses a file-static `recursion_depth` counter plus the process-global `LPORecursionDepthLimit`, making the C comparison helper non-reentrant. Rust keeps the global limit but makes current depth comparison-local; retain that cleanup unless reference tests show observable dependence on the C static state.
+- Standard LPO, LPO copy wrappers, and context-term LPO4 are separate algorithms with different higher-order assumptions. Rust preserves all explicitly selectable optimized-C release paths, including their legacy higher-order traversal. Once every ordering call site passes explicit problem-type and term-bank context, make the semantic distinction between release-compatible legacy traversal and LFHO-aware LPO4 normalization clearer in the API.
+- C's LPO4 implementation does not inspect `ocb->ho_order_kind`; `--ho-order-kind=lambda` therefore still selects the same context-term LPO4 behavior, even though that option changes KBO6 dispatch. Rust preserves this in forward modification and paramodulation. A cleaned option model should either scope the setting to KBO6 or reject combinations where it has no effect.
 
 ### Porting Focus
 

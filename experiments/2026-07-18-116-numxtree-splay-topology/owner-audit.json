@@ -1,0 +1,33 @@
+{
+  "accepted": true,
+  "c_owner_files": [
+    {
+      "mentions": 3,
+      "path": "eprover/CLAUSES/ccl_formulafunc.c"
+    },
+    {
+      "mentions": 2,
+      "path": "eprover/CLAUSES/ccl_formulafunc.h"
+    },
+    {
+      "mentions": 5,
+      "path": "eprover/CLAUSES/ccl_tcnf.c"
+    },
+    {
+      "mentions": 3,
+      "path": "eprover/CLAUSES/ccl_tcnf.h"
+    }
+  ],
+  "checks": {
+    "c_owner_inventory_is_nonempty": true,
+    "four_owned_value_slots_and_default_tail_are_retained": true,
+    "limited_traversal_uses_tree_path_not_linear_filter": true,
+    "primary_find_and_extract_splay_on_misses": true,
+    "read_only_binary_and_max_queries_are_explicit": true,
+    "rust_has_no_direct_production_owner": true,
+    "safe_index_linked_splay_representation": true,
+    "standard_tree_and_root_marker_are_removed": true
+  },
+  "direct_rust_owners": [],
+  "schema_version": 1
+}

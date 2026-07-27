@@ -1,0 +1,31 @@
+{
+  "decision_count": 586,
+  "decision_digest": "8a89c6edcb735f05dc427a1fe789f5091e50d264a16038c6e3396e3f509a384c",
+  "evidence_checks": {
+    "compatibility_matrix_has_zero_unexpected_differences": true,
+    "latest_full_validation_has_4425_tests": true,
+    "performance_is_within_compatibility_threshold": true
+  },
+  "exact_text_still_in_current_docs": 506,
+  "nonstandard_descriptions": 3,
+  "schema_version": 1,
+  "source_file_count": 181,
+  "standard_content_hashes_verified": 583,
+  "subsystem_counts": {
+    "(none)": 2,
+    "basics": 50,
+    "clauses": 171,
+    "contrib": 5,
+    "control": 108,
+    "external": 9,
+    "heuristics": 30,
+    "inout": 22,
+    "learn": 4,
+    "orderings": 9,
+    "pcl2": 32,
+    "propositional": 7,
+    "prover": 83,
+    "simple_apps": 5,
+    "terms": 49
+  }
+}

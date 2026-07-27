@@ -1,0 +1,3 @@
+variant,instructions,delta_from_parent,percent_from_parent,pop_frame_exclusive,processed_clauses
+parent,12525374625,0,0.0000,279148494,4873
+query_stack_truncate,12550598055,25223430,0.2014,303408905,4873

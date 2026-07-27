@@ -92,7 +92,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order definition-variant matching on 2026-07-10.
 
 Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 
@@ -106,6 +106,22 @@ Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Rust Port Status Notes
+
+- Rust now ports the `ClauseSplit` and `ClauseSplitGeneral` paths for represented clauses: literal partitioning by shared variables, `SplitGroundNone`/`SplitGroundOne`/`SplitGroundFull` ground handling, split-literal detection through the C `EPIsSplitLit` marker plus the generated split-predicate flag in proof-search split guards, fresh arity-zero and split-variable-parameterized predicate generation, creation of definition clauses plus the residual negative split-literal clause, increasing-cardinality split-variable search, and C-style split-count reporting.
+- Non-fresh arity-zero splitting now uses the proof-state definition store to reuse variant definition predicates, reuse represented formula parents, archive new reusable definition formulas, and suppress duplicate definition clauses, matching the reusable `GetDefinitions(fresh=false)` behavior. Definition lookup uses mutable-bank bidirectional subsumption so higher-order variants receive complete matching. Parameterized `ClauseSplitGeneral` attempts still create fresh definitions, as in C.
+- Rust also ports the `ClauseSetSplitClauses` and `ClauseSetSplitClausesGeneral` extraction/insertion loops, including C-style return counts when non-fresh definition reuse suppresses duplicate definition clauses. Arity-zero fresh and reusable non-fresh split-definition formula archives are represented for proof-state splitting, and the proof-control split branches now emit opt-in `DocIntroSplitDef`, `DocIntroSplitDefRest`, and `DocClauseApplyDefs` output from those represented parents before queuing split children.
+
+### Change Later
+
+- C recycles the original literal cells into split result clauses and mutates the original clause into the residual clause. Rust clones `Eqn` cells while preserving shared term handles and the original residual clause metadata; revisit this if literal-cell identity or allocation reuse becomes observable in indexing or proof-output integration.
+- The C `SplitGroundOne` pre-reservation check treats `find_free_literal()` as a raw integer, so `-1` is truthy and index `0` is false. Rust intentionally mirrors that behavior; change it only behind reference tests if compatibility can be relaxed.
+- C `ClauseSplitGeneral` uses `TPCheckFlag` as temporary term-cell state to ignore selected split variables during partitioning and does not locally clear every touched flag. Rust uses explicit split-variable identity exclusion instead; revisit only if reference tests show the flag leakage is externally observable.
+- Fresh arity-zero splitting in C creates and archives a formula definition even when definition reuse is disabled, while parameterized split-variable attempts use direct fresh definition clauses without a formula archive. Rust now mirrors the arity-zero proof-state archive path and leaves parameterized direct definitions archive-free; keep the split proof-documentation boundary at proof-control routing unless later set-level callers need the lower-level splitting API to own output.
+- C interleaves split formula-definition documentation, split-equivalence clause documentation, and residual `apply_def` documentation while `GetDefinitions` and `clause_split_general` are still mutating identifiers and definition associations. Rust mirrors that interleaving in the opt-in proof-control docs wrapper; a future proof-object API should keep formula-definition identity updates explicit instead of hiding them inside raw split construction.
+- `clause_split_general` returns `part+1` even when definition reuse suppresses one or more duplicate definition clauses. Rust carries this C-style split count separately from the actual queued clause vector; keep the distinction visible in future APIs.
+- C `ClauseHasSplitLiteral` checks the full `EPIsSplitLit` property mask, but that value overlaps maximality/cache flags such as `EPIsStrictlyMaximal`, `EPMaxIsUpToDate`, and `EPHasEquiv`. Later ordering work can disturb those bits on generated split predicates. Rust keeps the raw property helper but uses a bank-aware proof-search split guard that also recognizes `FPClSplitDef` predicates to avoid recursively splitting split-definition clauses; revisit the C property encoding after compatibility is secured.
 
 ### Porting Focus
 

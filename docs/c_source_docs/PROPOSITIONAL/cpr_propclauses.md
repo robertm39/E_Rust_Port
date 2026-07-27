@@ -80,7 +80,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; reconciled against the complete propositional ownership path and exact edpll matrix on 2026-07-17.
 
 Source files reviewed: `PROPOSITIONAL/cpr_propclauses.h`, `PROPOSITIONAL/cpr_propclauses.c`.
 
@@ -101,4 +101,16 @@ Source files reviewed: `PROPOSITIONAL/cpr_propclauses.h`, `PROPOSITIONAL/cpr_pro
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/propositional/propclauses.rs` ports the `DPLLOutputFormat` discriminants, `DPLLClauseIsUnit`, raw literal storage with separate active counts, `DPLLClauseFromClause`-style conversion, `DPLLClauseNormalize`, and the LOP/DIMACS clause printers.
+- Rust conversion takes an explicit `TermBank` argument because Rust `Eqn` values do not carry C's `eqn->bank` back-pointer. This explicit dependency is the completed safe ownership boundary: conversion still requires non-equational constant predicate literals, inserts atom names into `PropSig`, applies negative literal signs, and returns the C-shaped syntax diagnostic for non-propositional literals.
+- Normalization keeps the backing literal vector length after duplicate removal, preserving the C distinction between allocated storage and active literal count.
+
+### Change Later
+
+- `p_atom_compare` appears to compute `abs_a2 = ABS(*a1)` instead of `ABS(*a2)`, so the actual C comparator does not implement the comment's absolute-code ordering and gives `qsort` a non-strict ordering. Rust intentionally follows the documented absolute-code/positive-before-negative normalization contract: an invalid non-strict comparator has no portable reference ordering to reproduce. The exact integrated `edpll` matrix and direct normalization tests cover observable output; revisit only if a concrete platform-specific C ordering becomes externally required.
+- C `DPLLClauseFromClause` reaches symbol names through `eqn->bank->sig`, coupling literals to a specific term bank. Rust requires the caller to pass the bank explicitly; when full DPLL formula ownership is ported, keep that explicit boundary unless compatibility tests require storing bank identity in clause literals.
+- The C allocation keeps `mem_size` after normalization even when `lit_no` shrinks. Rust keeps inactive vector slots for this compatibility slice, but later DPLL code should decide whether capacity-only preservation is enough for performance once mutation patterns are measured.
 <!-- END MANUAL REVIEW: c_source_docs -->

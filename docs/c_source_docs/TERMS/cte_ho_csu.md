@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for `SingleUnif` queue-pop sequencing on 2026-07-09.
 
 Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 
@@ -123,4 +123,18 @@ Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- `cte_ho_csu.h` encodes constraint progress in an unsigned word: low two bits are the state (`CONSTRAINT_STATE`), the remaining bits are the counter (`CONSTRAINT_COUNTER`), and `BUILD_CONSTR` simply ORs the supplied state into the shifted counter. Rust now exposes the same state tags, limits aliases, move-kind constants, and bit-packing helpers in `src/terms/ho_csu.rs`.
+- `InitUnifLimits` stores a file-static `HeuristicParms_p`; the CSU iterator later reads `max_unif_steps`, `fixpoint_oracle`, `pattern_oracle`, `max_unifiers`, and `unif_mode`, while binding generation uses the projection/imitation/identification/elimination limits from the same parameter cell. Rust currently exposes a safe snapshot of those fields and updates it from proof-control initialization.
+- Rust now ports the reusable `CSUIterator` state machine as `CsuIterator`: it preserves C's newest-pair queue popping, backtrack-frame queue snapshots, substitution-position restoration, `WHNF_deref` plus lambda-prefix pruning, first-order fallback outside HO multi mode, fixpoint-oracle dispatch, pattern-oracle dispatch through `subst_compute_mgu_pattern`, binding-dispatcher enumeration, rigid/phony/DB decomposition, and C argument scheduling buckets.
+- The complete C production call-site set is now integrated: higher-order all-resolvent equality resolution, equality factoring, and both indexed paramodulation directions drive `CsuIterator`, preserve their C-shaped result ordering where applicable, and propagate C-shaped higher-order derivation metadata. The source audit in `experiments/2026-07-18-093-higher-order-match-csu-ownership/` pins four `CSUIterInit` constructions in C and the same four `CsuIterator::new` constructions in Rust; direct unindexed paramodulation intentionally remains on C's single-`SubstMguComplete` path.
+
+### Change Later
+
+- `BUILD_CONSTR(c, s)` does not mask `s` to the low two state bits, so an invalid state value can also change the decoded counter. Rust preserves the macro shape for compatibility; a cleaned CSU API should make state construction typed and reject out-of-range states once reference behavior is locked down.
+- `NextCSUElement` comments say the iterator is destroyed after it returns false, but the function only backtracks the substitution; callers still have to call `CSUIterDestroy` to release queues/stacks. Rust keeps false-result backtracking separate from explicit `destroy`, but a cleaned public API should make the lifecycle unambiguous.
+- The C global stores a pointer, so later mutation of the same `HeuristicParmsCell` would be observable by CSU enumeration. Rust intentionally stores a snapshot; revisit this if mutable post-init heuristic parameters become part of the Rust proof-search lifecycle.
+- `NextCSUElement` passes two side-effecting `PQueueGetLastP(iter->constraints)` calls as arguments to one `SubstMguComplete` call in first-order/`SingleUnif` mode. C does not specify function-argument evaluation order, so compilers may reverse which popped constraint becomes the first MGU operand; unifiability is symmetric, but binding orientation and allocation order need not be. Rust sequences the pops explicitly. A cleaned C implementation should do the same once reference traces establish the intended operand order.
 <!-- END MANUAL REVIEW: c_source_docs -->

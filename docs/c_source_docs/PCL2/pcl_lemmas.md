@@ -132,4 +132,17 @@ Source files reviewed: `PCL2/pcl_lemmas.h`, `PCL2/pcl_lemmas.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial lemma-selection support is ported as `src/pcl2/lemmas.rs`, including default lemma parameters, deterministic inference weights, active/passive reference counters by C operator class, pure quote references, proof-tree-size caching with lemma-as-zero recursion, lemma-quality computation, lemma-quality comparison, and sequential, recursive, and flat lemma selection.
+- Focused regressions pin every legacy compatibility edge: zero initialization of all C-unassigned opcode slots, the executable formula's omission of `proof_tree_w`/`proof_dag_w`, the sequential post-mark limit check, non-fatal missing counter parents, and the exact missing proof-size diagnostic. The archived C and Rust executables are byte-identical on a corpus using the uninitialized `PCLOpCondense` and `PCLOpSatCheck` slots; [`experiment 063`](../../../experiments/2026-07-16-063-pcl-lemma-edges/FINDINGS.md) records the source and executable evidence.
+
+### Change Later
+
+- `InferenceWeightsAlloc` initializes only a subset of `PCLOpcodes`, leaving slots such as `PCLOpIntroDef`, `PCLOpSatCheck`, `PCLOpCondense`, and all FOF-side transformations with allocator-dependent values even though `PCL_OP_CONDENSE_WEIGHT` is defined. Rust uses deterministic zero defaults for every unassigned slot while preserving the explicitly assigned C weights. The archived allocator happened to return zero-filled slots and therefore matches Rust on the focused `condense`/`cdclpropres` corpus, but heap residue remains undefined behavior rather than a portable target.
+- `LemmaParamCell` exposes `proof_tree_w` and `proof_dag_w`, and the header comment describes both in the rating formula, but `PCLStepComputeLemmaWeight` ignores those parameters and uses `1 + proof_tree_size` directly. Rust mirrors the executable formula, and a regression proves that changing both dead fields leaves the quality bits unchanged; the post-compatibility API can remove or activate them deliberately.
+- `PCLProtSeqFindLemmas` increments and marks a qualifying lemma before checking `res > max_number`, so `max_number == 0` can still mark and return one lemma. Rust preserves this off-by-one behavior.
+- `PCLProtComputeLemmaWeights` and the selection loops do not exclude FOF steps; FOF steps receive quality `0` and can be selected when the quality limit is non-positive. Rust keeps that behavior until proof-object tooling proves whether FOF lemma selection is intentional.
+- `PCLStepUpdateRefs` dereferences a missing parent for a top-level quote without a null check, while nested dangling quote references are silently ignored through `PCLExprGetQuotedArg` failure and quote recursion. The archived tool terminates with `SIGSEGV` on the focused top-level dangling corpus. Rust preserves non-fatal counter lookup, then reports the missing parent during proof-size computation instead of reproducing a null dereference.
 <!-- END MANUAL REVIEW: c_source_docs -->
