@@ -1,8 +1,8 @@
 # Summary
-This project is an automated theorem prover that started as a Rust port of the E theorem prover. My ambition for it is for it to be the #1 theorem prover and win the CASC (`https://tptp.org/CASC/`) in 2027.
+This project is Umlaut, an automated theorem prover that started as a Rust port of the E theorem prover. My ambition for it is for it to be the #1 theorem prover and win the CASC (`https://tptp.org/CASC/`) in 2027. I do not intend for it to remain as just a port of E.
 
-# Original Source of E
-The original source of the E theorem prover is in `eprover/`. It is directly from the Github repo. Do not modify the contents of it at all.
+# Original Sources
+The source code of various related projects is contained in the  `cadical/`, `eprover/`,`gmp-3.6.0/`, `minisat/`, `vampire/`, and `z3/` folders. The licenses these projects are under are in the `licenses/` folder. I want Umlaut to be under the LGPL-3.0 license (I would prefer something more permissive, but I think this is the best I can do), so make sure not to do anything that would forbid that.
 
 # Source Control
 This project uses git for source control. Make well-scoped commits with good commit messages. Push after committing. Use `git status` to confirm that the project is clean before starting a new piece of work. Stay on the `main` branch.
