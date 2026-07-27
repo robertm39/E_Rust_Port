@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and check porting-reference docs for the original E C source.
+"""Generate and check reference docs for the original E C source.
 
 The generated material is intentionally mechanical: it inventories source
 units, extracts declarations, and keeps links/counts in sync. The resulting
@@ -449,29 +449,29 @@ def summarize_unit(unit: Unit, infos: list[SourceInfo]) -> str:
     return f"{unit.stem} is a {source_kind(unit)} in {unit.directory or 'eprover'}."
 
 
-def porting_notes(unit: Unit, infos: list[SourceInfo]) -> list[str]:
+def reference_notes(unit: Unit, infos: list[SourceInfo]) -> list[str]:
     all_text = "\n".join(info.text for info in infos)
     all_macros = sorted({macro for info in infos for macro in info.macros})
     all_globals = sorted({extern for info in infos for extern in info.externs})
     notes = [
-        "Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.",
+        "Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.",
     ]
     if "assert(" in all_text:
         notes.append("Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.")
     if any(name.startswith(("USE_", "ENABLE_", "CLB_", "STACK", "NDEBUG")) for name in all_macros) or "#ifdef" in all_text:
-        notes.append("Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.")
+        notes.append("Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.")
     if all_globals or re.search(r"^\s*[A-Za-z_][A-Za-z0-9_\s\*]*\s+[A-Za-z_][A-Za-z0-9_]*\s*=", all_text, flags=re.M):
         notes.append("Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.")
     if "SizeMalloc" in all_text or "FREE(" in all_text or "Alloc(" in all_text:
-        notes.append("Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.")
+        notes.append("Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.")
     if "PStack" in all_text or "PQueue" in all_text or "PTree" in all_text:
         notes.append("Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.")
     if "TBTerm" in all_text or "TermBank" in all_text or "Term_p" in all_text:
-        notes.append("Term sharing and term-bank insertion are semantic constraints, not just memory optimizations.")
+        notes.append("Determine which term-sharing and term-bank properties are semantic constraints and which are replaceable memory optimizations.")
     if "Clause" in all_text or "Eqn" in all_text:
-        notes.append("Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.")
+        notes.append("Audit where clause/literal mutation order affects indexing, derivation, proof reconstruction, or deterministic behavior before changing it.")
     if "Scanner" in all_text or "Parse" in all_text or "Token" in all_text:
-        notes.append("Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.")
+        notes.append("Parser routines usually advance scanner state and may report fatal errors; preserve supported input behavior or document and test an intentional divergence.")
     return unique(notes)
 
 
@@ -562,9 +562,9 @@ def generate_unit_auto_doc(unit: Unit, info_by_source: dict[Path, SourceInfo]) -
             "### Compile-Time Conditions",
             "",
             bullet_list(conditionals, limit=120),
-            "## Porting Notes",
+            "## E Reference Notes",
             "",
-            prose_bullet_list(porting_notes(unit, infos)).rstrip(),
+            prose_bullet_list(reference_notes(unit, infos)).rstrip(),
             "",
         ]
     )
@@ -576,9 +576,9 @@ def generate_unit_manual_stub(unit: Unit) -> str:
         f"{MANUAL_BEGIN}\n"
         "## Manual Review\n"
         "\n"
-        "Manual review status: reviewed for porting-relevant behavior on 2026-06-22.\n"
+        "Manual review status: reviewed for E-reference behavior on 2026-06-22.\n"
         "\n"
-        "This page has been checked against the listed source files. Keep any hand-written corrections, caveats, or expanded porting notes in this manual section so regeneration preserves them.\n"
+        "This page has been checked against the listed source files. Keep any hand-written corrections, caveats, compatibility judgments, or expanded reference notes in this manual section so regeneration preserves them.\n"
         f"{MANUAL_END}\n"
     )
 
@@ -595,7 +595,7 @@ def generate_overview_auto_doc(units: list[Unit], files: list[SourceFile]) -> st
     lines = [
         "# E Original C Source Overview",
         "",
-        "This directory documents the original C implementation in `eprover/` for use while building the Rust port. The original source tree is treated as read-only.",
+        "This directory documents the original E C implementation in `eprover/` as a read-only compatibility, regression, provenance, and algorithmic reference for Umlaut.",
         "",
         "The documentation is organized by source unit: a `.c` and `.h` file with the same directory and basename are documented together, while standalone `.c` and `.h` files receive their own page.",
         "",
@@ -622,12 +622,13 @@ def generate_overview_auto_doc(units: list[Unit], files: list[SourceFile]) -> st
     lines.extend(
         [
             "",
-            "## Porting Guidance",
+            "## E Reference Guidance",
             "",
-            "- Preserve the architecture before improving it: many optimizations are encoded as ownership conventions, global caches, term/ clause sharing, and exact mutation ordering.",
-            "- Treat `BASICS`, `TERMS`, and `CLAUSES` as the foundation. Later modules assume their allocation, indexing, and object identity behavior.",
-            "- Treat comments about side effects, global variables, and fatal error behavior as part of the interface. E often reports errors by terminating rather than returning recoverable values.",
-            "- For performance-sensitive modules, keep freelists, term banks, clause indexes, discrimination/subterm indexes, and heuristic queues explicit in the Rust design.",
+            "- Examine ownership conventions, global caches, term/clause sharing, mutation order, and other implicit invariants before changing E-derived behavior.",
+            "- Use `BASICS`, `TERMS`, and `CLAUSES` to understand assumptions made by later E modules; Umlaut may replace those assumptions when correctness and measurements justify the change.",
+            "- Determine which side effects, global variables, diagnostics, and fatal-error behavior are supported public contracts and which are E implementation details or defects.",
+            "- For performance-sensitive modules, measure freelists, term banks, clause indexes, discrimination/subterm indexes, and heuristic queues before retaining or replacing them.",
+            "- New Umlaut features and designs do not need an E analogue; document independent papers, implementations, licenses, experiments, and validation evidence.",
             "- Vendored `CONTRIB/picosat-965` files are documented for integration awareness, but their API and license should remain distinct from E-owned code.",
             "",
             "## Source Units",
@@ -649,7 +650,7 @@ def generate_overview_manual_stub() -> str:
         f"{MANUAL_BEGIN}\n"
         "## Manual Notes\n"
         "\n"
-        "Manual source review is tracked in `review_status.md`; subsystem-level corrections and cross-cutting porting observations can be added here without being overwritten by regeneration.\n"
+        "Manual source review is tracked in `review_status.md`; subsystem-level corrections and cross-cutting compatibility or improvement observations can be added here without being overwritten by regeneration. Existing dated manual sections are historical porting-era analysis, not current product policy.\n"
         f"{MANUAL_END}\n"
     )
 
@@ -658,7 +659,7 @@ def generate_review_status_auto_doc(units: list[Unit], files: list[SourceFile]) 
     lines = [
         "# C Source Documentation Review Status",
         "",
-        "Every source unit listed here has a corresponding Markdown page and has been reviewed for porting-relevant API, dependency, global-state, and behavior notes.",
+        "Every source unit listed here has a corresponding Markdown page and has been reviewed for E-reference API, dependency, global-state, and behavior notes.",
         "",
         f"- Source files: {len(files)}",
         f"- Source units: {len(units)}",

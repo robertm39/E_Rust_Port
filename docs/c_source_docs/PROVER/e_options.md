@@ -53,11 +53,11 @@ Exported declarations are primarily taken from headers. For standalone program s
 - `choice`
 - `term`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
-- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
-- Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
+- Audit where clause/literal mutation order affects indexing, derivation, proof reconstruction, or deterministic behavior before changing it.
+- Parser routines usually advance scanner state and may report fatal errors; preserve supported input behavior or document and test an intentional divergence.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->

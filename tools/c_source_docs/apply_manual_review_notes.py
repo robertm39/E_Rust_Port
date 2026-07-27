@@ -70,9 +70,9 @@ UNIT_OVERRIDES = {
     "PCL2/pcl_proofcheck": "Proof checker. Failure behavior and inference validation are compatibility targets for proof tooling.",
     "PROPOSITIONAL/cpr_dpll": "DPLL solver state machine. Assignment, propagation, and backtracking behavior should be treated as algorithmic reference.",
     "PROPOSITIONAL/cpr_propclauses": "Bridge between first-order clauses and propositional clauses; ownership and mapping choices affect SAT integration.",
-    "PROVER/eprover": "Primary executable. Option processing, input parsing, scheduling, proof-state setup, and output mode selection define drop-in compatibility.",
-    "PROVER/e_options": "Command-line option declarations for `eprover`; keep flags, defaults, and help text consistent with the C binary.",
-    "PROVER/e_version": "Version/build metadata surface. Rust replacement should expose compatible version and build identifiers.",
+    "PROVER/eprover": "Original primary executable. Its option processing, input parsing, scheduling, proof-state setup, and output modes define important Umlaut compatibility references, excluding E branding and documented defects.",
+    "PROVER/e_options": "Command-line option declarations for `eprover`; preserve supported flag semantics while using Umlaut-specific program branding.",
+    "PROVER/e_version": "Original version/build metadata surface. Retain E attribution as provenance without presenting Umlaut as E.",
     "PROVER/e_server": "Server executable entry point; network/session behavior is user-visible for remote proving workflows.",
     "PROVER/e_client": "Client executable entry point; argument and protocol behavior must match the C tool.",
     "PROVER/checkproof": "Proof-checking application; preserve accepted proof formats and diagnostic behavior.",
@@ -97,7 +97,7 @@ UNIT_OVERRIDES = {
 
 
 FEATURE_PATTERNS = [
-    (r"\bSizeMalloc\b|\bSecureMalloc\b|\bFREE\(|\bAlloc\(", "Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting."),
+    (r"\bSizeMalloc\b|\bSecureMalloc\b|\bFREE\(|\bAlloc\(", "Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before designing the Umlaut equivalent."),
     (r"\bPStack\b|\bPQueue\b|\bPTree\b|\bPDArray\b|\bDArray\b", "Container use is pointer-oriented and often encodes ownership by convention rather than type; map this to Rust lifetimes/owners deliberately."),
     (r"\bClause\b|\bEqn\b|\bLiteral\b", "Clause and literal mutations can invalidate cached weights, indexes, or derivation metadata; keep update ordering visible."),
     (r"\bTermBank\b|\bTB_\b|\bTerm_p\b|\bTypeBank\b", "Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers."),
@@ -108,7 +108,7 @@ FEATURE_PATTERNS = [
     (r"\bDeriv\b|\bPCL\b|\bProof\b|\bProtocol\b", "Proof output/checking code is externally consumed; preserve identifiers, step ordering, and formatting details."),
     (r"#\s*ifdef|#\s*ifndef|#\s*if\b", "Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path."),
     (r"\bassert\s*\(", "Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation."),
-    (r"\bstatic\b.*=", "File-static state should be audited for thread-safety and reset behavior in the Rust port."),
+    (r"\bstatic\b.*=", "File-static state should be audited for thread-safety and reset behavior in Umlaut."),
     (r"\bGlobal\b|\bextern\b", "Global variables are often configuration or shared caches; preserve initialization and mutation timing."),
 ]
 
@@ -158,7 +158,7 @@ def manual_section(unit: docs.Unit, infos: list[docs.SourceInfo]) -> str:
     bullets = [
         f"Reviewed as a {source_kind(unit)} in `{unit.directory}` covering {len(unit.sources)} source file(s), about {line_count} lines, {public_items} scanned public declarations, {internal_functions} scanned internal function definitions, and {structured_comments} structured function-comment blocks.",
         UNIT_OVERRIDES.get(key, inferred_responsibility(unit, infos)),
-        SUBSYSTEM_REVIEW.get(unit.directory, "Original E source unit; preserve behavior against the C implementation while porting."),
+        SUBSYSTEM_REVIEW.get(unit.directory, "Original E source unit; use it to identify supported compatibility contracts and possible Umlaut improvements."),
     ]
     bullets.extend(feature_notes(joined))
     bullets = docs.unique(bullets)
@@ -168,7 +168,7 @@ def manual_section(unit: docs.Unit, infos: list[docs.SourceInfo]) -> str:
         docs.MANUAL_BEGIN,
         "## Manual Review",
         "",
-        "Manual review status: reviewed for porting-relevant behavior on 2026-06-22.",
+        "Manual review status: reviewed for E-reference behavior on 2026-06-22.",
         "",
         f"Source files reviewed: {source_files}.",
         "",
@@ -179,11 +179,11 @@ def manual_section(unit: docs.Unit, infos: list[docs.SourceInfo]) -> str:
     lines.extend(
         [
             "",
-            "### Porting Focus",
+            "### E Reference Focus",
             "",
             "- Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.",
-            "- Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.",
-            "- If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.",
+            "- Before replacing a C idiom, identify whether callers depend on object identity, global state, allocation reuse, fatal-error behavior, or another supported contract.",
+            "- When behavior is unclear, investigate and test the E reference, then choose the sound Umlaut behavior explicitly rather than treating source similarity as the goal.",
             docs.MANUAL_END,
         ]
     )

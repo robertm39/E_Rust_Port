@@ -1,8 +1,31 @@
 # Rust Code Standards
 
-This project is a Rust port of the E theorem prover. Rust code must preserve the behavior, feature coverage, and performance expectations of the original C implementation while using clear, idiomatic Rust.
+Umlaut is an independent automated theorem prover written in Rust. It began as
+a port of E and must retain E's substantive feature coverage, but its design is
+not constrained to E's architecture, implementation choices, bugs,
+performance, branding, or executable names.
 
-This file is the canonical Rust standards document for the port. Do not add a second standards document under `docs/c_source_docs/`; that tree documents the original C source.
+This file is the canonical Rust standards document for Umlaut. The
+`docs/c_source_docs/` tree documents the original E source and must not become
+a second Umlaut standards document.
+
+## Product Invariants And Engineering Direction
+
+Soundness, proof integrity, standards compliance, licensing, and provenance are
+non-negotiable. Within those invariants, prefer designs that improve
+capability, maintainability, reproducibility, or measured performance and
+advance the goal of winning CASC.
+
+E remains a read-only compatibility, regression, provenance, and algorithmic
+reference. New Umlaut features do not need an E analogue. Intentional
+implementation or behavioral divergences are permitted when they are sound,
+documented, tested, license-compatible, and supported by evidence. Do not
+reproduce a documented upstream defect merely for byte-for-byte parity.
+
+Umlaut must retain E's substantive features and broadly compatible CLI,
+TPTP-family input, SZS status, proof-output, and resource-limit behavior.
+Package, library-crate, executable, help-banner, and diagnostic program names
+are deliberately Umlaut-specific and have no legacy aliases.
 
 ## Required Checks
 
@@ -17,11 +40,11 @@ ephemeral-Linode lifecycle:
 The local PowerShell command only provisions, uploads, orchestrates, downloads
 artifacts, and tears down. On Ubuntu 24.04 the worker runs Rustfmt, all-target
 and all-feature tests, Clippy with warnings and pedantic findings denied,
-release builds for every binary, native C/Rust compatibility matrices, timing
-benchmarks, and Callgrind. It also compiles all binaries and test targets for
-`x86_64-pc-windows-gnu` without executing them. Treat Clippy pedantic findings
-as design feedback and prefer small, explicit fixes that keep the port close to
-the original implementation model.
+release builds for every binary, native C/Umlaut compatibility matrices,
+timing benchmarks, and Callgrind. It also compiles all binaries and test
+targets for `x86_64-pc-windows-gnu` without executing them. Treat Clippy
+pedantic findings as design feedback and use small, explicit fixes whose
+correctness and performance implications remain auditable.
 
 This rule also prohibits quick local smoke tests and running the toolchain in
 WSL, a local container, or another local virtual machine. Normal validation
@@ -35,74 +58,144 @@ Docs-only changes should run the Markdown link checker from `DOCS.md`.
 ## Platform Support
 
 Native Linux is the only supported execution platform and the authority for
-behavioral and performance comparisons with upstream E. Windows GNU x64 is a
-compile-only portability target. Windows executables must never be run as part
-of project validation, including on the Linode through Wine or another
-emulator, and the project makes no Windows runtime, behavioral, performance,
-or MSVC guarantee.
+Umlaut behavior and performance. E comparisons on that platform are regression
+evidence for supported compatibility surfaces, not a ceiling on Umlaut's
+behavior or performance. Windows GNU x64 is a compile-only portability target.
+Windows executables must never be run as part of project validation, including
+on the Linode through Wine or another emulator, and the project makes no
+Windows runtime, behavioral, performance, or MSVC guarantee.
 
-Keep the `x86_64-pc-windows-gnu` build working, including Windows-gated code,
-but do not add Windows-specific behavior solely to mimic results that are not
-tested. Cross-platform abstractions should preserve the upstream Linux
-contract first.
+Keep the `x86_64-pc-windows-gnu` build working, including Windows-gated code.
+Cross-platform abstractions must protect Umlaut's documented Linux contracts;
+do not add untested Windows-specific behavior.
 
 ## Unsafe Rust
 
-Unsafe Rust is permitted when there is a concrete reason that safe Rust cannot adequately satisfy. Valid reasons include interoperability, compatibility with the original C implementation, correctness requirements that cannot be expressed safely, and measured performance needs. Convenience alone is not sufficient. Prefer a safe design whenever it can meet the same requirements.
+Unsafe Rust is permitted when there is a concrete reason that safe Rust cannot
+adequately satisfy. Valid reasons include interoperability, correctness
+requirements that cannot be expressed safely, supported compatibility
+contracts, and measured performance needs. Convenience alone is not
+sufficient. Prefer a safe design whenever it can meet the same requirements.
 
-This permission covers unsafe blocks and functions, definitions and implementations of unsafe traits, FFI, and calls to unsafe APIs exposed by dependencies. Implementing an unsafe trait is permitted when the implementation satisfies and documents every invariant required by that trait.
+This permission covers unsafe blocks and functions, definitions and
+implementations of unsafe traits, FFI, and calls to unsafe APIs exposed by
+dependencies. Implementing an unsafe trait is permitted when the implementation
+satisfies and documents every invariant required by that trait.
 
-Keep unsafe implementation details narrowly scoped and contained behind safe APIs. Every externally usable boundary must be safe and must validate, encode, or otherwise uphold the preconditions of the unsafe implementation. Internal unsafe functions may exist only within that contained implementation, with all callers required to uphold their documented contracts.
+Keep unsafe implementation details narrowly scoped and contained behind safe
+APIs. Every externally usable boundary must be safe and must validate, encode,
+or otherwise uphold the preconditions of the unsafe implementation. Internal
+unsafe functions may exist only within that contained implementation, with all
+callers required to uphold their documented contracts.
 
-Every use of unsafe Rust must document both why unsafe code is justified and why it cannot result in Undefined Behavior:
+Every use of unsafe Rust must document both why unsafe code is justified and
+why it cannot result in Undefined Behavior:
 
-- Put a `SAFETY:` comment immediately next to each unsafe operation or block. State the applicable invariants and explain how the code establishes them.
-- Put a `SAFETY:` comment next to each unsafe trait implementation that addresses every safety requirement imposed by the trait.
-- Give every unsafe function and unsafe trait a `# Safety` documentation section that states the caller or implementer obligations.
-- Address pointer provenance, validity, alignment, initialization, aliasing, lifetimes, thread safety, ABI contracts, and other relevant sources of Undefined Behavior rather than relying on a generic assurance.
+- Put a `SAFETY:` comment immediately next to each unsafe operation or block.
+  State the applicable invariants and explain how the code establishes them.
+- Put a `SAFETY:` comment next to each unsafe trait implementation that
+  addresses every safety requirement imposed by the trait.
+- Give every unsafe function and unsafe trait a `# Safety` documentation
+  section that states the caller or implementer obligations.
+- Address pointer provenance, validity, alignment, initialization, aliasing,
+  lifetimes, thread safety, ABI contracts, and other relevant sources of
+  Undefined Behavior rather than relying on a generic assurance.
 
-Keep `#![deny(unsafe_code)]` at the crate level. An item or module that genuinely needs unsafe Rust may use the smallest practical local `allow(unsafe_code)`, accompanied by a comment identifying the reason, the safe API boundary, and the documented invariants that make the implementation sound.
+Keep `#![deny(unsafe_code)]` at the crate level. An item or module that
+genuinely needs unsafe Rust may use the smallest practical local
+`allow(unsafe_code)`, accompanied by a comment identifying the reason, safe API
+boundary, and documented invariants that make the implementation sound.
 
 ## Panics And Fatal Errors
 
-Production code must not use `unwrap`, `expect`, or panic-driven control flow for recoverable states. Use explicit error handling, checked access, or internal helper APIs that make the failure mode clear.
+Production code must not use `unwrap`, `expect`, or panic-driven control flow
+for recoverable states. Use explicit error handling, checked access, or
+internal helper APIs that make the failure mode clear.
 
-Panics are acceptable only for narrow internal invariants that cannot be triggered by valid user input, valid problem files, CLI options, environment variables, or resource limits. Document the invariant at the point of use.
+Panics are acceptable only for narrow internal invariants that cannot be
+triggered by valid user input, valid problem files, CLI options, environment
+variables, or resource limits. Document the invariant at the point of use.
 
-When the C executable reports an observable fatal error, the Rust port should match the C behavior: diagnostic stream, wording where compatibility depends on it, exit status, and whether partial output is emitted before termination. Tests may use `unwrap` or `expect` when it makes test failures clearer.
+For a supported compatibility surface, preserve the relevant diagnostic
+stream, exit status, and partial-output behavior unless an intentional
+divergence is documented. Diagnostics must identify the Umlaut executable,
+not E. Tests may use `unwrap` or `expect` when it makes test failures clearer.
 
-## Porting Style
+## Prover Implementation Style
 
-- Preserve command-line behavior, output compatibility, parsing rules, proof behavior, and edge cases from the C executable.
-- Keep data structures and algorithms close enough to the original source that future audits can compare Rust behavior against `eprover/`.
-- Use idiomatic Rust ownership and error handling, but avoid abstractions that obscure the correspondence with the original implementation.
-- Prefer deterministic behavior and explicit state transitions, especially in prover logic, indexing, ordering, and scheduling code.
-- Add tests for compatibility-sensitive behavior and performance-relevant code paths.
+- Prefer deterministic behavior and explicit state transitions in parsing,
+  inference, simplification, indexing, ordering, scheduling, and proof output.
+- Keep soundness-critical invariants visible and testable.
+- Use E source documentation to understand contracts and optimization ideas,
+  not to forbid clearer or faster Rust designs.
+- Record evidence before replacing a performance-sensitive representation or
+  algorithm, and keep enough provenance to audit the decision.
+- Add tests for standards contracts, proof behavior, compatibility-sensitive
+  surfaces, intentional divergences, and performance-relevant paths.
 
-## Compatibility Rules
+## Public Compatibility Contracts
 
-- Preserve stdout/stderr structure, SZS status output, proof-output order, parser diagnostics, include handling, stdin behavior, and line-ending normalization.
-- Preserve CLI option parsing, environment-variable behavior, resource-limit handling, timeout behavior, and file path semantics closely enough for the native-Linux Linode compatibility matrices to pass.
-- Keep deterministic ordering explicit. Do not rely on hash-map iteration order, filesystem traversal order, pointer addresses, or thread scheduling when output or proof search can observe the result.
-- Choose integer widths and conversions deliberately. Match the C contract for overflow, truncation, signedness, sentinel values, and boundary checks; use checked, saturating, or wrapping operations only when they match the original behavior.
-- Preserve proof-search state transitions and mutation order when they affect clause selection, simplification, indexing, ordering, scheduling, or proof objects.
+- Preserve supported TPTP-family parsing, SZS status semantics, proof validity,
+  include handling, stdin behavior, output ordering, line-ending handling, and
+  resource-limit behavior.
+- Preserve supported CLI options and the three legacy user configuration
+  variables `E_RUST_PORT_COMPAT_ROOT`, `E_RUST_PORT_COMPAT_ARTIFACT_ROOT`, and
+  `E_RUST_PORT_PICOSAT_LIBRARY`. Their names remain unchanged for operational
+  compatibility.
+- Do not provide old E package or executable aliases. Compatibility begins
+  after invoking the corresponding Umlaut executable.
+- Keep deterministic ordering explicit. Do not rely on hash-map iteration,
+  filesystem traversal, pointer addresses, or thread scheduling when output or
+  proof search can observe the result.
+- Choose integer widths and conversions deliberately. Preserve required
+  overflow, truncation, signedness, sentinel, and boundary semantics, while
+  fixing upstream defects when the divergence is documented and tested.
+- Preserve proof-search state transitions when they are required for soundness,
+  proof reconstruction, or a supported interface. Other mutation order is an
+  implementation choice subject to correctness and performance evidence.
 
 ## Data Structures And Ownership
 
-Object identity, sharing, allocation reuse, and mutation ordering are often part of E's behavior and performance contract. Before replacing a C idiom with a higher-level Rust abstraction, audit whether callers depend on identity, global state, allocation lifetime, freelists, term banks, clause indexes, or fatal-error behavior.
+Audit whether identity, sharing, lifetime, allocation reuse, caches, term
+banks, clause indexes, or global state affect correctness, proof output,
+supported behavior, or measured performance. Those facts—not source-level
+similarity—determine the Rust design.
 
-Use safe Rust designs such as arenas, interners, stable handles, index-based storage, explicit queues, and scoped owner objects to preserve those contracts. Do not replace pointer identity with structural equality, remove sharing, clone large term/clause structures casually, or hide performance-critical indexes behind abstractions that make the original optimization hard to verify.
+Prefer safe arenas, interners, stable handles, index-based storage, explicit
+queues, and scoped owners when appropriate. Structural equality, cloning,
+sharing, and alternative indexing strategies are acceptable when their
+semantics are correct and their performance is measured. Keep
+performance-critical structures explicit enough to profile and reason about.
 
-## Dependencies
+## Dependencies And Source Provenance
 
-Prefer the Rust standard library and small, focused crates. Add a dependency only when it has a clear porting, correctness, compatibility, or performance purpose.
+Prefer the Rust standard library and small, focused crates. A dependency may
+serve correctness, interoperability, supported compatibility, theorem-proving
+capability, research, maintainability, or measured performance.
 
-Before adding a crate, review and document its license, maintenance status, transitive dependency impact, feature flags, and whether it changes compatibility or deployment assumptions. Use minimal features where practical.
+Before adding a crate, review and document its license, maintenance status,
+transitive dependency impact, feature flags, deployment effects, and
+reproducibility. Use minimal features where practical.
 
-A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. Calls to unsafe dependency APIs are permitted only for a concrete reason allowed by the policy above, must remain behind a safe project API, and must document why all safety requirements are upheld and Undefined Behavior cannot occur.
+Bundled theorem-proving source trees are references, not automatic
+implementation sources. Incorporate code only when its license is compatible
+with Umlaut's current and intended licensing and its provenance is recorded.
+Do not inspect or use unlicensed VIRAS implementation source; use the
+paper-derived clean-room packet under `viras_docs/`.
+
+A dependency must not bypass this project's unsafe-Rust policy through project
+wrapper code. Calls to unsafe dependency APIs require an allowed concrete
+reason, a safe project API boundary, and documentation of every relevant
+safety requirement.
 
 ## Documentation Expectations
 
-For each ported subsystem, identify the original C source units used as the reference, including relevant `docs/c_source_docs/` pages when available. Document compatibility-sensitive deviations and the reason for them.
+For E-derived or compatibility-sensitive work, identify the E source units and
+relevant `docs/c_source_docs/` pages used as references. For independent work,
+record the papers, standards, implementations, experiments, licenses, and
+design evidence that informed it.
 
-When porting performance-sensitive code, record the important performance assumptions: data-structure identity, indexing strategy, allocation model, expected hot paths, and benchmark coverage.
+Document intentional compatibility deviations and their justification. For
+performance-sensitive work, record representation and algorithm assumptions,
+expected hot paths, benchmark coverage, and the evidence used to accept the
+change.

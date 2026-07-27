@@ -1,7 +1,7 @@
 <!-- BEGIN AUTO-GENERATED: c_source_docs -->
 # E Original C Source Overview
 
-This directory documents the original C implementation in `eprover/` for use while building the Rust port. The original source tree is treated as read-only.
+This directory documents the original E C implementation in `eprover/` as a read-only compatibility, regression, provenance, and algorithmic reference for Umlaut.
 
 The documentation is organized by source unit: a `.c` and `.h` file with the same directory and basename are documented together, while standalone `.c` and `.h` files receive their own page.
 
@@ -32,12 +32,13 @@ The documentation is organized by source unit: a `.c` and `.h` file with the sam
 | [`SIMPLE_APPS`](SIMPLE_APPS/ex_commandline.md) | 2 | Small standalone example or conversion programs built against the E libraries. |
 | [`TERMS`](TERMS/cte_acterms.md) | 30 | Typed term representation and manipulation: signatures, term banks, substitutions, matching/unification, higher-order/lambda handling, variable sets, types, and term indexing. |
 
-## Porting Guidance
+## E Reference Guidance
 
-- Preserve the architecture before improving it: many optimizations are encoded as ownership conventions, global caches, term/ clause sharing, and exact mutation ordering.
-- Treat `BASICS`, `TERMS`, and `CLAUSES` as the foundation. Later modules assume their allocation, indexing, and object identity behavior.
-- Treat comments about side effects, global variables, and fatal error behavior as part of the interface. E often reports errors by terminating rather than returning recoverable values.
-- For performance-sensitive modules, keep freelists, term banks, clause indexes, discrimination/subterm indexes, and heuristic queues explicit in the Rust design.
+- Examine ownership conventions, global caches, term/clause sharing, mutation order, and other implicit invariants before changing E-derived behavior.
+- Use `BASICS`, `TERMS`, and `CLAUSES` to understand assumptions made by later E modules; Umlaut may replace those assumptions when correctness and measurements justify the change.
+- Determine which side effects, global variables, diagnostics, and fatal-error behavior are supported public contracts and which are E implementation details or defects.
+- For performance-sensitive modules, measure freelists, term banks, clause indexes, discrimination/subterm indexes, and heuristic queues before retaining or replacing them.
+- New Umlaut features and designs do not need an E analogue; document independent papers, implementations, licenses, experiments, and validation evidence.
 - Vendored `CONTRIB/picosat-965` files are documented for integration awareness, but their API and license should remain distinct from E-owned code.
 
 ## Source Units

@@ -1,7 +1,7 @@
 <!-- BEGIN AUTO-GENERATED: c_source_docs -->
 # C Source Documentation Review Status
 
-Every source unit listed here has a corresponding Markdown page and has been reviewed for porting-relevant API, dependency, global-state, and behavior notes.
+Every source unit listed here has a corresponding Markdown page and has been reviewed for E-reference API, dependency, global-state, and behavior notes.
 
 - Source files: 492
 - Source units: 266

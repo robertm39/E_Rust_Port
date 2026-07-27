@@ -1,8 +1,17 @@
-# Rust Port Status
+# E-to-Umlaut Port Completion History
 
-> Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`. This document retains implemented history and compatibility evidence.
+> **Historical record.** This document records the completed E-to-Rust porting
+> program that established Umlaut's compatibility baseline. References to
+> `eprover`, former executable names, exact parity, porting requirements, and
+> the completed `E_Rust_Port-j76` epic describe that historical work; they are
+> not current product-identity or design instructions. Active Umlaut work is
+> tracked in Beads, with strategic improvement research organized under
+> `E_Rust_Port-9jt`.
 
-This document tracks Rust implementation slices and the original C source units they are intended to mirror.
+The completed porting work was tracked under root epic `E_Rust_Port-j76`.
+This document retains its implemented history and compatibility evidence,
+including the Rust implementation slices and original E source units that were
+used to establish the baseline.
 
 ## Learning Executables
 

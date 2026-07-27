@@ -77,11 +77,11 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `NDEBUG`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
+- Audit where clause/literal mutation order affects indexing, derivation, proof reconstruction, or deterministic behavior before changing it.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->

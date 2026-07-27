@@ -61,13 +61,13 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CLB_MEMORY_DEBUG`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
-- Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
+- Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
@@ -92,7 +92,7 @@ Source files reviewed: `PROVER/e_deduction_server.c`.
 - `src/prover/e_deduction_server.rs` and `src/bin/e_deduction_server.rs` port the standalone executable wrapper. The Rust wrapper preserves exact C-shaped full help text, the C option surface, default prover `eprover`, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, first positional argument as prover, ignored extra positional arguments, the C no-port stdout-mode-not-implemented message, TCP-string mode when `-p` is present, temp-file-backed `RUN` subprocess execution through the ported batch/process-control backend, captured `RUN` global/stdout side-channel output, and the C `OutClose(GlobalOut)` final flush/error check on the successful execution path.
 - The Rust TCP server starts one detached worker per accepted client. Each worker creates fresh term/control/runner state, and parser dialect state is thread-local, matching the isolation and simultaneous-service behavior of the C child-process snapshot without copying process-global mutable state between clients.
 - A real loopback regression now sends the exact framed `RUN` command, uploaded formula and `GO\n` terminator through the executable client wrapper, then compares all four intended response frames with a live C byte capture. The same WSL experiment records the stock C process-controller PID-prefix defect that Rust deliberately does not reproduce; see [`experiment 044`](../../../experiments/2026-07-17-044-deduction-server-run-framing/FINDINGS.md).
-- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under `E Server Sessions`.
+- The corresponding historical cross-unit status and compatibility notes live in [`../../e-port-history.md`](../../e-port-history.md) under `E Server Sessions`.
 
 ### Change Later
 

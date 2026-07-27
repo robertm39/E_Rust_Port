@@ -68,14 +68,14 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CTO_ORDERINGS`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
-- Term sharing and term-bank insertion are semantic constraints, not just memory optimizations.
-- Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
+- Determine which term-sharing and term-bank properties are semantic constraints and which are replaceable memory optimizations.
+- Parser routines usually advance scanner state and may report fatal errors; preserve supported input behavior or document and test an intentional divergence.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->

@@ -17,7 +17,7 @@ documentation checks may remain local.
 There are no exceptions for quick smoke tests, focused reproductions, or an
 already-installed local toolchain. WSL, local containers, and local virtual
 machines are not supported substitutes. Any command that formats, compiles,
-links, tests, starts, compares, benchmarks, or profiles the Rust port or C
+links, tests, starts, compares, benchmarks, or profiles Umlaut or the C
 reference must execute on the Linode.
 
 The normal `run` workflow creates a Cloud Firewall and Linode, installs the
@@ -159,7 +159,7 @@ that same guarded lifecycle with:
 
 ```powershell
 .\linode-runner.ps1 exec -- `
-    "cd /opt/e-rust-port/source && cargo build --locked --release --bin eprover && target/release/eprover eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p --auto --silent --cpu-limit=10"
+    "cd /opt/e-rust-port/source && cargo build --locked --release --bin umlaut && target/release/umlaut eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p --auto --silent --cpu-limit=10"
 ```
 
 For an isolated C reference build and prover smoke run, use:

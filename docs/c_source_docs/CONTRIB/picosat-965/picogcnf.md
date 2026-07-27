@@ -57,9 +57,9 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - None found in the source scan.
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->

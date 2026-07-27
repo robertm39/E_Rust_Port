@@ -77,9 +77,9 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CIO_FILEOPS`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
 <!-- END AUTO-GENERATED: c_source_docs -->

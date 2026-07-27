@@ -112,14 +112,14 @@ Exported declarations are primarily taken from headers. For standalone program s
 - `CTE_IDX_FP`
 - `ENABLE_LFHO`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
-- Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
+- Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
-- Term sharing and term-bank insertion are semantic constraints, not just memory optimizations.
+- Determine which term-sharing and term-bank properties are semantic constraints and which are replaceable memory optimizations.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->

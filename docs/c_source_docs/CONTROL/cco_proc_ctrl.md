@@ -100,12 +100,12 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CCO_PROC_CTRL`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
 <!-- END AUTO-GENERATED: c_source_docs -->
 

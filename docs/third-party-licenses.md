@@ -1,9 +1,13 @@
 # Third-Party Licenses
 
 The `licenses/` directory contains verbatim copies of the license notices
-distributed with the third-party source trees used by this project. The copies
-retain each project's copyright notice even when multiple projects use the
-same license family.
+distributed with the third-party source trees bundled as references for
+Umlaut. These trees provide provenance, compatibility evidence, algorithmic
+ideas, and comparative implementations; their presence does not make them
+part of Umlaut or authorize automatic incorporation of their code. Any
+incorporation requires a compatible license and recorded provenance. The
+copies retain each project's copyright notice even when multiple projects use
+the same license family.
 
 | Project | Bundled revision | Declared license | Verbatim copy |
 | --- | --- | --- | --- |
@@ -24,18 +28,20 @@ from the 6.3.0 distribution's `COPYING.LESSERv3`, `COPYINGv2`, and
 `COPYINGv3`; the [GMP copying conditions](https://gmplib.org/manual/Copying)
 describe which parts use each license.
 
-The local GMP reference tree intentionally omits `demos/`, `tests/`, and
-`mini-gmp/tests/` so those GPL-only programs are not available as implementation
-guidance. Do not restore or use those directories as source references. The
-GPL-3.0-or-later copy remains necessary for retained distribution build helpers
-that carry GPL-3 terms with special exceptions; those helpers are not GMP
-library implementation sources.
+The local `gmp-6.3.0/` reference tree intentionally omits `demos/`, `tests/`,
+and `mini-gmp/tests/` so those GPL-only programs are not available as
+implementation guidance. Do not restore or use those directories as source
+references. The GPL-3.0-or-later copy remains necessary for retained
+distribution build helpers that carry GPL-3 terms with special exceptions;
+those helpers are not GMP library implementation sources.
 
 VIRAS requires special attention: its complete Git tree at the bundled
 revision has no license file, and its source headers and README contain no
 licensing statement. Consequently this repository cannot include a license
-copy for VIRAS. Treat its license status as unresolved and obtain an explicit
-license from the upstream maintainer before redistributing it.
+copy for VIRAS or use that implementation as source guidance. Treat its
+license status as unresolved and obtain an explicit license from the upstream
+maintainer before redistributing it. Umlaut's VIRAS design work uses only the
+paper-derived clean-room packet under `viras_docs/`.
 
 This inventory records the top-level license of each named project. Individual
 source distributions can contain separately licensed third-party or

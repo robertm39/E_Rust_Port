@@ -2,6 +2,16 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Project Identity
+
+Umlaut is an independent automated theorem prover written in Rust. It began as
+a port of E, but E is now a read-only compatibility, regression, provenance,
+and algorithmic reference rather than the product identity or a universal
+design and performance authority. Umlaut must retain E's substantive feature
+coverage and broadly compatible interfaces, except that its package and
+executables intentionally use Umlaut names without legacy aliases. New
+features and measured implementation improvements do not need an E analogue.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
@@ -57,6 +67,18 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Repository Beads And Git Policy
+
+This repository explicitly opts into the Beads `team-maintainer` workflow.
+Tracked Beads exports are project state and must be committed. Include them in
+the same scoped commit as the source or documentation work they describe; use
+a dedicated `chore(beads): ...` commit only for Beads-only changes. Keep
+automatic export enabled and automatic Git staging disabled so staging remains
+intentional. Do not commit ignored Dolt databases, locks, caches, or temporary
+files. At successful session close, close completed Beads, run quality gates,
+push the Dolt state with `bd dolt push`, commit the tracked exports, push Git,
+and verify a clean worktree.
+
 
 ## Build & Test
 
@@ -86,8 +108,10 @@ Callgrind command first.
 
 ## Architecture Overview
 
-The Rust port and unchanged upstream C reference are compared natively on the
-same Linux worker. The local machine is limited to editing, orchestration, Git,
+Umlaut and the unchanged upstream C reference are compared natively on the
+same Linux worker. Compatibility comparisons protect supported behavior but do
+not require E's internal architecture or reproduce documented upstream
+defects. The local machine is limited to editing, orchestration, Git,
 documentation checks, PowerShell parsing, and Python controller tests.
 
 ## Conventions & Patterns

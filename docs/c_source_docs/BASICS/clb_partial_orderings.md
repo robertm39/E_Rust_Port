@@ -55,11 +55,11 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CLB_PARTIAL_ORDERINGS`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
-- Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
+- Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
 <!-- END AUTO-GENERATED: c_source_docs -->
 

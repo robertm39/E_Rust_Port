@@ -71,16 +71,16 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CLB_MEMORY_DEBUG`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
-- Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
+- Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
-- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
-- Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
+- Audit where clause/literal mutation order affects indexing, derivation, proof reconstruction, or deterministic behavior before changing it.
+- Parser routines usually advance scanner state and may report fatal errors; preserve supported input behavior or document and test an intentional divergence.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
@@ -107,7 +107,7 @@ Source files reviewed: `PROVER/e_axfilter.c`.
 - Formula-aware GSinE and LambdaDef now run over `StructFofSpec`'s owned `FormulaSet`s and produce borrowed selected-formula stacks, matching C's pointer-borrowing lifetime without cloning formulas or lowering them into clauses. Executable regressions keep a related GSinE formula while excluding an unrelated owner and keep a THF lambda definition plus conjecture while excluding a plain axiom. Full generated-file comparison cases are registered in the interop harness; the source-backed decision and unavailable live C run are recorded in [`../../../experiments/2026-07-16-026-e-axfilter-formula-filters/FINDINGS.md`](../../../experiments/2026-07-16-026-e-axfilter-formula-filters/FINDINGS.md).
 - The comparison matrix extends those cases to a multi-step GSinE chain, multiple THF definitions and selected roles, all/largest/diverse seeded runs with exact generated filenames and split stdout/configured-output routing, missing configured-output parent and missing filter diagnostics, and every generated file. C's output-close failure is platform-independent generic text and remains covered by the injected Rust flush-failure regression; the harness normalizes the known POSIX/Windows missing-file and broken-pipe suffix spellings. See [`../../../experiments/2026-07-16-027-e-axfilter-comparison-matrix/FINDINGS.md`](../../../experiments/2026-07-16-027-e-axfilter-comparison-matrix/FINDINGS.md).
 - `--seed-symbols`, `--seeds`, `--seed-subsample`, and `--seed-method` are parsed with the C option defaults and validation quirks, including `atol`-style prefix parsing for `--seed-subsample`. Seeded filtering now discovers eligible seed symbols, decodes explicit function-symbol names after problem parsing, preserves duplicate explicit seeds, optionally subsamples with the ported frequency distribution and process-global JKISS helper, temporarily mutates formula roles to hypotheses, emits C-shaped seed descriptors, and applies only hypothesis-aware filters.
-- The corresponding status entry lives in [`../../rust-port-status.md`](../../rust-port-status.md) under `e_axfilter Executable`.
+- The corresponding historical status entry lives in [`../../e-port-history.md`](../../e-port-history.md) under `e_axfilter Executable`.
 
 ### Change Later
 

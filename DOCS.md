@@ -2,11 +2,35 @@
 
 Agent-made documentation belongs in this file and in the documentation locations linked from this file. Do not modify `AGENTS.md`; add or update agent-facing documentation here instead.
 
-## Rust Port Standards
+## Umlaut Rust Standards
 
 Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is permitted for a concrete interoperability, compatibility, correctness, or measured performance reason when safe Rust cannot adequately meet the requirement; convenience alone is not sufficient. Keep unsafe implementation details narrowly scoped and behind safe APIs. Unsafe traits and their implementations are permitted, but every unsafe operation, function, trait, and implementation must document the applicable safety invariants and explain why Undefined Behavior cannot occur.
 
-Implemented Rust-port history and compatibility evidence are recorded in [`docs/rust-port-status.md`](docs/rust-port-status.md). Active work is tracked canonically in Beads under root epic `E_Rust_Port-j76`; use `bd ready`, `bd list`, and `bd search` to inspect current status.
+Umlaut is an independent theorem prover that began as an E port. E remains a
+read-only compatibility, regression, provenance, and algorithmic reference,
+not the product identity or a universal architecture and performance
+authority. Umlaut retains E's substantive feature coverage and broadly
+compatible interfaces, while its package and executable names intentionally
+have no E aliases.
+
+The completed E-to-Umlaut porting history and compatibility evidence are
+recorded in [`docs/e-port-history.md`](docs/e-port-history.md). Its old names
+and parity language are historical evidence, not active policy. Current work
+is tracked canonically in Beads; strategic improvement research is organized
+under `E_Rust_Port-9jt`. Use `bd ready`, `bd list`, and `bd search` to inspect
+current status.
+
+## Beads And Source Control
+
+This repository explicitly opts into the Beads `team-maintainer` workflow.
+Tracked Beads exports are project state and must be committed. Include them in
+the same scoped commit as the work they describe; use a dedicated
+`chore(beads): ...` commit only when the Beads update has no associated source
+or documentation change. Keep automatic export enabled and automatic Git
+staging disabled. Never commit ignored Dolt databases, locks, caches, or
+temporary files. At successful session close, close completed Beads, run
+quality gates, run `bd dolt push`, commit all intended tracked exports, push
+Git, and verify both stores and the worktree are clean.
 
 ## VIRAS Clean-Room Research
 
@@ -48,10 +72,10 @@ This is a command-routing rule, not a preference:
 There are no local smoke-test exceptions. WSL, local containers, virtual
 machines, and locally installed toolchains are not substitutes for the Linode.
 If a command formats, compiles, links, tests, starts, benchmarks, or profiles
-the Rust port or upstream C prover, route it through the Linode controller.
+Umlaut or the upstream C prover, route it through the Linode controller.
 
 Native Linux is the runtime, behavioral-compatibility, and performance
-authority. The Rust port must also compile for `x86_64-pc-windows-gnu` on the
+authority. Umlaut must also compile for `x86_64-pc-windows-gnu` on the
 Linode, but Windows is compile-only: do not execute Windows binaries or claim
 Windows runtime, behavioral, performance, or MSVC compatibility. Historical
 Windows/WSL commands in completed experiments and status records are evidence
@@ -72,7 +96,14 @@ exceptional task needs individual remote commands.
 
 ## Runtime PicoSAT Selection
 
-The Rust executable selects a runtime-loaded PicoSAT backend when `E_RUST_PORT_PICOSAT_LIBRARY` names a PicoSAT DLL/shared-library path. When that environment variable is unset or empty, the executable also looks for a bundled PicoSAT library next to `eprover`, under `lib/` next to the executable, and under `../lib/` relative to the executable directory. If no library is found, the port falls back to the internal solver.
+Umlaut selects a runtime-loaded PicoSAT backend when the legacy configuration
+variable `E_RUST_PORT_PICOSAT_LIBRARY` names a PicoSAT DLL/shared-library path.
+When it is unset or empty, Umlaut also looks for a bundled PicoSAT library next
+to `umlaut`, under `lib/` next to the executable, and under `../lib/` relative
+to the executable directory. If no library is found, Umlaut falls back to the
+internal solver. The user-configured variables `E_RUST_PORT_COMPAT_ROOT`,
+`E_RUST_PORT_COMPAT_ARTIFACT_ROOT`, and `E_RUST_PORT_PICOSAT_LIBRARY` retain
+their names for operational compatibility.
 
 ## C Source Documentation
 
@@ -80,9 +111,19 @@ The original C implementation in `eprover/` is documented under [`docs/c_source_
 
 ### C Change Later Notes
 
-When porting new code or reviewing already-ported code, document C implementation details that may make sense to change after drop-in compatibility is secured. This includes accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, confusing API boundaries, ignored parameters, counter overflows, and performance tradeoffs. Put these notes in the relevant C-source page's manual-review `Change Later` section, or in a linked status/design doc when the issue spans multiple source units. The review text remains the technical source-analysis record, while task state is canonical in Beads under epic `E_Rust_Port-j76.4`. Every new top-level `Change Later` item must also create or update a Beads task labeled `source-c-review-change-later`, with source-file and content-hash metadata.
+When using E as a reference or reviewing E-derived behavior, document details
+that Umlaut should preserve, reject, or improve. This includes soundness and
+compatibility contracts, accidental behavior, portability hazards, obsolete
+allocation patterns, global-state quirks, confusing API boundaries, ignored
+parameters, counter overflows, and performance tradeoffs. Put these notes in
+the relevant C-source page's manual-review `Change Later` section, or in a
+linked status/design document when the issue spans multiple source units. The
+review text remains the technical source-analysis record, while active task
+state is canonical in Beads. Every new top-level `Change Later` item must also
+create or update a Beads task labeled `source-c-review-change-later`, with
+source-file and content-hash metadata.
 
-Retroactive audit status as of 2026-07-11: the existing C-source manual-review pages have been checked against this rule with `check_change_later_notes.py`, `generate_c_source_docs.py --check`, `check_regeneration_preserves_manual.py`, and `check_markdown_links.py`; later indexed-paramodulation, higher-order-dispatch, proof-state global-index ownership, typed `PStack` allocation, derivation-stack memory, term-bank release-assertion, shared term-argument, intrusive term-tree, shared help-footer, support-tool option/help, feature-line, learning-protocol, PCL statistics, term-DAG, TSM-output, autoschedule partial-match-output, scanner resolved-source-path, higher-order proof-rendering/type-declaration, formula input-marker, dummy-quote-collapse, AC-resolution parent-collapse asymmetry, proof-quote input-marker side effects, derived-PCL layout/formula-dialect, formula-to-clause normalization-order, pointer-tree traversal/destructive-merge ownership, free-variable definition-order, parser-probe/intrusive-term-store ownership, typed/higher-order clause-rendering allocation-order, demodulator-index coverage/lifecycle, selected-sort type-UID/allocator ordering, post-cache discrimination-tree query/cursor, indexed unit-subsumption side expansion, recursive clause-subsumption orientation backtracking, shared-variable live-PDTree rewrite, paramodulation normalization-order, unindexed-paramodulation derivation-target, and PDTree leaf pointer-order reviews also removed stale status claims and recorded C behaviors that should remain compatibility-visible. The WSL compatibility benchmark baseline is recorded in `docs/rust-port-status.md` so later ports cannot silently treat current performance gaps as complete. Continue applying the rule to newly ported code and to any stale `pending` or `remaining` status notes discovered during later reviews.
+Retroactive audit status as of 2026-07-11: the existing C-source manual-review pages have been checked against this rule with `check_change_later_notes.py`, `generate_c_source_docs.py --check`, `check_regeneration_preserves_manual.py`, and `check_markdown_links.py`; later indexed-paramodulation, higher-order-dispatch, proof-state global-index ownership, typed `PStack` allocation, derivation-stack memory, term-bank release-assertion, shared term-argument, intrusive term-tree, shared help-footer, support-tool option/help, feature-line, learning-protocol, PCL statistics, term-DAG, TSM-output, autoschedule partial-match-output, scanner resolved-source-path, higher-order proof-rendering/type-declaration, formula input-marker, dummy-quote-collapse, AC-resolution parent-collapse asymmetry, proof-quote input-marker side effects, derived-PCL layout/formula-dialect, formula-to-clause normalization-order, pointer-tree traversal/destructive-merge ownership, free-variable definition-order, parser-probe/intrusive-term-store ownership, typed/higher-order clause-rendering allocation-order, demodulator-index coverage/lifecycle, selected-sort type-UID/allocator ordering, post-cache discrimination-tree query/cursor, indexed unit-subsumption side expansion, recursive clause-subsumption orientation backtracking, shared-variable live-PDTree rewrite, paramodulation normalization-order, unindexed-paramodulation derivation-target, and PDTree leaf pointer-order reviews also removed stale status claims and recorded C behaviors that should remain compatibility-visible. The earlier WSL compatibility benchmark baseline is retained in `docs/e-port-history.md` as historical evidence. Continue applying the rule when E-derived behavior is reviewed and when stale historical status claims are discovered.
 
 The 2026-07-17 KBO6 traversal follow-up applied this rule retroactively to C's local pointer-stack balance walkers and direct argument-array traversal. The paired `cto_kbolin` review records the ownership and push-order behavior that Rust now mirrors without constructing a temporary argument vector at every visited term.
 
@@ -190,7 +231,7 @@ The 2026-07-13 retroactive follow-up reviewed proof-state temporary-term-bank ow
 
 Start here:
 
-- [`docs/c_source_docs/overview.md`](docs/c_source_docs/overview.md) - subsystem map, coverage counts, porting guidance, and links to every source-unit page.
+- [`docs/c_source_docs/overview.md`](docs/c_source_docs/overview.md) - subsystem map, coverage counts, E-reference guidance, and links to every source-unit page.
 - [`docs/c_source_docs/review_status.md`](docs/c_source_docs/review_status.md) - review table for all documented C source units.
 - Per-subsystem directories such as [`BASICS`](docs/c_source_docs/BASICS/), [`TERMS`](docs/c_source_docs/TERMS/), [`CLAUSES`](docs/c_source_docs/CLAUSES/), [`CONTROL`](docs/c_source_docs/CONTROL/), and [`HEURISTICS`](docs/c_source_docs/HEURISTICS/) contain the individual source-unit pages.
 
@@ -205,7 +246,12 @@ Each C-source documentation page has two protected regions:
 - `<!-- BEGIN AUTO-GENERATED: c_source_docs -->` to `<!-- END AUTO-GENERATED: c_source_docs -->` contains mechanical inventory generated from the source tree.
 - `<!-- BEGIN MANUAL REVIEW: c_source_docs -->` to `<!-- END MANUAL REVIEW: c_source_docs -->` contains manually reviewed notes and compatibility judgments.
 
-Regeneration must not destroy manual documentation. Generated tooling may replace only the auto-generated region. Put hand-written source review, caveats, and porting observations in the manual-review region or in separate docs linked from this file.
+Regeneration must not destroy manual documentation. Generated tooling may
+replace only the auto-generated region. Put hand-written source review,
+caveats, compatibility judgments, and improvement observations in the
+manual-review region or in separate docs linked from this file. Existing dated
+manual regions are historical source analysis and may retain porting-era
+terminology.
 
 ## C Source Documentation Tooling
 
@@ -214,7 +260,6 @@ Use the repo-local virtual environment:
 ```powershell
 .\.venv\Scripts\python.exe tools\c_source_docs\generate_c_source_docs.py --check
 .\.venv\Scripts\python.exe tools\c_source_docs\generate_c_source_docs.py --generate
-.\.venv\Scripts\python.exe tools\c_source_docs\apply_manual_review_notes.py
 .\.venv\Scripts\python.exe tools\c_source_docs\check_change_later_notes.py
 .\.venv\Scripts\python.exe tools\c_source_docs\check_markdown_links.py
 .\.venv\Scripts\python.exe tools\c_source_docs\check_regeneration_preserves_manual.py
@@ -224,7 +269,7 @@ Command roles:
 
 - `generate_c_source_docs.py --check` verifies every C/H file under `eprover/` maps to exactly one documented source unit.
 - `generate_c_source_docs.py --generate` refreshes mechanical inventory sections while preserving manual-review sections.
-- `apply_manual_review_notes.py` updates the preserved manual-review sections from the source-aware review-note helper.
+- `apply_manual_review_notes.py` is a historical/bootstrap helper for replacing preserved manual-review sections. It is not part of normal regeneration and must be run only when intentionally revising those sections.
 - `check_change_later_notes.py` verifies C-source review docs use the standard `Change Later` section wording and do not reintroduce legacy candidate/observation headings.
 - `check_markdown_links.py` checks local Markdown links in the C-source docs and this `DOCS.md` file.
 - `check_regeneration_preserves_manual.py` regenerates docs and confirms manual-review sections are unchanged.
@@ -234,10 +279,14 @@ Command roles:
 1. Run `git status --short` before changing documentation.
 2. Do not modify `eprover/`.
 3. Add new agent-facing documentation to `DOCS.md` or to a linked docs location.
-4. For new porting work and retroactive review of already-ported code, document aspects of the C implementation that may make sense to change later, including accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, or performance tradeoffs that should be revisited after compatibility is secured.
+4. When using E as a reference, document which contracts Umlaut must preserve
+   and which implementation choices or defects should be improved, including
+   portability hazards, obsolete allocation patterns, global-state quirks,
+   soundness concerns, and performance tradeoffs.
 5. Track every newly discovered pending, remaining, or `Change Later` work item in Beads. When review shows a legacy status claim is stale because Rust already implements that surface, update the historical status evidence and close or update the corresponding Beads task in the same change.
 6. For C-source pages, edit manual-review sections by hand when adding source-review knowledge.
 7. Use generation only for source inventory and other mechanical updates.
 8. Run the coverage, Change Later terminology, link, and regeneration-preservation checks.
 9. Confirm the main worktree and the nested `eprover/` checkout are clean except for intended documentation changes.
-10. Commit and push scoped documentation changes.
+10. Commit and push scoped documentation and tracked Beads-export changes,
+    then run `bd dolt push`.

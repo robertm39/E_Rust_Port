@@ -64,15 +64,15 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CLB_MEMORY_DEBUG`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
-- Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
+- Audit compile-time feature gates and debug-only behavior; map supported variants to explicit Rust configuration or document why Umlaut intentionally chooses one path.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
-- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Allocation helpers and paired free functions reveal performance assumptions; measure allocation granularity and reuse before choosing Umlaut's representation.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
-- Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
+- Parser routines usually advance scanner state and may report fatal errors; preserve supported input behavior or document and test an intentional divergence.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
@@ -97,7 +97,7 @@ Source files reviewed: `PROVER/e_server.c`.
 
 - `src/prover/e_server.rs` and `src/bin/e_server.rs` port the standalone executable wrapper. The Rust wrapper preserves exact C-shaped full help text with the legacy footer, the C option surface, default prover `eprover`, default service port `3666`, output-file redirection including `-o -`, C-shaped output-file open diagnostics, output-file creation before missing-domain usage errors, custom/default ax-filter parsing, domain-spec parsing through the ported structured-FOF include loader, C-shaped reset of the shared boundary after distribution initialization, the observed TCP-string response loop that prints each message and replies `wait` then `ready`, one `Main loop` marker before each logical blocking wait, the stable `Read error` and `Connection closed` lines, and the C one-active-connection loop behavior that closes an accepted second socket while the first remains active.
 - The executable's unchecked `accept` result is also compatibility-visible: a failure with no active client prints `Accepted -1`, while a failure with an active client is silently passed to `close(-1)`. Focused regressions inject both paths. The comparison harness normalizes only nonnegative runtime descriptors in successful `Accepted <descriptor>` lines and intentionally leaves `Accepted -1` unchanged. The source audit and environment limitation are recorded in [`../../../experiments/2026-07-16-025-e-server-loop-compatibility/FINDINGS.md`](../../../experiments/2026-07-16-025-e-server-loop-compatibility/FINDINGS.md).
-- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under `E Server Sessions`.
+- The corresponding historical cross-unit status and compatibility notes live in [`../../e-port-history.md`](../../e-port-history.md) under `E Server Sessions`.
 
 ### Change Later
 

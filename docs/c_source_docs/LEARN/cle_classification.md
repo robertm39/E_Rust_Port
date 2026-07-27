@@ -57,12 +57,12 @@ Exported declarations are primarily taken from headers. For standalone program s
 
 - `CLE_CLASSIFICATION`
 
-## Porting Notes
+## E Reference Notes
 
-- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Use the ownership model visible in this unit's allocation/free helpers and exported APIs as evidence; preserve it only where correctness, supported compatibility, or measured performance requires it.
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
-- Term sharing and term-bank insertion are semantic constraints, not just memory optimizations.
+- Determine which term-sharing and term-bank properties are semantic constraints and which are replaceable memory optimizations.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
