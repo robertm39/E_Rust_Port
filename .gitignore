@@ -41,6 +41,9 @@ gmp-6.3.0/
 # Generated compatibility and benchmark reports
 .artifacts/
 
+# Local-only third-party research papers
+/viras_docs/*.pdf
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

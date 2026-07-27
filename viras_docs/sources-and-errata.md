@@ -2,6 +2,47 @@
 
 ## Sources actually used
 
+### Local copies, deliberately excluded from version control
+
+The three implementation-critical PDFs were downloaded into `viras_docs` on
+July 26, 2026. Per project direction, the PDFs are local reference material
+only: `/viras_docs/*.pdf` is ignored by Git, and none of these files is present
+in repository history.
+
+| Local filename | Bytes | Pages | SHA-256 |
+|---|---:|---:|---|
+| `viras-extended-easychair-13150-v2.pdf` | 746857 | 57 | `d3cc18758c49cea85361cd4980efec74de4ddaf58b0cf7825a7b7bf03eaa4d02` |
+| `viras-lpar-2024.pdf` | 611554 | 18 | `8c4c1d23885357d33c4b681521873ac7eeb5ed6d992915dc9c210e6f63924d45` |
+| `conflict-driven-virtual-substitution-2014.pdf` | 292908 | 15 | `4198fba502c4819a97dd6152cc37999255f5fca8f2f99de281149b39503ef7aa` |
+
+The files can be reconstructed with PowerShell:
+
+```powershell
+$virasSourceDir = Resolve-Path "viras_docs"
+
+Invoke-WebRequest `
+  -Uri "https://easychair.org/publications/preprint/GcSq/download" `
+  -OutFile "$virasSourceDir/viras-extended-easychair-13150-v2.pdf"
+
+Invoke-WebRequest `
+  -Uri "https://repositum.tuwien.at/bitstream/20.500.12708/199522/1/Schoisswohl-2024-VIRAS%20Conflict-Driven%20Quantifier%20Elimination%20for%20Integer...-vor.pdf" `
+  -OutFile "$virasSourceDir/viras-lpar-2024.pdf"
+
+Invoke-WebRequest `
+  -Uri "https://korovin.gitlab.io/pub/virtual_substitution_learning.pdf" `
+  -OutFile "$virasSourceDir/conflict-driven-virtual-substitution-2014.pdf"
+
+Get-FileHash -Algorithm SHA256 "$virasSourceDir/*.pdf"
+```
+
+The EasyChair preprint publishing agreement states that EasyChair preprints
+are open access; its operative agreement text applies
+[CC BY-NC-ND 4.0](https://easychair.org/publications/preprint_agreement).
+The TU Wien record applies the same license to the LPAR version of record. No
+redistribution license was identified on the author-hosted CDVS PDF. Keeping
+all three local-only avoids relying on redistribution rights and follows the
+user's explicit source-control boundary.
+
 ### Primary VIRAS description
 
 Johannes Schoisswohl, Laura Kovács, and Konstantin Korovin, "VIRAS:

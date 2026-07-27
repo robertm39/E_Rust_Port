@@ -38,6 +38,21 @@ provenance, and the paper's publication license are recorded in
 
 This is technical provenance, not legal advice.
 
+## Local source archive
+
+The three implementation-critical papers have been downloaded alongside these
+documents for local reference:
+
+- `viras-extended-easychair-13150-v2.pdf`
+- `viras-lpar-2024.pdf`
+- `conflict-driven-virtual-substitution-2014.pdf`
+
+All three PDFs are deliberately ignored by Git and must not be committed.
+Their exact download URLs, byte sizes, page counts, SHA-256 checksums, and
+license/provenance notes are recorded in
+[sources-and-errata.md](sources-and-errata.md). That metadata is sufficient to
+reconstruct and verify the local archive on another checkout.
+
 ## What VIRAS decides
 
 The paper's LIRA language is the first-order theory over the real numbers with:
