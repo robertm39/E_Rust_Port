@@ -19,15 +19,19 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NamedTuple, Sequence
 
 
 API_BASE = "https://api.linode.com/v4"
 DEFAULT_TYPE = "g8-dedicated-8-4"
+HIGH_MEMORY_TYPE = "g7-highmem-8"
 DEFAULT_REGION = "us-ord"
 DEFAULT_IMAGE = "linode/ubuntu24.04"
 LABEL_PREFIX = "e-rust-codex-"
+FIXED_EST = timezone(timedelta(hours=-5), name="EST")
+HIGH_MEMORY_DAILY_LIMIT = timedelta(hours=2)
 REMOTE_ROOT = PurePosixPath("/opt/e-rust-port")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_APP_DATA = Path(
@@ -38,6 +42,61 @@ CURRENT_STATE = LOCAL_ROOT / "current.json"
 RUN_HISTORY = LOCAL_ROOT / "runs"
 SSH_KEY = LOCAL_ROOT / "linode-runner-ed25519"
 ARTIFACT_ROOT = REPO_ROOT / ".artifacts" / "linode"
+
+
+class PlanSpec(NamedTuple):
+    """Expected catalog values for a supported Linode plan."""
+
+    label: str
+    memory: int
+    vcpus: int
+    disk: int
+    plan_class: str
+
+
+PLAN_SPECS = {
+    DEFAULT_TYPE: PlanSpec(
+        label="G8 Dedicated 8x4",
+        memory=8192,
+        vcpus=4,
+        disk=83968,
+        plan_class="dedicated",
+    ),
+    HIGH_MEMORY_TYPE: PlanSpec(
+        label="Linode 150GB",
+        memory=153600,
+        vcpus=8,
+        disk=204800,
+        plan_class="highmem",
+    ),
+}
+
+
+class HighMemoryUsage(NamedTuple):
+    """High-memory usage within one fixed-EST accounting day."""
+
+    used: timedelta
+    actual: timedelta
+    carried_in: timedelta
+    day_start: datetime
+    next_boundary: datetime
+
+    @property
+    def remaining(self) -> timedelta:
+        return max(HIGH_MEMORY_DAILY_LIMIT - self.used, timedelta())
+
+    @property
+    def exhausted(self) -> bool:
+        return self.used >= HIGH_MEMORY_DAILY_LIMIT
+
+    @property
+    def projected_eligible_at(self) -> datetime:
+        """Earliest boundary allowing a start if no additional usage accrues."""
+
+        overflow = max(self.used - HIGH_MEMORY_DAILY_LIMIT, timedelta())
+        blocked_days = overflow // HIGH_MEMORY_DAILY_LIMIT
+        return self.next_boundary + timedelta(days=blocked_days)
+
 
 class RunnerError(RuntimeError):
     """A user-facing runner failure."""
@@ -63,7 +122,49 @@ def iso_now() -> str:
 
 
 def parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RunnerError(f"Invalid timestamp {value!r}") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_http_date(value: str | None) -> datetime:
+    """Parse an HTTP Date header as an aware UTC timestamp."""
+
+    if not value:
+        raise RunnerError("Linode API response did not include a Date header")
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError) as error:
+        raise RunnerError(f"Invalid Linode API Date header: {value!r}") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def format_utc(value: datetime) -> str:
+    """Format a normalized, second-resolution UTC timestamp."""
+
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def fixed_est_day_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Return fixed UTC-05:00 accounting-day bounds expressed in UTC."""
+
+    fixed_now = now.astimezone(FIXED_EST)
+    day_start = datetime.combine(
+        fixed_now.date(),
+        datetime.min.time(),
+        tzinfo=FIXED_EST,
+    )
+    next_reset = day_start + timedelta(days=1)
+    return (
+        day_start.astimezone(timezone.utc),
+        next_reset.astimezone(timezone.utc),
+    )
 
 
 def run_id() -> str:
@@ -103,6 +204,15 @@ class LinodeApi:
                 "DPAPI-encrypted token is supplied safely."
             )
         self.base_url = base_url.rstrip("/")
+        self.last_response_at: datetime | None = None
+
+    def _capture_response_time(self, headers: Any) -> None:
+        """Retain a server-controlled timestamp without breaking cleanup."""
+
+        try:
+            self.last_response_at = parse_http_date(headers.get("Date"))
+        except (AttributeError, RunnerError):
+            self.last_response_at = None
 
     def request(
         self,
@@ -130,8 +240,10 @@ class LinodeApi:
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 response_body = response.read()
+                self._capture_response_time(response.headers)
         except urllib.error.HTTPError as error:
             response_body = error.read()
+            self._capture_response_time(error.headers)
             if allow_404 and error.code == 404:
                 return None
             detail = response_body.decode("utf-8", errors="replace")
@@ -164,6 +276,17 @@ class LinodeApi:
 
     def delete(self, path: str, *, allow_404: bool = False) -> Any:
         return self.request("DELETE", path, allow_404=allow_404)
+
+    def trusted_now(self) -> datetime:
+        """Read current UTC time from Linode's HTTPS response headers."""
+
+        self.request("HEAD", "/regions")
+        if self.last_response_at is None:
+            raise RunnerError(
+                "Could not obtain trusted UTC time from the Linode API; "
+                "high-memory starts fail closed"
+            )
+        return self.last_response_at
 
     def list_all(self, path: str) -> list[dict[str, Any]]:
         separator = "&" if "?" in path else "?"
@@ -250,6 +373,232 @@ def load_current(*, required: bool = True) -> dict[str, Any] | None:
         return json.loads(CURRENT_STATE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RunnerError(f"Could not read runner state {CURRENT_STATE}: {error}") from error
+
+
+def plan_spec(linode_type: str) -> PlanSpec:
+    try:
+        return PLAN_SPECS[linode_type]
+    except KeyError as error:
+        supported = ", ".join(sorted(PLAN_SPECS))
+        raise RunnerError(
+            f"Unsupported Linode type {linode_type!r}; supported types: {supported}"
+        ) from error
+
+
+def read_state_file(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RunnerError(
+            f"Could not verify high-memory usage from {path}: {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise RunnerError(
+            f"Could not verify high-memory usage from {path}: expected an object"
+        )
+    return value
+
+
+def high_memory_state_interval(
+    state: dict[str, Any],
+    *,
+    now: datetime,
+    active: bool,
+    source: str,
+) -> tuple[object, datetime, datetime] | None:
+    """Extract a trusted high-memory billing interval from runner state."""
+
+    if state.get("type") != HIGH_MEMORY_TYPE:
+        return None
+    linode_id = state.get("linode_id")
+    if linode_id is None:
+        return None
+    created = state.get("linode_created_at")
+    if not isinstance(created, str):
+        raise RunnerError(
+            f"Could not verify high-memory usage from {source}: "
+            "missing trusted Linode creation time"
+        )
+    started_at = parse_time(created)
+    if active:
+        ended_at = now
+    else:
+        deleted = state.get("linode_deleted_at")
+        if not isinstance(deleted, str):
+            raise RunnerError(
+                f"Could not verify high-memory usage from {source}: "
+                "missing trusted Linode deletion time"
+            )
+        ended_at = parse_time(deleted)
+    if ended_at < started_at:
+        raise RunnerError(
+            f"Could not verify high-memory usage from {source}: "
+            "deletion precedes creation"
+        )
+    if started_at > now or ended_at > now:
+        raise RunnerError(
+            f"Could not verify high-memory usage from {source}: "
+            "trusted interval extends into the future"
+        )
+    return linode_id, started_at, ended_at
+
+
+def high_memory_usage(
+    now: datetime,
+    *,
+    active_linodes: Iterable[dict[str, Any]] = (),
+    history_root: Path | None = None,
+    current_state_path: Path | None = None,
+) -> HighMemoryUsage:
+    """Sum managed high-memory lifetime overlapping the current fixed-EST day."""
+
+    history = RUN_HISTORY if history_root is None else history_root
+    current = CURRENT_STATE if current_state_path is None else current_state_path
+    intervals: dict[object, tuple[datetime, datetime]] = {}
+    if history.exists():
+        if not history.is_dir():
+            raise RunnerError(
+                f"Could not inspect high-memory runner history {history}: "
+                "expected a directory"
+            )
+        try:
+            history_files = sorted(history.glob("*.json"))
+        except OSError as error:
+            raise RunnerError(
+                f"Could not inspect high-memory runner history {history}: {error}"
+            ) from error
+        for path in history_files:
+            interval = high_memory_state_interval(
+                read_state_file(path),
+                now=now,
+                active=False,
+                source=str(path),
+            )
+            if interval is not None:
+                key, started_at, ended_at = interval
+                intervals[key] = (started_at, ended_at)
+    if current.exists() and not current.is_file():
+        raise RunnerError(
+            f"Could not verify high-memory usage from {current}: "
+            "expected a state file"
+        )
+    if current.is_file():
+        interval = high_memory_state_interval(
+            read_state_file(current),
+            now=now,
+            active=True,
+            source=str(current),
+        )
+        if interval is not None:
+            key, started_at, ended_at = interval
+            intervals[key] = (started_at, ended_at)
+    for linode in active_linodes:
+        if (
+            linode.get("type") != HIGH_MEMORY_TYPE
+            or not is_managed_label(linode.get("label"))
+        ):
+            continue
+        linode_id = linode.get("id")
+        created = linode.get("created")
+        if linode_id is None or not isinstance(created, str):
+            raise RunnerError(
+                "Could not verify high-memory usage from a live managed Linode: "
+                "missing ID or trusted creation time"
+            )
+        started_at = parse_time(created)
+        if now < started_at:
+            raise RunnerError(
+                "Could not verify high-memory usage from a live managed Linode: "
+                "creation time is in the future"
+            )
+        intervals[linode_id] = (started_at, now)
+
+    day_start, next_boundary = fixed_est_day_bounds(now)
+    if intervals:
+        first_day, _ = fixed_est_day_bounds(
+            min(started_at for started_at, _ended_at in intervals.values())
+        )
+    else:
+        first_day = day_start
+    carried_in = timedelta()
+    actual = timedelta()
+    accounting_day = first_day
+    while accounting_day <= day_start:
+        following_day = accounting_day + timedelta(days=1)
+        actual = timedelta()
+        for started_at, ended_at in intervals.values():
+            overlap_start = max(started_at, accounting_day)
+            overlap_end = min(ended_at, following_day)
+            if overlap_end > overlap_start:
+                actual += overlap_end - overlap_start
+        used = carried_in + actual
+        if accounting_day == day_start:
+            break
+        carried_in = max(used - HIGH_MEMORY_DAILY_LIMIT, timedelta())
+        accounting_day = following_day
+    return HighMemoryUsage(
+        used=used,
+        actual=actual,
+        carried_in=carried_in,
+        day_start=day_start,
+        next_boundary=next_boundary,
+    )
+
+
+def format_duration(value: timedelta) -> str:
+    total_seconds = max(0, int(value.total_seconds()))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def report_high_memory_usage(usage: HighMemoryUsage) -> None:
+    day = usage.day_start.astimezone(FIXED_EST).date().isoformat()
+    boundary_est = usage.next_boundary.astimezone(FIXED_EST).isoformat()
+    boundary_utc = format_utc(usage.next_boundary)
+    print(
+        f"High-memory usage for {day} fixed EST (UTC-05:00): "
+        f"{format_duration(usage.used)} of "
+        f"{format_duration(HIGH_MEMORY_DAILY_LIMIT)}"
+    )
+    print(f"Actual Linode lifetime today: {format_duration(usage.actual)}")
+    print(f"Overflow carried from prior day: {format_duration(usage.carried_in)}")
+    print(f"Remaining before new starts are blocked: {format_duration(usage.remaining)}")
+    print(f"Next accounting boundary: {boundary_est} ({boundary_utc} UTC)")
+    if usage.exhausted:
+        eligible_est = usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()
+        eligible_utc = format_utc(usage.projected_eligible_at)
+        print(
+            "Projected earliest new start if no further usage accrues: "
+            f"{eligible_est} ({eligible_utc} UTC)"
+        )
+
+
+def require_high_memory_allowance(usage: HighMemoryUsage) -> None:
+    if usage.exhausted:
+        raise RunnerError(
+            "High-memory usage has reached the two-hour daily limit; "
+            "no new high-memory run may start now. If no further usage accrues, "
+            f"the projected earliest eligible boundary is "
+            f"{usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()} "
+            "fixed EST"
+        )
+
+
+def inspect_high_memory_allowance(
+    api: LinodeApi,
+    *,
+    active_linodes: Iterable[dict[str, Any]] | None = None,
+) -> HighMemoryUsage:
+    trusted_now = api.trusted_now()
+    live = (
+        api.list_all("/linode/instances")
+        if active_linodes is None
+        else active_linodes
+    )
+    usage = high_memory_usage(trusted_now, active_linodes=live)
+    report_high_memory_usage(usage)
+    return usage
 
 
 def command_path(name: str) -> str:
@@ -540,14 +889,25 @@ def safe_extract(archive_path: Path, destination: Path) -> None:
 def validate_catalog(
     api: LinodeApi, linode_type: str, region: str, image: str
 ) -> None:
+    expected = plan_spec(linode_type)
     type_info = api.get(f"/linode/types/{linode_type}")
-    if (
-        type_info.get("memory") != 8192
-        or type_info.get("vcpus") != 4
-        or type_info.get("disk") != 83968
-    ):
+    actual = (
+        type_info.get("memory"),
+        type_info.get("vcpus"),
+        type_info.get("disk"),
+        type_info.get("class"),
+    )
+    wanted = (
+        expected.memory,
+        expected.vcpus,
+        expected.disk,
+        expected.plan_class,
+    )
+    if actual != wanted:
         raise RunnerError(
-            f"{linode_type} no longer matches the expected 8 GiB/4 CPU/82 GiB plan"
+            f"{linode_type} no longer matches the expected {expected.label} "
+            f"catalog values (memory={expected.memory}, vcpus={expected.vcpus}, "
+            f"disk={expected.disk}, class={expected.plan_class})"
         )
     api.get(f"/regions/{region}")
     api.get(f"/images/{image}")
@@ -646,15 +1006,18 @@ def provision(
             f"Active state already exists for {existing['label']}; "
             "run status/down before creating another runner"
         )
+    validate_catalog(api, linode_type, region, image)
+    if linode_type == HIGH_MEMORY_TYPE:
+        usage = inspect_high_memory_allowance(api)
+        require_high_memory_allowance(usage)
     command_path("ssh")
     command_path("scp")
     ensure_ssh_key()
     allow_cidr = detect_public_ipv4(allow_ip)
     print(
-        f"Validating {linode_type} in {region}; SSH source is {allow_cidr}",
+        f"Provisioning {linode_type} in {region}; SSH source is {allow_cidr}",
         flush=True,
     )
-    validate_catalog(api, linode_type, region, image)
     identifier = run_id()
     label = resource_label(identifier)
     state: dict[str, Any] = {
@@ -689,6 +1052,14 @@ def provision(
             ),
         )
         state["linode_id"] = int(linode["id"])
+        created = linode.get("created")
+        if linode_type == HIGH_MEMORY_TYPE:
+            if not isinstance(created, str):
+                raise RunnerError(
+                    "Created high-memory Linode did not include a trusted "
+                    "creation timestamp"
+                )
+            state["linode_created_at"] = format_utc(parse_time(created))
         state["phase"] = "provisioning"
         addresses = linode.get("ipv4", [])
         if addresses:
@@ -824,6 +1195,7 @@ def delete_state_resources(api: LinodeApi, state: dict[str, Any]) -> None:
     if not is_managed_label(label):
         raise RunnerError(f"Refusing cleanup for unmanaged label: {label}")
     linode_id = state.get("linode_id")
+    linode_deleted_at: datetime | None = None
     if linode_id is not None:
         path = f"/linode/instances/{int(linode_id)}"
         live = api.get(path, allow_404=True)
@@ -832,6 +1204,12 @@ def delete_state_resources(api: LinodeApi, state: dict[str, Any]) -> None:
             print(f"Deleting Linode {linode_id} ({label})")
             api.delete(path)
             wait_until_absent(api, path)
+        linode_deleted_at = getattr(api, "last_response_at", None)
+        if (
+            state.get("type") == HIGH_MEMORY_TYPE
+            and isinstance(linode_deleted_at, datetime)
+        ):
+            state["linode_deleted_at"] = format_utc(linode_deleted_at)
     firewall_id = state.get("firewall_id")
     if firewall_id is not None:
         path = f"/networking/firewalls/{int(firewall_id)}"
@@ -852,7 +1230,11 @@ def delete_state_resources(api: LinodeApi, state: dict[str, Any]) -> None:
                     time.sleep(5)
             wait_until_absent(api, path)
     state["phase"] = "deleted"
-    state["deleted_at"] = iso_now()
+    state["deleted_at"] = (
+        format_utc(linode_deleted_at)
+        if isinstance(linode_deleted_at, datetime)
+        else iso_now()
+    )
     archive_state(state)
     if CURRENT_STATE.exists():
         CURRENT_STATE.unlink()
@@ -980,11 +1362,17 @@ def preflight(
     ensure_ssh_key()
     allow_cidr = detect_public_ipv4(allow_ip)
     validate_catalog(api, linode_type, region, image)
-    api.list_all("/linode/instances")
+    active_linodes = api.list_all("/linode/instances")
     api.list_all("/networking/firewalls")
     print(f"Linode API and catalog: OK")
     print(f"Plan: {linode_type} in {region} using {image}")
     print(f"SSH firewall source: {allow_cidr}")
+    if linode_type == HIGH_MEMORY_TYPE:
+        usage = inspect_high_memory_allowance(
+            api,
+            active_linodes=active_linodes,
+        )
+        require_high_memory_allowance(usage)
 
 
 def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
@@ -992,7 +1380,21 @@ def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
         "--allow-ip",
         help="public controller IPv4; detected automatically when omitted",
     )
-    parser.add_argument("--type", default=DEFAULT_TYPE, dest="linode_type")
+    plan = parser.add_mutually_exclusive_group()
+    plan.add_argument(
+        "--type",
+        choices=tuple(PLAN_SPECS),
+        default=DEFAULT_TYPE,
+        dest="linode_type",
+        help="supported Linode type (advanced compatibility option)",
+    )
+    plan.add_argument(
+        "--high-memory",
+        action="store_const",
+        const=HIGH_MEMORY_TYPE,
+        dest="linode_type",
+        help="use the guarded 150 GB high-memory profile",
+    )
     parser.add_argument("--region", default=DEFAULT_REGION)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
 

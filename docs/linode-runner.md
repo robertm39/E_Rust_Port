@@ -1,12 +1,46 @@
 # Ephemeral Linode compute runner
 
 The repository includes a controller for short-lived Linux build and profiling
-workers. Its default is the Akamai Cloud `G8 Dedicated 8x4` plan in Chicago:
+workers. It supports two Akamai Cloud plans in Chicago (`us-ord`) using the
+`linode/ubuntu24.04` image:
 
-- type: `g8-dedicated-8-4`
-- region: `us-ord`
-- image: `linode/ubuntu24.04`
-- resources: 8 GiB RAM, 4 dedicated CPUs, and 82 GiB storage
+| Profile | Selection | Type | Resources | Price |
+| --- | --- | --- | --- | --- |
+| Normal (default) | no flag | `g8-dedicated-8-4` | 8 GiB RAM, 4 dedicated CPUs, 82 GiB storage | $0.14 an hour |
+| 150 GB high memory | `--high-memory` | `g7-highmem-8` | 150 GiB RAM, 8 dedicated CPUs, 200 GiB storage | $0.74 an hour |
+
+Use the high-memory profile when the task needs to resemble the CASC compute
+configuration more closely. For a closer CASC match, limit each actual prover
+process to 128 GiB rather than allowing it to consume the host's full 150 GiB:
+
+```text
+--memory-limit=131072
+```
+
+The prover option is expressed in MB, so `131072` represents 128 GiB. The
+controller does not inject this option automatically; include it in every
+CASC-oriented Umlaut command.
+
+High-memory starts have a mandatory daily cost guard. If managed high-memory
+Linodes have run for at least two hours during the current accounting day, the
+controller refuses another `up` or `run` using that profile. A start is allowed
+while usage is below two hours even if that run later crosses the threshold.
+Normal-profile starts are not restricted by high-memory usage.
+
+Usage beyond two hours is not discarded at midnight. The excess becomes
+high-memory usage at the start of the next accounting day and is added to that
+day's actual Linode lifetime. If the combined amount still exceeds two hours,
+the new overflow carries forward again until later daily allowances absorb it.
+For example, three hours of high-memory use on one day makes the next day start
+with one hour already used.
+
+An accounting day is midnight-to-midnight at fixed UTC-05:00 ("fixed EST").
+Daylight-saving time is never applied. The controller obtains current time
+from the Linode API's HTTPS `Date` header and records Linode-provided
+creation-to-deletion intervals, rather than trusting the Windows clock.
+`check --high-memory` reports actual lifetime, carried overflow, effective used
+and remaining time, the next accounting boundary, and projected eligibility
+when blocked; it returns nonzero when a new high-memory start would be blocked.
 
 This worker is the project's sole Rust/C execution environment. Do not run
 Cargo, `rustc`, Rust project binaries, the C build, C binaries, WSL, Valgrind,
@@ -59,6 +93,7 @@ runners:
 ```powershell
 .\linode-runner.ps1 init
 .\linode-runner.ps1 check
+.\linode-runner.ps1 check --high-memory
 ```
 
 The key and controller state are stored under
@@ -70,11 +105,23 @@ without creating a billable resource.
 ## Comprehensive remote validation
 
 Run the complete required project-validation lifecycle from the repository
-root:
+root on the normal $0.14-an-hour profile:
 
 ```powershell
 .\linode-runner.ps1 run
 ```
+
+When the validation specifically needs the CASC-like 150 GB host, use the
+guarded $0.74-an-hour profile:
+
+```powershell
+.\linode-runner.ps1 run --high-memory
+```
+
+The same two-hour fixed-EST start guard applies to both the automated `run`
+command and the interactive `up` command. The advanced `--type` option remains
+available for compatibility, but only the two documented types are accepted;
+`--type g7-highmem-8` cannot bypass the high-memory guard.
 
 The controller detects the machine's current public IPv4 address and creates an
 ephemeral firewall that accepts only TCP port 22 from that `/32`. Outbound
@@ -149,6 +196,24 @@ finally {
     .\linode-runner.ps1 down
 }
 ```
+
+Select the 150 GB profile at creation time when an interactive task needs the
+CASC-like host:
+
+```powershell
+.\linode-runner.ps1 up --high-memory
+try {
+    .\linode-runner.ps1 sync
+    .\linode-runner.ps1 exec -- `
+        "cd /opt/e-rust-port/source && cargo build --locked --release --bin umlaut && target/release/umlaut eprover/EXAMPLE_PROBLEMS/SMOKETEST/socrates.p --auto --silent --cpu-limit=10 --memory-limit=131072"
+}
+finally {
+    .\linode-runner.ps1 down
+}
+```
+
+The high-memory host alone does not reproduce the CASC memory envelope; retain
+`--memory-limit=131072` on every prover invocation intended to model CASC.
 
 Run `sync` again whenever the local files change. It replaces the remote source
 directory with a fresh immutable upload; no Git pull or remote working-branch
@@ -235,10 +300,11 @@ Python tests may run locally:
     -s tools\linode-runner -p "test_*.py" -v
 ```
 
-The tests pin the requested Linode and firewall settings, remote-only quality
-gates, Windows cross-toolchain bootstrap, source-archive exclusions, safe
-artifact extraction, stale-resource selection, label-matching deletion guards,
-compatibility matrices, report normalization, and disposable C-source
+The tests pin both supported Linode profiles, CLI selection, trusted API time,
+fixed-EST high-memory accounting and blocking, firewall settings, remote-only
+quality gates, Windows cross-toolchain bootstrap, source-archive exclusions,
+safe artifact extraction, stale-resource selection, label-matching deletion
+guards, compatibility matrices, report normalization, and disposable C-source
 preparation. They do not compile or execute Rust or C.
 
 Current Akamai references:

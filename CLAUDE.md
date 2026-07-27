@@ -100,6 +100,16 @@ Linode, collects artifacts, and deletes the Linode and firewall. Linux is the
 runtime compatibility authority. Windows GNU x64 is compile-only and is never
 executed. See `DOCS.md` and `docs/linode-runner.md`.
 
+The default 8 GiB profile costs $0.14 an hour. Use `--high-memory` only when a
+task should more closely resemble the CASC configuration; its 150 GB profile
+costs $0.74 an hour. No new high-memory `up` or `run` may start after managed
+high-memory usage reaches two hours in the current fixed UTC-05:00 day (no
+daylight-saving adjustment). Usage above two hours carries into the next day,
+and overflow keeps rolling forward until later daily allowances absorb it.
+Check actual usage, carried overflow, and allowance with
+`.\linode-runner.ps1 check --high-memory`. For a closer CASC match, give every
+actual prover process `--memory-limit=131072`, the prover's MB value for 128 GiB.
+
 For an exceptional individual Rust or C command, use only the runbook's
 guarded `up`/`sync`/`exec`/`down` lifecycle. Put `down` in a PowerShell
 `finally` block so a failed remote command cannot leave paid resources running.

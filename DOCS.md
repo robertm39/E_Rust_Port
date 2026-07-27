@@ -85,14 +85,29 @@ of earlier work, not current instructions.
 
 Use the single required workflow in
 [`docs/linode-runner.md`](docs/linode-runner.md). It provisions a short-lived
-G8 Dedicated runner, synchronizes the exact current worktree without depending
-on a pushed branch, runs every Linux Rust/C quality and parity check,
-cross-compiles Windows GNU x64 without executing it, collects timing and
-Callgrind evidence, and guarantees guarded teardown.
+runner, synchronizes the exact current worktree without depending on a pushed
+branch, runs every Linux Rust/C quality and parity check, cross-compiles
+Windows GNU x64 without executing it, collects timing and Callgrind evidence,
+and guarantees guarded teardown.
 
-Use `.\linode-runner.ps1 run` for normal validation. Use the guarded
-`up`/`sync`/`exec`/`down` lifecycle documented in the runbook only when an
-exceptional task needs individual remote commands.
+The normal default is the 8 GiB `g8-dedicated-8-4` profile at $0.14 an hour.
+Use `.\linode-runner.ps1 run` for normal validation. The explicit
+`--high-memory` option selects the 150 GB `g7-highmem-8` profile at $0.74 an hour
+when a task should more closely resemble the CASC configuration. For a closer
+CASC match, every actual prover command on that host should include
+`--memory-limit=131072`, which is the prover's MB value for 128 GiB.
+
+High-memory `up` and `run` starts are forbidden once managed high-memory usage
+has reached two hours in the current fixed-EST accounting day. Fixed EST means
+UTC-05:00 year-round, without daylight-saving time; the controller uses
+Linode-controlled timestamps rather than the local Windows clock. Any usage
+above two hours carries into the next day; overflow continues rolling forward
+until later daily allowances absorb it. Run
+`.\linode-runner.ps1 check --high-memory` to see today's actual usage, carried
+overflow, remaining allowance, next accounting boundary, and projected
+eligibility when blocked. Use the guarded `up`/`sync`/`exec`/`down` lifecycle
+documented in the runbook only when an exceptional task needs individual
+remote commands.
 
 ## Runtime PicoSAT Selection
 
