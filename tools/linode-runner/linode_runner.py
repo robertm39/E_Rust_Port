@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -800,6 +801,41 @@ def scp_from(state: dict[str, Any], source: str, destination: Path) -> None:
     )
 
 
+def validate_remote_file_path(value: str) -> str:
+    """Accept a conservative absolute POSIX file path for SCP transfers."""
+
+    path = PurePosixPath(value)
+    if (
+        not path.is_absolute()
+        or ".." in path.parts
+        or not re.fullmatch(r"/[A-Za-z0-9._/-]+", value)
+    ):
+        raise RunnerError(
+            "Remote transfer paths must be absolute and contain only "
+            "letters, digits, '.', '_', '-', and '/'"
+        )
+    return value
+
+
+def upload_file(state: dict[str, Any], source: Path, destination: str) -> None:
+    source = source.resolve()
+    if not source.is_file():
+        raise RunnerError(f"Upload source is not a file: {source}")
+    scp_to(state, source, validate_remote_file_path(destination))
+
+
+def download_file(
+    state: dict[str, Any], source: str, destination: Path, *, overwrite: bool
+) -> None:
+    source = validate_remote_file_path(source)
+    destination = destination.resolve()
+    if destination.exists() and not overwrite:
+        raise RunnerError(
+            f"Download destination already exists: {destination}; pass --overwrite"
+        )
+    scp_from(state, source, destination)
+
+
 def snapshot_metadata(repo_root: Path) -> dict[str, Any]:
     def git_output(repository: Path, *arguments: str) -> str | None:
         try:
@@ -1466,6 +1502,17 @@ def parser() -> argparse.ArgumentParser:
     up = commands.add_parser("up", help="provision and bootstrap a runner")
     add_provision_arguments(up)
     commands.add_parser("sync", help="upload a fresh current-worktree snapshot")
+    upload = commands.add_parser(
+        "upload", help="upload one explicit local artifact to the active runner"
+    )
+    upload.add_argument("local_path", type=Path)
+    upload.add_argument("remote_path")
+    download = commands.add_parser(
+        "download", help="download one explicit artifact from the active runner"
+    )
+    download.add_argument("remote_path")
+    download.add_argument("local_path", type=Path)
+    download.add_argument("--overwrite", action="store_true")
     execute = commands.add_parser("exec", help="run a command on the active runner")
     execute.add_argument("remote_command", nargs=argparse.REMAINDER)
     refresh = commands.add_parser(
@@ -1520,6 +1567,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             state = load_current()
             metadata = sync_source(state)
             print(f"Snapshot uploaded: {metadata['archive_sha256']}")
+        elif arguments.command == "upload":
+            upload_file(
+                load_current(), arguments.local_path, arguments.remote_path
+            )
+            print(f"Uploaded {arguments.local_path} to {arguments.remote_path}")
+        elif arguments.command == "download":
+            download_file(
+                load_current(),
+                arguments.remote_path,
+                arguments.local_path,
+                overwrite=arguments.overwrite,
+            )
+            print(f"Downloaded {arguments.remote_path} to {arguments.local_path}")
         elif arguments.command == "exec":
             state = load_current()
             remote_arguments = list(arguments.remote_command)

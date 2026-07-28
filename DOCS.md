@@ -192,6 +192,17 @@ naming, failure boundaries, and measured overhead budget are documented in
 reproducible benchmark and diagnosis evidence lives under
 [`experiments/2026-07-27-002-search-telemetry/`](experiments/2026-07-27-002-search-telemetry/).
 
+## CASC-30 Benchmark Matrix
+
+The immutable 2,901-problem manifest, family-held-out split, strict cgroup-v2
+resource contract, pinned Vampire/Umlaut batch commands, resumability rules,
+and report schema are documented in
+[`docs/casc-benchmark-matrix.md`](docs/casc-benchmark-matrix.md). The canonical
+128 GiB run requires the guarded high-memory Linode plan; smaller-host smoke
+runs are recorded as noncanonical and cannot satisfy that gate. The
+implementation and normal-runner smoke evidence are preserved in
+[`the CASC benchmark-matrix experiment`](experiments/2026-07-28-004-casc-benchmark-matrix/FINDINGS.md).
+
 ## Memory Representation Profile
 
 The current term, clause, index, garbage-collection, RSS, and cache-locality

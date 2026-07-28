@@ -94,6 +94,61 @@ class PayloadTests(unittest.TestCase):
             ["192.0.2.7/32"],
         )
 
+
+class ExplicitTransferTests(unittest.TestCase):
+    def test_transfer_commands_parse_explicit_file_paths(self):
+        upload = runner.parser().parse_args(
+            ["upload", "local.bin", "/root/reference.bin"]
+        )
+        self.assertEqual(upload.local_path, Path("local.bin"))
+        self.assertEqual(upload.remote_path, "/root/reference.bin")
+        download = runner.parser().parse_args(
+            ["download", "/root/results.tar.gz", "results.tar.gz", "--overwrite"]
+        )
+        self.assertTrue(download.overwrite)
+
+    def test_remote_transfer_path_is_conservative_and_absolute(self):
+        self.assertEqual(
+            runner.validate_remote_file_path("/root/casc-30/results.tar.gz"),
+            "/root/casc-30/results.tar.gz",
+        )
+        for invalid in [
+            "relative/file",
+            "/root/../etc/passwd",
+            "/root/a file",
+            "/root/file;touch-x",
+        ]:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(runner.RunnerError):
+                    runner.validate_remote_file_path(invalid)
+
+    def test_upload_requires_file_and_uses_scp_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.bin"
+            source.write_bytes(b"reference")
+            with mock.patch.object(runner, "scp_to") as scp:
+                runner.upload_file(
+                    {"ipv4": "192.0.2.1"}, source, "/root/reference.bin"
+                )
+            scp.assert_called_once_with(
+                {"ipv4": "192.0.2.1"}, source.resolve(), "/root/reference.bin"
+            )
+
+    def test_download_refuses_implicit_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "results.tar.gz"
+            destination.write_bytes(b"existing")
+            with (
+                mock.patch.object(runner, "scp_from"),
+                self.assertRaisesRegex(runner.RunnerError, "already exists"),
+            ):
+                runner.download_file(
+                    {"ipv4": "192.0.2.1"},
+                    "/root/results.tar.gz",
+                    destination,
+                    overwrite=False,
+                )
+
     def test_linode_request_disables_extras_and_attaches_firewall(self):
         payload = runner.linode_payload(
             "e-rust-codex-260724-a1b2c3", 41, "ssh-ed25519 AAAA test"

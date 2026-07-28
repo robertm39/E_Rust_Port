@@ -6,6 +6,8 @@ param(
         "check",
         "up",
         "sync",
+        "upload",
+        "download",
         "exec",
         "refresh-ip",
         "run",

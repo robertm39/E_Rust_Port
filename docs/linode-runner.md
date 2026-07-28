@@ -243,6 +243,26 @@ Run `sync` again whenever the local files change. It replaces the remote source
 directory with a fresh immutable upload; no Git pull or remote working-branch
 maintenance is involved.
 
+Ignored or otherwise explicit single-file experiment inputs are never included
+by `sync`. Transfer one only when the task authorizes that exact artifact:
+
+```powershell
+.\linode-runner.ps1 upload .artifacts\reference.bin /root/reference.bin
+```
+
+The source must be a local file. Remote paths must be absolute and use only a
+conservative filename character set. Download a single result archive without
+silently overwriting an existing local artifact:
+
+```powershell
+.\linode-runner.ps1 download /root/results.tar.gz .artifacts\results.tar.gz
+```
+
+Pass `--overwrite` only after intentionally selecting the existing destination.
+These commands use the active runner's dedicated SSH identity and firewall;
+they do not weaken the source snapshot exclusions or make an ignored artifact
+distributable.
+
 For a focused Rust build and prover smoke run, replace the `exec` command inside
 that same guarded lifecycle with:
 

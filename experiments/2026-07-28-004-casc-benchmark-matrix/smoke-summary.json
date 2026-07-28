@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "bead": "E_Rust_Port-9jt.2.1",
+  "canonical_acceptance_run": false,
+  "runner": {
+    "label": "e-rust-codex-260728-112514-c164",
+    "run_id": "260728-112514-c164",
+    "linode_id": 101605637,
+    "source_snapshot_sha256": "6b106c2526ce8a3fb6846df4bb0e4ac6a4514fbaef92b14a069e2dd68ba3cc2b",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-134-generic",
+    "logical_cpus": 4,
+    "memory_mib": 7940,
+    "cpu_model": "AMD EPYC 9845 160-Core Processor"
+  },
+  "inputs": {
+    "manifest_sha256": "31c9a99e4b34b56352b3311f3efe5c97f728fd078783085e1811d83eec271f6d",
+    "manifest_problem_count": 2901,
+    "manifest_axiom_count": 2425,
+    "axiom_tree_sha256": "d0efc4c36af0128fc4d0c27cbec35605692e590f308c09ec273c7db675752bbd",
+    "corpus_archive_bytes": 368939544,
+    "corpus_archive_sha256": "efcebc55298d4c6770113c095e8cefdd77b9e8cbe3afa3078201f541893d1a7d",
+    "umlaut_sha256": "1f94c64f49c7efeaf50c7b96db6bc61791f817e0636ebcc2fa6bd7193c0624a8",
+    "vampire_revision": "3677326861181f990ce3ef461e90471ba9749225",
+    "vampire_sha256": "3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665"
+  },
+  "contract": {
+    "contract_id": "290cb602c48b60130db88d2ce7eebd53d9d3dd430c291f1fb569529f0f42a42a",
+    "problem_id": "KRS203+1",
+    "category": "FNE",
+    "division": "FOF",
+    "cores": 4,
+    "memory_limit_mib": 4096,
+    "pids_limit": 512,
+    "presentation_id": "casc30-official-obfuscated",
+    "second_pass_new_results": 0,
+    "second_pass_resumed_results": 2
+  },
+  "results": {
+    "umlaut": {
+      "classification": "solved",
+      "szs_status": "Theorem",
+      "expected_status_match": true,
+      "wall_seconds": 0.10841407500015521,
+      "cpu_seconds": 0.113288,
+      "peak_memory_mib": 30.54296875,
+      "orphan_cleanup_required": false
+    },
+    "vampire": {
+      "classification": "solved",
+      "szs_status": "Theorem",
+      "expected_status_match": true,
+      "wall_seconds": 0.26170953999985613,
+      "cpu_seconds": 0.245239,
+      "peak_memory_mib": 5.484375,
+      "orphan_cleanup_required": false
+    },
+    "both_solved": 1,
+    "polarity_disagreements": 0,
+    "missing_results": 0
+  },
+  "raw_artifact": {
+    "ignored_path": ".artifacts/casc-benchmark/2026-07-28-004-normal-smoke.tar.gz",
+    "bytes": 6569,
+    "sha256": "93007b5f1b5e8de422d7516b20bc3d01112e02d4e1d040459c4341a2b551d43d"
+  },
+  "remaining_gate": "E_Rust_Port-9jt.2.7"
+}
