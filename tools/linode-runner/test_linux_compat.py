@@ -359,6 +359,79 @@ class ComparisonTests(unittest.TestCase):
             )
         )
 
+    def test_hash_pinned_main_output_expectation_rejects_any_other_delta(self):
+        reference = "fof(source, axiom, p(a)).\n"
+        candidate = (
+            "fof(source, axiom, p(a)).\n"
+            "fof(step_skolem, plain, p(esk1_0), "
+            "inference(skolemize,[status(esa),new_symbols(skolem,[esk1_0]),"
+            "skolemize(X1,esk1_0)],[source])).\n"
+        )
+        contract = {
+            "reference": e_interop.normalized_output_sha256(reference),
+            "candidate": e_interop.normalized_output_sha256(candidate),
+        }
+
+        self.assertTrue(
+            e_interop.main_mismatch_expectation_matches(
+                ["normalized_stdout"],
+                ["normalized_stdout"],
+                reference,
+                candidate,
+                contract,
+            )
+        )
+        self.assertFalse(
+            e_interop.main_mismatch_expectation_matches(
+                ["normalized_stdout"],
+                ["normalized_stdout"],
+                reference,
+                candidate.replace("p(esk1_0)", "q(esk1_0)"),
+                contract,
+            )
+        )
+        self.assertFalse(
+            e_interop.main_mismatch_expectation_matches(
+                ["normalized_stdout", "status"],
+                ["normalized_stdout"],
+                reference,
+                candidate,
+                contract,
+            )
+        )
+
+    def test_checker_complete_skolem_differences_are_hash_pinned(self):
+        expected_cases = {
+            ("fol", "ALL_RULES.p"),
+            ("fol", "CNFTest.p"),
+            ("fol", "GROUP1st.p"),
+            ("fol", "LUSK3.p"),
+            ("fol", "SEU027+1.p"),
+            ("fol", "SWB030+3.p"),
+            ("ho", "permute_func_axioms.p"),
+            ("ho", "permute_func_no_axioms.p"),
+            ("ho", "SEV286^5.p"),
+            ("ho", "tffex01.p"),
+        }
+
+        self.assertEqual(
+            set(e_interop.MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256),
+            expected_cases,
+        )
+        for case in expected_cases:
+            self.assertEqual(
+                e_interop.MAIN_COMPARISON_EXPECTED_MISMATCHES[case],
+                ("normalized_stdout",),
+            )
+            contract = (
+                e_interop.MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256[
+                    case
+                ]
+            )
+            self.assertEqual(set(contract), {"reference", "candidate"})
+            for digest in contract.values():
+                self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
     def test_tool_expected_mismatch_metadata_is_validated(self):
         metadata = e_interop.tool_functional_case_metadata(
             ({"expected_mismatches": ["normalized_stdout"]},)
@@ -490,6 +563,7 @@ class ComparisonTests(unittest.TestCase):
             tptp.mkdir(parents=True)
             lfhol.mkdir(parents=True)
             fol_names = (
+                "ALL_RULES.p",
                 "ans_test06.p",
                 "GEO288+1.p",
                 "MGT063+1.p",
@@ -520,6 +594,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(
             declared,
             {
+                ("fol", "ALL_RULES.p"): ["normalized_stdout"],
                 ("fol", "ans_test06.p"): ["normalized_stdout"],
                 ("fol", "GEO288+1.p"): ["normalized_stdout"],
                 ("fol", "MGT063+1.p"): ["normalized_stdout"],
@@ -529,6 +604,13 @@ class ComparisonTests(unittest.TestCase):
                 ("ho", "lists.p"): ["normalized_stdout"],
                 ("ho", "sledgehammer.p"): ["normalized_stdout"],
             },
+        )
+        all_rules = next(case for case in cases if case["name"] == "ALL_RULES.p")
+        self.assertEqual(
+            all_rules["expected_normalized_stdout_sha256"],
+            e_interop.MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256[
+                ("fol", "ALL_RULES.p")
+            ],
         )
 
     def test_default_comparison_cases_run_resource_stress_cases_last(self):

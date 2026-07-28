@@ -117,6 +117,21 @@ TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
     }
 )
 MAIN_COMPARISON_EXPECTED_MISMATCHES = {
+    # Umlaut's checker-complete Skolemization records deliberately add
+    # new_symbols/skolemize metadata and, where a later transformation follows,
+    # a named *_skolem proof boundary.  These normalized-output differences are
+    # accepted only when both complete outputs match the SHA-256 contracts
+    # below; the field declaration alone is not sufficient.
+    ("fol", "ALL_RULES.p"): ("normalized_stdout",),
+    ("fol", "CNFTest.p"): ("normalized_stdout",),
+    ("fol", "GROUP1st.p"): ("normalized_stdout",),
+    ("fol", "LUSK3.p"): ("normalized_stdout",),
+    ("fol", "SEU027+1.p"): ("normalized_stdout",),
+    ("fol", "SWB030+3.p"): ("normalized_stdout",),
+    ("ho", "permute_func_axioms.p"): ("normalized_stdout",),
+    ("ho", "permute_func_no_axioms.p"): ("normalized_stdout",),
+    ("ho", "SEV286^5.p"): ("normalized_stdout",),
+    ("ho", "tffex01.p"): ("normalized_stdout",),
     # Umlaut deliberately archives conjecture-preprocessing formulas as
     # standalone proof records.  E nests or omits those records, which leaves
     # otherwise valid derivations without independently checkable parents.
@@ -132,6 +147,50 @@ MAIN_COMPARISON_EXPECTED_MISMATCHES = {
     ("fol", "SWV851-1.p"): ("exit_code", "normalized_stdout"),
     ("ho", "lists.p"): ("normalized_stdout",),
     ("ho", "sledgehammer.p"): ("normalized_stdout",),
+}
+MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256 = {
+    # Recorded by Ubuntu 24.04 comprehensive run 260728-223644-efcf against
+    # pinned E revision 17026b1bfe61aaf223cfaae54947c8d2679c31a0.
+    ("fol", "ALL_RULES.p"): {
+        "reference": "5046054144345b5538b29de83c508d9e42beadd97d10aa7c39bc8ededd585c66",
+        "candidate": "e0d74d02c48def455eded89fea2dd8d3732a96634251c45588287cbb1bc36a45",
+    },
+    ("fol", "CNFTest.p"): {
+        "reference": "253f2d3974b84e6ac91ad9f2e118ef335eb087c7e9c4fd235b2e35ac4a4955c5",
+        "candidate": "f18c0fa23ed9e35b7865a73a2a65203ea5aa3114df605b724a433e12defe3d8b",
+    },
+    ("fol", "GROUP1st.p"): {
+        "reference": "4667d6a2ace9389d1299ec881b52b6896dbcbd70cd1c9016aa130407cdc76096",
+        "candidate": "c34f0ab81e363b222a97f3678037d40294e7e655a0bf83f57eb862497f48cda1",
+    },
+    ("fol", "LUSK3.p"): {
+        "reference": "2927887593896fe8f39425d2a8c84363ff9cb521394ed4b5f2f4e6c221993f7f",
+        "candidate": "19bd3b5bd3ddba3334d0c000f60ed9413b98eefbfaa988b56cc53e62859241c8",
+    },
+    ("fol", "SEU027+1.p"): {
+        "reference": "0dc960e3f278884bed68f1a2c8e81e13c67c06cb1ed3819bc72c5502fb436d70",
+        "candidate": "151dae587375215174d5566903511bf30fda29c40f0a84e7099d7c5eb6a61ccc",
+    },
+    ("fol", "SWB030+3.p"): {
+        "reference": "f21ce794298b91e84a1c8cb739c21a3086d03f6923454de510a1eb78d3961c67",
+        "candidate": "93fa8d30c98dc983fdf71ad8002e6da4b8b125eb6eacf6279a6a9b9f3a43f4f8",
+    },
+    ("ho", "permute_func_axioms.p"): {
+        "reference": "494cef3492c25499de75117fa7daec3ef585caed7f79233c5d2664d09a45b13b",
+        "candidate": "16d010b0f4a962153dec64254317489a08496909fc9214b458dddf3d74af8d93",
+    },
+    ("ho", "permute_func_no_axioms.p"): {
+        "reference": "ba686dd90510b40ec78e936af1309cfaec7987d3b66c291077ca9f42da93a830",
+        "candidate": "eb2645af12a3622e755bf45d30edfb070110c267d4b6132b8698f67a996ec60e",
+    },
+    ("ho", "SEV286^5.p"): {
+        "reference": "a60e5fe69b1aa17fb38040cfbdb1b1336bf900b647e3586b2ab64c94a17b382c",
+        "candidate": "32a951ed2d5b585e1cf368f28b7a80b1c22aa4c5f00e5e69e96b41022ed95c77",
+    },
+    ("ho", "tffex01.p"): {
+        "reference": "55fc18033f9e424c56a246f154e1af34efa9af53f23e1d339aad5a2b03f6285b",
+        "candidate": "4100969f6b4b77fff5d1286e5ee9d81bc0c91b867014640cc963db85ec78360e",
+    },
 }
 MAIN_COMPARISON_RESOURCE_STRESS_CASES = frozenset(
     {
@@ -2839,6 +2898,15 @@ def comparison_cases(
                 (),
             )
         )
+        expected_stdout_sha256 = (
+            MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256.get(
+                (case["mode"], case["name"])
+            )
+        )
+        if expected_stdout_sha256 is not None:
+            case["expected_normalized_stdout_sha256"] = dict(
+                expected_stdout_sha256
+            )
     return cases
 
 
@@ -2856,6 +2924,35 @@ def mismatch_expectation_matches(
     """Return whether every observed mismatch is an explicitly allowed one."""
 
     return set(mismatches).issubset(expected_mismatches)
+
+
+def normalized_output_sha256(output: str) -> str:
+    """Return the stable fingerprint used by exact output-difference contracts."""
+
+    return hashlib.sha256(output.encode("utf-8")).hexdigest()
+
+
+def main_mismatch_expectation_matches(
+    mismatches: Sequence[str],
+    expected_mismatches: Sequence[str],
+    reference_normalized: str,
+    candidate_normalized: str,
+    expected_normalized_stdout_sha256: dict[str, str] | None,
+) -> bool:
+    """Validate main-output expectations, including exact proof-output pairs."""
+
+    if not mismatch_expectation_matches(mismatches, expected_mismatches):
+        return False
+    if (
+        "normalized_stdout" not in mismatches
+        or expected_normalized_stdout_sha256 is None
+    ):
+        return True
+    observed = {
+        "reference": normalized_output_sha256(reference_normalized),
+        "candidate": normalized_output_sha256(candidate_normalized),
+    }
+    return observed == expected_normalized_stdout_sha256
 
 
 def compare(args: argparse.Namespace) -> None:
@@ -2943,8 +3040,23 @@ def compare(args: argparse.Namespace) -> None:
         expected_mismatches = (
             [] if args.self_test else list(case.get("expected_mismatches", ()))
         )
-        mismatch_expectation_met = mismatch_expectation_matches(
-            mismatches, expected_mismatches
+        expected_normalized_stdout_sha256 = (
+            None
+            if args.self_test
+            else case.get("expected_normalized_stdout_sha256")
+        )
+        reference_normalized_sha256 = normalized_output_sha256(
+            reference_normalized
+        )
+        candidate_normalized_sha256 = normalized_output_sha256(
+            candidate_normalized
+        )
+        mismatch_expectation_met = main_mismatch_expectation_matches(
+            mismatches,
+            expected_mismatches,
+            reference_normalized,
+            candidate_normalized,
+            expected_normalized_stdout_sha256,
         )
         if mismatches and mismatch_expectation_met:
             expected_difference_count += 1
@@ -2986,8 +3098,13 @@ def compare(args: argparse.Namespace) -> None:
                 "reference_seconds": reference["wall_seconds"],
                 "candidate_seconds": candidate["wall_seconds"],
                 "normalized_output_equal": normalized_output_equal,
+                "reference_normalized_sha256": reference_normalized_sha256,
+                "candidate_normalized_sha256": candidate_normalized_sha256,
                 "mismatches": mismatches,
                 "expected_mismatches": expected_mismatches,
+                "expected_normalized_stdout_sha256": (
+                    expected_normalized_stdout_sha256
+                ),
                 "mismatch_expectation_met": mismatch_expectation_met,
             }
         )
