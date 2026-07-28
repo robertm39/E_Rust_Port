@@ -49,6 +49,11 @@ projects are inventoried in
 [`docs/third-party-licenses.md`](docs/third-party-licenses.md). Verbatim copies
 of the available license notices are stored in [`licenses/`](licenses/).
 
+The reviewed product boundary, source-derived implementation paths, optional
+backend disablement rules, CASC source/runtime package split, and clean-package
+audit are maintained in
+[`docs/dependency-packaging-matrix.md`](docs/dependency-packaging-matrix.md).
+
 ## Pinned Vampire 5.0.1 Reference Build
 
 The native Linux x86-64 Vampire 5.0.1 reference executable built on the

@@ -164,7 +164,11 @@ Each run uploads a new archive made directly from the current filesystem. It
 therefore includes tracked modifications, untracked source files, and the
 ignored-but-required `eprover/` checkout. It excludes Git/Dolt metadata,
 credentials, agent state, virtual environments, build outputs, prior artifacts,
-and Python caches. Nothing relies on a remote Git branch being pushed first.
+Python caches, and the reference-only `cadical/`, `gmp-6.3.0/`, `minisat/`,
+`vampire/`, and `z3/` checkouts, as well as the external `problems/` corpus. A
+task that needs one of those references or problems must transfer its
+explicitly pinned inputs separately. Nothing relies on a remote Git branch
+being pushed first.
 
 The retained results are written to:
 

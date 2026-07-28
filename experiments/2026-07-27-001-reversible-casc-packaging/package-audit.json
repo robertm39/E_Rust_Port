@@ -1,0 +1,102 @@
+{
+  "checks": {
+    "cargo_lock_dependency_free": true,
+    "extracted_source_release_build_offline": true,
+    "runtime_archive_minimal": true,
+    "runtime_optional_backends_absent": true,
+    "source_archive_forbidden_components_absent": true,
+    "source_archive_pdfs_absent": true
+  },
+  "commands": {
+    "cargo_build": [
+      "   Compiling umlaut v0.1.0 (/tmp/umlaut-package-audit-hdhtoa0t/extracted/umlaut-0.1.0)",
+      "    Finished `release` profile [optimized] target(s) in 2m 33s"
+    ],
+    "cargo_package": [
+      "   Packaging umlaut v0.1.0 (/opt/e-rust-port/source)",
+      "warning: ignoring test `executable_diagnostics` as `tests/executable_diagnostics.rs` is not included in the published package",
+      "warning: ignoring test `executable_inventory` as `tests/executable_inventory.rs` is not included in the published package",
+      "warning: ignoring test `umlaut_hard_limit` as `tests/umlaut_hard_limit.rs` is not included in the published package",
+      "warning: ignoring test `umlaut_ltb_variant_worker` as `tests/umlaut_ltb_variant_worker.rs` is not included in the published package",
+      "warning: ignoring test `umlaut_schedule` as `tests/umlaut_schedule.rs` is not included in the published package",
+      "warning: ignoring test `umlaut_stratpar` as `tests/umlaut_stratpar.rs` is not included in the published package",
+      "    Packaged 307 files, 13.5MiB (1.8MiB compressed)"
+    ]
+  },
+  "optional_backends": {
+    "bundled": [],
+    "internal_sat_fallback": true,
+    "linked": []
+  },
+  "package": {
+    "name": "umlaut",
+    "version": "0.1.0"
+  },
+  "platform": {
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "machine": "x86_64",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "system": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39"
+  },
+  "primary_binary": {
+    "bytes": 8160376,
+    "dynamic_libraries": [
+      "linux-vdso.so.1 (0x00007fff5096f000)",
+      "\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007ad6c696d000)",
+      "\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007ad6c6117000)",
+      "\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ad6c5e00000)",
+      "\t/lib64/ld-linux-x86-64.so.2 (0x00007ad6c69a3000)"
+    ],
+    "sha256": "7fa340a6abb21d712869187e42977d71399ab0ddf8abdabeb6d6d125904cc3dc",
+    "version_output": [
+      "Umlaut 0.1.0",
+      "E compatibility baseline: 3.3.5 Countess Grey (facc36eaf92d70896d830140efc4382df9e8dcdb)"
+    ]
+  },
+  "release_binaries": [
+    "umlaut",
+    "umlaut-axiom-filter",
+    "umlaut-checkproof",
+    "umlaut-classify-problem",
+    "umlaut-client",
+    "umlaut-commandline-example",
+    "umlaut-csscpa-filter",
+    "umlaut-deduction-server",
+    "umlaut-direct-examples",
+    "umlaut-dpll",
+    "umlaut-ground",
+    "umlaut-kb-create",
+    "umlaut-kb-delete",
+    "umlaut-kb-ginsert",
+    "umlaut-kb-insert",
+    "umlaut-ltb-runner",
+    "umlaut-normalizer",
+    "umlaut-patternize",
+    "umlaut-pcl-analyse",
+    "umlaut-pcl-extract",
+    "umlaut-pcl-lemma",
+    "umlaut-server",
+    "umlaut-stratpar",
+    "umlaut-term2dag",
+    "umlaut-termprops",
+    "umlaut-tsm-classify"
+  ],
+  "runtime_archive": {
+    "bytes": 2754919,
+    "file": "umlaut-0.1.0-casc-runtime.tgz",
+    "members": [
+      "umlaut-0.1.0/LICENSE",
+      "umlaut-0.1.0/README.md",
+      "umlaut-0.1.0/THIRD_PARTY_NOTICES.md",
+      "umlaut-0.1.0/bin/umlaut"
+    ],
+    "sha256": "ffcac4ccba770e13fd534918f3366e0a98fa859c21525b93a05537567424d53b"
+  },
+  "schema_version": 1,
+  "source_archive": {
+    "bytes": 1908463,
+    "file": "umlaut-0.1.0-source.tgz",
+    "members": 307,
+    "sha256": "e55002e237d22adea396b8fb0fd10b10f07a60cf1f5b806aacf4518e37acf645"
+  }
+}

@@ -80,4 +80,6 @@ The independent VIRAS research packet is under
 The current Cargo package declares `GPL-2.0-or-later`. Moving Umlaut to
 LGPL-3.0 is a project objective, not a current license claim. Third-party
 license and provenance details are recorded in
-[docs/third-party-licenses.md](docs/third-party-licenses.md).
+[docs/third-party-licenses.md](docs/third-party-licenses.md). The enforced
+dependency and distribution boundary is in
+[docs/dependency-packaging-matrix.md](docs/dependency-packaging-matrix.md).

@@ -1,3 +1,5 @@
 tests/fixtures/ltb/official/* text eol=lf
+tests/fixtures/eprover-17026b1/* -text -whitespace
 tools/linode-runner/remote_run.sh text eol=lf
+src/heuristics/schedule.vars -text -whitespace
 licenses/* -whitespace

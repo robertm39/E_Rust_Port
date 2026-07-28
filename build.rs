@@ -16,14 +16,14 @@ use schedule_vars_parser::{
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=eprover/HEURISTICS/schedule.vars");
+    println!("cargo:rerun-if-changed=src/heuristics/schedule.vars");
     println!("cargo:rerun-if-changed=src/heuristics/schedule_vars_parser.rs");
 
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR")
             .ok_or_else(|| io::Error::other("CARGO_MANIFEST_DIR is not set"))?,
     );
-    let schedule_path = manifest_dir.join("eprover/HEURISTICS/schedule.vars");
+    let schedule_path = manifest_dir.join("src/heuristics/schedule.vars");
     let source = fs::read_to_string(&schedule_path)?;
     let data = parse_schedule_vars(&source).map_err(io::Error::other)?;
     let generated = generate_tables(&data)?;
@@ -38,10 +38,7 @@ fn generate_tables(
     data: &schedule_vars_parser::ParsedScheduleData,
 ) -> Result<String, Box<dyn Error>> {
     let mut output = String::with_capacity(2_500_000);
-    writeln!(
-        output,
-        "// Generated from eprover/HEURISTICS/schedule.vars."
-    )?;
+    writeln!(output, "// Generated from src/heuristics/schedule.vars.")?;
     writeln!(
         output,
         "const PREDEFINED_STRATEGIES: &[PredefinedStrategy] = &["

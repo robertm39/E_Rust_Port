@@ -1887,7 +1887,7 @@ mod tests {
     use super::EPROVER_OPTIONS;
     use crate::inout::commandline::OptArgType;
 
-    const C_E_OPTIONS_H: &str = include_str!("../../eprover/PROVER/e_options.h");
+    const C_E_OPTIONS_H: &str = include_str!("../../tests/fixtures/eprover-17026b1/e_options.h");
 
     #[test]
     fn rust_option_table_matches_c_long_option_surface() {

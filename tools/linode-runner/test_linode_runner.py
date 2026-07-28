@@ -889,6 +889,20 @@ class SnapshotTests(unittest.TestCase):
             (root / "src" / "lib.rs").write_text("pub fn x() {}\n", encoding="utf-8")
             (root / "eprover").mkdir()
             (root / "eprover" / "main.c").write_text("int main() {}\n", encoding="utf-8")
+            for reference_root in (
+                "cadical",
+                "gmp-6.3.0",
+                "minisat",
+                "problems",
+                "vampire",
+                "z3",
+            ):
+                path = root / reference_root
+                path.mkdir()
+                (path / "reference-source").write_text(
+                    "not needed by routine validation\n",
+                    encoding="utf-8",
+                )
             (root / "target").mkdir()
             (root / "target" / "binary").write_bytes(b"large")
             (root / ".git").mkdir()
@@ -911,6 +925,15 @@ class SnapshotTests(unittest.TestCase):
             self.assertNotIn(".git/config", names)
             self.assertNotIn(".claude/settings.json", names)
             self.assertNotIn(".beads-credential-key", names)
+            for reference_root in (
+                "cadical",
+                "gmp-6.3.0",
+                "minisat",
+                "problems",
+                "vampire",
+                "z3",
+            ):
+                self.assertNotIn(f"{reference_root}/reference-source", names)
             self.assertEqual(metadata["file_count"], 3)
 
     def test_safe_extract_rejects_parent_traversal(self):

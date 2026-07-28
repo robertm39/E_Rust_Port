@@ -1,0 +1,134 @@
+# Dependency, provenance, and CASC packaging matrix
+
+Last reviewed: 2026-07-27 for `E_Rust_Port-9jt.8.5`.
+
+This is the decision boundary for code, data, libraries, models, solvers, and
+reference artifacts considered for Umlaut. It is an engineering and provenance
+record, not legal advice. Adding a component to an ignored checkout or using it
+in an experiment does not adopt it as a product dependency.
+
+Umlaut currently declares `GPL-2.0-or-later`. LGPL-3.0 remains the intended
+future license, not a current package claim. A license change requires a
+separate provenance and contributor-rights audit; this matrix must not be used
+to imply that the change has already happened.
+
+## Package sets
+
+The current distributable boundary has two independently auditable archives:
+
+| Package | Included | Excluded |
+| --- | --- | --- |
+| Source `.tgz` | `Cargo.toml`, `Cargo.lock`, `build.rs`, Rust sources, the tracked schedule input, package tooling and its self-tests, the root license, notices, this matrix, and verbatim license records | Rust and controller tests; historical experiments; Beads and Git/Dolt state; local PDFs; build output; every ignored reference tree; every local artifact |
+| Linux runtime candidate `.tgz` | `bin/umlaut`, a runtime readme, `LICENSE`, and `THIRD_PARTY_NOTICES.md` | Source code; companion/development binaries; all optional backends; all reference trees and experiment artifacts |
+
+The runtime archive is a CASC packaging candidate, not yet a final StarExec
+installation package. The current
+[CASC-J13 delivery rules](https://tptp.org/CASC/J13/Design.html) require a
+runtime installation `.tgz` containing only what is needed to run the system
+and a separate source `.tgz` containing the source and files needed to build
+the runtime package. The exact StarExec wrapper must be based on the
+organizer's current exemplar and tested on StarExec. Recheck the CASC-2027
+rules before submission rather than treating the J13 format as permanent.
+
+## Adopted and candidate component matrix
+
+"Package impact" is the baseline impact. A candidate has zero bytes until a
+separate Bead adopts it, updates this matrix and the notices, and reruns the
+package audit.
+
+| ID | Component, exact input, and use | License, notice, and obligations | Link and transitive boundary | Package impact, reproduction, fallback, and disablement |
+| --- | --- | --- | --- | --- |
+| `UMLAUT` | Current tracked Rust implementation at the package-building commit. This is the product, including E-informed reimplementations recorded in `docs/e-port-history.md`. | `GPL-2.0-or-later`; root `LICENSE`. Preserve source, license, notices, and modification history when distributing. | No Cargo dependencies. Rust standard library is linked into the Linux executable; normal target system libraries remain dynamic. | Required. Build all declared binaries from the extracted source archive with `cargo build --locked --release --bins --offline`. Cannot be disabled because it is the product. |
+| `E-DATA` | Exact copies from E revision `17026b1bfe61aaf223cfaae54947c8d2679c31a0`: `src/heuristics/schedule.vars` (SHA-256 `491145ab45477620ed02ed8cd789d6b5e3e6e0d38f413fdbc62163e09a9cb068`) and test-only `tests/fixtures/eprover-17026b1/e_options.h` (SHA-256 `9b432caf9253a8e3b5b47901154ff419a17ba1ef7d788a17fcaf019186c87f3d`). The schedule is compiled into generated Rust tables; the header only validates option parity in repository tests. | E offers GPL-2.0-or-later or LGPL-2.1-or-later. The current package selects GPL-2.0-or-later. Preserve the E copyright/provenance notice and corresponding license; see `licenses/eprover-GPL-2.0-or-later_OR_LGPL-2.1-or-later.txt`. | No external link. `build.rs` reads only the tracked schedule. The source package excludes the ignored E checkout and does not need it to build. | Required schedule input; test header is repository-only. Regenerate from the pinned file only after reviewing and recording a new E revision and hash. Removing the schedule would require replacing the built-in strategy tables; it is not an optional backend. |
+| `LINUX-SYSTEM` | Ubuntu 24.04 target runtime and its standard ELF loader/libraries. | Supplied by the target operating system under their own licenses; they are not copied into the runtime candidate. | Dynamic dependencies are recorded by `ldd` in every package audit. The audit rejects any linked optional solver/backend. | Zero packaged bytes. Reproduce on the mandatory Linode target. Disablement means choosing a different supported target and repeating the complete build/runtime audit. |
+| `RUST-TOOLCHAIN` | Rust/Cargo versions recorded in `package-audit.json`; build-time input only. | Rust toolchain components retain their upstream licenses. They are not redistributed in either current archive. | Builds dependency-free `Cargo.lock`; no Cargo registry or Git package is needed after toolchain installation. | Zero packaged bytes. The source archive builds with `--locked --offline`. A toolchain change requires rerunning all quality and package gates. |
+| `PICOSAT-965` | Optional runtime-loaded PicoSAT 965-compatible shared library through `src/clauses/picosat.rs`; no library is supplied. | MIT; verbatim notice in `licenses/picosat-MIT.txt`. A distributor that bundles the library must ship the notice and audit that exact binary/source revision. | Dynamic, late-bound ABI only. No Cargo dependency or transitive library is adopted. | Zero baseline bytes. Unset `E_RUST_PORT_PICOSAT_LIBRARY` and omit executable-adjacent PicoSAT libraries to disable it; Umlaut uses its internal SAT solver. |
+| `CADICAL` | Candidate incremental SAT backend and ignored read-only reference at `c60730422e758ef1cebe7aeddf2dda31c996bf04`. The pinned Vampire reference instead contains CaDiCaL `f13d74439a5b5c963ac5b02d05ce93a8098018b8`. No code or binary is adopted. | MIT; `licenses/cadical-MIT.txt`. A future static or dynamic adoption must preserve the notice and review the exact revision and build flags. | None today. Candidate FFI/static/dynamic choices and any transitive build inputs belong to `E_Rust_Port-9jt.4.1`. | Zero bytes. Disabled by absence; internal SAT behavior remains. A future backend must remain selectable/removable behind the SAT service boundary. |
+| `MINISAT` | Candidate SAT implementation/reference at `37dc6c67e2af26379d88ce349eb9c4c6160e8543`; no code or binary is adopted. | MIT; `licenses/minisat-MIT.txt`. Preserve the notice if any substantial code is incorporated. | None today. | Zero bytes. Disabled by absence; the internal solver remains. Any adoption requires a new measured backend row rather than silent copying. |
+| `Z3` | Candidate ground-theory/SMT backend and ignored reference at `2d48fd119ce5074b880944c2b1c59e537c99cd46`; no code or binary is adopted. The pinned Vampire reference separately contains static Z3 `3c47fd96cf5645d0c42b2c819d9e9a84380aa721`. | MIT; `licenses/z3-MIT.txt`. Preserve the exact notice and record generated/build components if adopted. | None today. FFI, static, and external-process alternatives remain open under `E_Rust_Port-9jt.5.7`; proof/trust obligations are not waived by licensing. | Zero bytes. Disabled by absence; Umlaut must retain a no-SMT path and explicit `Unknown`/fallback behavior. |
+| `GMP` | Candidate exact-integer/rational substrate; ignored reference distribution 6.3.0. No code, library, Mini-GMP source, or Cargo wrapper is adopted. | GMP library and Mini-GMP are LGPL-3.0-or-later or GPL-2.0-or-later; retained build helpers can have GPL-3.0 terms with exceptions. Verbatim notices are in `licenses/gmp-*`. | None today. Static FFI, dynamic FFI, Mini-GMP, and permissive Rust alternatives remain candidates under `E_Rust_Port-9jt.5.1`. | Zero bytes. Disabled by absence. Any numeric interface must support a dependency-free or independently replaceable backend until evidence justifies removing it. |
+| `ML-RUNTIME` | Candidate custom, ONNX-style, or external-process neural inference for `E_Rust_Port-9jt.3.4`; no model, training corpus, runtime, or code is adopted. | Unknown until a concrete runtime/model/data choice is proposed. License, model provenance, training-data rights, and generated-weight redistribution must all be reviewed. | None today. A future runtime must document native libraries, transitive dependencies, model format, and deterministic CPU fallback. | Zero bytes. Disabled by absence; hand-engineered clause selection remains. Package/model size and removal must be measured before adoption. |
+| `VAMPIRE-REF` | Ignored Vampire source at `3677326861181f990ce3ef461e90471ba9749225` and canonical local Linux reference executable SHA-256 `3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665`. It is benchmark/reference infrastructure only. | Vampire is BSD-3-Clause (`licenses/vampire-BSD-3-Clause.txt`), but that does not cure the missing VIRAS license in the executable. | The local executable statically contains CaDiCaL `f13d74439a5b5c963ac5b02d05ce93a8098018b8`, VIRAS `8b8928f57f8d6415662cf43289de2c0d36443240`, and Z3 `3c47fd96cf5645d0c42b2c819d9e9a84380aa721`. | Always zero package bytes. It is disabled by simply omitting `.artifacts/` and `vampire/`, as the package allowlist and verifier require. It must not be committed, published, redistributed, or treated as an Umlaut backend. |
+| `VIRAS` | Unlicensed implementation revision `8b8928f57f8d6415662cf43289de2c0d36443240` appears only inside the ignored Vampire reference build. Umlaut's tracked `viras_docs/` material is an independent paper-derived clean-room design packet; local paper PDFs are ignored. | The implementation revision has no declared license. Resolution remains owned by `E_Rust_Port-mlf`. Do not inspect, copy, link, build, or redistribute its source. Paper-derived implementation work must retain paper citations and clean-room provenance. | No product link or dependency is permitted. | Always zero package bytes unless the upstream license is resolved and a later explicit review authorizes a new boundary. Current disablement is absolute absence. |
+| `REFERENCE-TREES` | Ignored E, CaDiCaL, MiniSat, Vampire, Z3, and GMP trees are compatibility, provenance, algorithm, and benchmark references. | See `docs/third-party-licenses.md`; a top-level license never automatically covers every nested component or authorizes copying. | No build may discover them implicitly. The package audit fails if any reference-root path enters an archive. | Always zero package bytes. A clean source-package build is the disablement and falsification test. |
+| `TPTP-CORPUS` | External TPTP/CASC problems and the `TPTP` runtime path; only small, explicitly provenanced parser fixtures are tracked for repository tests. | Problem and solution provenance must be reviewed per dataset. The competition corpus is not an Umlaut dependency or package component. | Runtime file input only. Includes resolve relative to the problem or `TPTP`. | Zero source/runtime package bytes. Disablement means running a self-contained problem; package correctness must not depend on a local `problems/` tree. |
+
+## Source-derived implementation paths
+
+| Path | Allowed evidence and required record | Package rule |
+| --- | --- | --- |
+| E compatibility port | The pinned E source, the per-unit C documentation, `docs/e-port-history.md`, and focused experiments. Record the E unit/revision and whether behavior or implementation was adopted or intentionally changed. | Rust product code and the two declared data inputs may ship under the current GPL-2.0-or-later package. The ignored E tree never ships. |
+| VIRAS arithmetic | The papers and tracked clean-room packet in `viras_docs/`; never the unlicensed implementation. Record paper theorem/section, errata, and independent tests. | Only new Umlaut code and attributed documentation may ship. VIRAS source/binaries and ignored PDFs do not. |
+| Cross-prover algorithm study | CaDiCaL, MiniSat, Vampire, Z3, GMP, papers, and specifications may inform experiments when their licenses permit inspection. Record exact revision, files/ideas used, and whether code was copied, translated, or independently implemented. | No reference tree or binary ships. Any copied or linked component needs an adopted row, notice, transitive audit, package-size measurement, and disablement path first. |
+| Independent Rust design | Rust standard-library APIs, specifications, measured profiles, and new Umlaut experiments. Record unsafe/FFI invariants and performance evidence under the Rust standards. | Ships as `UMLAUT`; a new Cargo dependency is forbidden until this matrix and `Cargo.lock` are deliberately updated. |
+
+## Enforced invariants and reproduction
+
+`tools/packaging/verify_casc_package.py` is the executable gate. On the target
+Ubuntu 24.04 Linode it:
+
+1. requires a dependency-free lock file;
+2. creates the Cargo source archive from the explicit allowlist;
+3. rejects reference roots, artifacts, Beads/Git/Dolt state, experiments, PDFs,
+   and archive links;
+4. extracts the archive into a clean temporary directory with no ignored
+   checkout available;
+5. builds every declared binary with `--locked --release --bins --offline`;
+6. runs the extracted `umlaut --version`;
+7. rejects dynamically linked optional backends;
+8. creates a deterministic four-file runtime candidate; and
+9. records toolchain, archive/binary sizes, SHA-256 values, members, and dynamic
+   libraries in `package-audit.json`.
+
+Run it only through the Linode controller:
+
+```text
+python3 tools/packaging/verify_casc_package.py \
+  --output-dir .artifacts/package-audit/CURRENT
+```
+
+The reviewed experiment and exact measurements are retained in
+`experiments/2026-07-27-001-reversible-casc-packaging/`.
+
+The 2026-07-27 Ubuntu 24.04 audit produced:
+
+| Measured artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Source `.tgz` (307 members) | 1,908,463 | `e55002e237d22adea396b8fb0fd10b10f07a60cf1f5b806aacf4518e37acf645` |
+| Minimal runtime candidate `.tgz` (four members) | 2,754,919 | `ffcac4ccba770e13fd534918f3366e0a98fa859c21525b93a05537567424d53b` |
+| Uncompressed primary Linux ELF | 8,160,376 | `7fa340a6abb21d712869187e42977d71399ab0ddf8abdabeb6d6d125904cc3dc` |
+
+The extracted source built all 26 declared release binaries offline. The
+primary binary dynamically needs only the Linux loader, `libgcc_s`, `libm`, and
+`libc`; no optional backend was linked. These measurements are a baseline, not
+a permanent size allowance. Re-run the audit after any source, toolchain,
+profile, or package-content change.
+
+## Change gate and unresolved questions
+
+Every proposed dependency remains rejected-by-default. Before adopting one:
+
+1. pin its exact source and binary revisions;
+2. record files or ideas used and provenance;
+3. verify its license and every required notice;
+4. document modification, source-offer, static/dynamic-link, patent, model, and
+   data obligations that apply;
+5. enumerate build tools and transitive dependencies;
+6. measure source archive, runtime archive, installed, and peak-build size;
+7. define explicit failure, fallback, and disablement behavior;
+8. rerun correctness, proof, performance, clean-package, and StarExec checks;
+9. update `Cargo.lock`, notices, this matrix, and Beads in the same change.
+
+Open questions are deliberately visible:
+
+- `E_Rust_Port-mlf` owns the missing VIRAS license resolution. Until it closes
+  with explicit upstream evidence, VIRAS implementation artifacts are
+  non-distributable.
+- Umlaut's intended LGPL-3.0 move still needs a complete provenance and
+  contributor-rights decision. The current package remains GPL-2.0-or-later.
+- Bundling PicoSAT would change the current zero-byte optional boundary and
+  requires an exact binary/source revision, notice, ABI, and package audit.
+- The final CASC-2027 StarExec wrapper and installation package must use the
+  organizer's then-current exemplar and pass an actual StarExec job; the
+  present runtime archive validates contents and linkage, not that external
+  platform integration.

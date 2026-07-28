@@ -2,8 +2,23 @@
 name = "umlaut"
 version = "0.1.0"
 edition = "2021"
+description = "An independent automated theorem prover written in Rust"
+repository = "https://github.com/robertm39/E_Rust_Port"
 license = "GPL-2.0-or-later"
 publish = false
+include = [
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/THIRD_PARTY_NOTICES.md",
+    "/build.rs",
+    "/docs/dependency-packaging-matrix.md",
+    "/docs/third-party-licenses.md",
+    "/licenses/**",
+    "/src/**",
+    "/tools/packaging/**",
+]
 
 [features]
 default = []
