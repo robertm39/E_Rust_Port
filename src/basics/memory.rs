@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 use std::mem;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use crate::basics::size_class_allocator::try_reserve_exact_vec;
+
 pub const MEM_ARR_SIZE: usize = 8192;
 pub const MEM_ALIGN: usize = 16;
 pub const MEM_CHUNKLIMIT: usize = 4096 / MEM_ALIGN;
@@ -69,7 +71,7 @@ pub struct MemoryBlock {
 impl MemoryBlock {
     fn zeroed(requested_size: usize, allocation_size: usize) -> Result<Self, MemoryError> {
         let mut bytes = Vec::new();
-        if bytes.try_reserve_exact(allocation_size).is_err() {
+        if !try_reserve_exact_vec(&mut bytes, allocation_size) {
             return Err(MemoryError::AllocationFailed {
                 size: allocation_size,
             });
@@ -414,7 +416,7 @@ pub fn try_int_array_alloc(size: usize) -> Result<Vec<i64>, MemoryError> {
     };
     let _block = try_size_malloc(MemoryPolicy::OldExact, bytes)?;
     let mut values = Vec::new();
-    if values.try_reserve_exact(size).is_err() {
+    if !try_reserve_exact_vec(&mut values, size) {
         return Err(MemoryError::AllocationFailed { size: bytes });
     }
     values.resize(size, 0);

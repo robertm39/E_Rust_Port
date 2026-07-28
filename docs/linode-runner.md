@@ -9,6 +9,13 @@ workers. It supports two Akamai Cloud plans in Chicago (`us-ord`) using the
 | Normal (default) | no flag | `g8-dedicated-8-4` | 8 GiB RAM, 4 dedicated CPUs, 82 GiB storage | $0.14 an hour |
 | 150 GB high memory | `--high-memory` | `g7-highmem-8` | 150 GiB RAM, 8 dedicated CPUs, 200 GiB storage | $0.74 an hour |
 
+High-memory plan deployment is also subject to provider account access. The
+read-only check can validate catalog visibility, regional capacity, and the
+cost guard while a later instance-creation request is still rejected by an
+account plan limit. In that case the controller deletes any firewall it
+created; contact provider support for `g7-highmem-8` access rather than
+substituting the normal profile for a required high-memory validation.
+
 Use the high-memory profile when the task needs to resemble the CASC compute
 configuration more closely. For a closer CASC match, limit each actual prover
 process to 128 GiB rather than allowing it to consume the host's full 150 GiB:

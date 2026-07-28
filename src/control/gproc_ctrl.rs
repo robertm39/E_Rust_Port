@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 pub const EGPCTRL_BUFSIZE: usize = 1024;
 pub const EGPCTRL_SET_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+const CHILD_TERMINATION_GRACE: Duration = Duration::from_secs(1);
+const CHILD_TERMINATION_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 enum GenericProcessOutputMessage {
@@ -93,6 +95,7 @@ impl EGPCtrl {
         )
         .map_err(|error| output_error(&error))?;
         command.stdout(Stdio::piped());
+        configure_child_lifecycle(&mut command);
         let mut child = command.spawn().map_err(|error| {
             gproc_ctrl_system_error(format!("Cannot start generic subprocess: {error}"))
         })?;
@@ -580,11 +583,157 @@ fn output_error(error: &std::io::Error) -> Diagnostic {
 }
 
 fn cleanup_child(child: &mut Child) {
-    if !terminate_process(child.id()) {
+    let process_id = child.id();
+    let termination_requested =
+        signal_child_process_group(process_id, CHILD_SIGTERM) || terminate_process(process_id);
+    if !termination_requested {
         let _kill_result = child.kill();
     }
-    let _wait_result = child.wait();
+
+    let deadline = Instant::now() + CHILD_TERMINATION_GRACE;
+    let mut reaped = false;
+    while Instant::now() < deadline {
+        if !reaped {
+            match child.try_wait() {
+                Ok(Some(_status)) => reaped = true,
+                Ok(None) => {}
+                Err(_error) => break,
+            }
+        }
+        if reaped && !child_process_group_exists(process_id) {
+            record_waited_child_resource_usage(child);
+            return;
+        }
+        thread::sleep(CHILD_TERMINATION_POLL);
+    }
+
+    let _group_kill_result = signal_child_process_group(process_id, CHILD_SIGKILL);
+    if !reaped {
+        let _kill_result = child.kill();
+        let _wait_result = child.wait();
+    }
     record_waited_child_resource_usage(child);
+}
+
+#[cfg(unix)]
+const CHILD_SIGTERM: i32 = 15;
+#[cfg(unix)]
+const CHILD_SIGKILL: i32 = 9;
+#[cfg(not(unix))]
+const CHILD_SIGTERM: i32 = 0;
+#[cfg(not(unix))]
+const CHILD_SIGKILL: i32 = 0;
+
+#[cfg(unix)]
+fn configure_child_lifecycle(command: &mut Command) {
+    posix_child_lifecycle::configure(command);
+}
+
+#[cfg(not(unix))]
+const fn configure_child_lifecycle(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn signal_child_process_group(process_id: u32, signal_number: i32) -> bool {
+    posix_child_lifecycle::signal_process_group(process_id, signal_number)
+}
+
+#[cfg(not(unix))]
+const fn signal_child_process_group(_process_id: u32, _signal_number: i32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn child_process_group_exists(process_id: u32) -> bool {
+    posix_child_lifecycle::signal_process_group(process_id, 0)
+}
+
+#[cfg(not(unix))]
+const fn child_process_group_exists(_process_id: u32) -> bool {
+    false
+}
+
+// Allowed external shared-library boundary: generic subprocesses need their
+// own POSIX process groups, and Linux workers need a parent-death signal to
+// prevent portfolio descendants from surviving abrupt controller exit.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod posix_child_lifecycle {
+    use std::process::Command;
+
+    use std::os::unix::process::CommandExt;
+
+    unsafe extern "C" {
+        fn kill(process_id: i32, signal_number: i32) -> i32;
+    }
+
+    pub(super) fn configure(command: &mut Command) {
+        command.process_group(0);
+        #[cfg(target_os = "linux")]
+        linux_parent_death::configure(command);
+    }
+
+    pub(super) fn signal_process_group(process_id: u32, signal_number: i32) -> bool {
+        let Ok(process_group) = i32::try_from(process_id) else {
+            return false;
+        };
+        // SAFETY: kill receives the negative process-group identifier created
+        // for this owned Child and a POSIX signal number (or zero for an
+        // existence probe). It neither reads nor writes Rust memory.
+        unsafe { kill(-process_group, signal_number) == 0 }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux_parent_death {
+        use std::io;
+        use std::process::Command;
+
+        use std::os::unix::process::CommandExt;
+
+        const PR_SET_PDEATHSIG_COMPAT: i32 = 1;
+        const SIGTERM_COMPAT: usize = 15;
+        const ESRCH_COMPAT: i32 = 3;
+
+        unsafe extern "C" {
+            fn getppid() -> i32;
+            fn prctl(option: i32, ...) -> i32;
+        }
+
+        pub(super) fn configure(command: &mut Command) {
+            let expected_parent = i32::try_from(std::process::id()).unwrap_or(i32::MAX);
+            // SAFETY: the closure executes after fork and before exec, calls
+            // only libc interfaces that are async-signal-safe on Linux, owns
+            // its copied integer state, and does not access parent-thread
+            // memory. Returning an io::Error uses Command's documented
+            // pre-exec error channel and prevents an unprotected child.
+            unsafe {
+                command.pre_exec(move || arm_parent_death_signal(expected_parent));
+            }
+        }
+
+        fn arm_parent_death_signal(expected_parent: i32) -> io::Result<()> {
+            // SAFETY: PR_SET_PDEATHSIG takes an integer signal value and three
+            // unused machine-word arguments. No pointers, aliases, or Rust
+            // lifetimes cross the C ABI.
+            if unsafe {
+                prctl(
+                    PR_SET_PDEATHSIG_COMPAT,
+                    SIGTERM_COMPAT,
+                    0_usize,
+                    0_usize,
+                    0_usize,
+                )
+            } == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: getppid has no arguments and only returns kernel process
+            // metadata. The post-prctl check closes the parent-exit race.
+            if unsafe { getppid() } != expected_parent {
+                return Err(io::Error::from_raw_os_error(ESRCH_COMPAT));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn spawn_output_reader(
@@ -654,6 +803,8 @@ mod tests {
     use std::process::Command;
     use std::sync::mpsc;
     use std::time::Duration;
+    #[cfg(target_os = "linux")]
+    use std::time::Instant;
 
     #[test]
     fn allocation_defaults_match_c_initialization() {
@@ -840,6 +991,35 @@ mod tests {
             .contains("% spawned with pid "));
         assert!(!control.has_child());
         control.cleanup().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cleanup_escalates_and_removes_an_uncooperative_process_group() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "trap '' TERM; sh -c 'trap \"\" TERM; while :; do sleep 1; done' & \
+             printf 'ready\\n'; while :; do sleep 1; done",
+        ]);
+        let mut control = EGPCtrl::spawn_command(command, "uncooperative", 1, 30).unwrap();
+        let process_group = control.pid().unwrap();
+        let mut buffer = Vec::new();
+        let mut output = Vec::new();
+
+        assert!(!control.read_result_chunk(&mut buffer, &mut output).unwrap());
+        assert!(control.output().view().contains("ready"));
+
+        let start = Instant::now();
+        control.cleanup().unwrap();
+
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(!control.has_child());
+        let reap_deadline = Instant::now() + Duration::from_secs(2);
+        while super::child_process_group_exists(process_group) && Instant::now() < reap_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!super::child_process_group_exists(process_group));
     }
 
     #[test]

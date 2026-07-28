@@ -1,4 +1,5 @@
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::hint::spin_loop;
 use std::mem;
 use std::ptr;
@@ -11,6 +12,10 @@ const CACHE_ALIGNMENT: usize = 16;
 static FREE_LIST_LOCK: AtomicBool = AtomicBool::new(false);
 static FREE_LISTS: [AtomicPtr<u8>; FREE_LIST_LIMIT] =
     [const { AtomicPtr::new(ptr::null_mut()) }; FREE_LIST_LIMIT];
+
+thread_local! {
+    static FALLIBLE_ALLOCATION_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
 
 struct FreeListGuard;
 
@@ -38,6 +43,40 @@ fn cacheable_size(layout: Layout) -> Option<usize> {
 
 fn cached_layout(size: usize) -> Option<Layout> {
     Layout::from_size_align(size, CACHE_ALIGNMENT).ok()
+}
+
+struct FallibleAllocationGuard;
+
+impl Drop for FallibleAllocationGuard {
+    fn drop(&mut self) {
+        let _ = FALLIBLE_ALLOCATION_DEPTH.try_with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
+}
+
+fn with_fallible_allocation<T>(operation: impl FnOnce() -> T) -> T {
+    let marked = FALLIBLE_ALLOCATION_DEPTH
+        .try_with(|depth| {
+            depth.set(depth.get().saturating_add(1));
+        })
+        .is_ok();
+    let _guard = marked.then_some(FallibleAllocationGuard);
+    operation()
+}
+
+fn fallible_allocation_active() -> bool {
+    FALLIBLE_ALLOCATION_DEPTH
+        .try_with(|depth| depth.get() != 0)
+        .unwrap_or(false)
+}
+
+pub(crate) fn try_reserve_vec<T>(values: &mut Vec<T>, additional: usize) -> bool {
+    with_fallible_allocation(|| values.try_reserve(additional).is_ok())
+}
+
+pub(crate) fn try_reserve_exact_vec<T>(values: &mut Vec<T>, additional: usize) -> bool {
+    with_fallible_allocation(|| values.try_reserve_exact(additional).is_ok())
 }
 
 #[expect(
@@ -114,7 +153,14 @@ unsafe impl GlobalAlloc for ESizeClassAllocator {
         // SAFETY: the first allocation failure does not consume or alter the
         // requested Layout. After cached blocks are returned to System, the
         // same valid allocation may be retried exactly once.
-        unsafe { System.alloc(system_layout) }
+        let block = unsafe { System.alloc(system_layout) };
+        if block.is_null() {
+            #[cfg(target_os = "linux")]
+            if !fallible_allocation_active() {
+                crate::inout::signals::finalize_memory_allocation_failure();
+            }
+        }
+        block
     }
 
     /// # Safety
@@ -155,6 +201,10 @@ mod tests {
         cacheable_size, cached_layout, CACHE_ALIGNMENT, FREE_LIST_LIMIT, FREE_LIST_MINIMUM,
     };
     use std::alloc::Layout;
+    #[cfg(target_os = "linux")]
+    use std::io::Write;
+    #[cfg(target_os = "linux")]
+    use std::process::Command;
     use std::thread;
 
     #[test]
@@ -228,5 +278,54 @@ mod tests {
         for worker in workers {
             worker.join().unwrap();
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_allocation_failure_reports_resource_out_without_aborting() {
+        const CHILD_ENV: &str = "UMLAUT_OOM_REPORT_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            crate::basics::error::init_error("umlaut-oom-test");
+            assert_ne!(
+                crate::basics::os_wrapper::set_memory_limit(64 * 1024 * 1024),
+                crate::basics::os_wrapper::RLimResult::Failed
+            );
+            let mut fallible = Vec::<u8>::new();
+            assert!(!super::try_reserve_exact_vec(
+                &mut fallible,
+                128 * 1024 * 1024
+            ));
+            std::io::stderr()
+                .lock()
+                .write_all(b"fallible-returned\n")
+                .unwrap();
+            let mut allocation = Vec::<u8>::with_capacity(128 * 1024 * 1024);
+            allocation.resize(allocation.capacity(), 1);
+            std::process::exit(99);
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "basics::size_class_allocator::tests::linux_allocation_failure_reports_resource_out_without_aborting",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stdout.contains(
+                "%% Failure: Resource limit exceeded (memory)\n%% SZS status ResourceOut\n"
+            ),
+            "{stdout}"
+        );
+        assert_eq!(
+            stderr,
+            "fallible-returned\numlaut-oom-test: Out of Memory\n"
+        );
     }
 }

@@ -622,6 +622,114 @@ mod tests {
             .contains("% Schedule exhausted\n"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn execution_contains_a_worker_signal_crash() {
+        let mut schedule = vec![
+            schedule_cell("crash", 0.1, 1),
+            schedule_cell("prove", 0.1, 1),
+        ];
+        let mut output = Vec::new();
+
+        let report = execute_schedule_multi_core(
+            &mut schedule,
+            config(10.0, 2),
+            &mut output,
+            |_, cell, output| {
+                let command = if cell.heuristic_name == "crash" {
+                    signal_crash_command()
+                } else {
+                    status_command("% SZS status Theorem", 0)
+                };
+                EGPCtrl::spawn_command_reporting(
+                    command,
+                    cell.heuristic_name.clone(),
+                    1,
+                    cell.time_absolute,
+                    output,
+                )
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.outcome,
+            ScheduleExecutionOutcome::Result {
+                index: 1,
+                name: "prove".to_owned(),
+                exit_status: 0,
+            }
+        );
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% crash with pid "));
+        assert!(printed.contains(" completed with status -1\n"));
+        assert!(printed.contains("% Result found by prove\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simultaneous_results_return_one_complete_winner() {
+        for attempt in 0..16 {
+            let barrier = std::env::current_dir()
+                .unwrap()
+                .join("target")
+                .join(format!(
+                    "schedule-simultaneous-{}-{attempt}",
+                    std::process::id()
+                ));
+            let mut schedule = vec![
+                schedule_cell("first", 0.1, 1),
+                schedule_cell("second", 0.1, 1),
+            ];
+            let mut output = Vec::new();
+
+            let report = execute_schedule_multi_core(
+                &mut schedule,
+                config(10.0, 2),
+                &mut output,
+                |index, cell, output| {
+                    let command = simultaneous_status_command(&barrier);
+                    let control = EGPCtrl::spawn_command_reporting(
+                        command,
+                        cell.heuristic_name.clone(),
+                        1,
+                        cell.time_absolute,
+                        output,
+                    )?;
+                    if index == 1 {
+                        std::fs::write(&barrier, b"go").map_err(|error| {
+                            crate::basics::error::Diagnostic::new(
+                                ErrorCode::FILE_ERROR,
+                                format!("Cannot release simultaneous worker barrier: {error}"),
+                            )
+                        })?;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Ok(control)
+                },
+            )
+            .unwrap();
+
+            let ScheduleExecutionOutcome::Result {
+                index,
+                name,
+                exit_status,
+            } = report.outcome
+            else {
+                panic!("simultaneous successful workers must produce a result");
+            };
+            assert!(matches!(
+                (index, name.as_str()),
+                (0, "first") | (1, "second")
+            ));
+            assert_eq!(exit_status, 0);
+            let printed = String::from_utf8(output).unwrap();
+            assert_eq!(printed.matches("% Result found by ").count(), 1);
+            assert!(printed.contains("% SZS status Theorem"));
+            std::fs::remove_file(barrier).unwrap();
+        }
+    }
+
     fn schedule_cell(name: &str, fraction: f64, cores: i32) -> ScheduleCell {
         ScheduleCell {
             heuristic_name: name.to_owned(),
@@ -657,6 +765,26 @@ mod tests {
             "-c",
             &format!("printf '%s\\n' '{status}'; exit {exit_code}"),
         ]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn signal_crash_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "kill -KILL $$"]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn simultaneous_status_command(barrier: &std::path::Path) -> Command {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "while [ ! -f \"$1\" ]; do sleep 0.001; done; \
+             printf '%s\\n' '% SZS status Theorem'",
+            "schedule-worker",
+        ]);
+        command.arg(barrier);
         command
     }
 }

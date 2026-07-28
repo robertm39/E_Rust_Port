@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "bead": "E_Rust_Port-9jt.8.4",
+  "acceptance_status": "blocked_on_required_high_memory_host",
+  "high_memory_start": {
+    "attempted_utc": "2026-07-28T08:51:18Z",
+    "runner_label": "e-rust-codex-260728-085118-61c0",
+    "requested_type": "g7-highmem-8",
+    "fixed_est_allowance_hours": 8,
+    "linode_created": false,
+    "firewall_id": 92115053,
+    "firewall_deleted": true,
+    "provider_error": "A limit on your account is preventing the deployment of the selected Linode plan. To request access to the plan, please contact Support and provide the Linode plan name.",
+    "human_gate": "E_Rust_Port-9jt.8.7"
+  },
+  "normal_proxy": {
+    "runner_label": "e-rust-codex-260728-085138-57e5",
+    "linode_id": 101595238,
+    "linode_type": "g8-dedicated-8-4",
+    "source_snapshot_sha256": "76bb6552068fc12f6bc69b9f59cf69439e3e5cf5b0f32468e840c17daaf10ebf",
+    "ubuntu": "24.04.4 LTS",
+    "kernel": "6.8.0-134-generic",
+    "logical_cpus": 4,
+    "cpu_model": "AMD EPYC 9845 160-Core Processor",
+    "mem_total_kib": 8130772,
+    "requested_schedule_cores": 8,
+    "memory_limit_mb": 131072,
+    "executable_sha256": "a1db57252733293995aaf6e7df3b0c0832a6d7219ba243f5750b9dc19567dab3",
+    "all_controller_checks_passed": true
+  },
+  "lifecycle": {
+    "timeout": {
+      "signal": "SIGALRM",
+      "exit_code": 8,
+      "elapsed_seconds": 6.2708827030000975,
+      "observed_processes": 5,
+      "aggregate_observed_rss_kib": 42676,
+      "surviving_processes": 0,
+      "temp_files_after": 0
+    },
+    "cancellation": {
+      "signal": "SIGTERM",
+      "exit_code": 14,
+      "elapsed_seconds": 6.718217803000016,
+      "observed_processes": 5,
+      "aggregate_observed_rss_kib": 42876,
+      "surviving_processes": 0,
+      "temp_files_after": 0
+    },
+    "worker_crash": {
+      "signal": "SIGKILL",
+      "exit_code": 0,
+      "elapsed_seconds": 20.4116112050001,
+      "observed_processes": 3,
+      "aggregate_observed_rss_kib": 24936,
+      "surviving_processes": 0,
+      "temp_files_after": 0
+    }
+  },
+  "limits_and_accounting": {
+    "observed_max_address_space_bytes": [
+      "137438953472"
+    ],
+    "observed_cpus_allowed_list": [
+      "0-3"
+    ],
+    "resource_footer_present": true,
+    "nested_resource_totals_monotonic": true,
+    "memory_limit_scope": "per process; external job/cgroup enforcement is still required for a strict aggregate 128 GiB competition envelope"
+  },
+  "seeded_reproducibility": {
+    "random_weight_seeds": [
+      11,
+      13,
+      17
+    ],
+    "runs": 4,
+    "all_exit_zero": true,
+    "proof_sha256": "3a374ad0997f3018d1cf5e79cd4c6c0cb23d5cdeade0716904b706fe71537bb2",
+    "proof_hashes_identical": true,
+    "winner_labels_identical": false,
+    "winner_label_policy": "first completed successful worker; labels are timing diagnostics, while the proof object is the reproducibility contract"
+  },
+  "simultaneous_results": {
+    "synchronized_stress_iterations": 16,
+    "contract": "one complete successful winner with all losers cleaned",
+    "already_ready_tie_break": "lowest descriptor in deterministic BTree order"
+  },
+  "raw_artifact": {
+    "path": ".artifacts/experiments/2026-07-28-003-multicore-scheduling/multicore-normal-proxy-final.json",
+    "bytes": 22912,
+    "sha256": "92e43ba96fa1dc5c916a898bcff5876ca914b3254843288f586c8faefe922e3a"
+  },
+  "comprehensive_validation": {
+    "runner_label": "e-rust-codex-260728-103448-52d9",
+    "artifact_path": ".artifacts/linode/260728-103448-52d9",
+    "library_tests_passed": 4436,
+    "all_targets_and_features_passed": true,
+    "rustfmt_passed": true,
+    "strict_pedantic_clippy_passed": true,
+    "linux_release_build_passed": true,
+    "windows_gnu_x64_compile_only_passed": true,
+    "main_cases": 50,
+    "main_unexpected_mismatches": 0,
+    "main_documented_differences": 8,
+    "support_tool_cases": 216,
+    "support_tool_unexpected_mismatches": 0,
+    "support_tool_documented_differences": 16,
+    "benchmark_cases": 10,
+    "benchmark_behavior_mismatches": 0,
+    "rust_to_c_wall_ratio": 1.0879988422143152,
+    "callgrind_rust_instructions": 9604028,
+    "callgrind_c_instructions": 7590630,
+    "umlaut_sha256": "1f94c64f49c7efeaf50c7b96db6bc61791f817e0636ebcc2fa6bd7193c0624a8",
+    "validation_summary_sha256": "62af7a5eec1ba6eb0f8879a063ac7588234093b8090c3ed54c8a6a9165f6958f"
+  }
+}

@@ -9,6 +9,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use crate::basics::size_class_allocator::try_reserve_exact_vec;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct RegMemHandle(usize);
@@ -63,7 +65,7 @@ fn lock_registry() -> MutexGuard<'static, RegMemRegistry> {
 
 fn zeroed_buffer(size: usize) -> Result<Vec<u8>, RegMemError> {
     let mut buffer = Vec::new();
-    if buffer.try_reserve_exact(size).is_err() {
+    if !try_reserve_exact_vec(&mut buffer, size) {
         return Err(RegMemError::AllocationFailed { size });
     }
     buffer.resize(size, 0);

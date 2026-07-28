@@ -34,6 +34,7 @@ pub mod regmem;
 pub mod simple_stuff;
 #[allow(unsafe_code)]
 mod size_class_allocator;
+pub(crate) use size_class_allocator::{try_reserve_exact_vec, try_reserve_vec};
 pub mod stringtrees;
 pub mod sysdate;
 pub mod verbose;

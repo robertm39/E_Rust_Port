@@ -6,6 +6,7 @@ use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
+use crate::basics::{try_reserve_exact_vec, try_reserve_vec};
 use crate::clauses::clause::{
     clause_parse_with_options, clause_print_format_string_with_options,
     clause_print_lop_format_string, clause_print_lop_format_string_with_options,
@@ -246,7 +247,7 @@ impl EvalIndexTree {
     fn try_reserve_insert_capacity(&mut self) -> bool {
         !self.free.is_empty()
             || self.nodes.len() < self.nodes.capacity()
-            || self.nodes.try_reserve(1).is_ok()
+            || try_reserve_vec(&mut self.nodes, 1)
     }
 
     fn node(&self, index: usize) -> &EvalIndexNode {
@@ -610,11 +611,11 @@ impl SparseClauseStore {
             .expect("tail clause chunk must be allocated");
         if tail.len() == SPARSE_STORE_CHUNK_SIZE {
             if self.tail_chunk >= self.overflow_chunks.len() {
-                if self.overflow_chunks.try_reserve(1).is_err() {
+                if !try_reserve_vec(&mut self.overflow_chunks, 1) {
                     return false;
                 }
                 let mut next = Vec::new();
-                if next.try_reserve_exact(SPARSE_STORE_CHUNK_SIZE).is_err() {
+                if !try_reserve_exact_vec(&mut next, SPARSE_STORE_CHUNK_SIZE) {
                     return false;
                 }
                 self.overflow_chunks.push(next);
@@ -624,11 +625,11 @@ impl SparseClauseStore {
 
         if tail.len() == tail.capacity() && tail.capacity() >= SPARSE_STORE_CHUNK_SIZE / 2 {
             let additional = SPARSE_STORE_CHUNK_SIZE - tail.capacity();
-            return self
-                .chunk_mut(self.tail_chunk)
-                .expect("tail clause chunk must be allocated")
-                .try_reserve_exact(additional)
-                .is_ok();
+            return try_reserve_exact_vec(
+                self.chunk_mut(self.tail_chunk)
+                    .expect("tail clause chunk must be allocated"),
+                additional,
+            );
         }
         true
     }
@@ -2439,7 +2440,7 @@ impl ClauseSet {
         };
         let eval_no = evaluations.eval_no();
         let missing = eval_no.saturating_sub(self.eval_indices.len());
-        if self.eval_indices.try_reserve(missing).is_err() {
+        if !try_reserve_vec(&mut self.eval_indices, missing) {
             return false;
         }
         while self.eval_indices.len() < eval_no {
@@ -2453,7 +2454,7 @@ impl ClauseSet {
 
         let required_slots = self.next_eval_object.saturating_add(1);
         let additional = required_slots.saturating_sub(self.eval_object_slots.len());
-        self.eval_object_slots.try_reserve(additional).is_ok()
+        try_reserve_vec(&mut self.eval_object_slots, additional)
     }
 
     fn index_clause_demodulator(&mut self, clause: &mut Clause) {

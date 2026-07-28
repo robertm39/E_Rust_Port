@@ -125,6 +125,11 @@ MAIN_COMPARISON_EXPECTED_MISMATCHES = {
     ("fol", "MGT063+1.p"): ("normalized_stdout",),
     ("fol", "socrates.p"): ("normalized_stdout",),
     ("fol", "SWW194+1.p"): ("normalized_stdout",),
+    # Umlaut fixes E's duplicate-RLIMIT_DATA typo and therefore constrains
+    # total virtual address space as requested. SWV851 can reach that strict
+    # 2-GiB ceiling just before E reaches its CPU ceiling; both still report
+    # SZS ResourceOut with the same non-proof output shape.
+    ("fol", "SWV851-1.p"): ("exit_code", "normalized_stdout"),
     ("ho", "lists.p"): ("normalized_stdout",),
     ("ho", "sledgehammer.p"): ("normalized_stdout",),
 }

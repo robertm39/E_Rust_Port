@@ -480,7 +480,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(stdin_app_encode_case["scenario"], "stdin-app-encode")
         self.assertIn("fof(goal, conjecture, p(a)).", stdin_app_encode_case["stdin"])
 
-    def test_default_comparison_cases_declare_only_archived_proof_differences(self):
+    def test_default_comparison_cases_declare_documented_differences(self):
         with tempfile.TemporaryDirectory() as directory:
             repo_root = Path(directory)
             smoketest = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "SMOKETEST"
@@ -496,6 +496,7 @@ class ComparisonTests(unittest.TestCase):
                 "ordinary.p",
                 "socrates.p",
                 "SWW194+1.p",
+                "SWV851-1.p",
             )
             ho_names = ("lists.p", "sledgehammer.p")
             for name in fol_names:
@@ -524,6 +525,7 @@ class ComparisonTests(unittest.TestCase):
                 ("fol", "MGT063+1.p"): ["normalized_stdout"],
                 ("fol", "socrates.p"): ["normalized_stdout"],
                 ("fol", "SWW194+1.p"): ["normalized_stdout"],
+                ("fol", "SWV851-1.p"): ["exit_code", "normalized_stdout"],
                 ("ho", "lists.p"): ["normalized_stdout"],
                 ("ho", "sledgehammer.p"): ["normalized_stdout"],
             },

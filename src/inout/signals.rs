@@ -109,6 +109,19 @@ pub fn signal_pending_output_clear() {
 #[cfg(not(all(target_os = "linux", not(test))))]
 pub const fn signal_pending_output_clear() {}
 
+/// Finish a failed Linux allocation without asking the exhausted allocator for
+/// diagnostic or unwinding storage.
+///
+/// The global allocator calls this only after returning its cached blocks to
+/// the system and retrying the allocation once. Like E's `SecureMalloc`
+/// failure path, this reports a memory `ResourceOut` and uses
+/// [`ErrorCode::OUT_OF_MEMORY`]. Raw descriptor writes also preserve bytes
+/// already held in the prover's C-stdio-compatible output mirror.
+#[cfg(target_os = "linux")]
+pub fn finalize_memory_allocation_failure() -> ! {
+    linux_allocation_failure::finalize_and_exit()
+}
+
 #[cfg(unix)]
 #[must_use]
 pub fn terminate_process(process_id: u32) -> bool {
@@ -609,6 +622,83 @@ mod posix_process_signal {
         // std::process::Child and the POSIX SIGTERM value. It does not borrow
         // Rust memory and mirrors C `EPCtrlCleanup`'s best-effort call.
         unsafe { kill(process_id, SIGTERM_COMPAT) == 0 }
+    }
+}
+
+// Allowed external shared-library boundary: allocator-exhaustion reporting
+// cannot use Rust allocation, formatting, buffered I/O, unwinding, or normal
+// process teardown. This module confines the Linux descriptor-write and
+// immediate-exit ABI behind one non-returning safe function.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod linux_allocation_failure {
+    use super::{signal_global_out_fd, ErrorCode};
+    #[cfg(not(test))]
+    use super::{SIGNAL_PENDING_OUTPUT, SIGNAL_PENDING_OUTPUT_CAPACITY};
+    use crate::basics::error::copy_emergency_program_name;
+    use std::ffi::c_void;
+
+    const STDERR_FILENO_COMPAT: i32 = 2;
+    const MEMORY_LIMIT_OUTPUT: &[u8] =
+        b"%% Failure: Resource limit exceeded (memory)\n%% SZS status ResourceOut\n";
+    const OUT_OF_MEMORY_SUFFIX: &[u8] = b": Out of Memory\n";
+
+    unsafe extern "C" {
+        fn _exit(status: i32) -> !;
+        fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
+    }
+
+    fn write_fd_all(fd: i32, mut buffer: &[u8]) {
+        while !buffer.is_empty() {
+            // SAFETY: write receives a raw descriptor and a pointer into the
+            // live byte slice for exactly its current length. It neither
+            // retains nor mutates the Rust storage.
+            let result = unsafe { write(fd, buffer.as_ptr().cast::<c_void>(), buffer.len()) };
+            let Ok(written) = usize::try_from(result) else {
+                break;
+            };
+            if written == 0 {
+                break;
+            }
+            buffer = &buffer[written.min(buffer.len())..];
+        }
+    }
+
+    #[cfg(not(test))]
+    fn write_pending_output(fd: i32) {
+        let mut offset = 0;
+        let mut buffer = [0_u8; 256];
+        while offset < SIGNAL_PENDING_OUTPUT_CAPACITY {
+            let copied = SIGNAL_PENDING_OUTPUT.copy_from(offset, &mut buffer);
+            if copied == 0 {
+                break;
+            }
+            write_fd_all(fd, &buffer[..copied]);
+            offset += copied;
+        }
+    }
+
+    #[cfg(test)]
+    const fn write_pending_output(_fd: i32) {}
+
+    pub(super) fn finalize_and_exit() -> ! {
+        let global_out_fd = signal_global_out_fd();
+        write_pending_output(global_out_fd);
+        write_fd_all(global_out_fd, MEMORY_LIMIT_OUTPUT);
+
+        let mut program_name = [0_u8; 256];
+        let program_name_len = copy_emergency_program_name(&mut program_name);
+        if program_name_len == 0 {
+            write_fd_all(STDERR_FILENO_COMPAT, b"umlaut");
+        } else {
+            write_fd_all(STDERR_FILENO_COMPAT, &program_name[..program_name_len]);
+        }
+        write_fd_all(STDERR_FILENO_COMPAT, OUT_OF_MEMORY_SUFFIX);
+
+        // SAFETY: `_exit` is required because ordinary exit/unwinding may
+        // allocate after the system allocator has already failed twice. The
+        // fixed E-compatible status is representable as a C int.
+        unsafe { _exit(i32::from(ErrorCode::OUT_OF_MEMORY.exit_status())) }
     }
 }
 

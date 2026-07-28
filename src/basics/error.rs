@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 // Allowed external shared-library boundary: C `strerror` is required for the
@@ -35,6 +35,10 @@ mod c_runtime {
 
 static PROGRAM_NAME: OnceLock<Mutex<String>> = OnceLock::new();
 static TMP_ERRNO: AtomicI32 = AtomicI32::new(0);
+const EMERGENCY_PROGRAM_NAME_CAPACITY: usize = 256;
+static EMERGENCY_PROGRAM_NAME: [AtomicU8; EMERGENCY_PROGRAM_NAME_CAPACITY] =
+    [const { AtomicU8::new(0) }; EMERGENCY_PROGRAM_NAME_CAPACITY];
+static EMERGENCY_PROGRAM_NAME_LEN: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ErrorCode(u8);
@@ -139,7 +143,27 @@ fn lock_program_name() -> MutexGuard<'static, String> {
 }
 
 pub fn init_error(program_name: impl Into<String>) {
-    *lock_program_name() = program_name.into();
+    let program_name = program_name.into();
+    set_emergency_program_name(program_name.as_bytes());
+    *lock_program_name() = program_name;
+}
+
+fn set_emergency_program_name(program_name: &[u8]) {
+    let len = program_name.len().min(EMERGENCY_PROGRAM_NAME_CAPACITY);
+    for (destination, source) in EMERGENCY_PROGRAM_NAME.iter().zip(&program_name[..len]) {
+        destination.store(*source, Ordering::Relaxed);
+    }
+    EMERGENCY_PROGRAM_NAME_LEN.store(len, Ordering::Release);
+}
+
+pub(crate) fn copy_emergency_program_name(destination: &mut [u8]) -> usize {
+    let len = EMERGENCY_PROGRAM_NAME_LEN
+        .load(Ordering::Acquire)
+        .min(destination.len());
+    for (destination, source) in destination.iter_mut().zip(&EMERGENCY_PROGRAM_NAME[..len]) {
+        *destination = source.load(Ordering::Relaxed);
+    }
+    len
 }
 
 /// Initialize the global diagnostic name from the executable invocation.
