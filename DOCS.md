@@ -299,6 +299,21 @@ experimental: it covers 16/250 historical FNT records, produces no unique
 equal-budget solve, and rejects positive-arity functions, so it is not wired
 into Umlaut's production search or defaults.
 
+## Incremental SAT Service Research
+
+The backend-neutral incremental SAT contract, exact semantic suite, instrumented
+`SATCheck` captures, held-out dispatch study, proof/core validation,
+cancellation measurements, and Linux/Windows packaging bake-off are recorded
+in
+[`experiments/2026-07-28-012-incremental-sat-service/`](experiments/2026-07-28-012-incremental-sat-service/).
+CaDiCaL 3.0.1 is selected for an optional production-integration follow-up: the
+frozen 128-clause policy reduced held-out query p95 by 75.2% and aggregate
+measured SAT cost by 34.3%, while independently checked DRAT, native
+cancellation, static Linux, and Windows-GNU gates passed. The positive
+threshold sample is narrow, so this research changes neither the production
+dependency set nor the default solver. The internal solver remains the complete
+disablement path.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

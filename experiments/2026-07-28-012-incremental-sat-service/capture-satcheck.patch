@@ -1,0 +1,70 @@
+diff --git a/src/clauses/satinterface.rs b/src/clauses/satinterface.rs
+index 5b677fa9..77777777 100644
+--- a/src/clauses/satinterface.rs
++++ b/src/clauses/satinterface.rs
+@@ -17,0 +18 @@ use std::collections::BTreeMap;
++use std::fs::{create_dir_all, File};
+@@ -18,0 +20,3 @@ use std::fmt;
++use std::io::{BufWriter, Write};
++use std::path::PathBuf;
++use std::sync::atomic::{AtomicU64, Ordering};
+@@ -19,0 +24,2 @@ use std::time::Instant;
++
++static SAT_CAPTURE_ORDINAL: AtomicU64 = AtomicU64::new(0);
+@@ -431,0 +438 @@ impl<'a> SatClauseSet<'a> {
++        capture_solver_workload(&solver_clauses, self.max_lit);
+@@ -1037,0 +1045,54 @@ fn assign_conj_dist(dist_array: &mut [i64], f_code: FunCode, value: i64) -> i64
++
++fn capture_solver_workload(clauses: &[Vec<i32>], max_lit: i32) {
++    let Some(root) = std::env::var_os("UMLAUT_SAT_CAPTURE_DIR") else {
++        return;
++    };
++    let label = std::env::var("UMLAUT_SAT_CAPTURE_LABEL")
++        .unwrap_or_else(|_| "unlabelled".to_owned())
++        .chars()
++        .map(|character| {
++            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
++                character
++            } else {
++                '_'
++            }
++        })
++        .collect::<String>();
++    let ordinal = SAT_CAPTURE_ORDINAL.fetch_add(1, Ordering::Relaxed);
++    let capture_max = std::env::var("UMLAUT_SAT_CAPTURE_MAX")
++        .ok()
++        .and_then(|value| value.parse::<u64>().ok());
++    if capture_max.is_some_and(|limit| ordinal >= limit) {
++        return;
++    }
++    let mut directory = PathBuf::from(root);
++    directory.push(label);
++    if create_dir_all(&directory).is_err() {
++        return;
++    }
++    let path = directory.join(format!(
++        "{ordinal:06}-v{max_lit}-c{}.cnf",
++        clauses.len()
++    ));
++    let temporary = path.with_extension("cnf.tmp");
++    let Ok(file) = File::create(&temporary) else {
++        return;
++    };
++    let mut output = BufWriter::new(file);
++    if writeln!(output, "p cnf {max_lit} {}", clauses.len()).is_err() {
++        return;
++    }
++    for clause in clauses {
++        for literal in clause {
++            if write!(output, "{literal} ").is_err() {
++                return;
++            }
++        }
++        if writeln!(output, "0").is_err() {
++            return;
++        }
++    }
++    if output.flush().is_ok() {
++        let _ = std::fs::rename(temporary, path);
++    }
++}

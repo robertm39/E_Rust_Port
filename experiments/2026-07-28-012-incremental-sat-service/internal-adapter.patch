@@ -1,0 +1,10 @@
+diff --git a/src/clauses/satinterface.rs b/src/clauses/satinterface.rs
+index 5b677fa9..66666666 100644
+--- a/src/clauses/satinterface.rs
++++ b/src/clauses/satinterface.rs
+@@ -1040 +1040 @@
+-enum SolverStatus {
++pub enum SolverStatus {
+@@ -1054 +1054 @@
+-fn solve_sat(clauses: &[Vec<i32>], max_lit: i32, decision_limit: i32) -> SolverStatus {
++pub fn solve_sat(clauses: &[Vec<i32>], max_lit: i32, decision_limit: i32) -> SolverStatus {
