@@ -1,0 +1,61 @@
+{
+  "schema": "umlaut.search-telemetry-experiment-summary",
+  "schema_version": 1,
+  "runner": {
+    "run_id": "260728-024950-6433",
+    "linode_id": 101571734,
+    "profile": "g8-dedicated-8-4",
+    "image": "Ubuntu 24.04",
+    "kernel": "6.8.0-134-generic",
+    "machine": "x86_64"
+  },
+  "binary": {
+    "sha256": "a8184939cdc05629eb252ddd89238f3703adccb6426a56e785f6fb20abf528a7"
+  },
+  "overhead": {
+    "repetitions_per_workload": 6,
+    "measured_runs": 36,
+    "aggregate_control_child_cpu_seconds": 45.10498500000001,
+    "aggregate_enabled_child_cpu_seconds": 44.89448199999999,
+    "aggregate_child_cpu_overhead_percent": -0.46669564350819703,
+    "child_cpu_budget_percent": 5.0,
+    "aggregate_control_wall_seconds": 45.11298475800004,
+    "aggregate_enabled_wall_seconds": 44.90239078500008,
+    "aggregate_wall_overhead_percent": -0.4668145415996139,
+    "wall_budget_percent": 10.0,
+    "passed": true
+  },
+  "diagnosis": {
+    "problem": "eprover/EXAMPLE_PROBLEMS/TPTP/SYN190-1.p",
+    "problem_sha256": "923ab1c09931072a5cd9924b39325ef3632f14258b3b5b14ecb4e39cae9ab5f0",
+    "low_limit_outcome": {
+      "reason": "step_limit",
+      "processed_steps": 1000,
+      "high_water_total": 1169
+    },
+    "high_limit_outcome": {
+      "reason": "generated_clause",
+      "processed_steps": 6384,
+      "high_water_total": 18799
+    },
+    "independent_reproductions": 2,
+    "passed": true
+  },
+  "comprehensive_validation": {
+    "run_id": "260728-032639-9aff",
+    "main_cases": 50,
+    "main_mismatches": 0,
+    "tool_cases": 216,
+    "tool_mismatches": 0,
+    "benchmark_behavior_mismatches": 0,
+    "rust_to_c_wall_ratio": 1.1002893669115814,
+    "advisory_ratio_threshold": 1.1,
+    "callgrind_completed": true,
+    "passed": true
+  },
+  "raw_artifacts": {
+    "local_path": ".artifacts/search-telemetry/2026-07-27-002/",
+    "summary_sha256": "0a0321370c77c68ea6a693f22e4673867946bfc809e420a65bd9141f597bd255"
+  },
+  "passed": true
+}

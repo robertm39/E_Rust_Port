@@ -205,6 +205,7 @@ pub enum EProverOption {
     KboDbWeight,
     DeterministicRewriteSort,
     DeterministicNewSort,
+    SearchTelemetry,
 }
 
 pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
@@ -1880,11 +1881,19 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         None,
         "Disable eliminating symbols that occur in the conjecture.",
     ),
+    OptCell::new(
+        EProverOption::SearchTelemetry,
+        None,
+        Some("search-telemetry"),
+        OptArgType::ReqArg,
+        None,
+        "Write one stable JSON search-telemetry record to the named file. This Umlaut extension is disabled by default.",
+    ),
 ];
 
 #[cfg(test)]
 mod tests {
-    use super::EPROVER_OPTIONS;
+    use super::{EProverOption, EPROVER_OPTIONS};
     use crate::inout::commandline::OptArgType;
 
     const C_E_OPTIONS_H: &str = include_str!("../../tests/fixtures/eprover-17026b1/e_options.h");
@@ -1893,6 +1902,7 @@ mod tests {
     fn rust_option_table_matches_c_long_option_surface() {
         let rust_long_options = EPROVER_OPTIONS
             .iter()
+            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
             .filter_map(|option| option.longopt)
             .collect::<Vec<_>>();
         let c_long_options = c_long_options();
@@ -1906,6 +1916,7 @@ mod tests {
     fn rust_option_table_matches_c_short_option_surface() {
         let rust_short_options = EPROVER_OPTIONS
             .iter()
+            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
             .filter_map(|option| option.shortopt)
             .collect::<Vec<_>>();
         let c_short_options = c_short_options();
@@ -1927,6 +1938,7 @@ mod tests {
     fn rust_option_table_matches_c_help_prose() {
         let rust_help = EPROVER_OPTIONS
             .iter()
+            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
             .map(|option| (option.longopt, option.desc.to_owned()))
             .collect::<Vec<_>>();
         let c_help = c_help_surface();
@@ -1959,6 +1971,17 @@ mod tests {
                 assert_eq!(rust_description, c_description, "option {rust_name:?}");
             }
         }
+    }
+
+    #[test]
+    fn umlaut_only_search_telemetry_extension_is_an_explicit_table_tail() {
+        let extension = EPROVER_OPTIONS
+            .last()
+            .expect("option table must not be empty");
+        assert_eq!(extension.option_code, EProverOption::SearchTelemetry);
+        assert_eq!(extension.shortopt, None);
+        assert_eq!(extension.longopt, Some("search-telemetry"));
+        assert_eq!(extension.arg_type, OptArgType::ReqArg);
     }
 
     fn assert_has_no_duplicates<T>(table_name: &str, options: &[T])
@@ -1999,6 +2022,7 @@ mod tests {
     fn rust_argument_surface() -> Vec<ArgumentSurface> {
         EPROVER_OPTIONS
             .iter()
+            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
             .map(|option| ArgumentSurface {
                 short_option: option.shortopt,
                 long_option: option.longopt,

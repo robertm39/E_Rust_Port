@@ -14,6 +14,7 @@ include = [
     "/THIRD_PARTY_NOTICES.md",
     "/build.rs",
     "/docs/dependency-packaging-matrix.md",
+    "/docs/search-telemetry.md",
     "/docs/third-party-licenses.md",
     "/licenses/**",
     "/src/**",

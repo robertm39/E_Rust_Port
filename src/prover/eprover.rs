@@ -154,6 +154,9 @@ use crate::inout::signals::{finalize_cpu_limit_outcome, silent_time_out};
 use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
+use crate::prover::search_telemetry::{
+    render_search_telemetry, SearchTelemetryCounterSnapshot, SearchTelemetryRecord,
+};
 use crate::prover::version::{self, PROGRAM_NAME, VERSION, VERSION_QUALIFIER};
 use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
@@ -1365,6 +1368,7 @@ pub struct EProverConfig {
     pub schedule_stdin_snapshot: Option<String>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
+    pub search_telemetry_file: Option<PathBuf>,
     pub output_level: i64,
     pub verbose: i64,
     pub proof_object_level: i64,
@@ -1483,6 +1487,7 @@ impl Default for EProverConfig {
             schedule_stdin_snapshot: None,
             files: Vec::new(),
             output_file: None,
+            search_telemetry_file: None,
             output_level: 1,
             verbose: 0,
             proof_object_level: 0,
@@ -3659,6 +3664,7 @@ const fn is_output_option(option: EProverOption) -> bool {
             | EProverOption::PrintSaturated
             | EProverOption::PrintSatInfo
             | EProverOption::FilterSaturated
+            | EProverOption::SearchTelemetry
     )
 }
 
@@ -4048,6 +4054,16 @@ fn apply_output_option(
             check_option_letter_string(&descriptor, "eigEIGaA", "--filter-saturated")?;
             config.filter_saturated_descriptor = descriptor;
             config.flags.set(EProverFlag::FilterSaturated);
+        }
+        EProverOption::SearchTelemetry => {
+            let path = parsed.arg().unwrap_or("");
+            if path.is_empty() || path == "-" {
+                return Err(Diagnostic::new(
+                    ErrorCode::USAGE_ERROR,
+                    "--search-telemetry requires a file path other than '-'",
+                ));
+            }
+            config.search_telemetry_file = Some(PathBuf::from(path));
         }
         _ => unreachable!("non-output option routed to output handler"),
     }
@@ -5379,6 +5395,7 @@ fn run_config_with_stderr(
     mut stderr: Option<&mut dyn Write>,
     config: &EProverConfig,
 ) -> Result<u8, EProverError> {
+    validate_search_telemetry_mode(config)?;
     let mut runtime_config = config.clone();
     let verbose = i32::try_from(config.verbose).map_err(|_| {
         Diagnostic::new(
@@ -5410,6 +5427,25 @@ fn run_config_with_stderr(
         output.flush()?;
     }
     result
+}
+
+fn validate_search_telemetry_mode(config: &EProverConfig) -> Result<(), Diagnostic> {
+    if config.search_telemetry_file.is_none() {
+        return Ok(());
+    }
+    let unsupported_mode = config.flags.contains(EProverFlag::SyntaxOnly)
+        || config.encoding.app_encode
+        || config.flags.contains(EProverFlag::PruneOnly)
+        || config.print_strategy.is_some()
+        || (config.flags.contains(EProverFlag::CnfOnly)
+            && internal_search_selection(config).is_none());
+    if unsupported_mode {
+        return Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "--search-telemetry requires a saturation-search mode",
+        ));
+    }
+    Ok(())
 }
 
 fn run_config_action<W: Write + ?Sized>(
@@ -5852,7 +5888,14 @@ fn run_proof_search<W: Write + ?Sized>(
     hard_timeout_stderr: &mut Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
+    let search_telemetry_baseline = config
+        .search_telemetry_file
+        .as_ref()
+        .map(|_| SearchTelemetryCounterSnapshot::capture());
     let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
+    if search_telemetry_baseline.is_some() {
+        state.enable_search_telemetry();
+    }
     write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state, hard_timeout_stderr)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
@@ -6041,6 +6084,7 @@ fn run_proof_search<W: Write + ?Sized>(
     } else {
         proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
     }
+    state.record_search_telemetry_high_water();
     write_verbose2_progress(hard_timeout_stderr, "Prover state initialized\n")?;
     proof_state_init_global_indices(&mut state, &control, problem_type());
     proof_state_init_watchlist_global_indices(&mut state, &control, problem_type());
@@ -6095,7 +6139,24 @@ fn run_proof_search<W: Write + ?Sized>(
     drop(sat_timer);
     next_doc_ident = saturation.next_doc_ident;
     let mut outcome = saturation.outcome;
+    let proof_statistics_input = ProofStatisticsInput {
+        parsed_ax_no,
+        relevancy_pruned: total_pruned,
+        raw_clause_no,
+        preproc_removed,
+    };
     if hard_time_limit_expired_in_saturation(&outcome) {
+        if let Some(counter_baseline) = search_telemetry_baseline {
+            write_search_telemetry(
+                config,
+                &state,
+                &outcome,
+                ErrorCode::CPU_LIMIT_ERROR.exit_status(),
+                control.heuristic_parms().heuristic_name.as_str(),
+                proof_statistics_input,
+                counter_baseline,
+            )?;
+        }
         return finalize_hard_time_limit_stop(output, hard_timeout_stderr);
     }
     let (filtered_empty, filtered_next_doc_ident) =
@@ -6139,20 +6200,27 @@ fn run_proof_search<W: Write + ?Sized>(
             config,
             state,
             Some(global_indices),
-            ProofStatisticsInput {
-                parsed_ax_no,
-                relevancy_pruned: total_pruned,
-                raw_clause_no,
-                preproc_removed,
-            },
+            proof_statistics_input,
         )
     })?;
-    Ok(saturate_outcome_exit_status(
+    let exit_status = saturate_outcome_exit_status(
         &outcome,
         &state,
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
-    ))
+    );
+    if let Some(counter_baseline) = search_telemetry_baseline {
+        write_search_telemetry(
+            config,
+            &state,
+            &outcome,
+            exit_status,
+            control.heuristic_parms().heuristic_name.as_str(),
+            proof_statistics_input,
+            counter_baseline,
+        )?;
+    }
+    Ok(exit_status)
 }
 
 fn hard_time_limit_expired_in_saturation(outcome: &SaturateOutcome) -> bool {
@@ -10215,6 +10283,70 @@ fn clause_print_for_output_format(
             eqn_print_options,
         )),
     }
+}
+
+fn write_search_telemetry(
+    config: &EProverConfig,
+    state: &ProofState,
+    outcome: &SaturateOutcome,
+    exit_status: u8,
+    heuristic: &str,
+    input: ProofStatisticsInput,
+    counter_baseline: SearchTelemetryCounterSnapshot,
+) -> Result<(), EProverError> {
+    let Some(path) = search_telemetry_output_path(config) else {
+        return Ok(());
+    };
+    let record = SearchTelemetryRecord {
+        files: &config.files,
+        problem_type: problem_type(),
+        heuristic,
+        outcome,
+        exit_status,
+        parsed_axioms: input.parsed_ax_no,
+        relevancy_pruned: input.relevancy_pruned,
+        raw_clauses: input.raw_clause_no,
+        preprocessing_removed: input.preproc_removed,
+        state,
+        counter_baseline,
+        resource_usage: current_resource_usage(),
+    };
+    let rendered = render_search_telemetry(&record).map_err(|_error| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Cannot format the search telemetry JSON record",
+        )
+    })?;
+    std::fs::write(&path, rendered).map_err(|error| {
+        eprover_sys_error_diagnostic(
+            format!("Cannot write search telemetry file {}", path.display()),
+            &error,
+        )
+    })?;
+    Ok(())
+}
+
+fn search_telemetry_output_path(config: &EProverConfig) -> Option<PathBuf> {
+    let base = config.search_telemetry_file.as_ref()?;
+    let Some(worker) = config.internal_schedule_worker.as_ref() else {
+        return Some(base.clone());
+    };
+    let suffix = match &worker.mode {
+        InternalScheduleWorkerMode::Preprocessing => format!(
+            ".preprocessing-{}-pid-{}.json",
+            worker.preprocessing_index,
+            std::process::id()
+        ),
+        InternalScheduleWorkerMode::Search { index, .. } => format!(
+            ".search-{}-{}-pid-{}.json",
+            worker.preprocessing_index,
+            index,
+            std::process::id()
+        ),
+    };
+    let mut worker_path = base.as_os_str().to_os_string();
+    worker_path.push(suffix);
+    Some(PathBuf::from(worker_path))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -16495,20 +16627,20 @@ mod tests {
         rlimit_warning_from_result, run, run_config, runtime_picosat_library_from_env,
         schedule_heuristic_selection, schedule_partial_match_comment, schedule_worker_command_args,
         schedule_worker_run_args, search_schedule_worker_command_args,
-        simple_fof_bool_term_to_formulas, take_selected_clause_ids,
-        take_selected_formula_entry_ids, temporary_executable_term_bank, write_proof_object_dot,
-        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, ConfiguredOutput, DocOutputFormat, EProverAction,
-        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
-        FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode,
-        LiteralComparison, ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
-        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
-        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE,
-        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        search_telemetry_output_path, simple_fof_bool_term_to_formulas, take_selected_clause_ids,
+        take_selected_formula_entry_ids, temporary_executable_term_bank,
+        validate_search_telemetry_mode, write_proof_object_dot, write_proof_object_list_graph,
+        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        ConfiguredOutput, DocOutputFormat, EProverAction, EProverConfig, EProverFlag,
+        EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType,
+        GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison, ParamodulationType,
+        ParsedAppEncodeFormula, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
+        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
+        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
+        UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
+        PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -18292,6 +18424,74 @@ input_clause(c2,axiom,[++q(X)]).
         };
         assert_eq!(config.saturated_output_descriptor, "teA");
         assert_eq!(config.filter_saturated_descriptor, "eig");
+    }
+
+    #[test]
+    fn process_options_records_umlaut_search_telemetry_output() {
+        let action = process_options(["umlaut", "--search-telemetry=metrics/search.json"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run action");
+        };
+        assert_eq!(
+            config.search_telemetry_file,
+            Some(PathBuf::from("metrics/search.json"))
+        );
+
+        let error = process_options(["umlaut", "--search-telemetry=-"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error.message().contains("file path other than '-'"));
+    }
+
+    #[test]
+    fn search_telemetry_rejects_non_search_modes_explicitly() {
+        for extra_option in [
+            "--syntax-only",
+            "--app-encode",
+            "--prune",
+            "--cnf",
+            "--print-strategy",
+        ] {
+            let action =
+                process_options(["umlaut", "--search-telemetry=metrics.json", extra_option])
+                    .unwrap();
+            let EProverAction::Run(config) = action else {
+                panic!("expected run action");
+            };
+            let error = validate_search_telemetry_mode(&config).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+            assert!(error.message().contains("saturation-search mode"));
+        }
+    }
+
+    #[test]
+    fn schedule_workers_derive_collision_free_search_telemetry_paths() {
+        let mut config = EProverConfig {
+            search_telemetry_file: Some(PathBuf::from("metrics/run")),
+            ..EProverConfig::default()
+        };
+        assert_eq!(
+            search_telemetry_output_path(&config),
+            Some(PathBuf::from("metrics/run"))
+        );
+
+        config.internal_schedule_worker = Some(super::InternalScheduleWorkerConfig {
+            preprocessing_index: 3,
+            preprocessing_strategy: "Preprocess".to_owned(),
+            preprocessing_ordering: to_params::TermOrdering::Kbo,
+            preprocessing_cpu_limit: 10,
+            preprocessing_cores: 2,
+            mode: InternalScheduleWorkerMode::Search {
+                index: 5,
+                strategy: "Search".to_owned(),
+                ordering: to_params::TermOrdering::Lpo,
+                cpu_limit: 20,
+            },
+        });
+        let worker_path = search_telemetry_output_path(&config)
+            .expect("configured worker telemetry should have a path");
+        let worker_path = worker_path.to_string_lossy();
+        assert!(worker_path.starts_with("metrics/run.search-3-5-pid-"));
+        assert!(worker_path.ends_with(".json"));
     }
 
     #[test]
@@ -25854,6 +26054,60 @@ input_clause(c2,axiom,[++q(X)]).
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_writes_opt_in_aggregate_json_telemetry() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("proof-search-telemetry-problem");
+        let telemetry_path = temp_path("proof-search-telemetry-record");
+        std::fs::write(&problem_path, "a!=a.\n").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
+        let telemetry_arg = telemetry_path.to_string_lossy().into_owned();
+        let telemetry_option = format!("--search-telemetry={telemetry_arg}");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--lop-in",
+                telemetry_option.as_str(),
+                problem_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
+        assert!(telemetry.starts_with("{\n"));
+        assert!(telemetry.ends_with("}\n"));
+        for required in [
+            "\"schema\": \"umlaut.search-telemetry\"",
+            "\"schema_version\": 1",
+            "\"search_funnel\"",
+            "\"high_water_unprocessed\"",
+            "\"inferences\"",
+            "\"simplification\"",
+            "\"indices\"",
+            "\"sat\"",
+            "\"terms\"",
+            "\"proof\"",
+            "\"resources\"",
+            "\"maximum_resident_pages\"",
+        ] {
+            assert!(
+                telemetry.contains(required),
+                "missing telemetry field {required}"
+            );
+        }
+        assert!(telemetry.contains("\"kind\": \"returned\""));
+        assert!(telemetry.contains("\"reason\": \"empty_clause\""));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(problem_path).unwrap();
+        std::fs::remove_file(telemetry_path).unwrap();
     }
 
     #[test]

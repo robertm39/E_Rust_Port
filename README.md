@@ -58,6 +58,16 @@ namespace:
 
 Automation that invokes a previous target name must be updated.
 
+## Search telemetry
+
+Pass `--search-telemetry=run.json` to the primary executable to write one
+versioned, aggregate JSON record for a saturation search. The record covers
+the input and search funnels, inferences, simplification and index activity,
+SAT calls, term storage, proof depth, clause-set high-water counts, and
+resource usage. See
+[docs/search-telemetry.md](docs/search-telemetry.md) for the schema and
+schedule-worker naming contract.
+
 ## Development and validation
 
 Start with [DOCS.md](DOCS.md) for the documentation index and

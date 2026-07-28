@@ -8227,6 +8227,7 @@ fn proof_state_saturate_impl<W: fmt::Write>(
                 output_context.as_mut(),
             )
         }?;
+        state.record_search_telemetry_high_water();
         match process_outcome {
             ProcessClauseOutcome::NoClause => {
                 return Ok(SaturateOutcome::Stopped {
@@ -8279,6 +8280,7 @@ fn proof_state_saturate_impl<W: fmt::Write>(
         } else if let Some((output, output_level, _output_format)) = output_context.as_mut() {
             write_cleanup_unprocessed_output(&mut **output, *output_level, &cleanup)?;
         }
+        state.record_search_telemetry_high_water();
         if let Some(clause) = cleanup.unsatisfiable {
             return Ok(proof_state_saturate_return_with_extract_root(
                 state,

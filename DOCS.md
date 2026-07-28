@@ -184,6 +184,14 @@ internal solver. The user-configured variables `E_RUST_PORT_COMPAT_ROOT`,
 `E_RUST_PORT_COMPAT_ARTIFACT_ROOT`, and `E_RUST_PORT_PICOSAT_LIBRARY` retain
 their names for operational compatibility.
 
+## Search Telemetry
+
+The opt-in, versioned JSON search telemetry contract, schedule-worker file
+naming, failure boundaries, and measured overhead budget are documented in
+[`docs/search-telemetry.md`](docs/search-telemetry.md). The corresponding
+reproducible benchmark and diagnosis evidence lives under
+[`experiments/2026-07-27-002-search-telemetry/`](experiments/2026-07-27-002-search-telemetry/).
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

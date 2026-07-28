@@ -151,6 +151,14 @@ pub struct ProofStateStatistics {
     pub gc_used_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SearchTelemetryHighWater {
+    pub processed_clauses: i64,
+    pub unprocessed_clauses: i64,
+    pub total_clauses: i64,
+    pub archived_clauses: i64,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RawFormulaFeatures {
     pub has_formula_input: bool,
@@ -640,6 +648,7 @@ pub struct ProofState {
     has_interpreted_symbols: bool,
     raw_formula_features: RawFormulaFeatures,
     statistics: ProofStateStatistics,
+    search_telemetry_high_water: Option<SearchTelemetryHighWater>,
     answer_outputs: Vec<String>,
 }
 
@@ -879,6 +888,7 @@ impl ProofState {
             has_interpreted_symbols: false,
             raw_formula_features: RawFormulaFeatures::default(),
             statistics: ProofStateStatistics::default(),
+            search_telemetry_high_water: None,
             answer_outputs: Vec::new(),
         })
     }
@@ -1737,6 +1747,34 @@ impl ProofState {
 
     pub fn statistics_mut(&mut self) -> &mut ProofStateStatistics {
         &mut self.statistics
+    }
+
+    pub fn enable_search_telemetry(&mut self) {
+        self.search_telemetry_high_water = Some(SearchTelemetryHighWater::default());
+        self.record_search_telemetry_high_water();
+    }
+
+    #[inline]
+    pub fn record_search_telemetry_high_water(&mut self) {
+        if self.search_telemetry_high_water.is_none() {
+            return;
+        }
+        let processed_clauses = self.processed_cardinality();
+        let unprocessed_clauses = self.unprocessed_cardinality();
+        let total_clauses = processed_clauses.saturating_add(unprocessed_clauses);
+        let archived_clauses = self.archive.members();
+        if let Some(high_water) = self.search_telemetry_high_water.as_mut() {
+            high_water.processed_clauses = high_water.processed_clauses.max(processed_clauses);
+            high_water.unprocessed_clauses =
+                high_water.unprocessed_clauses.max(unprocessed_clauses);
+            high_water.total_clauses = high_water.total_clauses.max(total_clauses);
+            high_water.archived_clauses = high_water.archived_clauses.max(archived_clauses);
+        }
+    }
+
+    #[must_use]
+    pub const fn search_telemetry_high_water(&self) -> Option<SearchTelemetryHighWater> {
+        self.search_telemetry_high_water
     }
 
     /// Marks represented clause ancestors that participate in a successful proof.

@@ -51,6 +51,7 @@ REQUIRED_SOURCE_PATHS = {
     "THIRD_PARTY_NOTICES.md",
     "build.rs",
     "docs/dependency-packaging-matrix.md",
+    "docs/search-telemetry.md",
     "src/heuristics/schedule.vars",
     "tools/packaging/README-CASC.md",
     "tools/packaging/verify_casc_package.py",
