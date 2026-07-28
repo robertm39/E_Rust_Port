@@ -49,6 +49,54 @@ projects are inventoried in
 [`docs/third-party-licenses.md`](docs/third-party-licenses.md). Verbatim copies
 of the available license notices are stored in [`licenses/`](licenses/).
 
+## Pinned Vampire 5.0.1 Reference Build
+
+The native Linux x86-64 Vampire 5.0.1 reference executable built on the
+ephemeral Ubuntu 24.04 Linode is stored locally at
+`.artifacts/vampire/3677326861181f990ce3ef461e90471ba9749225/linode-ubuntu24.04-x86_64/vampire`.
+Its SHA-256 is
+`3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665`;
+the adjacent ignored `vampire.sha256` sidecar contains the same value. The
+existing `.artifacts/` rule in `.gitignore` covers both files, as confirmed
+with `git check-ignore -v`.
+
+The 2026-07-27 build used Vampire revision
+`3677326861181f990ce3ef461e90471ba9749225`, CaDiCaL revision
+`f13d74439a5b5c963ac5b02d05ce93a8098018b8`, VIRAS revision
+`8b8928f57f8d6415662cf43289de2c0d36443240`, and Z3 revision
+`3c47fd96cf5645d0c42b2c819d9e9a84380aa721`. Z3 was configured with
+`CMAKE_BUILD_TYPE=Release`, `Z3_BUILD_EXECUTABLE=OFF`,
+`Z3_BUILD_TEST_EXECUTABLES=OFF`, and `Z3_BUILD_LIBZ3_SHARED=OFF`. Vampire was
+configured with `CMAKE_BUILD_TYPE=Release`, `CCACHE_PROGRAM=OFF`, and
+`Z3_DIR` pointing to that static Z3 build; both build stages used four
+parallel jobs.
+
+The authoritative artifact came from normal-profile runner
+`e-rust-codex-260727-233253-f75d` (run ID `260727-233253-f75d`, Linode ID
+`101559950`) using Ubuntu 24.04, GCC 13.3.0, and CMake 3.28.3. It is an
+unstripped x86-64 GNU/Linux ELF PIE. Its dynamic dependencies are only the
+standard GNU/Linux loader, `libstdc++`, `libm`, `libgcc_s`, and `libc`;
+`libz3` is absent because Z3 is linked statically. The binary reports Vampire
+5.0.1 at the pinned commit, CaDiCaL 2.1.3, and Z3 4.14.0.0 at the pinned
+revision. It passed the complete upstream `checks/sanity` suite on the
+Linode. After download, its hash matched the remote value and it ran under
+WSL Ubuntu 24.04, where it proved `checks/Problems/PUZ/PUZ001+1.p` with SZS
+status `Theorem`.
+
+The independent WSL build is retained in the local cache at
+`/home/rober/.cache/e-rust-port/vampire/3677326861181f990ce3ef461e90471ba9749225/vampire-build/vampire`
+with SHA-256
+`84a3cc9fe13295c6ef73bb62a75d9a32b9aa3a1316500a49c126277405070184`.
+It used the same revisions and build flags and passed the complete upstream
+sanity suite through a disposable LF-normalized harness, leaving the Windows
+checkout untouched. This WSL build and validation were a user-authorized
+one-time exception for this reference artifact; they do not change the
+execution policy below.
+
+The pinned VIRAS revision does not declare a license. Consequently, these
+Vampire executables are ignored, local-only reference artifacts and must not
+be committed, published, or redistributed.
+
 ## Execution And Platform Policy
 
 All Rust and C formatting, compilation, tests, execution, compatibility
