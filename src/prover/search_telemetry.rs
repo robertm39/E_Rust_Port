@@ -7,6 +7,9 @@ use crate::heuristics::hcb::HcbSelectionTelemetry;
 use crate::heuristics::proofcontrol::{
     ProcessClauseReturnReason, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
+use crate::terms::fp_index::{
+    fingerprint_index_telemetry_snapshot, FPIndexDistrib, FingerprintIndexTelemetrySnapshot,
+};
 use std::fmt::{self, Write as _};
 use std::sync::atomic::Ordering;
 
@@ -24,6 +27,7 @@ pub(crate) struct SearchTelemetryCounterSnapshot {
     backward_rewrite_match_successes: u64,
     condensation_attempts: u64,
     condensation_successes: u64,
+    fingerprint_index: FingerprintIndexTelemetrySnapshot,
 }
 
 impl SearchTelemetryCounterSnapshot {
@@ -54,6 +58,7 @@ impl SearchTelemetryCounterSnapshot {
             condensation_successes: nonnegative_counter(
                 crate::clauses::condensation::condensation_successes(),
             ),
+            fingerprint_index: fingerprint_index_telemetry_snapshot(),
         }
     }
 
@@ -86,6 +91,7 @@ impl SearchTelemetryCounterSnapshot {
             condensation_successes: self
                 .condensation_successes
                 .saturating_sub(baseline.condensation_successes),
+            fingerprint_index: self.fingerprint_index.since(baseline.fingerprint_index),
         }
     }
 }
@@ -250,6 +256,7 @@ fn write_search_activity(
     let state = record.state;
     let statistics = state.statistics();
     let counters = derived.counters;
+    let fingerprint = counters.fingerprint_index;
     writeln!(
         output,
         "  \"inferences\": {{\"paramodulations\": {}, \"factorizations\": {}, \"equation_resolutions\": {}, \"disequality_decompositions\": {}, \"negative_extensionality\": {}}},",
@@ -271,9 +278,9 @@ fn write_search_activity(
         counters.condensation_successes,
         counters.rewrite_unbound_variable_failures
     )?;
-    writeln!(
+    write!(
         output,
-        "  \"indices\": {{\"clause_subsumption_calls\": {}, \"recursive_clause_subsumption_calls\": {}, \"clause_subsumption_successes\": {}, \"unit_subsumption_calls\": {}, \"oriented_demodulation_matches\": {}, \"unoriented_demodulation_matches\": {}, \"backward_rewrite_match_attempts\": {}, \"backward_rewrite_match_successes\": {}}},",
+        "  \"indices\": {{\"clause_subsumption_calls\": {}, \"recursive_clause_subsumption_calls\": {}, \"clause_subsumption_successes\": {}, \"unit_subsumption_calls\": {}, \"oriented_demodulation_matches\": {}, \"unoriented_demodulation_matches\": {}, \"backward_rewrite_match_attempts\": {}, \"backward_rewrite_match_successes\": {}, \"fingerprint\": {{\"insertions\": {}, \"deletions\": {}, \"unification_queries\": {}, \"unification_leaves\": {}, \"unification_candidates\": {}, \"paramodulation_candidates\": {}, \"paramodulation_unifiable_candidates\": {}, \"match_queries\": {}, \"match_leaves\": {}, \"match_candidates\": {}, \"structures\": {{",
         counters.clause_subsumption_calls,
         counters.recursive_clause_subsumption_calls,
         counters.clause_subsumption_successes,
@@ -281,7 +288,64 @@ fn write_search_activity(
         state.processed_pos_rules().demod_index_match_count(),
         state.processed_pos_eqns().demod_index_match_count(),
         counters.backward_rewrite_match_attempts,
-        counters.backward_rewrite_match_successes
+        counters.backward_rewrite_match_successes,
+        fingerprint.insertions,
+        fingerprint.deletions,
+        fingerprint.unification_queries,
+        fingerprint.unification_leaves,
+        fingerprint.unification_candidates,
+        fingerprint.paramodulation_candidates,
+        fingerprint.paramodulation_unifiable_candidates,
+        fingerprint.match_queries,
+        fingerprint.match_leaves,
+        fingerprint.match_candidates,
+    )?;
+    let indices = state.global_indices();
+    write_fingerprint_index_structure(
+        output,
+        "backward_rewrite",
+        indices.rw_bw_index_type(),
+        indices.bw_rw_index_distribution(),
+    )?;
+    output.write_str(", ")?;
+    write_fingerprint_index_structure(
+        output,
+        "paramodulation_from",
+        indices.pm_from_index_type(),
+        indices.pm_from_index_distribution(),
+    )?;
+    output.write_str(", ")?;
+    write_fingerprint_index_structure(
+        output,
+        "paramodulation_into",
+        indices.pm_into_index_type(),
+        indices.pm_into_index_distribution(),
+    )?;
+    output.write_str(", ")?;
+    write_fingerprint_index_structure(
+        output,
+        "paramodulation_negative_predicate",
+        indices.pm_negp_index_type(),
+        indices.pm_negp_index_distribution(),
+    )?;
+    writeln!(output, "}}}}}},")
+}
+
+fn write_fingerprint_index_structure(
+    output: &mut String,
+    name: &str,
+    index_type: &str,
+    distribution: Option<FPIndexDistrib>,
+) -> fmt::Result {
+    let distribution = distribution.unwrap_or_default();
+    write!(
+        output,
+        "{}: {{\"type\": {}, \"nodes\": {}, \"leaves\": {}, \"entries\": {}}}",
+        json_string(name),
+        json_string(index_type),
+        distribution.nodes,
+        distribution.leaves,
+        distribution.entries,
     )
 }
 

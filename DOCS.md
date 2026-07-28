@@ -253,6 +253,21 @@ escalation in
 [`experiments/2026-07-28-006-goal-hard-priority/`](experiments/2026-07-28-006-goal-hard-priority/):
 it matches baseline coverage and regresses paired CPU at the larger budget.
 
+## Redundancy And Indexing Research
+
+The stronger-redundancy capability audit and 752-run family-held-out study is
+recorded in
+[`experiments/2026-07-28-008-stronger-redundancy/`](experiments/2026-07-28-008-stronger-redundancy/).
+Existing condensation fires but produces no stable held-out coverage or
+performance gain, so the established redundancy defaults remain unchanged.
+
+The exact-result replay, opt-in fingerprint workload telemetry, and 468-run
+fingerprint/discrimination-tree bake-off are recorded in
+[`experiments/2026-07-28-009-index-retrieval-bakeoff/`](experiments/2026-07-28-009-index-retrieval-bakeoff/).
+`NPDT` produced one validation-only solve but no held-out gain; it reduced
+candidate counts only marginally, regressed larger-budget CPU, and expanded
+UEQ index nodes, so `FP7` remains the default.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

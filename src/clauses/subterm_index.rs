@@ -1,6 +1,6 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::subterm_tree::SubtermOcc;
-use crate::terms::fp_index::{FPIndex, FPTree};
+use crate::terms::fp_index::{FPIndex, FPIndexDistrib, FPTree};
 use crate::terms::idx_fp::FingerprintIndexFunction;
 use crate::terms::signature::Signature;
 use crate::terms::termfunc::term_is_db_closed;
@@ -51,15 +51,20 @@ impl SubtermIndex {
         self.index.collect_leaves(result)
     }
 
+    #[must_use]
+    pub fn distribution(&self) -> FPIndexDistrib {
+        self.index.collect_distrib()
+    }
+
     #[cfg(feature = "print-index-stats")]
     #[must_use]
     pub fn distrib_data_string(&self) -> String {
-        self.index.collect_distrib().data_string()
+        self.distribution().data_string()
     }
 
     #[cfg(feature = "print-index-stats")]
     pub fn write_distrib_data(&self, output: &mut impl fmt::Write) -> fmt::Result {
-        self.index.collect_distrib().write_data(output)
+        self.distribution().write_data(output)
     }
 
     pub fn collect_matchable_occurrences<'idx>(

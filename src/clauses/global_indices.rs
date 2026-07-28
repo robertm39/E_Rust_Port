@@ -13,6 +13,7 @@ use crate::clauses::subterm_index::SubtermIndex;
 #[cfg(feature = "print-index-stats")]
 use crate::clauses::subterm_tree::subterm_occurrences_dot_record_string;
 use crate::clauses::subterm_tree::SubtermOcc;
+use crate::terms::fp_index::FPIndexDistrib;
 use crate::terms::idx_fp::get_fp_index_function;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -286,6 +287,26 @@ impl GlobalIndices {
     }
 
     #[must_use]
+    pub fn bw_rw_index_distribution(&self) -> Option<FPIndexDistrib> {
+        self.bw_rw_index.as_ref().map(SubtermIndex::distribution)
+    }
+
+    #[must_use]
+    pub fn pm_from_index_distribution(&self) -> Option<FPIndexDistrib> {
+        self.pm_from_index.as_ref().map(OverlapIndex::distribution)
+    }
+
+    #[must_use]
+    pub fn pm_into_index_distribution(&self) -> Option<FPIndexDistrib> {
+        self.pm_into_index.as_ref().map(OverlapIndex::distribution)
+    }
+
+    #[must_use]
+    pub fn pm_negp_index_distribution(&self) -> Option<FPIndexDistrib> {
+        self.pm_negp_index.as_ref().map(OverlapIndex::distribution)
+    }
+
+    #[must_use]
     pub fn pm_paramodulation_indexes(
         &self,
     ) -> Option<(&OverlapIndex, &OverlapIndex, &OverlapIndex)> {
@@ -483,6 +504,7 @@ fn write_null_fp_index_distrib_data(output: &mut impl FmtWrite) -> fmt::Result {
     crate::terms::fp_index::FPIndexDistrib {
         nodes: 0,
         leaves: 0,
+        entries: 0,
         average: 0.0,
         stddev: 0.0,
     }

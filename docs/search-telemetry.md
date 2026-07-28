@@ -42,7 +42,7 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 | `clause_selection` | HCB queue quotas, selections by priority class, empty/orphan exhaustions, schedule gaps, and preferred-clause bypass/wait bounds |
 | `inferences` | Paramodulation, factoring, equation-resolution, disequality-decomposition, and negative-extensionality totals |
 | `simplification` | Rewrite, subsumption, condensation, and related contraction totals |
-| `indices` | Subsumption, demodulation, and backward-rewrite lookup activity |
+| `indices` | Subsumption and demodulation activity plus fingerprint-index queries, candidate filtering, mutations, and final structure sizes |
 | `sat` | SAT checks, clause volumes, outcomes, and CPU-time components |
 | `terms` | Shared term nodes, insertions, recoveries, and storage estimate |
 | `proof` | Answer count, returned-clause depth, and proof/search given-clause counts |
@@ -51,6 +51,21 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 All process-global counters are captured at search entry and emitted as
 saturating per-run deltas. This matters for library tests and other callers
 that execute multiple searches in one process.
+
+The nested `indices.fingerprint` object separates compatible fingerprint
+leaves and candidate term payloads from exact unification successes. Its
+`paramodulation_candidates` and `paramodulation_unifiable_candidates` fields
+therefore measure filtering precision, while the existing backward-rewrite
+match counters provide the corresponding matching precision.
+`indices.fingerprint.structures` records the effective index type and final
+node, payload-leaf, and term-entry counts for backward rewriting,
+paramodulation-from, paramodulation-into, and negative-predicate
+paramodulation. A disabled index reports zero sizes.
+
+Fingerprint telemetry is enabled by the same scoped search-telemetry guard.
+Normal searches pay only a relaxed enabled-flag check at each fingerprint
+operation; candidate payload counting and atomic counter updates occur only
+while telemetry is requested.
 
 The JSON field names and outcome-reason spellings are compatibility contracts
 within schema version 1. Additive fields may be introduced without changing

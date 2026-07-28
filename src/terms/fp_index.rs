@@ -10,6 +10,128 @@ use crate::terms::termtypes::Term;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static INDEX_TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
+static INDEX_INSERTIONS: AtomicU64 = AtomicU64::new(0);
+static INDEX_DELETIONS: AtomicU64 = AtomicU64::new(0);
+static INDEX_UNIFICATION_QUERIES: AtomicU64 = AtomicU64::new(0);
+static INDEX_UNIFICATION_LEAVES: AtomicU64 = AtomicU64::new(0);
+static INDEX_UNIFICATION_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+static INDEX_MATCH_QUERIES: AtomicU64 = AtomicU64::new(0);
+static INDEX_MATCH_LEAVES: AtomicU64 = AtomicU64::new(0);
+static INDEX_MATCH_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+static PARAMODULATION_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+static PARAMODULATION_UNIFIABLE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FingerprintIndexTelemetrySnapshot {
+    pub insertions: u64,
+    pub deletions: u64,
+    pub unification_queries: u64,
+    pub unification_leaves: u64,
+    pub unification_candidates: u64,
+    pub match_queries: u64,
+    pub match_leaves: u64,
+    pub match_candidates: u64,
+    pub paramodulation_candidates: u64,
+    pub paramodulation_unifiable_candidates: u64,
+}
+
+impl FingerprintIndexTelemetrySnapshot {
+    #[must_use]
+    pub const fn since(self, baseline: Self) -> Self {
+        Self {
+            insertions: self.insertions.saturating_sub(baseline.insertions),
+            deletions: self.deletions.saturating_sub(baseline.deletions),
+            unification_queries: self
+                .unification_queries
+                .saturating_sub(baseline.unification_queries),
+            unification_leaves: self
+                .unification_leaves
+                .saturating_sub(baseline.unification_leaves),
+            unification_candidates: self
+                .unification_candidates
+                .saturating_sub(baseline.unification_candidates),
+            match_queries: self.match_queries.saturating_sub(baseline.match_queries),
+            match_leaves: self.match_leaves.saturating_sub(baseline.match_leaves),
+            match_candidates: self
+                .match_candidates
+                .saturating_sub(baseline.match_candidates),
+            paramodulation_candidates: self
+                .paramodulation_candidates
+                .saturating_sub(baseline.paramodulation_candidates),
+            paramodulation_unifiable_candidates: self
+                .paramodulation_unifiable_candidates
+                .saturating_sub(baseline.paramodulation_unifiable_candidates),
+        }
+    }
+}
+
+#[must_use]
+pub(crate) fn fingerprint_index_telemetry_snapshot() -> FingerprintIndexTelemetrySnapshot {
+    FingerprintIndexTelemetrySnapshot {
+        insertions: INDEX_INSERTIONS.load(Ordering::Relaxed),
+        deletions: INDEX_DELETIONS.load(Ordering::Relaxed),
+        unification_queries: INDEX_UNIFICATION_QUERIES.load(Ordering::Relaxed),
+        unification_leaves: INDEX_UNIFICATION_LEAVES.load(Ordering::Relaxed),
+        unification_candidates: INDEX_UNIFICATION_CANDIDATES.load(Ordering::Relaxed),
+        match_queries: INDEX_MATCH_QUERIES.load(Ordering::Relaxed),
+        match_leaves: INDEX_MATCH_LEAVES.load(Ordering::Relaxed),
+        match_candidates: INDEX_MATCH_CANDIDATES.load(Ordering::Relaxed),
+        paramodulation_candidates: PARAMODULATION_CANDIDATES.load(Ordering::Relaxed),
+        paramodulation_unifiable_candidates: PARAMODULATION_UNIFIABLE_CANDIDATES
+            .load(Ordering::Relaxed),
+    }
+}
+
+pub(crate) struct FingerprintIndexTelemetryGuard;
+
+impl Drop for FingerprintIndexTelemetryGuard {
+    fn drop(&mut self) {
+        INDEX_TELEMETRY_ENABLED.store(false, Ordering::Relaxed);
+    }
+}
+
+#[must_use]
+pub(crate) fn enable_fingerprint_index_telemetry() -> FingerprintIndexTelemetryGuard {
+    INDEX_TELEMETRY_ENABLED.store(true, Ordering::Relaxed);
+    FingerprintIndexTelemetryGuard
+}
+
+pub(crate) fn record_paramodulation_candidate_result(unifiable: bool) {
+    if !INDEX_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    PARAMODULATION_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+    if unifiable {
+        PARAMODULATION_UNIFIABLE_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn record_index_update(counter: &AtomicU64) {
+    if INDEX_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn record_index_query(
+    query_counter: &AtomicU64,
+    leaf_counter: &AtomicU64,
+    candidate_counter: &AtomicU64,
+    leaves: usize,
+    candidates: usize,
+) {
+    if !INDEX_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    query_counter.fetch_add(1, Ordering::Relaxed);
+    leaf_counter.fetch_add(u64::try_from(leaves).unwrap_or(u64::MAX), Ordering::Relaxed);
+    candidate_counter.fetch_add(
+        u64::try_from(candidates).unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct FPTree<T>
@@ -225,10 +347,16 @@ where
     pub fn collect_distrib(&self) -> FPIndexDistrib {
         let mut payload_sizes = PStack::<PStackInt>::new();
         let nodes = self.collect_distrib_rek(&mut payload_sizes);
+        let entries = payload_sizes
+            .as_slice()
+            .iter()
+            .map(|value| usize::try_from(*value).unwrap_or(usize::MAX))
+            .fold(0_usize, usize::saturating_add);
         let (average, stddev) = payload_sizes.compute_average();
         FPIndexDistrib {
             nodes,
             leaves: payload_sizes.len(),
+            entries,
             average,
             stddev,
         }
@@ -559,10 +687,11 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FPIndexDistrib {
     pub nodes: usize,
     pub leaves: usize,
+    pub entries: usize,
     pub average: f64,
     pub stddev: f64,
 }
@@ -631,11 +760,13 @@ where
     }
 
     pub fn insert(&mut self, term: &Term) -> &mut FPTree<T> {
+        record_index_update(&INDEX_INSERTIONS);
         let key = (self.fp_fun)(term);
         self.index.insert(&key)
     }
 
     pub fn delete(&mut self, term: &Term) {
+        record_index_update(&INDEX_DELETIONS);
         let key = (self.fp_fun)(term);
         self.index.delete(&key);
     }
@@ -654,12 +785,30 @@ where
         let _timer = crate::basics::perf_counters::start(
             crate::basics::perf_counters::PerfCounter::IndexUnifTimer,
         );
+        let start = collect.len();
         let key = (self.fp_fun)(term);
-        if self.discrimination_tree {
+        let leaves = if self.discrimination_tree {
             self.index.find_dt_unifiable(&key, sig, collect)
         } else {
             self.index.find_unifiable(&key, sig, collect)
-        }
+        };
+        let candidates = if INDEX_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+            collect[start..]
+                .iter()
+                .flatten()
+                .map(|payload| payload.nodes())
+                .fold(0_usize, usize::saturating_add)
+        } else {
+            0
+        };
+        record_index_query(
+            &INDEX_UNIFICATION_QUERIES,
+            &INDEX_UNIFICATION_LEAVES,
+            &INDEX_UNIFICATION_CANDIDATES,
+            leaves,
+            candidates,
+        );
+        leaves
     }
 
     /// Finds matchable leaves using a caller-provided live signature.
@@ -672,12 +821,30 @@ where
         let _timer = crate::basics::perf_counters::start(
             crate::basics::perf_counters::PerfCounter::IndexMatchTimer,
         );
+        let start = collect.len();
         let key = (self.fp_fun)(term);
-        if self.discrimination_tree {
+        let leaves = if self.discrimination_tree {
             self.index.find_dt_matchable(&key, sig, collect)
         } else {
             self.index.find_matchable(&key, sig, collect)
-        }
+        };
+        let candidates = if INDEX_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+            collect[start..]
+                .iter()
+                .flatten()
+                .map(|payload| payload.nodes())
+                .fold(0_usize, usize::saturating_add)
+        } else {
+            0
+        };
+        record_index_query(
+            &INDEX_MATCH_QUERIES,
+            &INDEX_MATCH_LEAVES,
+            &INDEX_MATCH_CANDIDATES,
+            leaves,
+            candidates,
+        );
+        leaves
     }
 
     pub fn collect_leaves<'b>(&'b self, result: &mut Vec<&'b FPTree<T>>) -> usize {
@@ -765,14 +932,19 @@ fn fp_symbol(sig: &Signature, symbol: FunCode) -> String {
 mod tests {
     use super::{FPIndex, FPTree};
     use crate::basics::objtrees::ObjTree;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{set_problem_type, ProblemType};
     use crate::terms::idx_fp::{
-        index_dt_create, index_fp1_create, index_fp2_create, IndexFingerprint, ANY_VAR, BELOW_VAR,
-        NOT_IN_TERM,
+        get_fp_index_function, index_dt_create, index_fp1_create, index_fp2_create,
+        IndexFingerprint, ANY_VAR, BELOW_VAR, FP_INDEX_NAMES, NOT_IN_TERM,
     };
+    use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::Type;
+    use crate::terms::subst::Substitution;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+    use std::collections::BTreeSet;
 
     struct TestSignature {
         sig: Signature,
@@ -805,6 +977,117 @@ mod tests {
             term.set_argument(index, arg.clone());
         }
         term
+    }
+
+    fn typed_leaf(code: i64, type_: &Type) -> Term {
+        let term = leaf(code);
+        term.set_type(Some(type_.clone()));
+        term
+    }
+
+    fn typed_term(code: i64, args: &[Term], type_: &Type) -> Term {
+        let term = term(code, args);
+        term.set_type(Some(type_.clone()));
+        term
+    }
+
+    fn exact_unification_result(left: &Term, right: &Term) -> bool {
+        let mut substitution = Substitution::new();
+        let result = subst_mgu_complete(left, right, &mut substitution);
+        substitution.backtrack();
+        result
+    }
+
+    fn exact_match_result(pattern: &Term, target: &Term) -> bool {
+        let mut substitution = Substitution::new();
+        let result = subst_match_complete(pattern, target, &mut substitution);
+        substitution.backtrack();
+        result
+    }
+
+    fn filtered_result_set(
+        index: &FPIndex<usize>,
+        indexed_terms: &[(usize, Term)],
+        query: &Term,
+        signature: &Signature,
+        unification: bool,
+    ) -> BTreeSet<usize> {
+        let mut payloads = Vec::new();
+        if unification {
+            index.find_unifiable(query, signature, &mut payloads);
+        } else {
+            index.find_matchable(query, signature, &mut payloads);
+        }
+        payloads
+            .into_iter()
+            .flatten()
+            .flat_map(ObjTree::to_vec)
+            .filter(|candidate| {
+                let term = &indexed_terms[*candidate].1;
+                if unification {
+                    exact_unification_result(query, term)
+                } else {
+                    exact_match_result(query, term)
+                }
+            })
+            .collect()
+    }
+
+    fn slow_result_set(
+        active: &BTreeSet<usize>,
+        indexed_terms: &[(usize, Term)],
+        query: &Term,
+        unification: bool,
+    ) -> BTreeSet<usize> {
+        active
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                let term = &indexed_terms[*candidate].1;
+                if unification {
+                    exact_unification_result(query, term)
+                } else {
+                    exact_match_result(query, term)
+                }
+            })
+            .collect()
+    }
+
+    fn delete_indexed_term(index: &mut FPIndex<usize>, identifier: usize, term: &Term) {
+        let payload_empty = {
+            let leaf = index.find_mut(term).expect("indexed term must have a leaf");
+            let payload = leaf
+                .payload_mut()
+                .expect("indexed term leaf must have a payload");
+            assert_eq!(payload.extract_object(&identifier), Some(identifier));
+            let empty = payload.is_empty();
+            if empty {
+                leaf.clear_payload();
+            }
+            empty
+        };
+        if payload_empty {
+            index.delete(term);
+        }
+    }
+
+    fn assert_replay_queries(
+        index: &FPIndex<usize>,
+        active: &BTreeSet<usize>,
+        indexed_terms: &[(usize, Term)],
+        queries: &[Term],
+        signature: &Signature,
+        variant: &str,
+    ) {
+        for query in queries {
+            for unification in [false, true] {
+                assert_eq!(
+                    filtered_result_set(index, indexed_terms, query, signature, unification),
+                    slow_result_set(active, indexed_terms, query, unification),
+                    "{variant} changed the exact retrieval result set"
+                );
+            }
+        }
     }
 
     fn payload_values(stack: &[Option<&ObjTree<i32>>]) -> Vec<i32> {
@@ -961,6 +1244,7 @@ mod tests {
         let distrib = index.collect_distrib();
         assert_eq!(distrib.nodes, 4);
         assert_eq!(distrib.leaves, 3);
+        assert_eq!(distrib.entries, 3);
         assert!((distrib.average - 1.0).abs() < f64::EPSILON);
         assert!(distrib.stddev.abs() < f64::EPSILON);
         assert_eq!(
@@ -978,6 +1262,104 @@ mod tests {
             .clear_payload();
         index.delete(&g);
         assert!(index.find(&g).is_none());
+    }
+
+    #[test]
+    fn all_index_variants_replay_dynamic_workload_with_exact_result_sets() {
+        let _lock = global_state_lock();
+        set_problem_type(ProblemType::FirstOrder).unwrap();
+        let data = test_signature();
+        let type_ = data.sig.type_bank().i_type();
+        let a = typed_leaf(data.a, &type_);
+        let b = typed_leaf(data.b, &type_);
+        let indexed_x = typed_leaf(-2, &type_);
+        let indexed_y = typed_leaf(-4, &type_);
+        let query_x = typed_leaf(-20, &type_);
+        let query_y = typed_leaf(-22, &type_);
+        let g_a = typed_term(data.g, std::slice::from_ref(&a), &type_);
+        let g_b = typed_term(data.g, std::slice::from_ref(&b), &type_);
+        let g_x = typed_term(data.g, std::slice::from_ref(&indexed_x), &type_);
+        let indexed_terms = vec![
+            (0, a.clone()),
+            (1, b.clone()),
+            (2, typed_term(data.f, &[a.clone(), b.clone()], &type_)),
+            (
+                3,
+                typed_term(data.f, &[indexed_x.clone(), b.clone()], &type_),
+            ),
+            (
+                4,
+                typed_term(data.f, &[indexed_y.clone(), indexed_y.clone()], &type_),
+            ),
+            (
+                5,
+                typed_term(data.f, &[g_a.clone(), indexed_x.clone()], &type_),
+            ),
+            (6, typed_term(data.g, std::slice::from_ref(&g_x), &type_)),
+            (7, typed_term(data.f, &[g_b.clone(), g_a.clone()], &type_)),
+        ];
+        let queries = vec![
+            query_x.clone(),
+            typed_term(data.g, std::slice::from_ref(&query_x), &type_),
+            typed_term(data.f, &[query_x.clone(), b.clone()], &type_),
+            typed_term(data.f, &[query_y.clone(), query_y.clone()], &type_),
+            typed_term(
+                data.f,
+                &[
+                    typed_term(data.g, std::slice::from_ref(&query_x), &type_),
+                    query_y,
+                ],
+                &type_,
+            ),
+            typed_term(data.f, &[b.clone(), a.clone()], &type_),
+        ];
+
+        for variant in FP_INDEX_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != "NoIndex")
+        {
+            let mut index = FPIndex::new(
+                get_fp_index_function(variant).expect("listed index variant must resolve"),
+            );
+            let mut active = BTreeSet::new();
+            for (identifier, term) in &indexed_terms[..4] {
+                index.insert(term).store_payload(*identifier);
+                active.insert(*identifier);
+            }
+            assert_replay_queries(
+                &index,
+                &active,
+                &indexed_terms,
+                &queries,
+                &data.sig,
+                variant,
+            );
+
+            for (identifier, term) in &indexed_terms[4..] {
+                index.insert(term).store_payload(*identifier);
+                active.insert(*identifier);
+            }
+            assert_replay_queries(
+                &index,
+                &active,
+                &indexed_terms,
+                &queries,
+                &data.sig,
+                variant,
+            );
+
+            delete_indexed_term(&mut index, 3, &indexed_terms[3].1);
+            active.remove(&3);
+            assert_replay_queries(
+                &index,
+                &active,
+                &indexed_terms,
+                &queries,
+                &data.sig,
+                variant,
+            );
+        }
     }
 
     #[test]

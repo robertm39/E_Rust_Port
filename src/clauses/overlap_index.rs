@@ -7,7 +7,7 @@ use crate::clauses::clausepos_tree::ClauseTPosTree;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::subterm_index::TermIdentitySet;
 use crate::clauses::subterm_tree::SubtermOcc;
-use crate::terms::fp_index::{FPIndex, FPTree};
+use crate::terms::fp_index::{FPIndex, FPIndexDistrib, FPTree};
 use crate::terms::functypes::FunCode;
 use crate::terms::idx_fp::FingerprintIndexFunction;
 use crate::terms::signature::Signature;
@@ -97,6 +97,11 @@ impl OverlapIndex {
     }
 
     #[must_use]
+    pub fn distribution(&self) -> FPIndexDistrib {
+        self.index.collect_distrib()
+    }
+
+    #[must_use]
     pub fn leaf_debug_string(&self, bank: &TermBank, problem_type: ProblemType) -> String {
         let mut output = String::new();
         let _ = self.write_leaf_debug(&mut output, bank, problem_type);
@@ -117,12 +122,12 @@ impl OverlapIndex {
     #[cfg(feature = "print-index-stats")]
     #[must_use]
     pub fn distrib_data_string(&self) -> String {
-        self.index.collect_distrib().data_string()
+        self.distribution().data_string()
     }
 
     #[cfg(feature = "print-index-stats")]
     pub fn write_distrib_data(&self, output: &mut impl Write) -> fmt::Result {
-        self.index.collect_distrib().write_data(output)
+        self.distribution().write_data(output)
     }
 
     #[cfg(feature = "print-index-stats")]

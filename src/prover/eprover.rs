@@ -160,6 +160,7 @@ use crate::prover::search_telemetry::{
     render_search_telemetry, SearchTelemetryCounterSnapshot, SearchTelemetryRecord,
 };
 use crate::prover::version::{self, PROGRAM_NAME, VERSION, VERSION_QUALIFIER};
+use crate::terms::fp_index::enable_fingerprint_index_telemetry;
 use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
     lambda_eta_expand_db, lambda_eta_reduce_db, lambda_to_forall, named_to_db, set_eta_normalizer,
@@ -5895,6 +5896,8 @@ fn run_proof_search<W: Write + ?Sized>(
         .search_telemetry_file
         .as_ref()
         .map(|_| SearchTelemetryCounterSnapshot::capture());
+    let _fingerprint_index_telemetry_guard =
+        search_telemetry_baseline.map(|_| enable_fingerprint_index_telemetry());
     let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
     if search_telemetry_baseline.is_some() {
         state.enable_search_telemetry();

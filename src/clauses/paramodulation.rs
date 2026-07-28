@@ -22,6 +22,7 @@ use crate::heuristics::to_params::TermOrdering;
 use crate::inout::signals::time_is_up;
 use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::fp_index::record_paramodulation_candidate_result;
 use crate::terms::ho_csu::CsuIterator;
 use crate::terms::match_mgu::{
     subst_mgu_complete_with_bank, term_has_higher_order_unification_surface,
@@ -753,9 +754,10 @@ fn compute_from_position_into_occurrence(
 
     let mut subst = Substitution::new();
     let result = (|| {
-        if !subst_mgu_complete_with_bank(bank, &from_term, occurrence.term(), &mut subst)?
-            || !indexed_source_allows_under_subst(bank, ocb, from_pos, from_clause)?
-        {
+        let unified =
+            subst_mgu_complete_with_bank(bank, &from_term, occurrence.term(), &mut subst)?;
+        record_paramodulation_candidate_result(unified);
+        if !unified || !indexed_source_allows_under_subst(bank, ocb, from_pos, from_clause)? {
             return Ok(0);
         }
         let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
@@ -828,6 +830,7 @@ fn compute_indexed_sources_into_position(
                     return Err(error);
                 }
             };
+        record_paramodulation_candidate_result(unified);
         if !unified {
             subst.backtrack();
             continue;
@@ -897,6 +900,7 @@ fn compute_from_position_into_occurrence_csu(
     let mut subst = Substitution::new();
     let mut iter = CsuIterator::new(&from_term, occurrence.term(), &subst);
     let mut paramod_count = 0;
+    let mut unifiable = false;
 
     loop {
         let has_next = match iter.next_csu_element(bank, &mut subst) {
@@ -909,6 +913,7 @@ fn compute_from_position_into_occurrence_csu(
         if !has_next {
             break;
         }
+        unifiable = true;
 
         if !indexed_source_allows_under_subst(bank, ocb, from_pos, from_clause)? {
             continue;
@@ -942,6 +947,7 @@ fn compute_from_position_into_occurrence_csu(
     }
 
     iter.destroy(&mut subst);
+    record_paramodulation_candidate_result(unifiable);
     Ok(paramod_count)
 }
 
@@ -1102,6 +1108,7 @@ fn compute_indexed_sources_into_position_csu(
         )?;
         let mut subst = Substitution::new();
         let mut iter = CsuIterator::new(overlap_term, occurrence.term(), &subst);
+        let mut unifiable = false;
 
         loop {
             let has_next = match iter.next_csu_element(bank, &mut subst) {
@@ -1114,6 +1121,7 @@ fn compute_indexed_sources_into_position_csu(
             if !has_next {
                 break;
             }
+            unifiable = true;
 
             if !indexed_target_allows_under_subst(bank, ocb, into_pos, into_clause)? {
                 continue;
@@ -1148,6 +1156,7 @@ fn compute_indexed_sources_into_position_csu(
         }
 
         iter.destroy(&mut subst);
+        record_paramodulation_candidate_result(unifiable);
     }
 
     Ok(paramod_count)
