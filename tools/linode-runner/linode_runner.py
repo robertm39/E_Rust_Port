@@ -73,29 +73,61 @@ PLAN_SPECS = {
 
 
 class HighMemoryUsage(NamedTuple):
-    """High-memory usage within one fixed-EST accounting day."""
+    """Bank-adjusted high-memory usage within one fixed-EST accounting day."""
 
-    used: timedelta
     actual: timedelta
-    carried_in: timedelta
+    balance_at_start: timedelta
     day_start: datetime
     next_boundary: datetime
 
     @property
+    def banked_at_start(self) -> timedelta:
+        return max(self.balance_at_start, timedelta())
+
+    @property
+    def debt_at_start(self) -> timedelta:
+        return max(-self.balance_at_start, timedelta())
+
+    @property
+    def capacity(self) -> timedelta:
+        return max(HIGH_MEMORY_DAILY_LIMIT + self.balance_at_start, timedelta())
+
+    @property
     def remaining(self) -> timedelta:
-        return max(HIGH_MEMORY_DAILY_LIMIT - self.used, timedelta())
+        return max(self.capacity - self.actual, timedelta())
+
+    @property
+    def next_balance(self) -> timedelta:
+        return min(
+            HIGH_MEMORY_DAILY_LIMIT,
+            self.balance_at_start + HIGH_MEMORY_DAILY_LIMIT - self.actual,
+        )
+
+    @property
+    def banked_at_next_boundary(self) -> timedelta:
+        return max(self.next_balance, timedelta())
+
+    @property
+    def debt_at_next_boundary(self) -> timedelta:
+        return max(-self.next_balance, timedelta())
 
     @property
     def exhausted(self) -> bool:
-        return self.used >= HIGH_MEMORY_DAILY_LIMIT
+        return self.actual >= self.capacity
 
     @property
     def projected_eligible_at(self) -> datetime:
         """Earliest boundary allowing a start if no additional usage accrues."""
 
-        overflow = max(self.used - HIGH_MEMORY_DAILY_LIMIT, timedelta())
-        blocked_days = overflow // HIGH_MEMORY_DAILY_LIMIT
-        return self.next_boundary + timedelta(days=blocked_days)
+        balance = self.next_balance
+        boundary = self.next_boundary
+        while HIGH_MEMORY_DAILY_LIMIT + balance <= timedelta():
+            balance = min(
+                HIGH_MEMORY_DAILY_LIMIT,
+                balance + HIGH_MEMORY_DAILY_LIMIT,
+            )
+            boundary += timedelta(days=1)
+        return boundary
 
 
 class RunnerError(RuntimeError):
@@ -450,7 +482,7 @@ def high_memory_usage(
     history_root: Path | None = None,
     current_state_path: Path | None = None,
 ) -> HighMemoryUsage:
-    """Sum managed high-memory lifetime overlapping the current fixed-EST day."""
+    """Replay trusted history and return current bank-adjusted usage."""
 
     history = RUN_HISTORY if history_root is None else history_root
     current = CURRENT_STATE if current_state_path is None else current_state_path
@@ -520,7 +552,7 @@ def high_memory_usage(
         )
     else:
         first_day = day_start
-    carried_in = timedelta()
+    balance_at_start = HIGH_MEMORY_DAILY_LIMIT
     actual = timedelta()
     accounting_day = first_day
     while accounting_day <= day_start:
@@ -531,15 +563,16 @@ def high_memory_usage(
             overlap_end = min(ended_at, following_day)
             if overlap_end > overlap_start:
                 actual += overlap_end - overlap_start
-        used = carried_in + actual
         if accounting_day == day_start:
             break
-        carried_in = max(used - HIGH_MEMORY_DAILY_LIMIT, timedelta())
+        balance_at_start = min(
+            HIGH_MEMORY_DAILY_LIMIT,
+            balance_at_start + HIGH_MEMORY_DAILY_LIMIT - actual,
+        )
         accounting_day = following_day
     return HighMemoryUsage(
-        used=used,
         actual=actual,
-        carried_in=carried_in,
+        balance_at_start=balance_at_start,
         day_start=day_start,
         next_boundary=next_boundary,
     )
@@ -556,15 +589,25 @@ def report_high_memory_usage(usage: HighMemoryUsage) -> None:
     day = usage.day_start.astimezone(FIXED_EST).date().isoformat()
     boundary_est = usage.next_boundary.astimezone(FIXED_EST).isoformat()
     boundary_utc = format_utc(usage.next_boundary)
-    print(
-        f"High-memory usage for {day} fixed EST (UTC-05:00): "
-        f"{format_duration(usage.used)} of "
-        f"{format_duration(HIGH_MEMORY_DAILY_LIMIT)}"
-    )
+    print(f"High-memory usage for {day} fixed EST (UTC-05:00)")
+    print(f"Daily base allowance: {format_duration(HIGH_MEMORY_DAILY_LIMIT)}")
+    print(f"Banked usage at start of day: {format_duration(usage.banked_at_start)}")
+    print(f"Usage debt at start of day: {format_duration(usage.debt_at_start)}")
+    print(f"Adjusted daily capacity: {format_duration(usage.capacity)}")
     print(f"Actual Linode lifetime today: {format_duration(usage.actual)}")
-    print(f"Overflow carried from prior day: {format_duration(usage.carried_in)}")
-    print(f"Remaining before new starts are blocked: {format_duration(usage.remaining)}")
+    print(
+        "Remaining before new starts are blocked: "
+        f"{format_duration(usage.remaining)}"
+    )
     print(f"Next accounting boundary: {boundary_est} ({boundary_utc} UTC)")
+    print(
+        "Projected bank at next boundary if no further usage accrues: "
+        f"{format_duration(usage.banked_at_next_boundary)}"
+    )
+    print(
+        "Projected debt at next boundary if no further usage accrues: "
+        f"{format_duration(usage.debt_at_next_boundary)}"
+    )
     if usage.exhausted:
         eligible_est = usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()
         eligible_utc = format_utc(usage.projected_eligible_at)
@@ -577,7 +620,8 @@ def report_high_memory_usage(usage: HighMemoryUsage) -> None:
 def require_high_memory_allowance(usage: HighMemoryUsage) -> None:
     if usage.exhausted:
         raise RunnerError(
-            "High-memory usage has reached the four-hour daily limit; "
+            "High-memory usage has reached today's bank-adjusted capacity "
+            f"of {format_duration(usage.capacity)}; "
             "no new high-memory run may start now. If no further usage accrues, "
             f"the projected earliest eligible boundary is "
             f"{usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()} "

@@ -154,17 +154,19 @@ when a task should more closely resemble the CASC configuration. For a closer
 CASC match, every actual prover command on that host should include
 `--memory-limit=131072`, which is the prover's MB value for 128 GiB.
 
-High-memory `up` and `run` starts are forbidden once managed high-memory usage
-has reached four hours in the current fixed-EST accounting day. Fixed EST means
-UTC-05:00 year-round, without daylight-saving time; the controller uses
-Linode-controlled timestamps rather than the local Windows clock. Any usage
-above four hours carries into the next day; overflow continues rolling forward
-until later daily allowances absorb it. Run
-`.\linode-runner.ps1 check --high-memory` to see today's actual usage, carried
-overflow, remaining allowance, next accounting boundary, and projected
-eligibility when blocked. Use the guarded `up`/`sync`/`exec`/`down` lifecycle
-documented in the runbook only when an exceptional task needs individual
-remote commands.
+High-memory usage has a four-hour daily base allowance and a bank capped at four
+hours. The bank starts full before the earliest trusted run, unused daily time
+refills it, usage above the base consumes it, and overshoot beyond the bank
+becomes uncapped debt that reduces later capacity. New high-memory `up` and
+`run` starts are forbidden once actual usage reaches the base allowance adjusted
+by the bank or debt at the start of the fixed-EST day. Fixed EST means UTC-05:00
+year-round, without daylight-saving time; the controller uses Linode-controlled
+timestamps rather than the local Windows clock. Run
+`.\linode-runner.ps1 check --high-memory` to see the base allowance, starting
+bank or debt, adjusted capacity, actual and remaining usage, projected next
+balance, next accounting boundary, and projected eligibility when blocked. Use
+the guarded `up`/`sync`/`exec`/`down` lifecycle documented in the runbook only
+when an exceptional task needs individual remote commands.
 
 ## Runtime PicoSAT Selection
 

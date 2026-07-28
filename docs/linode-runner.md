@@ -21,26 +21,39 @@ The prover option is expressed in MB, so `131072` represents 128 GiB. The
 controller does not inject this option automatically; include it in every
 CASC-oriented Umlaut command.
 
-High-memory starts have a mandatory daily cost guard. If managed high-memory
-Linodes have run for at least four hours during the current accounting day, the
-controller refuses another `up` or `run` using that profile. A start is allowed
-while usage is below four hours even if that run later crosses the threshold.
+High-memory starts have a mandatory bank-adjusted daily cost guard. The base
+allowance is four hours per accounting day. Unused base allowance is added to a
+bank capped at four hours, so a full bank raises one day's capacity to eight
+hours. Existing trusted history is replayed as though the bank was full before
+the earliest recorded run; no separate balance file is required.
+
+The balance is fixed at the start of each day. Positive balance is banked usage;
+negative balance is uncapped usage debt. The controller computes:
+
+```text
+daily capacity = max(0, 4 hours + starting balance)
+next balance = min(4 hours, starting balance + 4 hours - actual usage)
+```
+
+The controller refuses another high-memory `up` or `run` once actual usage
+reaches the day's capacity. A start is allowed while usage is below capacity
+even if that run later crosses the threshold; the overshoot becomes debt.
+Empty days add four hours, first repaying debt and then filling the bank.
 Normal-profile starts are not restricted by high-memory usage.
 
-Usage beyond four hours is not discarded at midnight. The excess becomes
-high-memory usage at the start of the next accounting day and is added to that
-day's actual Linode lifetime. If the combined amount still exceeds four hours,
-the new overflow carries forward again until later daily allowances absorb it.
-For example, five hours of high-memory use on one day makes the next day start
-with one hour already used.
+For example, a two-hour starting bank gives six hours of capacity. Using three
+hours leaves a three-hour bank for the next day, using five hours leaves a
+one-hour bank, and using seven hours creates one hour of debt. That debt reduces
+the next day's capacity to three hours.
 
 An accounting day is midnight-to-midnight at fixed UTC-05:00 ("fixed EST").
 Daylight-saving time is never applied. The controller obtains current time
 from the Linode API's HTTPS `Date` header and records Linode-provided
 creation-to-deletion intervals, rather than trusting the Windows clock.
-`check --high-memory` reports actual lifetime, carried overflow, effective used
-and remaining time, the next accounting boundary, and projected eligibility
-when blocked; it returns nonzero when a new high-memory start would be blocked.
+`check --high-memory` reports the base allowance, bank and debt at day start,
+adjusted capacity, actual and remaining time, projected balance at the next
+boundary, and projected eligibility when blocked. It returns nonzero when a new
+high-memory start would be blocked.
 
 This worker is the project's sole Rust/C execution environment. Do not run
 Cargo, `rustc`, Rust project binaries, the C build, C binaries, WSL, Valgrind,
@@ -118,10 +131,10 @@ guarded $0.74-an-hour profile:
 .\linode-runner.ps1 run --high-memory
 ```
 
-The same four-hour fixed-EST start guard applies to both the automated `run`
-command and the interactive `up` command. The advanced `--type` option remains
-available for compatibility, but only the two documented types are accepted;
-`--type g7-highmem-8` cannot bypass the high-memory guard.
+The same bank-adjusted fixed-EST start guard applies to both the automated
+`run` command and the interactive `up` command. The advanced `--type` option
+remains available for compatibility, but only the two documented types are
+accepted; `--type g7-highmem-8` cannot bypass the high-memory guard.
 
 The controller detects the machine's current public IPv4 address and creates an
 ephemeral firewall that accepts only TCP port 22 from that `/32`. Outbound
@@ -301,11 +314,11 @@ Python tests may run locally:
 ```
 
 The tests pin both supported Linode profiles, CLI selection, trusted API time,
-fixed-EST high-memory accounting and blocking, firewall settings, remote-only
-quality gates, Windows cross-toolchain bootstrap, source-archive exclusions,
-safe artifact extraction, stale-resource selection, label-matching deletion
-guards, compatibility matrices, report normalization, and disposable C-source
-preparation. They do not compile or execute Rust or C.
+fixed-EST high-memory bank/debt accounting and blocking, firewall settings,
+remote-only quality gates, Windows cross-toolchain bootstrap, source-archive
+exclusions, safe artifact extraction, stale-resource selection, label-matching
+deletion guards, compatibility matrices, report normalization, and disposable
+C-source preparation. They do not compile or execute Rust or C.
 
 Current Akamai references:
 
