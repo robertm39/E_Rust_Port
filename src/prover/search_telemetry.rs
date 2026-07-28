@@ -3,6 +3,7 @@
 use crate::basics::os_wrapper::ResourceUsage;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::proofstate::{ProofState, SearchTelemetryHighWater};
+use crate::heuristics::hcb::HcbSelectionTelemetry;
 use crate::heuristics::proofcontrol::{
     ProcessClauseReturnReason, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
@@ -100,6 +101,7 @@ pub(crate) struct SearchTelemetryRecord<'a> {
     pub raw_clauses: i64,
     pub preprocessing_removed: i64,
     pub state: &'a ProofState,
+    pub selection_telemetry: Option<&'a HcbSelectionTelemetry>,
     pub counter_baseline: SearchTelemetryCounterSnapshot,
     pub resource_usage: ResourceUsage,
 }
@@ -161,6 +163,7 @@ pub(crate) fn render_search_telemetry(
     writeln!(output, "{{")?;
     write_identity_and_outcome(&mut output, record)?;
     write_search_funnel(&mut output, record, &derived)?;
+    write_clause_selection(&mut output, record.selection_telemetry)?;
     write_search_activity(&mut output, record, &derived)?;
     write_resources_and_proof(&mut output, record, &derived)?;
     writeln!(output, "}}")?;
@@ -218,12 +221,13 @@ fn write_search_funnel(
     let statistics = record.state.statistics();
     writeln!(
         output,
-        "  \"search_funnel\": {{\"processed\": {}, \"trivial\": {}, \"forward_subsumed\": {}, \"processed_non_trivial\": {}, \"other_redundant\": {}, \"generated\": {}, \"generated_non_trivial\": {}, \"generated_literals\": {}, \"final_processed\": {}, \"final_unprocessed\": {}, \"final_total\": {}, \"final_archived\": {}, \"high_water_processed\": {}, \"high_water_unprocessed\": {}, \"high_water_total\": {}, \"high_water_archived\": {}}},",
+        "  \"search_funnel\": {{\"processed\": {}, \"trivial\": {}, \"forward_subsumed\": {}, \"processed_non_trivial\": {}, \"other_redundant\": {}, \"non_redundant_deleted\": {}, \"generated\": {}, \"generated_non_trivial\": {}, \"generated_literals\": {}, \"final_processed\": {}, \"final_unprocessed\": {}, \"final_total\": {}, \"final_archived\": {}, \"high_water_processed\": {}, \"high_water_unprocessed\": {}, \"high_water_total\": {}, \"high_water_archived\": {}}},",
         statistics.processed_count,
         statistics.proc_trivial_count,
         statistics.proc_forward_subsumed_count,
         statistics.proc_non_trivial_count,
         statistics.other_redundant_count,
+        statistics.non_redundant_deleted,
         derived.generated_clauses,
         statistics.non_trivial_generated_count,
         derived.generated_literals,
@@ -279,6 +283,40 @@ fn write_search_activity(
         counters.backward_rewrite_match_attempts,
         counters.backward_rewrite_match_successes
     )
+}
+
+fn write_clause_selection(
+    output: &mut String,
+    telemetry: Option<&HcbSelectionTelemetry>,
+) -> fmt::Result {
+    let enabled = telemetry.is_some();
+    let selection_steps = telemetry.map_or(0, |value| value.selection_steps);
+    write!(
+        output,
+        "  \"clause_selection\": {{\"enabled\": {enabled}, \"selection_steps\": {selection_steps}, \"queues\": ["
+    )?;
+    if let Some(telemetry) = telemetry {
+        for (index, queue) in telemetry.queues.iter().enumerate() {
+            if index != 0 {
+                output.write_str(", ")?;
+            }
+            write!(
+                output,
+                "{{\"evaluation_index\": {}, \"schedule_quota\": {}, \"scheduled_selections\": {}, \"preferred_selections\": {}, \"normal_selections\": {}, \"deferred_selections\": {}, \"empty_or_orphaned_selections\": {}, \"preferred_bypass_steps\": {}, \"max_schedule_gap\": {}, \"max_preferred_wait\": {}}}",
+                queue.evaluation_index,
+                queue.schedule_quota,
+                queue.scheduled_selections,
+                queue.preferred_selections,
+                queue.normal_selections,
+                queue.deferred_selections,
+                queue.empty_or_orphaned_selections,
+                queue.preferred_bypass_steps,
+                queue.max_schedule_gap,
+                queue.max_preferred_wait,
+            )?;
+        }
+    }
+    writeln!(output, "]}},")
 }
 
 fn write_resources_and_proof(
@@ -432,8 +470,10 @@ fn nonnegative_counter(value: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        json_string, return_reason_name, stop_reason_name, SearchTelemetryCounterSnapshot,
+        json_string, return_reason_name, stop_reason_name, write_clause_selection,
+        SearchTelemetryCounterSnapshot,
     };
+    use crate::heuristics::hcb::{HcbQueueSelectionTelemetry, HcbSelectionTelemetry};
     use crate::heuristics::proofcontrol::{
         ProcessClauseReturnReason, SaturateReturnReason, SaturateStopReason,
     };
@@ -479,5 +519,31 @@ mod tests {
         let delta = current.since(baseline);
         assert_eq!(delta.clause_subsumption_calls, 4);
         assert_eq!(delta.condensation_successes, 0);
+    }
+
+    #[test]
+    fn clause_selection_telemetry_renders_queue_fairness_fields() {
+        let mut queue = HcbQueueSelectionTelemetry::default();
+        queue.evaluation_index = 1;
+        queue.schedule_quota = 3;
+        queue.scheduled_selections = 4;
+        queue.preferred_selections = 2;
+        queue.normal_selections = 1;
+        queue.empty_or_orphaned_selections = 1;
+        queue.preferred_bypass_steps = 5;
+        queue.max_schedule_gap = 3;
+        queue.max_preferred_wait = 2;
+        let telemetry = HcbSelectionTelemetry {
+            selection_steps: 7,
+            queues: vec![queue],
+        };
+        let mut output = String::new();
+
+        write_clause_selection(&mut output, Some(&telemetry))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        assert!(output.contains("\"selection_steps\": 7"));
+        assert!(output.contains("\"schedule_quota\": 3"));
+        assert!(output.contains("\"max_preferred_wait\": 2"));
     }
 }

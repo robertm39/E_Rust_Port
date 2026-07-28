@@ -238,6 +238,18 @@ worker-crash, aggregate-accounting, and seeded-proof evidence is recorded in
 The normal-host fallback is complete, while the required 8-CPU/150 GiB run
 remains explicitly blocked on provider plan access.
 
+## Clause Selection Research
+
+The layered clause-selection and Limited Resource Strategy evaluation is
+recorded in
+[`experiments/2026-07-28-005-layered-clause-selection/`](experiments/2026-07-28-005-layered-clause-selection/).
+The 704-run family-held-out matrix rejects the tested goal/Horn/unit layers and
+a direct Otter-loop LRS port for the current DISCOUNT architecture. The
+opt-in per-queue schedule, priority, bypass, and wait instrumentation remains
+available through [`docs/search-telemetry.md`](docs/search-telemetry.md).
+The unexpected three-problem held-out gain from the simpler goal-hard-priority
+control is tracked separately under Bead `E_Rust_Port-9jt.3.8`.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

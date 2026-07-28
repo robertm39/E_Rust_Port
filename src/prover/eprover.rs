@@ -6056,6 +6056,9 @@ fn run_proof_search<W: Write + ?Sized>(
             problem_type() == ProblemType::HigherOrder,
         )?
     };
+    if search_telemetry_baseline.is_some() {
+        control.enable_active_hcb_selection_telemetry();
+    }
     write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
     for event in heuristic_admin_events {
         match event {
@@ -6153,7 +6156,7 @@ fn run_proof_search<W: Write + ?Sized>(
                 &state,
                 &outcome,
                 ErrorCode::CPU_LIMIT_ERROR.exit_status(),
-                control.heuristic_parms().heuristic_name.as_str(),
+                &control,
                 proof_statistics_input,
                 counter_baseline,
             )?;
@@ -6216,7 +6219,7 @@ fn run_proof_search<W: Write + ?Sized>(
             &state,
             &outcome,
             exit_status,
-            control.heuristic_parms().heuristic_name.as_str(),
+            &control,
             proof_statistics_input,
             counter_baseline,
         )?;
@@ -10312,7 +10315,7 @@ fn write_search_telemetry(
     state: &ProofState,
     outcome: &SaturateOutcome,
     exit_status: u8,
-    heuristic: &str,
+    control: &ProofControl,
     input: ProofStatisticsInput,
     counter_baseline: SearchTelemetryCounterSnapshot,
 ) -> Result<(), EProverError> {
@@ -10322,7 +10325,7 @@ fn write_search_telemetry(
     let record = SearchTelemetryRecord {
         files: &config.files,
         problem_type: problem_type(),
-        heuristic,
+        heuristic: control.heuristic_parms().heuristic_name.as_str(),
         outcome,
         exit_status,
         parsed_axioms: input.parsed_ax_no,
@@ -10330,6 +10333,7 @@ fn write_search_telemetry(
         raw_clauses: input.raw_clause_no,
         preprocessing_removed: input.preproc_removed,
         state,
+        selection_telemetry: control.active_hcb_selection_telemetry(),
         counter_baseline,
         resource_usage: current_resource_usage(),
     };

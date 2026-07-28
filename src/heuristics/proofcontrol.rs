@@ -98,8 +98,8 @@ use crate::heuristics::hcb::{
     hcb_clause_evaluate_with_bank, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
     hcb_clause_set_reweight_with_bank, hcb_single_weight_clause_select_with,
     hcb_standard_clause_select_with, AcHandling, ExtInferenceType, GroundingStrategy,
-    HcbSelectFunction, HeuristicParmsCell, ParamodulationType as HcbParamodulationType,
-    PrimEnumMode, SplitClassType, SplitType,
+    HcbSelectFunction, HcbSelectionTelemetry, HeuristicParmsCell,
+    ParamodulationType as HcbParamodulationType, PrimEnumMode, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -498,6 +498,22 @@ impl ProofControl {
 
     pub const fn set_active_hcb(&mut self, active_hcb: Option<usize>) {
         self.active_hcb = active_hcb;
+    }
+
+    pub(crate) fn enable_active_hcb_selection_telemetry(&mut self) {
+        let Some(active_hcb) = self.active_hcb else {
+            return;
+        };
+        if let Some(hcb) = self.hcbs.hcb_mut(active_hcb) {
+            hcb.enable_selection_telemetry();
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn active_hcb_selection_telemetry(&self) -> Option<&HcbSelectionTelemetry> {
+        self.active_hcb
+            .and_then(|active_hcb| self.hcbs.hcb(active_hcb))
+            .and_then(crate::heuristics::hcb::HcbCell::selection_telemetry)
     }
 
     #[must_use]

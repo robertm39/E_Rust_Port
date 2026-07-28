@@ -13,11 +13,19 @@ standard output or standard error. The parent directory must already exist.
 Syntax checking, applicative encoding, pruning, CNF-only conversion, and
 strategy-printing modes reject the option because they do not run saturation.
 
-The disabled path does not allocate a record or inspect proof-state sets.
-There are two predictable conditional checkpoints per given-clause iteration.
-When enabled, those checkpoints update constant-time clause-set high-water
-counts. Formatting and file I/O happen once, after the search outcome is
-known.
+The disabled path does not allocate a record or inspect proof-state or HCB
+queues. There are two predictable conditional checkpoints per given-clause
+iteration. When enabled, those checkpoints update constant-time clause-set
+high-water counts and inspect only the best entry of each active HCB evaluation
+queue. Formatting and file I/O happen once, after the search outcome is known.
+
+Within `clause_selection`, `max_schedule_gap` counts selections of other queues
+between visits to one queue. `preferred_bypass_steps` counts selections made
+elsewhere while that queue had a clause above normal priority, and
+`max_preferred_wait` is the longest consecutive such wait. The queue's
+`schedule_quota` is its number of consecutive visits in one HCB cycle. These
+are starvation diagnostics; they do not claim that a preferred clause is
+logically necessary or that a normal/deferred clause is redundant.
 
 ## Schema contract
 
@@ -30,7 +38,8 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 | `configuration` | Effective heuristic name |
 | `outcome` | Returned/stopped classification, stable snake-case reason, processed steps, and exit status |
 | `input_funnel` | Parsed axioms, relevancy removals, raw clauses, and preprocessing removals |
-| `search_funnel` | Processed/redundant/generated counts plus final and high-water clause-set sizes |
+| `search_funnel` | Processed/redundant/resource-pruned/generated counts plus final and high-water clause-set sizes |
+| `clause_selection` | HCB queue quotas, selections by priority class, empty/orphan exhaustions, schedule gaps, and preferred-clause bypass/wait bounds |
 | `inferences` | Paramodulation, factoring, equation-resolution, disequality-decomposition, and negative-extensionality totals |
 | `simplification` | Rewrite, subsumption, condensation, and related contraction totals |
 | `indices` | Subsumption, demodulation, and backward-rewrite lookup activity |

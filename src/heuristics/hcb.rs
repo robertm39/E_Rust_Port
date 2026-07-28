@@ -3,7 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{FormulaProperties, CP_DELETE_CLAUSE};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::neweval::{evals_alloc, EvalCell};
+use crate::clauses::neweval::{evals_alloc, EvalCell, PRIO_NORMAL};
 use crate::heuristics::to_params::{
     order_parms_parse_into_report, order_parms_print_string, OrderParmsCell,
 };
@@ -731,12 +731,111 @@ pub enum HcbSelectFunction {
     SingleWeightClauseSelect,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HcbQueueSelectionTelemetry {
+    pub(crate) evaluation_index: usize,
+    pub(crate) schedule_quota: u64,
+    pub(crate) scheduled_selections: u64,
+    pub(crate) preferred_selections: u64,
+    pub(crate) normal_selections: u64,
+    pub(crate) deferred_selections: u64,
+    pub(crate) empty_or_orphaned_selections: u64,
+    pub(crate) preferred_bypass_steps: u64,
+    pub(crate) max_schedule_gap: u64,
+    pub(crate) max_preferred_wait: u64,
+    current_schedule_gap: u64,
+    current_preferred_wait: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HcbSelectionTelemetry {
+    pub(crate) selection_steps: u64,
+    pub(crate) queues: Vec<HcbQueueSelectionTelemetry>,
+}
+
+impl HcbSelectionTelemetry {
+    fn from_schedule(select_switch: &[i64]) -> Self {
+        let mut previous = 0;
+        let queues = select_switch
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(evaluation_index, cumulative)| {
+                let quota = cumulative.saturating_sub(previous);
+                previous = cumulative;
+                HcbQueueSelectionTelemetry {
+                    evaluation_index,
+                    schedule_quota: u64::try_from(quota).unwrap_or(0),
+                    ..HcbQueueSelectionTelemetry::default()
+                }
+            })
+            .collect();
+        Self {
+            selection_steps: 0,
+            queues,
+        }
+    }
+
+    fn record_schedule_step(&mut self, selected_eval: usize, preferred_available: &[bool]) {
+        self.selection_steps = self.selection_steps.saturating_add(1);
+        for (index, queue) in self.queues.iter_mut().enumerate() {
+            if index == selected_eval {
+                queue.scheduled_selections = queue.scheduled_selections.saturating_add(1);
+                queue.max_schedule_gap = queue.max_schedule_gap.max(queue.current_schedule_gap);
+                queue.current_schedule_gap = 0;
+            } else {
+                queue.current_schedule_gap = queue.current_schedule_gap.saturating_add(1);
+                queue.max_schedule_gap = queue.max_schedule_gap.max(queue.current_schedule_gap);
+            }
+
+            if !preferred_available.get(index).copied().unwrap_or(false) {
+                queue.current_preferred_wait = 0;
+            } else if index == selected_eval {
+                queue.max_preferred_wait =
+                    queue.max_preferred_wait.max(queue.current_preferred_wait);
+                queue.current_preferred_wait = 0;
+            } else {
+                queue.preferred_bypass_steps = queue.preferred_bypass_steps.saturating_add(1);
+                queue.current_preferred_wait = queue.current_preferred_wait.saturating_add(1);
+                queue.max_preferred_wait =
+                    queue.max_preferred_wait.max(queue.current_preferred_wait);
+            }
+        }
+    }
+
+    fn record_selected_clause(&mut self, selected_eval: usize, clause: Option<&Clause>) {
+        let Some(queue) = self.queues.get_mut(selected_eval) else {
+            return;
+        };
+        let Some(priority) = clause
+            .and_then(Clause::evaluations)
+            .map(|evaluations| evaluations.eval(selected_eval).priority())
+        else {
+            queue.empty_or_orphaned_selections =
+                queue.empty_or_orphaned_selections.saturating_add(1);
+            return;
+        };
+        match priority.cmp(&PRIO_NORMAL) {
+            std::cmp::Ordering::Less => {
+                queue.preferred_selections = queue.preferred_selections.saturating_add(1);
+            }
+            std::cmp::Ordering::Equal => {
+                queue.normal_selections = queue.normal_selections.saturating_add(1);
+            }
+            std::cmp::Ordering::Greater => {
+                queue.deferred_selections = queue.deferred_selections.saturating_add(1);
+            }
+        }
+    }
+}
+
 pub struct HcbCell<Data = ()> {
     wfcb_list: Vec<WfcbHandle>,
     current_eval: usize,
     select_switch: Vec<i64>,
     select_count: i64,
     hcb_select: HcbSelectFunction,
+    selection_telemetry: Option<HcbSelectionTelemetry>,
     hcb_exit: fn(Data),
     data: Option<Data>,
 }
@@ -763,6 +862,7 @@ impl<Data> HcbCell<Data> {
             select_switch: Vec::with_capacity(HCB_INITIAL_CAPACITY),
             select_count: 0,
             hcb_select: HcbSelectFunction::StandardClauseSelect,
+            selection_telemetry: None,
             hcb_exit,
             data,
         }
@@ -811,6 +911,37 @@ impl<Data> HcbCell<Data> {
     #[must_use]
     pub const fn data(&self) -> Option<&Data> {
         self.data.as_ref()
+    }
+
+    pub(crate) fn enable_selection_telemetry(&mut self) {
+        self.selection_telemetry = Some(HcbSelectionTelemetry::from_schedule(&self.select_switch));
+    }
+
+    #[must_use]
+    pub(crate) const fn selection_telemetry(&self) -> Option<&HcbSelectionTelemetry> {
+        self.selection_telemetry.as_ref()
+    }
+
+    fn record_selection_start(&mut self, set: &ClauseSet, selected_eval: usize) {
+        if self.selection_telemetry.is_none() {
+            return;
+        }
+        let preferred_available = (0..self.wfcb_no())
+            .map(|index| {
+                set.find_best(index)
+                    .and_then(Clause::evaluations)
+                    .is_some_and(|evaluations| evaluations.eval(index).priority() < PRIO_NORMAL)
+            })
+            .collect::<Vec<_>>();
+        if let Some(telemetry) = self.selection_telemetry.as_mut() {
+            telemetry.record_schedule_step(selected_eval, &preferred_available);
+        }
+    }
+
+    fn record_selection_result(&mut self, selected_eval: usize, selected: Option<&Clause>) {
+        if let Some(telemetry) = self.selection_telemetry.as_mut() {
+            telemetry.record_selected_clause(selected_eval, selected);
+        }
     }
 }
 
@@ -1071,13 +1202,15 @@ pub fn hcb_standard_clause_select_with<Data>(
         "current evaluation index must reference an HCB WFCB"
     );
     let selected_eval = hcb.current_eval;
+    hcb.record_selection_start(set, selected_eval);
     let selected = select_best_non_orphan(set, selected_eval, &mut is_orphaned);
+    hcb.record_selection_result(selected_eval, selected.as_ref());
     let _ = hcb_standard_selection_eval_and_advance(hcb);
     selected
 }
 
 pub fn hcb_single_weight_clause_select<Data>(
-    hcb: &HcbCell<Data>,
+    hcb: &mut HcbCell<Data>,
     set: &mut ClauseSet,
 ) -> Option<Clause> {
     hcb_single_weight_clause_select_with(hcb, set, |_| false)
@@ -1090,7 +1223,7 @@ pub fn hcb_single_weight_clause_select<Data>(
 ///
 /// Panics if a non-empty HCB has an invalid current evaluation index.
 pub fn hcb_single_weight_clause_select_with<Data>(
-    hcb: &HcbCell<Data>,
+    hcb: &mut HcbCell<Data>,
     set: &mut ClauseSet,
     mut is_orphaned: impl FnMut(&Clause) -> bool,
 ) -> Option<Clause> {
@@ -1101,7 +1234,11 @@ pub fn hcb_single_weight_clause_select_with<Data>(
         hcb.current_eval < hcb.wfcb_no(),
         "current evaluation index must reference an HCB WFCB"
     );
-    select_best_non_orphan(set, hcb.current_eval, &mut is_orphaned)
+    let selected_eval = hcb.current_eval;
+    hcb.record_selection_start(set, selected_eval);
+    let selected = select_best_non_orphan(set, selected_eval, &mut is_orphaned);
+    hcb.record_selection_result(selected_eval, selected.as_ref());
+    selected
 }
 
 fn select_best_non_orphan(
@@ -2541,7 +2678,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED};
     use crate::clauses::clausesets::ClauseSet;
-    use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
+    use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL, PRIO_PREFER};
     use crate::heuristics::to_params::{OrderParmsCell, TermOrdering};
     use crate::heuristics::wfcb::{wfcb_alloc, wfcb_alloc_with_bank, BoxedWfcb};
     use crate::heuristics::wfcbadmin::WfcbAdmin;
@@ -3133,6 +3270,7 @@ mod tests {
         assert_eq!(hcb.hcb_select(), HcbSelectFunction::StandardClauseSelect);
         assert_eq!(hcb.wfcb_handle(0), None);
         assert_eq!(hcb.select_switch(0), None);
+        assert!(hcb.selection_telemetry().is_none());
         assert_eq!(hcb.data(), None);
     }
 
@@ -3233,6 +3371,46 @@ mod tests {
     }
 
     #[test]
+    fn selection_telemetry_records_schedule_fairness_and_preferred_wait() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 2);
+        hcb_add_wfcb(&mut hcb, 11, 1);
+        hcb.enable_selection_telemetry();
+        let first = clause_with_evaluations(111, &[(PRIO_NORMAL, 1.0), (PRIO_NORMAL, 10.0)]);
+        let second = clause_with_evaluations(112, &[(PRIO_NORMAL, 2.0), (PRIO_NORMAL, 20.0)]);
+        let preferred = clause_with_evaluations(113, &[(PRIO_NORMAL, 100.0), (PRIO_PREFER, 1.0)]);
+        let mut set = ClauseSet::from_clauses([first, second, preferred]);
+
+        assert_eq!(
+            hcb_standard_clause_select(&mut hcb, &mut set).map(|clause| clause.ident()),
+            Some(111)
+        );
+        assert_eq!(
+            hcb_standard_clause_select(&mut hcb, &mut set).map(|clause| clause.ident()),
+            Some(112)
+        );
+        assert_eq!(
+            hcb_standard_clause_select(&mut hcb, &mut set).map(|clause| clause.ident()),
+            Some(113)
+        );
+
+        let telemetry = hcb
+            .selection_telemetry()
+            .unwrap_or_else(|| panic!("telemetry should be enabled"));
+        assert_eq!(telemetry.selection_steps, 3);
+        assert_eq!(telemetry.queues[0].schedule_quota, 2);
+        assert_eq!(telemetry.queues[0].scheduled_selections, 2);
+        assert_eq!(telemetry.queues[0].normal_selections, 2);
+        assert_eq!(telemetry.queues[0].max_schedule_gap, 1);
+        assert_eq!(telemetry.queues[1].schedule_quota, 1);
+        assert_eq!(telemetry.queues[1].scheduled_selections, 1);
+        assert_eq!(telemetry.queues[1].preferred_selections, 1);
+        assert_eq!(telemetry.queues[1].preferred_bypass_steps, 2);
+        assert_eq!(telemetry.queues[1].max_schedule_gap, 2);
+        assert_eq!(telemetry.queues[1].max_preferred_wait, 2);
+    }
+
+    #[test]
     fn single_weight_clause_select_does_not_advance_schedule() {
         let mut hcb = hcb_alloc();
         hcb_add_wfcb(&mut hcb, 10, 4);
@@ -3242,7 +3420,7 @@ mod tests {
         let second = clause_with_evaluations(second_id, &[(PRIO_NORMAL, 1.0)]);
         let mut set = ClauseSet::from_clauses([first, second]);
 
-        let selected = hcb_single_weight_clause_select_with(&hcb, &mut set, |_| false).unwrap();
+        let selected = hcb_single_weight_clause_select_with(&mut hcb, &mut set, |_| false).unwrap();
 
         assert_eq!(selected.ident(), second_id);
         assert_eq!(hcb.select_count(), 0);
