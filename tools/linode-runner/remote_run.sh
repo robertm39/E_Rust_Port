@@ -66,6 +66,12 @@ cd "$source_root"
     cargo build --locked --release --bins 2>&1 |
     tee "$artifact_root/rust-build.txt"
 
+echo "== Independent solution-validation controller tests =="
+/usr/bin/time -v -o "$artifact_root/solution-validation-test-time.txt" \
+    python3 -m unittest discover \
+        -s tools/validation -p 'test_*.py' -v 2>&1 |
+    tee "$artifact_root/solution-validation-test.txt"
+
 rust_bin_dir="$source_root/target/release"
 rust_binary="$rust_bin_dir/umlaut"
 canonical_binaries=(

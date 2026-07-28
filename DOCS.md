@@ -201,6 +201,14 @@ It attributes retained memory across solved and bounded searches, records the
 negative general-layout decision, and carries the measured rewrite-derivation
 target into the dedicated proof-trace Bead.
 
+## Soundness Validation Gates
+
+The positive-only SZS status, proof, and model validation policy is documented
+in [`docs/soundness-validation.md`](docs/soundness-validation.md). The
+controller, adversarial tests, pinned independent-checker evidence, and
+machine-visible coverage gaps are recorded in
+[`experiments/2026-07-27-004-soundness-validation-gates/`](experiments/2026-07-27-004-soundness-validation-gates/).
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

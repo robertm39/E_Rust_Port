@@ -1,0 +1,172 @@
+{
+  "adversarial": {
+    "corrupt_proof": {
+      "external_status": "VerifiedBad",
+      "gate_returncode": 1,
+      "reason": [
+        "external_proof_checker reported VerifiedBad"
+      ],
+      "solution_sha256": "4499999a4122469093330ff282b9ad1787a49424586342f7218a5c01179ab59a",
+      "verdict": "rejected"
+    },
+    "known_nontheorem_forged_proof": {
+      "gate_returncode": 1,
+      "reason": [
+        "claimed SZS status theorem is incompatible with problem status countersatisfiable"
+      ],
+      "solution_sha256": "a27efd1da24ec29443ebffa74c8232cae2298263b07595fbc05d79da035264cd",
+      "verdict": "rejected"
+    }
+  },
+  "comprehensive_validation": {
+    "artifact_bytes": 2450990,
+    "artifact_file_count": 406,
+    "benchmark_behavior_mismatch_count": 0,
+    "benchmark_case_count": 10,
+    "benchmark_rust_to_c_wall_ratio": 1.0780858424460409,
+    "main_case_count": 50,
+    "main_expected_difference_count": 1,
+    "main_mismatch_count": 0,
+    "run_id": "260728-045250-3161",
+    "source_snapshot_sha256": "60ed205d9af97c84de730b303e8aebc5a71cbda21cefc96b1fa89e0701130495",
+    "tool_case_count": 216,
+    "tool_expected_difference_count": 16,
+    "tool_mismatch_count": 0,
+    "unexpected_compatibility_mismatch_count": 0,
+    "validation_summary_sha256": "71a2ef9d6cbc4eb6c1f350d7a0a29e9e4dde586d7258baac3849994c0e5adbaf"
+  },
+  "cases": [
+    {
+      "category": "proof",
+      "gate_reasons": [
+        "external_proof_checker reported VerifiedGood"
+      ],
+      "gate_returncode": 0,
+      "gate_verdict": "verified",
+      "name": "fof_theorem",
+      "prover_returncode": 0,
+      "solution_bytes": 1286,
+      "solution_sha256": "a27efd1da24ec29443ebffa74c8232cae2298263b07595fbc05d79da035264cd",
+      "solution_statuses": [
+        "Theorem"
+      ]
+    },
+    {
+      "category": "proof",
+      "gate_reasons": [
+        "external_proof_checker reported VerifiedGood"
+      ],
+      "gate_returncode": 0,
+      "gate_verdict": "verified",
+      "name": "cnf_unsatisfiable",
+      "prover_returncode": 0,
+      "solution_bytes": 1390,
+      "solution_sha256": "469e80cb970e39ed2990f5612f4694a6300959cd9700061162a0fc4c660c1348",
+      "solution_statuses": [
+        "Unsatisfiable"
+      ]
+    },
+    {
+      "category": "proof",
+      "gate_reasons": [
+        "external_proof_checker reported unknown"
+      ],
+      "gate_returncode": 2,
+      "gate_verdict": "coverage_gap",
+      "name": "fof_contradictory_axioms",
+      "prover_returncode": 0,
+      "solution_bytes": 1242,
+      "solution_sha256": "fec84132e7ec3b5e7a9c81976cd306b06e81345e9dd757cf42f63f5354d62f9b",
+      "solution_statuses": [
+        "ContradictoryAxioms"
+      ]
+    },
+    {
+      "category": "model_gap",
+      "gate_reasons": [
+        "expected exactly one interpretation output block, found 0"
+      ],
+      "gate_returncode": 2,
+      "gate_verdict": "coverage_gap",
+      "name": "fof_counter_satisfiable",
+      "prover_returncode": 1,
+      "solution_bytes": 1330,
+      "solution_sha256": "38ceb9f4396f3d26764cf47d47da7839381c756fdb16a0d8afb5d21b1fccc53f",
+      "solution_statuses": [
+        "CounterSatisfiable"
+      ]
+    },
+    {
+      "category": "model_gap",
+      "gate_reasons": [
+        "expected exactly one interpretation output block, found 0"
+      ],
+      "gate_returncode": 2,
+      "gate_verdict": "coverage_gap",
+      "name": "cnf_satisfiable",
+      "prover_returncode": 1,
+      "solution_bytes": 714,
+      "solution_sha256": "238cfec50a2e733b6e655887a808e9f7ea4dd8242bfa3ff792b2a6ca7a4d3cb3",
+      "solution_statuses": [
+        "Satisfiable"
+      ]
+    },
+    {
+      "category": "typed_proof",
+      "gate_reasons": [
+        "external_proof_checker reported unknown"
+      ],
+      "gate_returncode": 2,
+      "gate_verdict": "coverage_gap",
+      "name": "tff_theorem",
+      "prover_returncode": 0,
+      "solution_bytes": 1386,
+      "solution_sha256": "c51a463a5ef2d2e55001770db44571da524434b33b9dffb18924014d852354ab",
+      "solution_statuses": [
+        "Theorem"
+      ]
+    },
+    {
+      "category": "higher_order_proof",
+      "gate_reasons": [
+        "external_proof_checker is not configured"
+      ],
+      "gate_returncode": 2,
+      "gate_verdict": "coverage_gap",
+      "name": "thf_theorem",
+      "prover_returncode": 0,
+      "solution_bytes": 1369,
+      "solution_sha256": "4fc97e09ddda7d1620d8e0d754d2dd357a0e2946c3a9a224af6391de810eeadd",
+      "solution_statuses": [
+        "Theorem"
+      ]
+    }
+  ],
+  "host": {
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "uname": [
+      "Linux",
+      "localhost",
+      "6.8.0-134-generic",
+      "#134-Ubuntu SMP PREEMPT_DYNAMIC Fri Jun 26 18:43:11 UTC 2026",
+      "x86_64",
+      "x86_64"
+    ]
+  },
+  "proofcheck": {
+    "archive_bytes": 8046522,
+    "archive_sha256": "4c4c6f71f9d8235450c6889863963ba242249c2d8d63d0461ea3acb7814b6aaa",
+    "executable_sha256": "92bb5193a9d8b2857fb97d9bd9fb6f16f5bcb57d07e4307d7f087e403ff51c7e",
+    "self_certify_returncode": 0,
+    "self_certify_stdout_sha256": "355f918e2f66db779cde50f97326c3cc2debe0e9df3613b4dfe29101aec5548f",
+    "tag": "v1.0",
+    "url": "https://github.com/AlgorithmicTruth/proofcheck-releases/releases/download/v1.0/proofcheck-linux-x86_64.zip"
+  },
+  "schema": "umlaut.soundness-validation-gates",
+  "source_commit": "2e6b8c3ff47142f30f2da1e3bde9926d08c3f22e",
+  "source_snapshot_sha256": "1540a5c22f8f46322d94f829751a4205a7555e8141eb76e00e2e1619a448117b",
+  "umlaut_binary_sha256": "a8184939cdc05629eb252ddd89238f3703adccb6426a56e785f6fb20abf528a7"
+}
