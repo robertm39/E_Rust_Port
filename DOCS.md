@@ -192,6 +192,15 @@ naming, failure boundaries, and measured overhead budget are documented in
 reproducible benchmark and diagnosis evidence lives under
 [`experiments/2026-07-27-002-search-telemetry/`](experiments/2026-07-27-002-search-telemetry/).
 
+## Memory Representation Profile
+
+The current term, clause, index, garbage-collection, RSS, and cache-locality
+profile is recorded in
+[`experiments/2026-07-27-003-memory-representation-profile/`](experiments/2026-07-27-003-memory-representation-profile/).
+It attributes retained memory across solved and bounded searches, records the
+negative general-layout decision, and carries the measured rewrite-derivation
+target into the dedicated proof-trace Bead.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

@@ -1,0 +1,21 @@
+{
+  "blocks": 1,
+  "events": {
+    "Ir": {
+      "inclusive": 4438882,
+      "inclusive_percent": 46.27439999616368,
+      "program_total": 9592522,
+      "self": 2166785
+    }
+  },
+  "function_fragment": "TermBank>::gc_sweep",
+  "function_ids": [
+    "1568"
+  ],
+  "matched_functions": [
+    "<umlaut::terms::termbanks::TermBank>::gc_sweep"
+  ],
+  "profile_sha256": "ba9b413225f37d44990a901cff143cdb707389f2080579094325dc0423610a68",
+  "schema": "umlaut.callgrind-function-cost",
+  "schema_version": 1
+}

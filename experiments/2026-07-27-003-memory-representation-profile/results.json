@@ -1,0 +1,189 @@
+{
+  "schema": "umlaut.memory-representation-profile-summary",
+  "schema_version": 1,
+  "source": {
+    "git_commit": "069a5f7f0ecd9bc27f0b5df3472fddffc27550bb",
+    "uploaded_snapshot_sha256": "ac193354a772ba8562ea9efaef21ba974d6db3fa061905bf23fecaf6a73fefbb",
+    "profile_script_sha256": "a12798e6ae5526a91e92e8dff69fbf1f1faa65908fbcddd5481b583803d2d407",
+    "binary_sha256": "a8184939cdc05629eb252ddd89238f3703adccb6426a56e785f6fb20abf528a7"
+  },
+  "runner": {
+    "run_id": "260728-040506-50ab",
+    "profile": "g8-dedicated-8-4",
+    "image": "Ubuntu 24.04",
+    "kernel": "6.8.0-134-generic",
+    "machine": "x86_64",
+    "rustc": "1.97.1",
+    "valgrind": "3.22.0"
+  },
+  "layout_bytes_64_bit": {
+    "Term": 8,
+    "Option<Term>": 8,
+    "TermLinkData": 24,
+    "TermLinks": 24,
+    "TermArgs": 24,
+    "TermArguments": 24,
+    "TermCell": 136,
+    "Clause_upper_bound": 136,
+    "SimpleEvalCell": 32,
+    "EvalCell": 32,
+    "PdtTraversalFrame": 40,
+    "DerivationEntry": 32
+  },
+  "native": {
+    "repetitions": 5,
+    "workloads": {
+      "socrates_solve": {
+        "median_cpu_seconds": 0.0,
+        "median_max_rss_kib": 8352,
+        "processed_steps": 3,
+        "high_water_total_clauses": 3,
+        "shared_terms": 26,
+        "terms_recovered": 11
+      },
+      "syn190_solve": {
+        "median_cpu_seconds": 0.32,
+        "processed_steps_per_cpu_second": 19950.0,
+        "median_max_rss_kib": 52672,
+        "processed_steps": 6384,
+        "high_water_total_clauses": 18799,
+        "shared_terms": 4106,
+        "terms_recovered": 1461
+      },
+      "lcl365_limit": {
+        "median_cpu_seconds": 0.58,
+        "processed_steps_per_cpu_second": 34482.76,
+        "median_max_rss_kib": 72268,
+        "processed_steps": 20000,
+        "high_water_total_clauses": 63608,
+        "shared_terms": 15255,
+        "terms_recovered": 8
+      },
+      "swv851_limit": {
+        "median_cpu_seconds": 2.86,
+        "processed_steps_per_cpu_second": 6993.01,
+        "median_max_rss_kib": 335028,
+        "processed_steps": 20000,
+        "high_water_total_clauses": 344374,
+        "shared_terms": 14897,
+        "terms_recovered": 1303
+      },
+      "lusk6_solve": {
+        "median_cpu_seconds": 1.35,
+        "processed_steps_per_cpu_second": 3609.63,
+        "median_max_rss_kib": 189672,
+        "processed_steps": 4873,
+        "high_water_total_clauses": 84631,
+        "shared_terms": 524364,
+        "terms_recovered": 2
+      }
+    }
+  },
+  "massif": {
+    "lcl365_limit": {
+      "peak_useful_heap_bytes": 62809105,
+      "peak_allocator_extra_bytes": 2568191,
+      "peak_stack_bytes": 58640,
+      "peak_total_bytes": 65435936,
+      "attributed_groups": {
+        "generated_equations_and_paramodulation": {
+          "bytes": 24362976,
+          "percent_of_useful_heap": 38.788924
+        },
+        "clause_set_ownership": {
+          "bytes": 18928192,
+          "percent_of_useful_heap": 30.136064
+        },
+        "indices": {
+          "bytes": 7659944,
+          "percent_of_useful_heap": 12.195595
+        },
+        "evaluations": {
+          "bytes": 4156544,
+          "percent_of_useful_heap": 6.617741
+        },
+        "term_cells": {
+          "bytes": 2360560,
+          "percent_of_useful_heap": 3.758309
+        }
+      }
+    },
+    "lusk6_solve": {
+      "peak_useful_heap_bytes": 186313522,
+      "peak_allocator_extra_bytes": 11328126,
+      "peak_stack_bytes": 58640,
+      "peak_total_bytes": 197700288,
+      "attributed_groups": {
+        "term_cells": {
+          "bytes": 79659856,
+          "percent_of_useful_heap": 42.75581
+        },
+        "clause_set_ownership": {
+          "bytes": 37467520,
+          "percent_of_useful_heap": 20.109931
+        },
+        "rewrite_derivation_stacks": {
+          "bytes": 35000832,
+          "percent_of_useful_heap": 18.785986
+        },
+        "evaluations": {
+          "bytes": 10664704,
+          "percent_of_useful_heap": 5.724063
+        },
+        "paramodulation_equation_storage": {
+          "bytes": 8174336,
+          "percent_of_useful_heap": 4.387409
+        },
+        "indices": {
+          "bytes": 7361152,
+          "percent_of_useful_heap": 3.950949
+        }
+      }
+    }
+  },
+  "cachegrind": {
+    "syn190_first_1000": {
+      "instructions": 239477100,
+      "l1_instruction_miss_percent": 0.9164692573945483,
+      "l1_data_miss_percent": 1.7458738021244031,
+      "last_level_instruction_miss_percent": 0.004636351450723263,
+      "last_level_data_miss_percent": 0.10608067721081268
+    },
+    "lcl365_first_2000": {
+      "instructions": 424491605,
+      "l1_instruction_miss_percent": 0.6717039786923465,
+      "l1_data_miss_percent": 1.0081843293763562,
+      "last_level_instruction_miss_percent": 0.0024104128042767774,
+      "last_level_data_miss_percent": 0.067611112817154
+    }
+  },
+  "collection_callgrind": {
+    "workload": "socrates_solve",
+    "total_instructions": 9592522,
+    "term_bank_gc_sweep_self_instructions": 2166785,
+    "term_bank_gc_sweep_inclusive_instructions": 4438882,
+    "inclusive_percent": 46.2744,
+    "terms_recovered": 11
+  },
+  "decision": {
+    "prototype": "none",
+    "reason": "Current cache miss rates and index shares do not justify a structural arena or ID rewrite; term cells already use the recently accepted compact layout, and the isolated proof-trace allocation belongs to E_Rust_Port-9jt.8.2.",
+    "proof_trace_follow_up": "E_Rust_Port-9jt.8.2",
+    "previously_rejected_prototypes": {
+      "arena_term_cell_store_instruction_regression_percent": 0.907525,
+      "packed_derivation_entry_instruction_regression_percent": 12.11888
+    }
+  },
+  "raw_artifacts": {
+    "local_path": ".artifacts/linode/260728-040506-50ab/",
+    "file_count": 139,
+    "bytes": 61813486,
+    "summary_sha256": "38e0d23fbc94c1ebc3d19e2348b97b6020f5da657470728cf8db3ab8a1ca11c4",
+    "massif_lcl365_sha256": "0224dfb0786d4f32519cad7b4848c3ec8129dff1d419a6b2c5c148e1e566e8cc",
+    "massif_lusk6_sha256": "8c766619f9774d7c690f1d5f1ab2bd42abc8ad64baec230655c1db88f4396bb2",
+    "cachegrind_syn190_sha256": "99bc2fa9d7c61d6327687e20824e39ec15a08bd976c3a8e46f8a585246aef108",
+    "cachegrind_lcl365_sha256": "2fb7c27a57b7ee72564c141879ef295e4ff7f4ee0a9e7ca05367a2e645d17c9e",
+    "callgrind_gc_sha256": "ba9b413225f37d44990a901cff143cdb707389f2080579094325dc0423610a68"
+  },
+  "passed": true
+}
