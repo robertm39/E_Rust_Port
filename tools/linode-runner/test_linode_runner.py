@@ -6,6 +6,7 @@ import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -301,26 +302,50 @@ class HighMemoryUsageTests(unittest.TestCase):
             )
             usage = self.usage(history)
             self.assertEqual(usage.actual, timedelta(minutes=30))
-            self.assertEqual(usage.carried_in, timedelta(minutes=30))
-            self.assertEqual(usage.used, timedelta(hours=1))
+            self.assertEqual(usage.carried_in, timedelta())
+            self.assertEqual(usage.used, timedelta(minutes=30))
             self.assertFalse(usage.exhausted)
 
-    def test_exactly_two_hours_blocks_new_start(self):
+    def test_usage_immediately_below_four_hours_allows_new_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             history = Path(temporary) / "runs"
             write_json(
-                history / "two-hours.json",
+                history / "below-four-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-27T08:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T10:00:00+00:00",
+                    "linode_deleted_at": "2026-07-27T11:59:59+00:00",
                 },
             )
             usage = self.usage(history)
-            self.assertEqual(usage.used, timedelta(hours=2))
+            self.assertEqual(
+                usage.used,
+                timedelta(hours=3, minutes=59, seconds=59),
+            )
+            self.assertEqual(usage.remaining, timedelta(seconds=1))
+            self.assertFalse(usage.exhausted)
+            runner.require_high_memory_allowance(usage)
+
+    def test_exactly_four_hours_blocks_new_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            write_json(
+                history / "four-hours.json",
+                {
+                    "type": runner.HIGH_MEMORY_TYPE,
+                    "linode_id": 1,
+                    "linode_created_at": "2026-07-27T08:00:00+00:00",
+                    "linode_deleted_at": "2026-07-27T12:00:00+00:00",
+                },
+            )
+            usage = self.usage(history)
+            self.assertEqual(usage.used, timedelta(hours=4))
             self.assertTrue(usage.exhausted)
-            with self.assertRaisesRegex(runner.RunnerError, "two-hour daily limit"):
+            with self.assertRaisesRegex(
+                runner.RunnerError,
+                "four-hour daily limit",
+            ):
                 runner.require_high_memory_allowance(usage)
 
     def test_prior_day_overflow_counts_as_current_day_usage(self):
@@ -332,14 +357,14 @@ class HighMemoryUsageTests(unittest.TestCase):
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-26T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-26T09:00:00+00:00",
+                    "linode_deleted_at": "2026-07-26T11:00:00+00:00",
                 },
             )
             usage = self.usage(history)
             self.assertEqual(usage.actual, timedelta())
             self.assertEqual(usage.carried_in, timedelta(hours=1))
             self.assertEqual(usage.used, timedelta(hours=1))
-            self.assertEqual(usage.remaining, timedelta(hours=1))
+            self.assertEqual(usage.remaining, timedelta(hours=3))
 
     def test_large_overflow_rolls_forward_until_daily_allowances_absorb_it(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -350,7 +375,7 @@ class HighMemoryUsageTests(unittest.TestCase):
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-26T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-26T11:00:00+00:00",
+                    "linode_deleted_at": "2026-07-26T15:00:00+00:00",
                 },
             )
             usage = runner.high_memory_usage(
@@ -371,11 +396,11 @@ class HighMemoryUsageTests(unittest.TestCase):
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-26T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-26T11:00:00+00:00",
+                    "linode_deleted_at": "2026-07-26T15:00:00+00:00",
                 },
             )
             usage = self.usage(history)
-            self.assertEqual(usage.used, timedelta(hours=3))
+            self.assertEqual(usage.used, timedelta(hours=5))
             self.assertTrue(usage.exhausted)
             self.assertEqual(
                 usage.projected_eligible_at,
@@ -428,12 +453,12 @@ class ProvisionGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "two-hours.json",
+                root / "runs" / "four-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-27T08:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T10:00:00+00:00",
+                    "linode_deleted_at": "2026-07-27T12:00:00+00:00",
                 },
             )
             api = ProvisionApi()
@@ -441,7 +466,7 @@ class ProvisionGuardTests(unittest.TestCase):
             with patches[0], patches[1]:
                 with self.assertRaisesRegex(
                     runner.RunnerError,
-                    "two-hour daily limit",
+                    "four-hour daily limit",
                 ):
                     runner.provision(
                         api,
@@ -454,12 +479,12 @@ class ProvisionGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "two-hours.json",
+                root / "runs" / "four-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-27T08:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T10:00:00+00:00",
+                    "linode_deleted_at": "2026-07-27T12:00:00+00:00",
                 },
             )
             api = ProvisionApi()
@@ -471,6 +496,7 @@ class ProvisionGuardTests(unittest.TestCase):
                 patches[3],
                 mock.patch.object(runner, "LinodeApi", return_value=api),
                 mock.patch("sys.stderr"),
+                mock.patch("sys.stdout", new_callable=StringIO) as stdout,
             ):
                 exit_code = runner.main(
                     [
@@ -481,18 +507,19 @@ class ProvisionGuardTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(exit_code, 1)
+            self.assertIn("04:00:00 of 04:00:00", stdout.getvalue())
             self.assertEqual(api.posts, [])
 
     def test_high_memory_history_does_not_block_normal_profile(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "two-hours.json",
+                root / "runs" / "four-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
                     "linode_created_at": "2026-07-27T08:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T10:00:00+00:00",
+                    "linode_deleted_at": "2026-07-27T12:00:00+00:00",
                 },
             )
             api = ProvisionApi()
@@ -566,7 +593,7 @@ class DocumentationTests(unittest.TestCase):
             self.assertIn("CASC", document)
             self.assertIn("--memory-limit=131072", document)
         self.assertIn("fixed UTC-05:00", runbook)
-        self.assertIn("at least two hours", runbook)
+        self.assertIn("at least four hours", runbook)
         self.assertIn("overflow", runbook.lower())
 
 

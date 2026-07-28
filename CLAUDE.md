@@ -103,8 +103,8 @@ executed. See `DOCS.md` and `docs/linode-runner.md`.
 The default 8 GiB profile costs $0.14 an hour. Use `--high-memory` only when a
 task should more closely resemble the CASC configuration; its 150 GB profile
 costs $0.74 an hour. No new high-memory `up` or `run` may start after managed
-high-memory usage reaches two hours in the current fixed UTC-05:00 day (no
-daylight-saving adjustment). Usage above two hours carries into the next day,
+high-memory usage reaches four hours in the current fixed UTC-05:00 day (no
+daylight-saving adjustment). Usage above four hours carries into the next day,
 and overflow keeps rolling forward until later daily allowances absorb it.
 Check actual usage, carried overflow, and allowance with
 `.\linode-runner.ps1 check --high-memory`. For a closer CASC match, give every

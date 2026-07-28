@@ -155,10 +155,10 @@ CASC match, every actual prover command on that host should include
 `--memory-limit=131072`, which is the prover's MB value for 128 GiB.
 
 High-memory `up` and `run` starts are forbidden once managed high-memory usage
-has reached two hours in the current fixed-EST accounting day. Fixed EST means
+has reached four hours in the current fixed-EST accounting day. Fixed EST means
 UTC-05:00 year-round, without daylight-saving time; the controller uses
 Linode-controlled timestamps rather than the local Windows clock. Any usage
-above two hours carries into the next day; overflow continues rolling forward
+above four hours carries into the next day; overflow continues rolling forward
 until later daily allowances absorb it. Run
 `.\linode-runner.ps1 check --high-memory` to see today's actual usage, carried
 overflow, remaining allowance, next accounting boundary, and projected

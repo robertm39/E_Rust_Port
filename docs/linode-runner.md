@@ -22,16 +22,16 @@ controller does not inject this option automatically; include it in every
 CASC-oriented Umlaut command.
 
 High-memory starts have a mandatory daily cost guard. If managed high-memory
-Linodes have run for at least two hours during the current accounting day, the
+Linodes have run for at least four hours during the current accounting day, the
 controller refuses another `up` or `run` using that profile. A start is allowed
-while usage is below two hours even if that run later crosses the threshold.
+while usage is below four hours even if that run later crosses the threshold.
 Normal-profile starts are not restricted by high-memory usage.
 
-Usage beyond two hours is not discarded at midnight. The excess becomes
+Usage beyond four hours is not discarded at midnight. The excess becomes
 high-memory usage at the start of the next accounting day and is added to that
-day's actual Linode lifetime. If the combined amount still exceeds two hours,
+day's actual Linode lifetime. If the combined amount still exceeds four hours,
 the new overflow carries forward again until later daily allowances absorb it.
-For example, three hours of high-memory use on one day makes the next day start
+For example, five hours of high-memory use on one day makes the next day start
 with one hour already used.
 
 An accounting day is midnight-to-midnight at fixed UTC-05:00 ("fixed EST").
@@ -118,7 +118,7 @@ guarded $0.74-an-hour profile:
 .\linode-runner.ps1 run --high-memory
 ```
 
-The same two-hour fixed-EST start guard applies to both the automated `run`
+The same four-hour fixed-EST start guard applies to both the automated `run`
 command and the interactive `up` command. The advanced `--type` option remains
 available for compatibility, but only the two documented types are accepted;
 `--type g7-highmem-8` cannot bypass the high-memory guard.

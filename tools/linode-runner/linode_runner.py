@@ -31,7 +31,7 @@ DEFAULT_REGION = "us-ord"
 DEFAULT_IMAGE = "linode/ubuntu24.04"
 LABEL_PREFIX = "e-rust-codex-"
 FIXED_EST = timezone(timedelta(hours=-5), name="EST")
-HIGH_MEMORY_DAILY_LIMIT = timedelta(hours=2)
+HIGH_MEMORY_DAILY_LIMIT = timedelta(hours=4)
 REMOTE_ROOT = PurePosixPath("/opt/e-rust-port")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_APP_DATA = Path(
@@ -577,7 +577,7 @@ def report_high_memory_usage(usage: HighMemoryUsage) -> None:
 def require_high_memory_allowance(usage: HighMemoryUsage) -> None:
     if usage.exhausted:
         raise RunnerError(
-            "High-memory usage has reached the two-hour daily limit; "
+            "High-memory usage has reached the four-hour daily limit; "
             "no new high-memory run may start now. If no further usage accrues, "
             f"the projected earliest eligible boundary is "
             f"{usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()} "
