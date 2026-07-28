@@ -60,6 +60,15 @@ the adjacent ignored `vampire.sha256` sidecar contains the same value. The
 existing `.artifacts/` rule in `.gitignore` covers both files, as confirmed
 with `git check-ignore -v`.
 
+For every routine Vampire invocation on a Linode, treat this archived
+executable as canonical. After provisioning the runner, transfer the executable
+explicitly from the path above with the active runner's dedicated SSH identity;
+the normal source `sync` excludes `.artifacts/`. Verify that the remote
+SHA-256 equals the value above, grant executable permission, and run the
+transferred file. Do not clone or recompile Vampire, CaDiCaL, VIRAS, or Z3
+merely to run Vampire. Rebuild only when a task explicitly replaces the pinned
+artifact with a newly verified and documented revision.
+
 The 2026-07-27 build used Vampire revision
 `3677326861181f990ce3ef461e90471ba9749225`, CaDiCaL revision
 `f13d74439a5b5c963ac5b02d05ce93a8098018b8`, VIRAS revision
