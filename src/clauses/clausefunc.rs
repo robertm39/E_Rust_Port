@@ -10557,42 +10557,64 @@ mod tests {
     #[test]
     fn tformula_skolemization_records_constants_functions_and_nested_scopes() {
         let mut bank = test_bank();
-        let c = typed_var(&bank, -194);
-        let x = typed_var(&bank, -196);
-        let y = typed_var(&bank, -198);
-        let u = typed_var(&bank, -200);
-        let z = typed_var(&bank, -202);
-        let a = typed_const(&mut bank, "skolem_evidence_a");
+        let closed_variable = typed_var(&bank, -194);
+        let outer_variable = typed_var(&bank, -196);
+        let first_existential = typed_var(&bank, -198);
+        let inner_universal = typed_var(&bank, -200);
+        let second_existential = typed_var(&bank, -202);
+        let constant = typed_const(&mut bank, "skolem_evidence_a");
         let eqn_code = bank.signature_mut().get_eqn_code(true);
         let and_code = bank.signature().and_code();
         let qex_code = bank.signature().qex_code();
         let qall_code = bank.signature().qall_code();
 
-        let closed_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &a);
-        let closed_exists = bool_binary_with_code(&mut bank, qex_code, &c, &closed_atom);
-        let y_atom = bool_binary_with_code(&mut bank, eqn_code, &y, &x);
-        let z_atom = bool_binary_with_code(&mut bank, eqn_code, &z, &u);
-        let matrix = bool_binary_with_code(&mut bank, and_code, &y_atom, &z_atom);
-        let z_exists = bool_binary_with_code(&mut bank, qex_code, &z, &matrix);
-        let u_forall = bool_binary_with_code(&mut bank, qall_code, &u, &z_exists);
-        let y_exists = bool_binary_with_code(&mut bank, qex_code, &y, &u_forall);
-        let x_forall = bool_binary_with_code(&mut bank, qall_code, &x, &y_exists);
-        let formula = bool_binary_with_code(&mut bank, and_code, &closed_exists, &x_forall);
+        let closed_atom = bool_binary_with_code(&mut bank, eqn_code, &closed_variable, &constant);
+        let closed_exists =
+            bool_binary_with_code(&mut bank, qex_code, &closed_variable, &closed_atom);
+        let first_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &first_existential, &outer_variable);
+        let second_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &second_existential, &inner_universal);
+        let matrix = bool_binary_with_code(&mut bank, and_code, &first_atom, &second_atom);
+        let second_exists =
+            bool_binary_with_code(&mut bank, qex_code, &second_existential, &matrix);
+        let inner_forall =
+            bool_binary_with_code(&mut bank, qall_code, &inner_universal, &second_exists);
+        let first_exists =
+            bool_binary_with_code(&mut bank, qex_code, &first_existential, &inner_forall);
+        let outer_forall =
+            bool_binary_with_code(&mut bank, qall_code, &outer_variable, &first_exists);
+        let formula = bool_binary_with_code(&mut bank, and_code, &closed_exists, &outer_forall);
 
         let (_skolemized, bindings) =
             tformula_skolemize_outermost_with_bindings(&mut bank, &formula).unwrap();
 
         assert_eq!(bindings.len(), 3);
-        assert_eq!(bindings[0].variable(), &c);
+        assert_eq!(bindings[0].variable(), &closed_variable);
         assert_eq!(bindings[0].skolem_term().arity(), 0);
-        assert_eq!(bindings[1].variable(), &y);
+        assert_eq!(bindings[1].variable(), &first_existential);
         assert_eq!(bindings[1].skolem_term().arity(), 1);
-        assert_eq!(bindings[1].skolem_term().argument(0).as_ref(), Some(&x));
-        assert_eq!(bindings[2].variable(), &z);
+        assert_eq!(
+            bindings[1].skolem_term().argument(0).as_ref(),
+            Some(&outer_variable)
+        );
+        assert_eq!(bindings[2].variable(), &second_existential);
         assert_eq!(bindings[2].skolem_term().arity(), 2);
-        assert_eq!(bindings[2].skolem_term().argument(0).as_ref(), Some(&x));
-        assert_eq!(bindings[2].skolem_term().argument(1).as_ref(), Some(&u));
-        for variable in [&c, &x, &y, &u, &z] {
+        assert_eq!(
+            bindings[2].skolem_term().argument(0).as_ref(),
+            Some(&outer_variable)
+        );
+        assert_eq!(
+            bindings[2].skolem_term().argument(1).as_ref(),
+            Some(&inner_universal)
+        );
+        for variable in [
+            &closed_variable,
+            &outer_variable,
+            &first_existential,
+            &inner_universal,
+            &second_existential,
+        ] {
             assert!(variable.binding().is_none());
         }
     }

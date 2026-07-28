@@ -286,6 +286,19 @@ machine-visible gap: none of the 22 reproducible held-out claims passed the
 current checker/adapter boundary, due to adapter-scope or Nörgler
 implementation gaps rather than a `VerifiedBad` result.
 
+## Finite Model Finding Research
+
+The isolated function-free finite-model prototype, inferred-sort SAT
+encoding, complete TPTP interpretation renderer, independent Vampire semantic
+validation, adversarial corruption checks, and family-held-out FNT coverage
+study are recorded in
+[`experiments/2026-07-28-011-fnt-finite-model-prototype/`](experiments/2026-07-28-011-fnt-finite-model-prototype/).
+Inferred sorting cuts the official `NLP042+1` successful encoding by 73.4% in
+clauses and the emitted model verifies independently. The prototype remains
+experimental: it covers 16/250 historical FNT records, produces no unique
+equal-budget solve, and rejects positive-arity functions, so it is not wired
+into Umlaut's production search or defaults.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

@@ -86,6 +86,15 @@ model verification. It must preserve enough provenance to emit a checkable
 artifact and configure a checker whose positive result is independent of the
 claiming code path.
 
+The isolated finite-model study in
+[`experiment 011`](../experiments/2026-07-28-011-fnt-finite-model-prototype/)
+demonstrates that contract for a narrow function-free fragment. It emits
+complete finite interpretations and uses pinned Vampire model-check mode to
+evaluate the original formulas rather than the producer's clauses. Six genuine
+models pass and predicate, constant, domain, and status corruptions all fail.
+This is experimental evidence, not a production `Satisfiable` output path;
+ordinary saturation output retains the coverage gap above.
+
 ## Test and release integration
 
 The standard-library controller tests are in
