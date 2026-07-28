@@ -20,8 +20,9 @@ use crate::clauses::clausefunc::{
     tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
     tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
     tformula_simplify, tformula_to_cnf, tformula_to_cnf_with_docs, tformula_tptp_string,
-    tformula_unencode_root_eqn, tformula_unroll_fool_result, tformula_var_rename,
-    TFormulaDefinitions, TFormulaToCnfDocContext, TFormulaToCnfInput, TFormulaTptpPrintOptions,
+    tformula_unencode_root_eqn, tformula_unroll_fool_result, tformula_var_rename, TFormulaCnfPhase,
+    TFormulaDefinitions, TFormulaSkolemBinding, TFormulaToCnfDocContext, TFormulaToCnfInput,
+    TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -35,8 +36,8 @@ use crate::clauses::derivation::{
 use crate::clauses::eqn::EqnFofPrintOptions;
 use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::inferencedoc::{
-    FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationInference,
-    ProofDocSession, ProofDocWriteResult,
+    FormulaCreationInference, FormulaCreationParents, FormulaDocView, FormulaModificationEvidence,
+    FormulaModificationInference, FormulaSkolemBindingDoc, ProofDocSession, ProofDocWriteResult,
 };
 use crate::clauses::pdtrees::{PdTree, PdtIndexedOccurrence, PDTREE_IGNORE_NF_DATE};
 use crate::inout::scanner::IoFormat;
@@ -442,6 +443,24 @@ fn cnf_phase_formula_inference(op: i64) -> Option<FormulaModificationInference> 
         DC_FOOL_UNROLL => None,
         _ => panic!("unexpected CNF formula derivation opcode {op}"),
     }
+}
+
+fn formula_skolem_binding_docs(
+    bank: &TermBank,
+    bindings: &[TFormulaSkolemBinding],
+) -> Vec<FormulaSkolemBindingDoc> {
+    bindings
+        .iter()
+        .map(|binding| FormulaSkolemBindingDoc {
+            symbol: bank
+                .signature()
+                .func(binding.phase_skolem_term().f_code())
+                .print_name()
+                .to_owned(),
+            variable: bank.term_string(binding.phase_variable(), true),
+            term: bank.term_string(binding.phase_skolem_term(), true),
+        })
+        .collect()
 }
 
 fn term_has_named_lambda(term: &Term) -> bool {
@@ -1583,6 +1602,31 @@ pub struct WrappedFormula {
     info: Option<Box<ClauseInfo>>,
     derivation: Option<PStack<DerivationEntry>>,
     formula: Option<Term>,
+    skolem_proof_step: Option<FormulaSkolemProofStep>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FormulaSkolemProofStep {
+    formula: Term,
+    bindings: Vec<TFormulaSkolemBinding>,
+    derivation_entry_count: usize,
+}
+
+impl FormulaSkolemProofStep {
+    #[must_use]
+    pub(crate) fn formula(&self) -> &Term {
+        &self.formula
+    }
+
+    #[must_use]
+    pub(crate) fn bindings(&self) -> &[TFormulaSkolemBinding] {
+        &self.bindings
+    }
+
+    #[must_use]
+    pub(crate) const fn derivation_entry_count(&self) -> usize {
+        self.derivation_entry_count
+    }
 }
 
 #[must_use]
@@ -1628,6 +1672,7 @@ impl WrappedFormula {
             info: None,
             derivation: None,
             formula: None,
+            skolem_proof_step: None,
         }
     }
 
@@ -1650,6 +1695,7 @@ impl WrappedFormula {
             info: None,
             derivation: None,
             formula: self.formula.clone(),
+            skolem_proof_step: None,
         }
     }
 
@@ -1775,9 +1821,38 @@ impl WrappedFormula {
         self.formula = Some(formula);
     }
 
+    #[must_use]
+    pub(crate) fn skolem_proof_step(&self) -> Option<&FormulaSkolemProofStep> {
+        self.skolem_proof_step.as_ref()
+    }
+
+    pub(crate) fn clear_skolem_proof_step(&mut self) {
+        self.skolem_proof_step = None;
+    }
+
+    fn push_cnf_phase_derivation(&mut self, phase: &TFormulaCnfPhase) {
+        self.push_formula_derivation(phase.op(), None, None);
+        if !phase.skolem_bindings().is_empty() {
+            self.skolem_proof_step = Some(FormulaSkolemProofStep {
+                formula: phase.formula().clone(),
+                bindings: phase.skolem_bindings().to_vec(),
+                derivation_entry_count: self.derivation_entries().len(),
+            });
+        }
+    }
+
     pub fn gc_mark_cells(&self, bank: &TermBank) {
         if let Some(formula) = &self.formula {
             bank.gc_mark_term(formula);
+        }
+        if let Some(step) = &self.skolem_proof_step {
+            bank.gc_mark_term(&step.formula);
+            for binding in &step.bindings {
+                bank.gc_mark_term(binding.variable());
+                bank.gc_mark_term(binding.skolem_term());
+                bank.gc_mark_term(binding.phase_variable());
+                bank.gc_mark_term(binding.phase_skolem_term());
+            }
         }
     }
 
@@ -2448,11 +2523,11 @@ impl WrappedFormula {
             tformula_conjunctive_nf3(bank, self.formula(), miniscope_limit, fool_unroll)?;
         let formula_derivation_ops = cnf_result.derivation_ops().to_vec();
         self.set_formula(cnf_result.formula().clone());
-        for op in &formula_derivation_ops {
-            if cnf_phase_formula_inference(*op).is_some() {
+        for phase in cnf_result.changed_phases() {
+            if cnf_phase_formula_inference(phase.op()).is_some() {
                 self.del_prop(CP_INPUT_FORMULA);
             }
-            self.push_formula_derivation(*op, None, None);
+            self.push_cnf_phase_derivation(phase);
         }
         let clauses_generated = tformula_to_cnf(
             bank,
@@ -2527,13 +2602,17 @@ impl WrappedFormula {
         for phase in cnf_result.changed_phases() {
             self.set_formula(phase.formula().clone());
             if let Some(inference) = cnf_phase_formula_inference(phase.op()) {
+                let binding_docs = formula_skolem_binding_docs(bank, phase.skolem_bindings());
                 let (write_result, new_ident, new_properties) = {
                     let renderings = self.proof_doc_renderings(bank, doc.render_options)?;
                     let mut view = self.proof_doc_view_from_renderings(&renderings);
-                    let write_result = doc.session.doc_formula_modification(
+                    let write_result = doc.session.doc_formula_modification_with_evidence(
                         &mut *doc.output,
                         &mut view,
                         inference,
+                        FormulaModificationEvidence {
+                            skolem_bindings: &binding_docs,
+                        },
                         None,
                     )?;
                     (write_result, view.ident(), view.properties())
@@ -2542,7 +2621,7 @@ impl WrappedFormula {
                 self.set_properties(new_properties);
                 formula_write_results.push(write_result);
             }
-            self.push_formula_derivation(phase.op(), None, None);
+            self.push_cnf_phase_derivation(phase);
         }
         self.set_formula(cnf_result.formula().clone());
 
@@ -2673,6 +2752,15 @@ impl WrappedFormula {
         bank: &TermBank,
         problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
+        self.proof_object_tstp_string_with_id(bank, problem_type, &self.get_id(true))
+    }
+
+    pub(crate) fn proof_object_tstp_string_with_id(
+        &self,
+        bank: &TermBank,
+        problem_type: ProblemType,
+        identifier: &str,
+    ) -> Result<String, Diagnostic> {
         let formula_kind = if problem_type == ProblemType::HigherOrder {
             "thf"
         } else if self.is_clause {
@@ -2699,7 +2787,7 @@ impl WrappedFormula {
         };
         Ok(format!(
             "{formula_kind}({}, {}, {rendered}",
-            self.get_id(true),
+            identifier,
             self.tstp_role_name()
         ))
     }
@@ -8016,6 +8104,68 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn wrapped_formula_cnf2_with_docs_uses_named_parent_variables_in_skolem_records() {
+        let mut bank = test_bank();
+        let z = typed_var(&bank, -401);
+        let a = typed_const(&mut bank, "wf_cnf_skolem_doc_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &z, &a);
+        let qex_code = bank.signature().qex_code();
+        let formula = bool_binary_with_code(&mut bank, qex_code, &z, &atom);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        let mut set = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        {
+            let mut doc_context = WrappedFormulaCnfDocContext::new(
+                &mut rendered,
+                &mut session,
+                FormulaProofDocRenderOptions::new(true, ProblemType::FirstOrder),
+            );
+            wrapped
+                .cnf2_into_with_docs(
+                    &mut doc_context,
+                    &mut bank,
+                    &mut set,
+                    &fresh_vars,
+                    100,
+                    false,
+                )
+                .unwrap();
+        }
+
+        let step = wrapped
+            .skolem_proof_step()
+            .expect("Skolemized formula must retain proof evidence");
+        let binding = &step.bindings()[0];
+        let phase_variable = bank.term_string(binding.phase_variable(), true);
+        let phase_term = bank.term_string(binding.phase_skolem_term(), true);
+        let original_variable = bank.term_string(binding.variable(), true);
+        assert_ne!(phase_variable, original_variable);
+        assert!(
+            rendered.contains(&format!(
+                "new_symbols(skolem,[{}])",
+                bank.signature()
+                    .func(binding.phase_skolem_term().f_code())
+                    .print_name()
+            )),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("skolemize({phase_variable},{phase_term})")),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&format!("skolemize({original_variable},")),
+            "{rendered}"
+        );
     }
 
     #[test]

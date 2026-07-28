@@ -944,7 +944,7 @@ fn deriv_stack_pcl_string_internal(
 /// Rust stack entry shape.
 #[must_use]
 pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
-    deriv_stack_tstp_string_internal(derivation, None, None)
+    deriv_stack_tstp_string_internal(derivation, None, None, None)
 }
 
 /// Returns the C `DerivationStackTSTPPrint` expression with signature-owned AC
@@ -960,7 +960,7 @@ pub fn deriv_stack_tstp_string_with_ac_axioms(
     derivation: Option<&PStack<DerivationEntry>>,
     ac_axioms: &[ClauseDerivationRef],
 ) -> Option<String> {
-    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), None)
+    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), None, None)
 }
 
 #[must_use]
@@ -969,13 +969,29 @@ pub fn deriv_stack_tstp_string_with_formula_ids(
     ac_axioms: &[ClauseDerivationRef],
     formula_ids: &BTreeMap<i64, String>,
 ) -> Option<String> {
-    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), Some(formula_ids))
+    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms), Some(formula_ids), None)
+}
+
+#[must_use]
+pub fn deriv_stack_tstp_string_with_formula_ids_and_skolem_details(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+    formula_ids: &BTreeMap<i64, String>,
+    skolem_details: &str,
+) -> Option<String> {
+    deriv_stack_tstp_string_internal(
+        derivation,
+        Some(ac_axioms),
+        Some(formula_ids),
+        Some(skolem_details),
+    )
 }
 
 fn deriv_stack_tstp_string_internal(
     derivation: Option<&PStack<DerivationEntry>>,
     ac_axioms: Option<&[ClauseDerivationRef]>,
     formula_ids: Option<&BTreeMap<i64, String>>,
+    skolem_details: Option<&str>,
 ) -> Option<String> {
     let derivation = derivation?;
     let entries = derivation.as_slice();
@@ -997,13 +1013,24 @@ fn deriv_stack_tstp_string_internal(
             }
             op => {
                 let status = derivation_op_status(op).unwrap_or("unknown");
-                write!(
-                    &mut rendered,
-                    "inference({},[status({})],[",
-                    derivation_op_id(op),
-                    status
-                )
-                .expect("writing to String cannot fail");
+                if op_code(op) == DO_SKOLEMIZE && skolem_details.is_some() {
+                    write!(
+                        &mut rendered,
+                        "inference({},[status({}),{}],[",
+                        derivation_op_id(op),
+                        status,
+                        skolem_details.unwrap_or_default()
+                    )
+                    .expect("writing to String cannot fail");
+                } else {
+                    write!(
+                        &mut rendered,
+                        "inference({},[status({})],[",
+                        derivation_op_id(op),
+                        status
+                    )
+                    .expect("writing to String cannot fail");
+                }
             }
         }
     }
@@ -1536,7 +1563,8 @@ mod tests {
         deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
         deriv_stack_tstp_string_with_ac_axioms, deriv_stack_tstp_string_with_formula_ids,
-        derivation_entries, derivation_op_id, derivation_op_status, derivation_op_theory,
+        deriv_stack_tstp_string_with_formula_ids_and_skolem_details, derivation_entries,
+        derivation_op_id, derivation_op_status, derivation_op_theory,
         formula_dummy_quote_parent_ref, get_is_ho, op_code, op_is_generating, set_is_ho,
         ClauseDerivationRef, DerivationEntry, DerivationParentRef, FormulaDerivationRef,
         ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM,
@@ -2274,6 +2302,29 @@ mod tests {
             deriv_stack_tstp_string_with_formula_ids(Some(&derivation), &[], &formula_ids)
                 .as_deref(),
             Some("inference(fof_simplification,[status(thm)],[input_formula])")
+        );
+    }
+
+    #[test]
+    fn deriv_stack_tstp_string_attaches_checker_complete_skolem_details() {
+        let parent = FormulaDerivationRef::new(17);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_FOF_QUOTE));
+        derivation.push(DerivationEntry::FormulaParent(parent));
+        derivation.push(DerivationEntry::Operation(DC_SKOLEMIZE));
+        let formula_ids = BTreeMap::from([(17, "input_formula".to_owned())]);
+
+        assert_eq!(
+            deriv_stack_tstp_string_with_formula_ids_and_skolem_details(
+                Some(&derivation),
+                &[],
+                &formula_ids,
+                "new_symbols(skolem,[esk1_1]),skolemize(X1,esk1_1(X2))",
+            )
+            .as_deref(),
+            Some(
+                "inference(skolemize,[status(esa),new_symbols(skolem,[esk1_1]),skolemize(X1,esk1_1(X2))],[input_formula])"
+            )
         );
     }
 

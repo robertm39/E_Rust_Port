@@ -150,6 +150,18 @@ pub enum FormulaModificationInference {
     Other,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormulaSkolemBindingDoc {
+    pub symbol: String,
+    pub variable: String,
+    pub term: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FormulaModificationEvidence<'a> {
+    pub skolem_bindings: &'a [FormulaSkolemBindingDoc],
+}
+
 impl FormulaModificationInference {
     #[must_use]
     pub const fn parent_inference(self) -> Option<FormulaParentInference> {
@@ -696,6 +708,25 @@ impl ProofDocSession {
         inference: FormulaModificationInference,
         comment: Option<&str>,
     ) -> Result<ProofDocWriteResult, Diagnostic> {
+        self.doc_formula_modification_with_evidence(
+            output,
+            formula,
+            inference,
+            FormulaModificationEvidence::default(),
+            comment,
+        )
+    }
+
+    /// Documents a represented formula modification with optional
+    /// checker-facing inference evidence.
+    pub fn doc_formula_modification_with_evidence(
+        &mut self,
+        output: &mut impl fmt::Write,
+        formula: &mut FormulaDocView<'_>,
+        inference: FormulaModificationInference,
+        evidence: FormulaModificationEvidence<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
         formula.del_prop(CP_INPUT_FORMULA);
         if self.output_level < 2 {
             return Ok(ProofDocWriteResult::suppressed());
@@ -720,6 +751,7 @@ impl ProofDocSession {
                 formula,
                 parent_inference,
                 old_id,
+                evidence,
                 comment,
             ),
             ProofDocOutputFormat::NoFormat
@@ -1702,11 +1734,13 @@ impl ProofDocSession {
         formula: &FormulaDocView<'_>,
         inference: FormulaParentInference,
         old_id: i64,
+        evidence: FormulaModificationEvidence<'_>,
         comment: Option<&str>,
     ) -> Result<ProofDocWriteResult, Diagnostic> {
         write_tstp_formula_start(output, formula, self.problem_type).map_err(doc_write_error)?;
         output.write_char(',').map_err(doc_write_error)?;
-        write_tstp_formula_parent_inference(output, inference, old_id).map_err(doc_write_error)?;
+        write_tstp_formula_parent_inference_with_evidence(output, inference, old_id, evidence)
+            .map_err(doc_write_error)?;
         tstp_formula_print_end(output, comment).map_err(doc_write_error)?;
         Ok(ProofDocWriteResult::printed())
     }
@@ -2205,9 +2239,40 @@ pub fn write_tstp_formula_parent_inference(
     inference: FormulaParentInference,
     parent_id: i64,
 ) -> fmt::Result {
+    write_tstp_formula_parent_inference_with_evidence(
+        output,
+        inference,
+        parent_id,
+        FormulaModificationEvidence::default(),
+    )
+}
+
+pub fn write_tstp_formula_parent_inference_with_evidence(
+    output: &mut impl fmt::Write,
+    inference: FormulaParentInference,
+    parent_id: i64,
+    evidence: FormulaModificationEvidence<'_>,
+) -> fmt::Result {
     let name = inference.pcl_name();
     let status = inference.tstp_status();
     match inference {
+        FormulaParentInference::Skolemize if !evidence.skolem_bindings.is_empty() => {
+            write!(
+                output,
+                "inference({name}, [status({status}),new_symbols(skolem,["
+            )?;
+            for (index, binding) in evidence.skolem_bindings.iter().enumerate() {
+                if index > 0 {
+                    output.write_char(',')?;
+                }
+                output.write_str(&binding.symbol)?;
+            }
+            output.write_str("])")?;
+            for binding in evidence.skolem_bindings {
+                write!(output, ",skolemize({},{})", binding.variable, binding.term)?;
+            }
+            write!(output, "], [c_0_{parent_id}])")
+        }
         FormulaParentInference::SplitEquiv | FormulaParentInference::Skolemize => {
             write!(
                 output,
@@ -2275,11 +2340,12 @@ mod tests {
         write_tstp_clause_binary_inference, write_tstp_clause_rewrite_inference,
         write_tstp_clause_unary_inference, write_tstp_formula_apply_defs_inference,
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
-        ClauseBinaryInference, ClauseCreationInference, ClauseCreationParents,
-        ClauseModificationEvidence, ClauseModificationInference, ClauseUnaryInference,
-        FormulaCreationInference, FormulaCreationParents, FormulaDocView,
-        FormulaModificationInference, FormulaParentInference, PclStepPrintOptions,
-        ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
+        write_tstp_formula_parent_inference_with_evidence, ClauseBinaryInference,
+        ClauseCreationInference, ClauseCreationParents, ClauseModificationEvidence,
+        ClauseModificationInference, ClauseUnaryInference, FormulaCreationInference,
+        FormulaCreationParents, FormulaDocView, FormulaModificationEvidence,
+        FormulaModificationInference, FormulaParentInference, FormulaSkolemBindingDoc,
+        PclStepPrintOptions, ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -3711,6 +3777,38 @@ mod tests {
         assert_eq!(
             rendered,
             "inference(add_answer_literal, [status(thm)],[c_0_12,theory(answers)])"
+        );
+    }
+
+    #[test]
+    fn formula_parent_inference_emits_checker_complete_skolem_evidence() {
+        let bindings = vec![
+            FormulaSkolemBindingDoc {
+                symbol: "esk1_0".to_owned(),
+                variable: "X1".to_owned(),
+                term: "esk1_0".to_owned(),
+            },
+            FormulaSkolemBindingDoc {
+                symbol: "esk2_1".to_owned(),
+                variable: "X2".to_owned(),
+                term: "esk2_1(X3)".to_owned(),
+            },
+        ];
+        let mut rendered = String::new();
+
+        write_tstp_formula_parent_inference_with_evidence(
+            &mut rendered,
+            FormulaParentInference::Skolemize,
+            12,
+            FormulaModificationEvidence {
+                skolem_bindings: &bindings,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "inference(skolemize, [status(esa),new_symbols(skolem,[esk1_0,esk2_1]),skolemize(X1,esk1_0),skolemize(X2,esk2_1(X3))], [c_0_12])"
         );
     }
 

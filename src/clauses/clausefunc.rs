@@ -132,6 +132,37 @@ pub struct TFormulaCnfResult {
 pub struct TFormulaCnfPhase {
     op: i64,
     formula: Term,
+    skolem_bindings: Vec<TFormulaSkolemBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TFormulaSkolemBinding {
+    variable: Term,
+    skolem_term: Term,
+    phase_variable: Term,
+    phase_skolem_term: Term,
+}
+
+impl TFormulaSkolemBinding {
+    #[must_use]
+    pub fn variable(&self) -> &Term {
+        &self.variable
+    }
+
+    #[must_use]
+    pub fn skolem_term(&self) -> &Term {
+        &self.skolem_term
+    }
+
+    #[must_use]
+    pub fn phase_variable(&self) -> &Term {
+        &self.phase_variable
+    }
+
+    #[must_use]
+    pub fn phase_skolem_term(&self) -> &Term {
+        &self.phase_skolem_term
+    }
 }
 
 impl TFormulaCnfPhase {
@@ -143,6 +174,11 @@ impl TFormulaCnfPhase {
     #[must_use]
     pub fn formula(&self) -> &Term {
         &self.formula
+    }
+
+    #[must_use]
+    pub fn skolem_bindings(&self) -> &[TFormulaSkolemBinding] {
+        &self.skolem_bindings
     }
 }
 
@@ -4939,6 +4975,29 @@ fn tform_copy_mod(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> 
 /// root, well-formed quantified cells, typed quantified variables, and a fresh
 /// variable bank state that cannot return the original quantified variable.
 pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    Ok(tformula_var_rename_with_bindings(bank, form)?.0)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TFormulaVariableRename {
+    original: Term,
+    fresh: Term,
+}
+
+fn tformula_var_rename_with_bindings(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(Term, Vec<TFormulaVariableRename>), Diagnostic> {
+    let mut renamings = Vec::new();
+    let formula = tformula_rek_var_rename(bank, form, &mut renamings)?;
+    Ok((formula, renamings))
+}
+
+fn tformula_rek_var_rename(
+    bank: &mut TermBank,
+    form: &Term,
+    renamings: &mut Vec<TFormulaVariableRename>,
+) -> Result<Term, Diagnostic> {
     assert!(
         !form.is_applied_free_var(),
         "TFormulaVarRename expects no applied free-variable root"
@@ -4954,6 +5013,10 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
             fresh_var, quantified_var,
             "fresh quantified variable must differ from original"
         );
+        renamings.push(TFormulaVariableRename {
+            original: quantified_var.clone(),
+            fresh: fresh_var.clone(),
+        });
         Some((
             BindingRestore::install(quantified_var, fresh_var.clone()),
             fresh_var,
@@ -4967,7 +5030,7 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
         let copy = Term::top_copy_without_args(form);
         for (index, arg) in form.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
-            copy.set_argument(index, tformula_var_rename(bank, &arg)?);
+            copy.set_argument(index, tformula_rek_var_rename(bank, &arg, renamings)?);
         }
         return bank.term_top_insert(copy);
     }
@@ -4998,12 +5061,24 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
     let mut arg2 = None;
     if tformula_is_quantified(bank, form) {
         arg1 = fresh_quantified_var;
-        arg2 = Some(tformula_var_rename(bank, &formula_argument(form, 1))?);
+        arg2 = Some(tformula_rek_var_rename(
+            bank,
+            &formula_argument(form, 1),
+            renamings,
+        )?);
     } else if tformula_has_subform1(bank, form) {
-        arg1 = Some(tformula_var_rename(bank, &formula_argument(form, 0))?);
+        arg1 = Some(tformula_rek_var_rename(
+            bank,
+            &formula_argument(form, 0),
+            renamings,
+        )?);
     }
     if tformula_has_subform2(bank, form) {
-        arg2 = Some(tformula_var_rename(bank, &formula_argument(form, 1))?);
+        arg2 = Some(tformula_rek_var_rename(
+            bank,
+            &formula_argument(form, 1),
+            renamings,
+        )?);
     }
 
     tformula_fcode_alloc(
@@ -5032,14 +5107,24 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
 /// cells, free and typed quantified variables, distinct quantified variables,
 /// and no pre-existing binding on variables being Skolemized.
 pub fn tformula_skolemize_outermost(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    Ok(tformula_skolemize_outermost_with_bindings(bank, form)?.0)
+}
+
+fn tformula_skolemize_outermost_with_bindings(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(Term, Vec<TFormulaSkolemBinding>), Diagnostic> {
     let mut free_vars = tformula_collect_free_vars(bank, form);
-    tformula_rek_skolemize(bank, form, &mut free_vars)
+    let mut bindings = Vec::new();
+    let formula = tformula_rek_skolemize(bank, form, &mut free_vars, &mut bindings)?;
+    Ok((formula, bindings))
 }
 
 fn tformula_rek_skolemize(
     bank: &mut TermBank,
     form: &Term,
     free_vars: &mut Vec<Term>,
+    bindings: &mut Vec<TFormulaSkolemBinding>,
 ) -> Result<Term, Diagnostic> {
     if term_is_ground(form) {
         return Ok(form.clone());
@@ -5084,8 +5169,14 @@ fn tformula_rek_skolemize(
             .type_()
             .expect("existential variable must have a type");
         let skolem = bank.alloc_new_skolem(free_vars.as_slice(), Some(&variable_type))?;
+        bindings.push(TFormulaSkolemBinding {
+            variable: variable.clone(),
+            skolem_term: skolem.clone(),
+            phase_variable: variable.clone(),
+            phase_skolem_term: skolem.clone(),
+        });
         let _binding = BindingRestore::install(variable, skolem);
-        return tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars);
+        return tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars, bindings);
     }
 
     if form.f_code() == qall_code {
@@ -5104,7 +5195,8 @@ fn tformula_rek_skolemize(
             "universal variable must not already be bound"
         );
         free_vars.push(variable.clone());
-        let body_result = tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars);
+        let body_result =
+            tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars, bindings);
         let popped = free_vars.pop().expect("universal variable stack underflow");
         assert_eq!(
             popped, variable,
@@ -5119,12 +5211,12 @@ fn tformula_rek_skolemize(
         "compound formula must have a first subformula"
     );
     let original_left = formula_argument(form, 0);
-    let left = tformula_rek_skolemize(bank, &original_left, free_vars)?;
+    let left = tformula_rek_skolemize(bank, &original_left, free_vars, bindings)?;
     let mut modified = left != original_left;
     let mut right = None;
     if tformula_has_subform2(bank, form) {
         let original_right = formula_argument(form, 1);
-        let new_right = tformula_rek_skolemize(bank, &original_right, free_vars)?;
+        let new_right = tformula_rek_skolemize(bank, &original_right, free_vars, bindings)?;
         modified |= new_right != original_right;
         right = Some(new_right);
     }
@@ -5434,6 +5526,7 @@ pub fn tformula_conjunctive_nf(
     let mut current = form.clone();
     let mut derivation_ops = Vec::new();
     let mut changed_phases = Vec::new();
+    let mut variable_renamings = Vec::new();
 
     apply_cnf_phase(
         bank,
@@ -5460,21 +5553,19 @@ pub fn tformula_conjunctive_nf(
         tformula_mini_scope,
     )?;
     seed_formula_cnf_fresh_vars(bank);
-    apply_cnf_phase(
+    apply_cnf_var_rename_phase(
         bank,
         &mut current,
         &mut derivation_ops,
         &mut changed_phases,
-        DC_VAR_RENAME,
-        tformula_var_rename,
+        &mut variable_renamings,
     )?;
-    apply_cnf_phase(
+    apply_cnf_skolem_phase(
         bank,
         &mut current,
         &mut derivation_ops,
         &mut changed_phases,
-        DC_SKOLEMIZE,
-        tformula_skolemize_outermost,
+        &variable_renamings,
     )?;
     apply_cnf_phase(
         bank,
@@ -5528,6 +5619,7 @@ pub fn tformula_conjunctive_nf3(
     let mut current = form.clone();
     let mut derivation_ops = Vec::new();
     let mut changed_phases = Vec::new();
+    let mut variable_renamings = Vec::new();
 
     apply_cnf_phase(
         bank,
@@ -5554,21 +5646,19 @@ pub fn tformula_conjunctive_nf3(
         |bank, form| tformula_mini_scope3(bank, form, miniscope_limit),
     )?;
     seed_formula_cnf_fresh_vars(bank);
-    apply_cnf_phase(
+    apply_cnf_var_rename_phase(
         bank,
         &mut current,
         &mut derivation_ops,
         &mut changed_phases,
-        DC_VAR_RENAME,
-        tformula_var_rename,
+        &mut variable_renamings,
     )?;
-    apply_cnf_phase(
+    apply_cnf_skolem_phase(
         bank,
         &mut current,
         &mut derivation_ops,
         &mut changed_phases,
-        DC_SKOLEMIZE,
-        tformula_skolemize_outermost,
+        &variable_renamings,
     )?;
     apply_cnf_phase(
         bank,
@@ -5622,9 +5712,92 @@ fn apply_cnf_phase(
         changed_phases.push(TFormulaCnfPhase {
             op,
             formula: current.clone(),
+            skolem_bindings: Vec::new(),
         });
     }
     Ok(())
+}
+
+fn apply_cnf_skolem_phase(
+    bank: &mut TermBank,
+    current: &mut Term,
+    derivation_ops: &mut Vec<i64>,
+    changed_phases: &mut Vec<TFormulaCnfPhase>,
+    variable_renamings: &[TFormulaVariableRename],
+) -> Result<(), Diagnostic> {
+    let (transformed, skolem_bindings) = tformula_skolemize_outermost_with_bindings(bank, current)?;
+    if transformed != *current {
+        *current = transformed;
+        derivation_ops.push(DC_SKOLEMIZE);
+        changed_phases.push(TFormulaCnfPhase {
+            op: DC_SKOLEMIZE,
+            formula: current.clone(),
+            skolem_bindings: original_variable_skolem_bindings(skolem_bindings, variable_renamings),
+        });
+    }
+    Ok(())
+}
+
+fn apply_cnf_var_rename_phase(
+    bank: &mut TermBank,
+    current: &mut Term,
+    derivation_ops: &mut Vec<i64>,
+    changed_phases: &mut Vec<TFormulaCnfPhase>,
+    variable_renamings: &mut Vec<TFormulaVariableRename>,
+) -> Result<(), Diagnostic> {
+    let (transformed, renamings) = tformula_var_rename_with_bindings(bank, current)?;
+    if transformed != *current {
+        *current = transformed;
+        *variable_renamings = renamings;
+        derivation_ops.push(DC_VAR_RENAME);
+        changed_phases.push(TFormulaCnfPhase {
+            op: DC_VAR_RENAME,
+            formula: current.clone(),
+            skolem_bindings: Vec::new(),
+        });
+    }
+    Ok(())
+}
+
+fn original_variable_skolem_bindings(
+    bindings: Vec<TFormulaSkolemBinding>,
+    variable_renamings: &[TFormulaVariableRename],
+) -> Vec<TFormulaSkolemBinding> {
+    let originals = variable_renamings
+        .iter()
+        .map(|renaming| (term_identity_id(&renaming.fresh), renaming.original.clone()))
+        .collect::<BTreeMap<_, _>>();
+    bindings
+        .into_iter()
+        .map(|binding| {
+            let TFormulaSkolemBinding {
+                variable: bound_variable,
+                skolem_term: bound_skolem_term,
+                phase_variable,
+                phase_skolem_term,
+            } = binding;
+            let variable = originals
+                .get(&term_identity_id(&bound_variable))
+                .cloned()
+                .unwrap_or(bound_variable);
+            let skolem_term = Term::top_copy_without_args(&bound_skolem_term);
+            for (index, argument) in bound_skolem_term.argument_clones().into_iter().enumerate() {
+                let argument =
+                    argument.unwrap_or_else(|| panic!("Skolem argument {index} is uninitialized"));
+                let original = originals
+                    .get(&term_identity_id(&argument))
+                    .cloned()
+                    .unwrap_or(argument);
+                skolem_term.set_argument(index, original);
+            }
+            TFormulaSkolemBinding {
+                variable,
+                skolem_term,
+                phase_variable,
+                phase_skolem_term,
+            }
+        })
+        .collect()
 }
 
 fn tformula_nnf_positive(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
@@ -5649,6 +5822,7 @@ fn apply_cnf_fool_unroll(
         changed_phases.push(TFormulaCnfPhase {
             op: DC_FOOL_UNROLL,
             formula: unrolled.clone(),
+            skolem_bindings: Vec::new(),
         });
     }
     *current = unrolled;
@@ -6921,10 +7095,11 @@ mod tests {
         tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_negate,
         tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc, tformula_quantor_alloc,
         tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
-        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_stack_to_form,
-        tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse,
-        tformula_unroll_fool, tformula_var_is_free, tformula_var_is_free_cached,
-        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_simplify_decoded, tformula_skolemize_outermost,
+        tformula_skolemize_outermost_with_bindings, tformula_stack_to_form, tformula_to_cnf,
+        tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse, tformula_unroll_fool,
+        tformula_var_is_free, tformula_var_is_free_cached, tformula_var_rename,
+        TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -10377,6 +10552,49 @@ mod tests {
         assert_ne!(skolem, z);
         assert_eq!(skolem.arity(), 0);
         assert_eq!(skolem.type_(), z.type_());
+    }
+
+    #[test]
+    fn tformula_skolemization_records_constants_functions_and_nested_scopes() {
+        let mut bank = test_bank();
+        let c = typed_var(&bank, -194);
+        let x = typed_var(&bank, -196);
+        let y = typed_var(&bank, -198);
+        let u = typed_var(&bank, -200);
+        let z = typed_var(&bank, -202);
+        let a = typed_const(&mut bank, "skolem_evidence_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let and_code = bank.signature().and_code();
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+
+        let closed_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &a);
+        let closed_exists = bool_binary_with_code(&mut bank, qex_code, &c, &closed_atom);
+        let y_atom = bool_binary_with_code(&mut bank, eqn_code, &y, &x);
+        let z_atom = bool_binary_with_code(&mut bank, eqn_code, &z, &u);
+        let matrix = bool_binary_with_code(&mut bank, and_code, &y_atom, &z_atom);
+        let z_exists = bool_binary_with_code(&mut bank, qex_code, &z, &matrix);
+        let u_forall = bool_binary_with_code(&mut bank, qall_code, &u, &z_exists);
+        let y_exists = bool_binary_with_code(&mut bank, qex_code, &y, &u_forall);
+        let x_forall = bool_binary_with_code(&mut bank, qall_code, &x, &y_exists);
+        let formula = bool_binary_with_code(&mut bank, and_code, &closed_exists, &x_forall);
+
+        let (_skolemized, bindings) =
+            tformula_skolemize_outermost_with_bindings(&mut bank, &formula).unwrap();
+
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings[0].variable(), &c);
+        assert_eq!(bindings[0].skolem_term().arity(), 0);
+        assert_eq!(bindings[1].variable(), &y);
+        assert_eq!(bindings[1].skolem_term().arity(), 1);
+        assert_eq!(bindings[1].skolem_term().argument(0).as_ref(), Some(&x));
+        assert_eq!(bindings[2].variable(), &z);
+        assert_eq!(bindings[2].skolem_term().arity(), 2);
+        assert_eq!(bindings[2].skolem_term().argument(0).as_ref(), Some(&x));
+        assert_eq!(bindings[2].skolem_term().argument(1).as_ref(), Some(&u));
+        for variable in [&c, &x, &y, &u, &z] {
+            assert!(variable.binding().is_none());
+        }
     }
 
     #[test]

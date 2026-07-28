@@ -57,8 +57,10 @@ use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_dummy_quote_parent_ref, demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
-    deriv_stack_tstp_string_with_formula_ids, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef, DC_CNF_QUOTE,
+    deriv_stack_tstp_string_with_formula_ids,
+    deriv_stack_tstp_string_with_formula_ids_and_skolem_details, op_has_arg1, op_has_arg2,
+    op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, FormulaDerivationRef,
+    DC_CNF_QUOTE, DC_FOF_QUOTE,
 };
 use crate::clauses::eqn::{
     eqn_fof_parse, prepare_predicate_literal, Eqn, EqnFofPrintOptions, EqnPrintOptions,
@@ -9497,27 +9499,176 @@ fn write_saturation_proof_object_formula_with_formula_ids(
             rendered.push('\n');
         }
         DocOutputFormat::Tstp => {
-            rendered.push_str(&formula.proof_object_tstp_string(bank, proof_problem_type)?);
-            if let Some(derivation) = deriv_stack_tstp_string_with_formula_ids(
-                formula.derivation(),
-                ac_axioms,
-                formula_ids,
-            ) {
-                rendered.push_str(", ");
-                rendered.push_str(&derivation);
-            } else {
-                let source_info = source_info_tstp_string(formula.info());
-                if !source_info.is_empty() {
-                    rendered.push_str(", ");
-                    rendered.push_str(&source_info);
+            let mut wrote_skolem_boundary = false;
+            if let (Some(step), Some(derivation)) =
+                (formula.skolem_proof_step(), formula.derivation())
+            {
+                let entries = derivation.as_slice();
+                let boundary = step.derivation_entry_count();
+                if boundary <= entries.len() && !step.bindings().is_empty() {
+                    let details = proof_object_skolem_details(bank, step.bindings());
+                    if boundary < entries.len() {
+                        let prefix = proof_object_derivation_stack(&entries[..boundary]);
+                        let synthetic_id = proof_object_skolem_step_id(formula);
+                        let mut synthetic = formula.clone();
+                        synthetic.set_formula(step.formula().clone());
+                        synthetic.clear_skolem_proof_step();
+                        append_proof_object_formula_tstp(
+                            &mut rendered,
+                            bank,
+                            &synthetic,
+                            &synthetic_id,
+                            proof_problem_type,
+                            Some(&prefix),
+                            formula_ids,
+                            ac_axioms,
+                            Some(&details),
+                        )?;
+
+                        let mut suffix = PStack::with_exact_capacity(
+                            entries.len().saturating_sub(boundary).saturating_add(2),
+                        );
+                        suffix.push(DerivationEntry::Operation(DC_FOF_QUOTE));
+                        suffix.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+                            formula.ident(),
+                        )));
+                        for entry in &entries[boundary..] {
+                            suffix.push(*entry);
+                        }
+                        let mut suffix_formula_ids = formula_ids.clone();
+                        suffix_formula_ids.insert(formula.ident(), synthetic_id);
+                        append_proof_object_formula_tstp(
+                            &mut rendered,
+                            bank,
+                            formula,
+                            &formula.get_id(true),
+                            proof_problem_type,
+                            Some(&suffix),
+                            &suffix_formula_ids,
+                            ac_axioms,
+                            None,
+                        )?;
+                    } else {
+                        append_proof_object_formula_tstp(
+                            &mut rendered,
+                            bank,
+                            formula,
+                            &formula.get_id(true),
+                            proof_problem_type,
+                            Some(derivation),
+                            formula_ids,
+                            ac_axioms,
+                            Some(&details),
+                        )?;
+                    }
+                    wrote_skolem_boundary = true;
                 }
             }
-            rendered.push_str(").");
-            rendered.push('\n');
+            if !wrote_skolem_boundary {
+                append_proof_object_formula_tstp(
+                    &mut rendered,
+                    bank,
+                    formula,
+                    &formula.get_id(true),
+                    proof_problem_type,
+                    formula.derivation(),
+                    formula_ids,
+                    ac_axioms,
+                    None,
+                )?;
+            }
         }
         _ => write_comment_line(output, "Output format not implemented.")?,
     }
     output.write_all(rendered.as_bytes())?;
+    Ok(())
+}
+
+fn proof_object_derivation_stack(entries: &[DerivationEntry]) -> PStack<DerivationEntry> {
+    let mut derivation = PStack::with_exact_capacity(entries.len().max(1));
+    for entry in entries {
+        derivation.push(*entry);
+    }
+    derivation
+}
+
+fn proof_object_skolem_step_id(formula: &WrappedFormula) -> String {
+    if formula.ident() < 0 {
+        format!(
+            "i_0_{}_skolem",
+            i128::from(formula.ident()) - i128::from(i64::MIN)
+        )
+    } else {
+        format!("c_0_{}_skolem", formula.ident())
+    }
+}
+
+fn proof_object_skolem_details(
+    bank: &TermBank,
+    bindings: &[crate::clauses::clausefunc::TFormulaSkolemBinding],
+) -> String {
+    let symbols = bindings
+        .iter()
+        .map(|binding| {
+            bank.signature()
+                .func(binding.skolem_term().f_code())
+                .print_name()
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut details = format!("new_symbols(skolem,[{symbols}])");
+    for binding in bindings {
+        let _ = write!(
+            details,
+            ",skolemize({},{})",
+            bank.term_string(binding.variable(), true),
+            bank.term_string(binding.skolem_term(), true)
+        );
+    }
+    details
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TSTP formula records keep proof body, ancestry, and Skolem evidence explicit"
+)]
+fn append_proof_object_formula_tstp(
+    rendered: &mut String,
+    bank: &TermBank,
+    formula: &WrappedFormula,
+    identifier: &str,
+    proof_problem_type: ProblemType,
+    derivation: Option<&PStack<DerivationEntry>>,
+    formula_ids: &BTreeMap<i64, String>,
+    ac_axioms: &[ClauseDerivationRef],
+    skolem_details: Option<&str>,
+) -> Result<(), EProverError> {
+    rendered.push_str(&formula.proof_object_tstp_string_with_id(
+        bank,
+        proof_problem_type,
+        identifier,
+    )?);
+    let derivation = if let Some(details) = skolem_details {
+        deriv_stack_tstp_string_with_formula_ids_and_skolem_details(
+            derivation,
+            ac_axioms,
+            formula_ids,
+            details,
+        )
+    } else {
+        deriv_stack_tstp_string_with_formula_ids(derivation, ac_axioms, formula_ids)
+    };
+    if let Some(derivation) = derivation {
+        rendered.push_str(", ");
+        rendered.push_str(&derivation);
+    } else {
+        let source_info = source_info_tstp_string(formula.info());
+        if !source_info.is_empty() {
+            rendered.push_str(", ");
+            rendered.push_str(&source_info);
+        }
+    }
+    rendered.push_str(").\n");
     Ok(())
 }
 
@@ -16721,6 +16872,7 @@ mod tests {
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{RewriteLevel, Term};
+    use crate::terms::termvars::VarBank;
     use crate::test_support::global_state_lock;
     use std::collections::BTreeMap;
     use std::ffi::OsString;
@@ -33503,6 +33655,112 @@ cnf(c_0_12, negated_conjecture, ($false), inference(eval_answer_literal,[status(
             .find("     1 :  : [] : 0 : 'proof'")
             .unwrap_or_else(|| panic!("missing remapped clause PCL node in:\n{printed}"));
         assert!(formula_position < clause_position, "{printed}");
+    }
+
+    #[test]
+    fn proof_object_list_names_checker_complete_skolem_boundary_before_distribution() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let z = typed_var(&bank, -401);
+        let a = {
+            let type_ = bank.signature().type_bank().default_type();
+            let code = bank.signature_mut().insert_id("proof_skolem_a", 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, type_)
+                .unwrap();
+            bank.create_const_term(code).unwrap()
+        };
+        let b = {
+            let type_ = bank.signature().type_bank().default_type();
+            let code = bank.signature_mut().insert_id("proof_skolem_b", 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, type_)
+                .unwrap();
+            bank.create_const_term(code).unwrap()
+        };
+        let c = {
+            let type_ = bank.signature().type_bank().default_type();
+            let code = bank.signature_mut().insert_id("proof_skolem_c", 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, type_)
+                .unwrap();
+            bank.create_const_term(code).unwrap()
+        };
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let qex_code = bank.signature().qex_code();
+        let left = bool_binary_term(&mut bank, eqn_code, &z, &a);
+        let right_left = bool_binary_term(&mut bank, eqn_code, &z, &b);
+        let right_right = bool_binary_term(&mut bank, eqn_code, &z, &c);
+        let conjunction = bool_binary_term(&mut bank, and_code, &right_left, &right_right);
+        let disjunction = bool_binary_term(&mut bank, or_code, &left, &conjunction);
+        let quantified = bool_binary_term(&mut bank, qex_code, &z, &disjunction);
+        let mut input = WrappedFormula::wt_formula_alloc(quantified);
+        input.set_tptp_type(CP_TYPE_AXIOM);
+        let mut derived = input.flat_copy();
+        derived.push_formula_derivation(DC_FOF_QUOTE, Some(input.derivation_ref()), None);
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        derived
+            .cnf2_into(
+                &mut bank,
+                &mut clauses,
+                &fresh_vars,
+                100,
+                false,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert!(derived.skolem_proof_step().is_some());
+
+        let graph = ProofObjectGraph {
+            clauses: Vec::new(),
+            formulas: vec![&input, &derived],
+            clause_aliases: BTreeMap::new(),
+            edges: Vec::new(),
+            mixed_edges: vec![ProofObjectGraphMixedEdge {
+                parent: ProofObjectGraphNode::Formula(0),
+                child: ProofObjectGraphNode::Formula(1),
+            }],
+            root_indices: Vec::new(),
+            formula_root_indices: vec![1],
+        };
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Tstp,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+
+        write_proof_object_list_graph(&mut output, &config, &bank, &graph, ProblemType::FirstOrder)
+            .unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        let skolem_position = printed
+            .find("fof(c_0_1_skolem, plain,")
+            .unwrap_or_else(|| panic!("missing named Skolem boundary:\n{printed}"));
+        let final_position = printed
+            .find("fof(c_0_1, plain,")
+            .unwrap_or_else(|| panic!("missing final clausification formula:\n{printed}"));
+        assert!(skolem_position < final_position, "{printed}");
+        let skolem_line = printed
+            .lines()
+            .find(|line| line.starts_with("fof(c_0_1_skolem"));
+        assert!(
+            skolem_line.is_some_and(|line| {
+                line.contains("status(esa),new_symbols(skolem,[esk") && line.contains("skolemize(")
+            }),
+            "{printed}"
+        );
+        let final_line = printed.lines().find(|line| line.starts_with("fof(c_0_1,"));
+        assert!(
+            final_line.is_some_and(|line| {
+                line.contains("inference(distribute")
+                    && line.contains("[c_0_1_skolem])")
+                    && !line.contains("skolemize")
+            }),
+            "{printed}"
+        );
     }
 
     #[test]
