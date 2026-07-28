@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "bead": "E_Rust_Port-9jt.8.6",
+  "created_utc": "2026-07-28T08:32:00Z",
+  "public_contract": {
+    "checked_utc_date": "2026-07-28",
+    "latest_published_casc": "CASC-J13",
+    "casc_2027_rules_published": false,
+    "organizer_exemplar_obtained": false,
+    "real_starexec_job_completed": false,
+    "public_contract_emulated": true
+  },
+  "build": {
+    "runner": "e-rust-codex-260728-082757-7d41",
+    "linode_id": 101593837,
+    "platform": "Ubuntu 24.04, Linux x86_64, glibc 2.39",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "runner_and_firewall_deleted": true
+  },
+  "source_archive": {
+    "file": "umlaut-0.1.0-source.tgz",
+    "bytes": 1921429,
+    "sha256": "81abc2afedc6c7b4195ed588fe8213ff9580f65bca63810f85f66b9f65d04f1c",
+    "members": 310,
+    "offline_release_build_of_all_declared_binaries": true
+  },
+  "runtime_archive": {
+    "file": "umlaut-0.1.0-starexec.tgz",
+    "bytes": 2762199,
+    "sha256": "e3391e5530dfe9facb6bd20af24c4e17210d579af2082c7a0cb866b8af8ecb68",
+    "members": [
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "bin/starexec_run_default",
+      "bin/umlaut",
+      "starexec_description.txt"
+    ],
+    "rootless_starexec_layout": true
+  },
+  "starexec_emulation": {
+    "wrapper_arguments": [
+      "--auto",
+      "--tstp-out",
+      "--proof-object=1",
+      "--output-level=0",
+      "--cpu-limit=17",
+      "--memory-limit=4096",
+      "ABSOLUTE_PROBLEM_PATH"
+    ],
+    "tptp_environment_preserved": true,
+    "wallclock_environment_preserved_for_starexec": true,
+    "problem_path_with_spaces_preserved": true,
+    "include_job": {
+      "status": "Theorem",
+      "proof_delimiters": "CNFRefutation",
+      "stdout_sha256": "9029311143112bf6c9f5d809b1a4e5cab5a19b625ec3b146b6d4df5a243de23e",
+      "stderr_bytes": 0,
+      "normal_exit_files_created": []
+    },
+    "signals": [
+      {
+        "signal": "SIGALRM",
+        "exit_status": 8,
+        "status": "ResourceOut",
+        "temporary_files_after_signal": []
+      },
+      {
+        "signal": "SIGXCPU",
+        "exit_status": 8,
+        "status": "ResourceOut",
+        "temporary_files_after_signal": []
+      }
+    ]
+  },
+  "optional_backends": {
+    "bundled": [],
+    "linked": [],
+    "internal_sat_fallback": true,
+    "viras_absent": true,
+    "vampire_absent": true
+  },
+  "comprehensive_validation": {
+    "run_id": "260728-075710-d611",
+    "validation_summary_sha256": "779c29410eae094ed7853a634d8a07fe477fe7600b6502e2ba5e4d04a30df28e",
+    "rust_tests_passed": 4447,
+    "solution_validation_controller_tests_passed": 9,
+    "main_cases": 50,
+    "main_unexpected_mismatches": 0,
+    "tool_cases": 216,
+    "tool_unexpected_mismatches": 0,
+    "benchmark_cases": 10,
+    "benchmark_behavior_mismatches": 0,
+    "rust_to_c_wall_ratio": 1.0687869754514174,
+    "linux_release_umlaut_sha256": "118913e10762348c0a675850644f75b55565e0c7c9207344c70fb62badbebc7a"
+  },
+  "rebuild": [
+    "python3 tools/packaging/verify_casc_package.py --output-dir \"$OUTPUT_DIR\""
+  ]
+}

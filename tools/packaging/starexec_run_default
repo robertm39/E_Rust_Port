@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+problem=${1:?StarExec did not provide a benchmark path}
+
+set -- \
+    --auto \
+    --tstp-out \
+    --proof-object=1 \
+    --output-level=0
+
+case ${STAREXEC_CPU_LIMIT:-} in
+    ''|0|*[!0-9]*)
+        ;;
+    *)
+        set -- "$@" "--cpu-limit=${STAREXEC_CPU_LIMIT}"
+        ;;
+esac
+
+case ${STAREXEC_MAX_MEM:-} in
+    ''|0|*[!0-9]*)
+        ;;
+    *)
+        set -- "$@" "--memory-limit=${STAREXEC_MAX_MEM}"
+        ;;
+esac
+
+exec ./umlaut "$@" "$problem"

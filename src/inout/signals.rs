@@ -13,6 +13,7 @@ use std::sync::atomic::{
 
 pub const RLIM_INFINITY_COMPAT: u64 = u64::MAX;
 pub const SIGINT_COMPAT: i32 = 2;
+pub const SIGALRM_COMPAT: i32 = 14;
 pub const SIGTERM_COMPAT: i32 = 15;
 pub const SIGXCPU_COMPAT: i32 = 24;
 const USEC_PER_SEC: u64 = 1_000_000;
@@ -435,7 +436,7 @@ pub fn e_sched_signal_setup() -> SignalOutcome {
 #[must_use]
 pub fn e_signal_handler(signal: i32) -> SignalOutcome {
     match signal {
-        SIGXCPU_COMPAT => handle_cpu_limit(),
+        SIGALRM_COMPAT | SIGXCPU_COMPAT => handle_cpu_limit(),
         SIGTERM_COMPAT | SIGINT_COMPAT => handle_termination(signal),
         _ => SignalOutcome::UnexpectedSignal { signal },
     }
@@ -536,10 +537,9 @@ fn handle_cpu_limit() -> SignalOutcome {
     } else {
         SignalOutcome::CpuLimitExceeded {
             silent: false,
-            diagnostic: Some(Diagnostic::new(
-                ErrorCode::CPU_LIMIT_ERROR,
-                "CPU time limit exceeded, terminating",
-            )),
+            // Native signal delivery can interrupt the allocator. The
+            // trampoline owns a static diagnostic and must not allocate here.
+            diagnostic: None,
         }
     }
 }
@@ -633,7 +633,7 @@ mod linux_signal {
     const UNEXPECTED_SIGNAL_WARNING: &[u8] = b"Warning: Unexpected signal caught, continuing";
 
     unsafe extern "C" {
-        fn exit(status: i32) -> !;
+        fn _exit(status: i32) -> !;
         fn raise(signal_number: i32) -> i32;
         fn write(fd: i32, buffer: *const c_void, count: usize) -> isize;
         #[link_name = "signal"]
@@ -720,10 +720,10 @@ mod linux_signal {
             write_fd_all(STDERR_FILENO_COMPAT, HARD_CPU_TIMEOUT_ERROR);
         }
         write_pending_output(global_out_fd);
-        // SAFETY: exit is libc's process-termination API. C `ESignalHandler`
-        // calls exit directly for silent hard CPU timeouts and reaches it via
-        // Error(...) for non-silent hard CPU timeouts.
-        unsafe { exit(i32::from(ErrorCode::CPU_LIMIT_ERROR.exit_status())) }
+        // SAFETY: `_exit` terminates the process without invoking allocator,
+        // stdio, or atexit state that may have been interrupted by the signal.
+        // The fixed status is representable as a C int.
+        unsafe { _exit(i32::from(ErrorCode::CPU_LIMIT_ERROR.exit_status())) }
     }
 
     extern "C" fn signal_trampoline(signal_number: i32) {
@@ -775,8 +775,8 @@ mod tests {
         set_time_limit_is_soft, sig_term_caught, signal_global_out_fd, silent_time_out,
         soft_time_limit, system_time_limit, time_is_up, time_limit_expired_kind,
         time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, SignalPendingOutput,
-        TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY,
-        SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        TimeLimitKind, RLIM_INFINITY_COMPAT, SIGALRM_COMPAT, SIGINT_COMPAT,
+        SIGNAL_PENDING_OUTPUT_CAPACITY, SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::os_wrapper::get_usec_clock;
@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_cpu_signal_reports_silent_or_diagnostic_timeout() {
+    fn hard_cpu_signal_reports_timeout_without_allocating_a_diagnostic() {
         let _guard = global_state_lock();
         reset_signal_state_for_tests();
         let _ = set_silent_time_out(true);
@@ -1024,16 +1024,28 @@ mod tests {
         assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
 
         reset_signal_state_for_tests();
-        let SignalOutcome::CpuLimitExceeded {
-            silent,
-            diagnostic: Some(diagnostic),
-        } = e_signal_handler(SIGXCPU_COMPAT)
-        else {
-            panic!("expected non-silent CPU limit outcome");
-        };
-        assert!(!silent);
-        assert_eq!(diagnostic.code(), ErrorCode::CPU_LIMIT_ERROR);
-        assert_eq!(diagnostic.message(), "CPU time limit exceeded, terminating");
+        assert_eq!(
+            e_signal_handler(SIGXCPU_COMPAT),
+            SignalOutcome::CpuLimitExceeded {
+                silent: false,
+                diagnostic: None
+            }
+        );
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
+    }
+
+    #[test]
+    fn alarm_signal_uses_the_hard_resource_timeout_contract() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+
+        assert_eq!(
+            e_signal_handler(SIGALRM_COMPAT),
+            SignalOutcome::CpuLimitExceeded {
+                silent: false,
+                diagnostic: None
+            }
+        );
         assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
     }
 

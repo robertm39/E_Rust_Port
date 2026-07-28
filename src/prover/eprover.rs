@@ -147,7 +147,7 @@ use crate::inout::signals::{
     configure_time_limits, e_sched_signal_setup, e_signal_setup, reset_sig_term_caught,
     set_signal_global_out_fd, sig_term_caught, signal_pending_output_append,
     signal_pending_output_clear, time_limit_expired_kind, SignalOutcome, TimeLimitKind,
-    RLIM_INFINITY_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY, SIGXCPU_COMPAT,
+    RLIM_INFINITY_COMPAT, SIGALRM_COMPAT, SIGNAL_PENDING_OUTPUT_CAPACITY, SIGXCPU_COMPAT,
 };
 #[cfg(any(test, not(target_os = "linux")))]
 use crate::inout::signals::{finalize_cpu_limit_outcome, silent_time_out};
@@ -2676,11 +2676,12 @@ fn pdt_constraint_settings(
 }
 
 fn setup_signal_handlers() -> Result<(), Diagnostic> {
-    if let SignalOutcome::HandlerInstallFailed { diagnostic, .. } = e_signal_setup(SIGXCPU_COMPAT) {
-        Err(diagnostic)
-    } else {
-        Ok(())
+    for signal in [SIGXCPU_COMPAT, SIGALRM_COMPAT] {
+        if let SignalOutcome::HandlerInstallFailed { diagnostic, .. } = e_signal_setup(signal) {
+            return Err(diagnostic);
+        }
     }
+    Ok(())
 }
 
 fn setup_scheduler_signal_handler() -> Result<(), Diagnostic> {

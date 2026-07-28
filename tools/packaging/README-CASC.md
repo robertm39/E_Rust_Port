@@ -1,24 +1,22 @@
-# Umlaut CASC runtime candidate
+# Umlaut StarExec installation package
 
-This archive is a minimal Linux runtime candidate produced by
-`verify_casc_package.py`. It is not yet a final StarExec installation package:
-the competition-specific StarExec wrapper must be based on the organizer's
-current exemplar and validated on StarExec before submission.
+`verify_casc_package.py` produces this minimal Linux StarExec installation
+package from a clean, audited source archive. The archive has no wrapper
+directory: StarExec extracts `bin/` directly and runs
+`bin/starexec_run_default` with `bin/` as the working directory.
 
-The executable is `bin/umlaut`. It accepts TPTP-family problem files and the
-documented Umlaut/E-compatible options. A representative direct invocation is:
+The run configuration invokes `bin/umlaut` in automatic mode with TSTP proof
+output. It preserves the benchmark path exactly, inherits `TPTP` for include
+resolution, maps a positive integer `STAREXEC_CPU_LIMIT` to `--cpu-limit`, and
+maps a positive integer `STAREXEC_MAX_MEM` (MiB) to `--memory-limit`.
+`STAREXEC_WALLCLOCK_LIMIT` remains in the environment for StarExec to enforce;
+Umlaut has a per-core CPU limit rather than a wall-clock limit.
 
-```text
-bin/umlaut PROBLEM.p --auto --silent --cpu-limit=300
-```
+This package follows the current public CASC-J13 and StarExec contract as of
+2026-07-28. CASC-2027 rules are not yet published. Before a 2027 submission,
+compare it with the organizer's then-current exemplar and validate installation
+and an SZS-postprocessed job in the TPTP StarExec space.
 
-Set `TPTP` to the TPTP library root when a problem uses include files that are
-not relative to the problem itself. For a CASC-like 128 GiB prover limit, add:
-
-```text
---memory-limit=131072
-```
-
-The runtime candidate deliberately contains no PicoSAT, CaDiCaL, MiniSat, Z3,
-GMP, Vampire, VIRAS, or other optional backend. Umlaut uses its internal SAT
-fallback when no PicoSAT-compatible shared library is configured.
+The package deliberately contains no PicoSAT, CaDiCaL, MiniSat, Z3, GMP,
+Vampire, VIRAS, or other optional backend. Umlaut uses its internal SAT fallback
+when no PicoSAT-compatible shared library is configured.

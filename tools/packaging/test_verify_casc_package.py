@@ -85,6 +85,10 @@ class RuntimeArchiveTests(unittest.TestCase):
                 "readme\n",
                 encoding="utf-8",
             )
+            (source / "tools" / "packaging" / "starexec_run_default").write_text(
+                "#!/bin/sh\nexec ./umlaut \"$@\"\n",
+                encoding="utf-8",
+            )
             (source / "LICENSE").write_text("license\n", encoding="utf-8")
             (source / "THIRD_PARTY_NOTICES.md").write_text(
                 "notices\n",
@@ -95,7 +99,6 @@ class RuntimeArchiveTests(unittest.TestCase):
             for target in (first, second):
                 audit.build_runtime_archive(
                     target,
-                    root_name="umlaut-0.1.0",
                     binary=binary,
                     source_root=source,
                 )
@@ -106,12 +109,26 @@ class RuntimeArchiveTests(unittest.TestCase):
         self.assertEqual(
             members,
             [
-                "umlaut-0.1.0/LICENSE",
-                "umlaut-0.1.0/README.md",
-                "umlaut-0.1.0/THIRD_PARTY_NOTICES.md",
-                "umlaut-0.1.0/bin/umlaut",
+                "LICENSE",
+                "THIRD_PARTY_NOTICES.md",
+                "bin/starexec_run_default",
+                "bin/umlaut",
+                "starexec_description.txt",
             ],
         )
+
+    def test_runtime_rejects_wrapper_root_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "runtime.tgz"
+            write_tar(
+                archive,
+                [f"umlaut-0.1.0/{name}" for name in sorted(audit.RUNTIME_FILES)],
+            )
+            with self.assertRaisesRegex(
+                audit.AuditError,
+                "StarExec allowlist",
+            ):
+                audit.runtime_members(archive)
 
     def test_runtime_rejects_optional_backend_name(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -119,10 +136,10 @@ class RuntimeArchiveTests(unittest.TestCase):
             write_tar(
                 archive,
                 [
-                    "umlaut-0.1.0/bin/umlaut",
-                    "umlaut-0.1.0/lib/libpicosat.so",
-                    "umlaut-0.1.0/LICENSE",
-                    "umlaut-0.1.0/README.md",
+                    "bin/umlaut",
+                    "lib/libpicosat.so",
+                    "LICENSE",
+                    "starexec_description.txt",
                 ],
             )
             with self.assertRaisesRegex(

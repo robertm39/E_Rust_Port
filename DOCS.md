@@ -212,6 +212,13 @@ The follow-up checker bake-off, explicit typed conjecture-negation provenance,
 and independent `ContradictoryAxioms` acceptance are recorded in
 [`experiments/2026-07-28-001-proof-checker-coverage/`](experiments/2026-07-28-001-proof-checker-coverage/).
 
+## StarExec Package
+
+The latest-public-contract StarExec wrapper, deterministic source/runtime
+archives, include/SZS job emulation, signal-safety fix, package hashes, and
+explicit CASC-2027 organizer-controlled gates are recorded in
+[`experiments/2026-07-28-002-starexec-package/`](experiments/2026-07-28-002-starexec-package/).
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
