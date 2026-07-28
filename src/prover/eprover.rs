@@ -7875,14 +7875,26 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
             .with_eqn_output_format(config.output_format)
             .with_print_types(config.encoding.print_types);
         let _archived = formulas.archive_into(archive);
-        let _preprocessed = formulas.preproc_conjectures_with_docs(
-            &mut rendered,
-            bank,
-            &mut session,
-            render_options,
-            config.answer_limit > 0,
-            config.flags.contains(EProverFlag::ConjecturesAreQuestions),
-        )?;
+        let _preprocessed = if config.proof_object_level > 0 {
+            formulas.preproc_conjectures_with_docs_and_proof_archive(
+                archive,
+                &mut rendered,
+                bank,
+                &mut session,
+                render_options,
+                config.answer_limit > 0,
+                config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+            )?
+        } else {
+            formulas.preproc_conjectures_with_docs(
+                &mut rendered,
+                bank,
+                &mut session,
+                render_options,
+                config.answer_limit > 0,
+                config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+            )?
+        };
         let mut doc_context =
             WrappedFormulaCnfDocContext::new(&mut rendered, &mut session, render_options);
         let cnf = formulas.cnf2_into_with_docs_and_gc_context(
@@ -7915,11 +7927,20 @@ fn clausify_formula_axioms_silent(
         let (bank, clauses, formulas, archive, gc_context) =
             state.terms_axioms_formula_sets_cnf_with_gc_mut();
         let _archived = formulas.archive_into(archive);
-        let _preprocessed = formulas.preproc_conjectures(
-            bank,
-            config.answer_limit > 0,
-            config.flags.contains(EProverFlag::ConjecturesAreQuestions),
-        )?;
+        let _preprocessed = if config.proof_object_level > 0 {
+            formulas.preproc_conjectures_with_proof_archive(
+                archive,
+                bank,
+                config.answer_limit > 0,
+                config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+            )?
+        } else {
+            formulas.preproc_conjectures(
+                bank,
+                config.answer_limit > 0,
+                config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+            )?
+        };
         let cnf = formulas.cnf2_into_with_gc_context(
             archive,
             clauses,
@@ -26650,6 +26671,130 @@ input_clause(c2,axiom,[++q(X)]).
     }
 
     #[test]
+    fn run_proof_object_keeps_explicit_tff_negated_conjecture_step() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-tff-negated-conjecture");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(fact, axiom, p(a)).\n\
+             tff(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--tstp-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(printed.matches("inference(assume_negation").count(), 1);
+        assert!(
+            !printed
+                .contains("inference(fof_simplification,[status(thm)],[inference(assume_negation"),
+            "{printed}"
+        );
+        let negated_line = printed
+            .lines()
+            .find(|line| line.contains("inference(assume_negation,[status(cth)],[goal])"))
+            .unwrap_or_else(|| panic!("missing explicit negated-conjecture step in:\n{printed}"));
+        assert!(negated_line.starts_with("tff("), "{negated_line}");
+        assert!(
+            negated_line.contains(", negated_conjecture, ~(p(a)), "),
+            "{negated_line}"
+        );
+        let negated_id = negated_line
+            .strip_prefix("tff(")
+            .and_then(|line| line.split_once(','))
+            .map(|(id, _)| id)
+            .unwrap();
+        assert!(
+            printed
+                .lines()
+                .any(|line| line.contains("inference(fof_simplification")
+                    && line.contains(&format!("[{negated_id}])"))),
+            "{printed}"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_keeps_explicit_thf_negated_conjecture_step() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-thf-negated-conjecture");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ a).\n\
+             thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--tstp-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(printed.matches("inference(assume_negation").count(), 1);
+        assert!(
+            !printed
+                .contains("inference(fof_simplification,[status(thm)],[inference(assume_negation"),
+            "{printed}"
+        );
+        let negated_line = printed
+            .lines()
+            .find(|line| line.contains("inference(assume_negation,[status(cth)],[goal])"))
+            .unwrap_or_else(|| panic!("missing explicit negated-conjecture step in:\n{printed}"));
+        assert!(negated_line.starts_with("thf("), "{negated_line}");
+        assert!(
+            negated_line.contains(", negated_conjecture, ~((p @ a)), "),
+            "{negated_line}"
+        );
+        let negated_id = negated_line
+            .strip_prefix("thf(")
+            .and_then(|line| line.split_once(','))
+            .map(|(id, _)| id)
+            .unwrap();
+        assert!(
+            printed
+                .lines()
+                .any(|line| line.contains("inference(fof_simplification")
+                    && line.contains(&format!("[{negated_id}])"))),
+            "{printed}"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_theorem_for_tcf_formula_conjecture() {
         let _guard = global_state_lock();
         let path = temp_path("proof-tcf-formula-conjecture");
@@ -32445,14 +32590,16 @@ input_clause(c2,axiom,[++q(X)]).
 fof(is_there_wisdom, question, ?[X1]:(wise(X1)), file('<PROBLEM>', is_there_wisdom)).\n\
 fof(phil_wise, axiom, ![X1]:((philosopher(X1)=>wise(X1))), file('<PROBLEM>', phil_wise)).\n\
 fof(hume, axiom, philosopher(hume), file('<PROBLEM>', hume)).\n\
-fof(c_0_3, negated_conjecture, ~(?[X1]:((wise(X1)&~$answer(esk1_1(X1))))), inference(fof_simplification,[status(thm)],[inference(assume_negation,[status(cth)],[inference(add_answer_literal,[status(thm)],[is_there_wisdom, theory(answers)])])])).\n\
-fof(c_0_4, negated_conjecture, ![X3]:((~wise(X3)|$answer(esk1_1(X3)))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_3])])])).\n\
-fof(c_0_5, plain, ![X2]:((~philosopher(X2)|wise(X2))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[phil_wise])])])).\n\
-cnf(c_0_6, negated_conjecture, ($answer(esk1_1(X1))|~wise(X1)), inference(split_conjunct,[status(thm)],[c_0_4])).\n\
-cnf(c_0_7, plain, (wise(X1)|~philosopher(X1)), inference(split_conjunct,[status(thm)],[c_0_5])).\n\
-cnf(c_0_8, negated_conjecture, ($answer(esk1_1(X1))|~philosopher(X1)), inference(spm,[status(thm)],[c_0_6, c_0_7])).\n\
-cnf(c_0_9, plain, (philosopher(hume)), inference(split_conjunct,[status(thm)],[hume])).\n\
-cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(thm)],[inference(spm,[status(thm)],[c_0_8, c_0_9]), theory(answers)]), ['proof']).\n\
+fof(c_0_3, conjecture, ?[X1]:((wise(X1)&~$answer(esk1_1(X1)))), inference(add_answer_literal,[status(thm)],[is_there_wisdom, theory(answers)])).\n\
+fof(c_0_4, negated_conjecture, ~(?[X1]:((wise(X1)&~$answer(esk1_1(X1))))), inference(assume_negation,[status(cth)],[c_0_3])).\n\
+fof(c_0_5, negated_conjecture, ~(?[X1]:((wise(X1)&~$answer(esk1_1(X1))))), inference(fof_simplification,[status(thm)],[c_0_4])).\n\
+fof(c_0_6, negated_conjecture, ![X3]:((~wise(X3)|$answer(esk1_1(X3)))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[c_0_5])])])).\n\
+fof(c_0_7, plain, ![X2]:((~philosopher(X2)|wise(X2))), inference(fof_nnf,[status(thm)],[inference(variable_rename,[status(thm)],[inference(fof_nnf,[status(thm)],[phil_wise])])])).\n\
+cnf(c_0_8, negated_conjecture, ($answer(esk1_1(X1))|~wise(X1)), inference(split_conjunct,[status(thm)],[c_0_6])).\n\
+cnf(c_0_9, plain, (wise(X1)|~philosopher(X1)), inference(split_conjunct,[status(thm)],[c_0_7])).\n\
+cnf(c_0_10, negated_conjecture, ($answer(esk1_1(X1))|~philosopher(X1)), inference(spm,[status(thm)],[c_0_8, c_0_9])).\n\
+cnf(c_0_11, plain, (philosopher(hume)), inference(split_conjunct,[status(thm)],[hume])).\n\
+cnf(c_0_12, negated_conjecture, ($false), inference(eval_answer_literal,[status(thm)],[inference(spm,[status(thm)],[c_0_10, c_0_11]), theory(answers)]), ['proof']).\n\
 % SZS output end CNFRefutation\n"
         );
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
@@ -32484,7 +32631,7 @@ cnf(c_0_10, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(
-            printed.contains("inference(rw,[status(thm)],[c_0_8, c_0_9])"),
+            printed.contains("inference(rw,[status(thm)],[c_0_9, c_0_10])"),
             "{printed}"
         );
         assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");

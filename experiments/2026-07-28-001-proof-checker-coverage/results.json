@@ -1,0 +1,586 @@
+{
+  "artifacts": {
+    "file_count": 31,
+    "files": {
+      "licenses/GAPT-2.20-COPYING": {
+        "bytes": 35147,
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      "licenses/Norgler-1.1-LICENSE": {
+        "bytes": 1110,
+        "sha256": "f4f5ea0fc7eb971bd6c34c0a83d34fe56a20b306d8825eb5ccb4ce9073baec45"
+      },
+      "raw/cargo-build.stderr": {
+        "bytes": 116,
+        "sha256": "53667730d23067d84c4b5a1d6720c92ee02df5abe9ac2b99b41c4d49d736ff1e"
+      },
+      "raw/cargo-build.stdout": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gapt-fof-corrupt.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gapt-fof-corrupt.stdout": {
+        "bytes": 71,
+        "sha256": "bdedecfc38147b8c2058fec9cd1268e82bcbf84eef633f411a5d15bf240a1f48"
+      },
+      "raw/gapt-fof_contradictory_axioms.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gapt-fof_contradictory_axioms.stdout": {
+        "bytes": 26,
+        "sha256": "355f918e2f66db779cde50f97326c3cc2debe0e9df3613b4dfe29101aec5548f"
+      },
+      "raw/gapt-tff_theorem.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gapt-tff_theorem.stdout": {
+        "bytes": 21,
+        "sha256": "24b5dfce3ce48e0f7ae37e6b2f9c24e6b72ce2e74f6eeddb0a9712ce0131f94f"
+      },
+      "raw/gapt-thf_theorem.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gapt-thf_theorem.stdout": {
+        "bytes": 21,
+        "sha256": "24b5dfce3ce48e0f7ae37e6b2f9c24e6b72ce2e74f6eeddb0a9712ce0131f94f"
+      },
+      "raw/gate-corrupt.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gate-corrupt.stdout": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gate-positive.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/gate-positive.stdout": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "raw/norgler-fof_contradictory_axioms.stderr": {
+        "bytes": 14506,
+        "sha256": "6dc1c79cd838c659015b93f25b5ac551104e9947615d8e9cbcd29d5122656812"
+      },
+      "raw/norgler-fof_contradictory_axioms.stdout": {
+        "bytes": 546,
+        "sha256": "d3009d2bdadd49461adfea56775f99ee00bce04d494eb3d6c7b2c754fe98402d"
+      },
+      "raw/norgler-tff_theorem.stderr": {
+        "bytes": 7498,
+        "sha256": "9fb2584a3cde026b5fa26711bab4a83d2c346919d75307e08ac4a6161881df3f"
+      },
+      "raw/norgler-tff_theorem.stdout": {
+        "bytes": 327,
+        "sha256": "7d56fe225065eac63d594fab26f94e394e006f829cf717c20f91f33618142754"
+      },
+      "raw/norgler-thf_theorem.stderr": {
+        "bytes": 7531,
+        "sha256": "c7ba0abe68caaf432223bb5ee0666cf03d5dd8bd42b7a64579fe324d786cf02e"
+      },
+      "raw/norgler-thf_theorem.stdout": {
+        "bytes": 348,
+        "sha256": "1425c5a2419f9589057eb293716ff05554d180608fa02011feef671de3b60a64"
+      },
+      "reports/gate-corrupt.json": {
+        "bytes": 1285,
+        "sha256": "ce5302b77d1bf42b5419936f5fae3dfb7c1ea867e12b7c76675e1860f83c1f38"
+      },
+      "reports/gate-positive.json": {
+        "bytes": 1225,
+        "sha256": "274a6a9c284354441a967223bb27406fbeae3508839894577fdea7bc7d3a27c8"
+      },
+      "solutions/fof_contradictory_axioms-corrupt-derived.s": {
+        "bytes": 1242,
+        "sha256": "6591dd520fbc7eb487a86c311ebdab727b8fc2279c531f938b7b41d94f3b2248"
+      },
+      "solutions/fof_contradictory_axioms.s": {
+        "bytes": 1242,
+        "sha256": "fec84132e7ec3b5e7a9c81976cd306b06e81345e9dd757cf42f63f5354d62f9b"
+      },
+      "solutions/fof_contradictory_axioms.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "solutions/tff_theorem.s": {
+        "bytes": 1434,
+        "sha256": "6f70ac5a1b445f94cb2adf4cc1c99c403618c4dda41ac75a9d2f04317e1d9adf"
+      },
+      "solutions/tff_theorem.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "solutions/thf_theorem.s": {
+        "bytes": 1420,
+        "sha256": "25c8df0aa296cd610110b3405d5506882133c27fd3a9543bfe19a985c84ad90d"
+      },
+      "solutions/thf_theorem.stderr": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "total_bytes": 75116
+  },
+  "corruption": {
+    "kind": "derived-clause formula mutation",
+    "original": "cnf(c_0_4, plain, (p(a)),",
+    "replacement": "cnf(c_0_4, plain, (q(a)),",
+    "solution_bytes": 1242,
+    "solution_sha256": "6591dd520fbc7eb487a86c311ebdab727b8fc2279c531f938b7b41d94f3b2248"
+  },
+  "gapt": {
+    "corrupt_fof": {
+      "command": [
+        "timeout",
+        "--kill-after=5s",
+        "180s",
+        "java",
+        "-Xss16m",
+        "-Xms1g",
+        "-Xmx8g",
+        "-jar",
+        "/opt/checkers/gapt-runtime/gapt.jar",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/fof_contradictory_axioms-corrupt-derived.s"
+      ],
+      "returncode": 0,
+      "stderr": "gapt-fof-corrupt.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "gapt-fof-corrupt.stdout",
+      "stdout_sha256": "bdedecfc38147b8c2058fec9cd1268e82bcbf84eef633f411a5d15bf240a1f48",
+      "szs_status": "VerifiedBad",
+      "timed_out": false,
+      "wall_seconds": 0.6433355559997835
+    },
+    "positive": {
+      "fof_contradictory_axioms": {
+        "command": [
+          "timeout",
+          "--kill-after=5s",
+          "180s",
+          "java",
+          "-Xss16m",
+          "-Xms1g",
+          "-Xmx8g",
+          "-jar",
+          "/opt/checkers/gapt-runtime/gapt.jar",
+          "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/fof_contradictory_axioms.s"
+        ],
+        "returncode": 0,
+        "stderr": "gapt-fof_contradictory_axioms.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "gapt-fof_contradictory_axioms.stdout",
+        "stdout_sha256": "355f918e2f66db779cde50f97326c3cc2debe0e9df3613b4dfe29101aec5548f",
+        "szs_status": "VerifiedGood",
+        "timed_out": false,
+        "wall_seconds": 0.8632075299997268
+      },
+      "tff_theorem": {
+        "command": [
+          "timeout",
+          "--kill-after=5s",
+          "180s",
+          "java",
+          "-Xss16m",
+          "-Xms1g",
+          "-Xmx8g",
+          "-jar",
+          "/opt/checkers/gapt-runtime/gapt.jar",
+          "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/tff_theorem.s"
+        ],
+        "returncode": 0,
+        "stderr": "gapt-tff_theorem.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "gapt-tff_theorem.stdout",
+        "stdout_sha256": "24b5dfce3ce48e0f7ae37e6b2f9c24e6b72ce2e74f6eeddb0a9712ce0131f94f",
+        "szs_status": "Unknown",
+        "timed_out": false,
+        "wall_seconds": 0.3552728939998815
+      },
+      "thf_theorem": {
+        "command": [
+          "timeout",
+          "--kill-after=5s",
+          "180s",
+          "java",
+          "-Xss16m",
+          "-Xms1g",
+          "-Xmx8g",
+          "-jar",
+          "/opt/checkers/gapt-runtime/gapt.jar",
+          "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/thf_theorem.s"
+        ],
+        "returncode": 0,
+        "stderr": "gapt-thf_theorem.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "gapt-thf_theorem.stdout",
+        "stdout_sha256": "24b5dfce3ce48e0f7ae37e6b2f9c24e6b72ce2e74f6eeddb0a9712ce0131f94f",
+        "szs_status": "Unknown",
+        "timed_out": false,
+        "wall_seconds": 0.3650278610002715
+      }
+    }
+  },
+  "norgler": {
+    "fof_contradictory_axioms": {
+      "command": [
+        "timeout",
+        "--kill-after=5s",
+        "180s",
+        "java",
+        "-Xms256m",
+        "-Xmx4g",
+        "-jar",
+        "/opt/checkers/Norgler---1.1/bin/noergler-1.1.jar",
+        "--problem",
+        "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/fof_contradictory_axioms.p",
+        "--verbosity",
+        "6",
+        "--eprover-path",
+        "/opt/checkers/e-cache/bin/17026b1bfe61aaf223cfaae54947c8d2679c31a0/ho/eprover-ho",
+        "--mace4-path",
+        "/bin/false",
+        "--parallel-mode",
+        "steps",
+        "--timeout",
+        "120",
+        "--relax-annotation-format",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/fof_contradictory_axioms.s"
+      ],
+      "returncode": 0,
+      "stderr": "norgler-fof_contradictory_axioms.stderr",
+      "stderr_sha256": "6dc1c79cd838c659015b93f25b5ac551104e9947615d8e9cbcd29d5122656812",
+      "stdout": "norgler-fof_contradictory_axioms.stdout",
+      "stdout_sha256": "d3009d2bdadd49461adfea56775f99ee00bce04d494eb3d6c7b2c754fe98402d",
+      "szs_status": "Unknown",
+      "timed_out": false,
+      "wall_seconds": 0.4668970900002023
+    },
+    "tff_theorem": {
+      "command": [
+        "timeout",
+        "--kill-after=5s",
+        "180s",
+        "java",
+        "-Xms256m",
+        "-Xmx4g",
+        "-jar",
+        "/opt/checkers/Norgler---1.1/bin/noergler-1.1.jar",
+        "--problem",
+        "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/tff_theorem.p",
+        "--verbosity",
+        "6",
+        "--eprover-path",
+        "/opt/checkers/e-cache/bin/17026b1bfe61aaf223cfaae54947c8d2679c31a0/ho/eprover-ho",
+        "--mace4-path",
+        "/bin/false",
+        "--parallel-mode",
+        "steps",
+        "--timeout",
+        "120",
+        "--relax-annotation-format",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/tff_theorem.s"
+      ],
+      "returncode": 1,
+      "stderr": "norgler-tff_theorem.stderr",
+      "stderr_sha256": "9fb2584a3cde026b5fa26711bab4a83d2c346919d75307e08ac4a6161881df3f",
+      "stdout": "norgler-tff_theorem.stdout",
+      "stdout_sha256": "7d56fe225065eac63d594fab26f94e394e006f829cf717c20f91f33618142754",
+      "szs_status": "Error",
+      "timed_out": false,
+      "wall_seconds": 0.36867096300011326
+    },
+    "thf_theorem": {
+      "command": [
+        "timeout",
+        "--kill-after=5s",
+        "180s",
+        "java",
+        "-Xms256m",
+        "-Xmx4g",
+        "-jar",
+        "/opt/checkers/Norgler---1.1/bin/noergler-1.1.jar",
+        "--problem",
+        "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/thf_theorem.p",
+        "--verbosity",
+        "6",
+        "--eprover-path",
+        "/opt/checkers/e-cache/bin/17026b1bfe61aaf223cfaae54947c8d2679c31a0/ho/eprover-ho",
+        "--mace4-path",
+        "/bin/false",
+        "--parallel-mode",
+        "steps",
+        "--timeout",
+        "120",
+        "--relax-annotation-format",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/thf_theorem.s"
+      ],
+      "returncode": 1,
+      "stderr": "norgler-thf_theorem.stderr",
+      "stderr_sha256": "c7ba0abe68caaf432223bb5ee0666cf03d5dd8bd42b7a64579fe324d786cf02e",
+      "stdout": "norgler-thf_theorem.stdout",
+      "stdout_sha256": "1425c5a2419f9589057eb293716ff05554d180608fa02011feef671de3b60a64",
+      "szs_status": "Error",
+      "timed_out": false,
+      "wall_seconds": 0.3908525639999425
+    }
+  },
+  "oracles": {
+    "e_backend": {
+      "binary": {
+        "bytes": 4054424,
+        "path": "/opt/checkers/e-cache/bin/17026b1bfe61aaf223cfaae54947c8d2679c31a0/ho/eprover-ho",
+        "sha256": "50a1ce2444c136f737cdc504233b32e7471de33339d9d2fc963d36ff8a02796a"
+      },
+      "build_command": [
+        "python3",
+        "tools/linode-runner/linux_compat.py",
+        "build-reference",
+        "--repo-root",
+        "/opt/e-rust-port/source",
+        "--eprover-commit",
+        "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+      ],
+      "license": "GPL-3.0-or-later",
+      "name": "E",
+      "source_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0",
+      "version": "3.3.5-ho",
+      "version_output": "E 3.3.5-ho Countess Grey (17026b1bfe61aaf223cfaae54947c8d2679c31a0)"
+    },
+    "gapt": {
+      "build_command": [
+        "java",
+        "-Xms1g",
+        "-Xmx8g",
+        "-jar",
+        "/opt/checkers/sbt-launch-1.11.5.jar",
+        "cli/ProoVerCLI/assembly"
+      ],
+      "bytes": 113746748,
+      "jar": {
+        "bytes": 85597722,
+        "path": "/opt/checkers/gapt-runtime/gapt.jar",
+        "sha256": "4532d97f9a56bd1c57bd7b127d6c1c9b8efc228faf4bd43017cfefcdea88afff"
+      },
+      "license": "GPL-3.0-only",
+      "name": "GAPT",
+      "sha256": "3d99d26201f6b892a167f4b8e8d8fc95b6ee76cb154155ad3854b9ea8c44b94c",
+      "source_archive": {
+        "bytes": 113746748,
+        "path": "/opt/checkers/GAPT-2.20.tgz",
+        "sha256": "3d99d26201f6b892a167f4b8e8d8fc95b6ee76cb154155ad3854b9ea8c44b94c"
+      },
+      "url": "https://tptp.org/CASC/J13/SystemSources/GAPT---2.20.tgz",
+      "version": "2.20",
+      "version_evidence": "CASC source release GAPT 2.20"
+    },
+    "norgler": {
+      "build_command": [
+        "java",
+        "-jar",
+        "/opt/checkers/sbt-launch-1.11.5.jar",
+        "assembly"
+      ],
+      "bytes": 2482928,
+      "jar": {
+        "bytes": 6991650,
+        "path": "/opt/checkers/Norgler---1.1/bin/noergler-1.1.jar",
+        "sha256": "29e9f5210fe9908c50cdc15f305bf08ae6930c0e768cd9eb42ae1ccd8ae1c6bf"
+      },
+      "license": "MIT",
+      "name": "N\u00f6rgler",
+      "sha256": "22cd1042af79ae1947e8478367c24a1d4b1e0208e78a49b3d8f66a222c5b9aaf",
+      "source_archive": {
+        "bytes": 2482928,
+        "path": "/opt/checkers/Norgler-1.1.tgz",
+        "sha256": "22cd1042af79ae1947e8478367c24a1d4b1e0208e78a49b3d8f66a222c5b9aaf"
+      },
+      "url": "https://tptp.org/CASC/J13/SystemSources/Norgler---1.1.tgz",
+      "version": "1.1",
+      "version_output": "noergler 1.1"
+    },
+    "sbt_launcher": {
+      "artifact": {
+        "bytes": 3847512,
+        "path": "/opt/checkers/sbt-launch-1.11.5.jar",
+        "sha256": "da3424478bb0c91428bdbe621b69b4b4e86ce8d468b403656020e7ebe5f7ed84"
+      },
+      "bytes": 3847512,
+      "sha256": "da3424478bb0c91428bdbe621b69b4b4e86ce8d468b403656020e7ebe5f7ed84",
+      "url": "https://repo1.maven.org/maven2/org/scala-sbt/sbt-launch/1.11.5/sbt-launch-1.11.5.jar",
+      "version": "1.11.5"
+    }
+  },
+  "platform": {
+    "java": "openjdk version \"21.0.11\" 2026-04-21\nOpenJDK Runtime Environment (build 21.0.11+10-1-24.04.2-Ubuntu)\nOpenJDK 64-Bit Server VM (build 21.0.11+10-1-24.04.2-Ubuntu, mixed mode, sharing)",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "resource_limits": {
+    "checker_hard_wall_seconds": 180,
+    "checker_kill_grace_seconds": 5,
+    "gapt_heap_mib": 8192,
+    "gapt_stack_mib": 16,
+    "norgler_heap_mib": 4096,
+    "norgler_soft_step_seconds": 120,
+    "umlaut_cpu_seconds": 30,
+    "umlaut_hard_wall_seconds": 120,
+    "umlaut_memory_mib": 2048
+  },
+  "schema_version": 1,
+  "source": {
+    "commit": "39826d5633c706dc43adef684add5fcbbb6894bf",
+    "snapshot_sha256": "7a81b25d10dc0323ecd9422c56c06a10081383b8fe6232501998d6305104e257"
+  },
+  "umlaut": {
+    "binary_bytes": 8177200,
+    "binary_sha256": "e6fa50170b9c964214ac9b3626192be337cdffa50d9249cfe94ae2092315f505",
+    "build": {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--bin",
+        "umlaut"
+      ],
+      "returncode": 0,
+      "stderr": "cargo-build.stderr",
+      "stderr_sha256": "53667730d23067d84c4b5a1d6720c92ee02df5abe9ac2b99b41c4d49d736ff1e",
+      "stdout": "cargo-build.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false,
+      "wall_seconds": 99.82647122800017
+    },
+    "generated": {
+      "fof_contradictory_axioms": {
+        "command": [
+          "/opt/e-rust-port/source/target/release/umlaut",
+          "--auto",
+          "--tstp-out",
+          "--proof-object=1",
+          "--cpu-limit=30",
+          "--memory-limit=2048",
+          "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/fof_contradictory_axioms.p"
+        ],
+        "returncode": 0,
+        "solution_bytes": 1242,
+        "solution_sha256": "fec84132e7ec3b5e7a9c81976cd306b06e81345e9dd757cf42f63f5354d62f9b",
+        "stderr": "fof_contradictory_axioms.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "fof_contradictory_axioms.s",
+        "stdout_sha256": "fec84132e7ec3b5e7a9c81976cd306b06e81345e9dd757cf42f63f5354d62f9b",
+        "szs_statuses": [
+          "ContradictoryAxioms"
+        ],
+        "timed_out": false,
+        "wall_seconds": 0.0029114620001564617
+      },
+      "tff_theorem": {
+        "command": [
+          "/opt/e-rust-port/source/target/release/umlaut",
+          "--auto",
+          "--tstp-out",
+          "--proof-object=1",
+          "--cpu-limit=30",
+          "--memory-limit=2048",
+          "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/tff_theorem.p"
+        ],
+        "returncode": 0,
+        "solution_bytes": 1434,
+        "solution_sha256": "6f70ac5a1b445f94cb2adf4cc1c99c403618c4dda41ac75a9d2f04317e1d9adf",
+        "stderr": "tff_theorem.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "tff_theorem.s",
+        "stdout_sha256": "6f70ac5a1b445f94cb2adf4cc1c99c403618c4dda41ac75a9d2f04317e1d9adf",
+        "szs_statuses": [
+          "Theorem"
+        ],
+        "timed_out": false,
+        "wall_seconds": 0.0024906329999794252
+      },
+      "thf_theorem": {
+        "command": [
+          "/opt/e-rust-port/source/target/release/umlaut",
+          "--auto",
+          "--tstp-out",
+          "--proof-object=1",
+          "--cpu-limit=30",
+          "--memory-limit=2048",
+          "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/thf_theorem.p"
+        ],
+        "returncode": 0,
+        "solution_bytes": 1420,
+        "solution_sha256": "25c8df0aa296cd610110b3405d5506882133c27fd3a9543bfe19a985c84ad90d",
+        "stderr": "thf_theorem.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "thf_theorem.s",
+        "stdout_sha256": "25c8df0aa296cd610110b3405d5506882133c27fd3a9543bfe19a985c84ad90d",
+        "szs_statuses": [
+          "Theorem"
+        ],
+        "timed_out": false,
+        "wall_seconds": 0.002252992999729031
+      }
+    }
+  },
+  "validation_gate": {
+    "corrupt": {
+      "command": [
+        "/usr/bin/python3",
+        "/opt/e-rust-port/source/tools/validation/validate_tptp_solution.py",
+        "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/fof_contradictory_axioms.p",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/fof_contradictory_axioms-corrupt-derived.s",
+        "--proof-command-json",
+        "[\"java\", \"-Xss16m\", \"-Xms1g\", \"-Xmx8g\", \"-jar\", \"/opt/checkers/gapt-runtime/gapt.jar\", \"{artifact}\"]",
+        "--timeout-seconds",
+        "180",
+        "--report",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/reports/gate-corrupt.json"
+      ],
+      "reasons": [
+        "external_proof_checker reported VerifiedBad"
+      ],
+      "returncode": 1,
+      "stderr": "gate-corrupt.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "gate-corrupt.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false,
+      "verdict": "rejected",
+      "wall_seconds": 0.6907381000000896
+    },
+    "positive": {
+      "command": [
+        "/usr/bin/python3",
+        "/opt/e-rust-port/source/tools/validation/validate_tptp_solution.py",
+        "/opt/e-rust-port/source/experiments/2026-07-27-004-soundness-validation-gates/fixtures/fof_contradictory_axioms.p",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/solutions/fof_contradictory_axioms.s",
+        "--proof-command-json",
+        "[\"java\", \"-Xss16m\", \"-Xms1g\", \"-Xmx8g\", \"-jar\", \"/opt/checkers/gapt-runtime/gapt.jar\", \"{artifact}\"]",
+        "--timeout-seconds",
+        "180",
+        "--report",
+        "/opt/e-rust-port/artifacts/e-rust-codex-260728-052723-19e1/proof-checker-coverage-v5/reports/gate-positive.json"
+      ],
+      "reasons": [
+        "external_proof_checker reported VerifiedGood"
+      ],
+      "returncode": 0,
+      "stderr": "gate-positive.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "gate-positive.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false,
+      "verdict": "verified",
+      "wall_seconds": 0.7933249299999261
+    }
+  }
+}

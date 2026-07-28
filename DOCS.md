@@ -208,6 +208,9 @@ in [`docs/soundness-validation.md`](docs/soundness-validation.md). The
 controller, adversarial tests, pinned independent-checker evidence, and
 machine-visible coverage gaps are recorded in
 [`experiments/2026-07-27-004-soundness-validation-gates/`](experiments/2026-07-27-004-soundness-validation-gates/).
+The follow-up checker bake-off, explicit typed conjecture-negation provenance,
+and independent `ContradictoryAxioms` acceptance are recorded in
+[`experiments/2026-07-28-001-proof-checker-coverage/`](experiments/2026-07-28-001-proof-checker-coverage/).
 
 ## C Source Documentation
 

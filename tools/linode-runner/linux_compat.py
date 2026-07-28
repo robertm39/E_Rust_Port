@@ -117,6 +117,15 @@ TOOL_COMPARISON_MISMATCH_FIELDS = frozenset(
     }
 )
 MAIN_COMPARISON_EXPECTED_MISMATCHES = {
+    # Umlaut deliberately archives conjecture-preprocessing formulas as
+    # standalone proof records.  E nests or omits those records, which leaves
+    # otherwise valid derivations without independently checkable parents.
+    ("fol", "ans_test06.p"): ("normalized_stdout",),
+    ("fol", "GEO288+1.p"): ("normalized_stdout",),
+    ("fol", "MGT063+1.p"): ("normalized_stdout",),
+    ("fol", "socrates.p"): ("normalized_stdout",),
+    ("fol", "SWW194+1.p"): ("normalized_stdout",),
+    ("ho", "lists.p"): ("normalized_stdout",),
     ("ho", "sledgehammer.p"): ("normalized_stdout",),
 }
 MAIN_COMPARISON_RESOURCE_STRESS_CASES = frozenset(

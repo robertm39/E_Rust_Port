@@ -480,7 +480,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(stdin_app_encode_case["scenario"], "stdin-app-encode")
         self.assertIn("fof(goal, conjecture, p(a)).", stdin_app_encode_case["stdin"])
 
-    def test_default_comparison_cases_declare_only_sledgehammer_output_difference(self):
+    def test_default_comparison_cases_declare_only_archived_proof_differences(self):
         with tempfile.TemporaryDirectory() as directory:
             repo_root = Path(directory)
             smoketest = repo_root / "eprover" / "EXAMPLE_PROBLEMS" / "SMOKETEST"
@@ -489,12 +489,23 @@ class ComparisonTests(unittest.TestCase):
             smoketest.mkdir(parents=True)
             tptp.mkdir(parents=True)
             lfhol.mkdir(parents=True)
-            (tptp / "ordinary.p").write_text(
-                "fof(goal, conjecture, $true).\n", encoding="utf-8"
+            fol_names = (
+                "ans_test06.p",
+                "GEO288+1.p",
+                "MGT063+1.p",
+                "ordinary.p",
+                "socrates.p",
+                "SWW194+1.p",
             )
-            (lfhol / "sledgehammer.p").write_text(
-                "thf(goal, conjecture, $true).\n", encoding="utf-8"
-            )
+            ho_names = ("lists.p", "sledgehammer.p")
+            for name in fol_names:
+                (tptp / name).write_text(
+                    "fof(goal, conjecture, $true).\n", encoding="utf-8"
+                )
+            for name in ho_names:
+                (lfhol / name).write_text(
+                    "thf(goal, conjecture, $true).\n", encoding="utf-8"
+                )
             run_dir = repo_root / "run"
             run_dir.mkdir()
 
@@ -507,7 +518,15 @@ class ComparisonTests(unittest.TestCase):
         }
         self.assertEqual(
             declared,
-            {("ho", "sledgehammer.p"): ["normalized_stdout"]},
+            {
+                ("fol", "ans_test06.p"): ["normalized_stdout"],
+                ("fol", "GEO288+1.p"): ["normalized_stdout"],
+                ("fol", "MGT063+1.p"): ["normalized_stdout"],
+                ("fol", "socrates.p"): ["normalized_stdout"],
+                ("fol", "SWW194+1.p"): ["normalized_stdout"],
+                ("ho", "lists.p"): ["normalized_stdout"],
+                ("ho", "sledgehammer.p"): ["normalized_stdout"],
+            },
         )
 
     def test_default_comparison_cases_run_resource_stress_cases_last(self):

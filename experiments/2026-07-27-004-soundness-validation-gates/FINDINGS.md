@@ -16,6 +16,11 @@ pretend that complete saturation is a checkable model: Umlaut's
 abstains on the sampled `ContradictoryAxioms` and TFF proofs, and it is not a
 THF checker. Those three proof classes remain visible follow-up work.
 
+Follow-up experiment
+[`2026-07-28-001`](../2026-07-28-001-proof-checker-coverage/) now verifies
+the representative `ContradictoryAxioms` proof with GAPT 2.20 and rejects its
+corrupted derivative. TFF and THF remain explicit checker coverage gaps.
+
 ## Trust boundary
 
 The gate has four layers:

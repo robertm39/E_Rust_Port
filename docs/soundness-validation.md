@@ -57,11 +57,22 @@ proofs with ProofCheck 1.0. A corrupted input leaf produces `VerifiedBad`, and
 a forged theorem on a known counter-satisfiable problem is rejected before the
 checker runs.
 
+Experiment
+[`2026-07-28-001`](../experiments/2026-07-28-001-proof-checker-coverage/)
+adds representative FOF `ContradictoryAxioms` coverage with GAPT 2.20. GAPT
+reports `VerifiedGood` for the original proof and `VerifiedBad` after a
+derived clause is changed from `p(a)` to `q(a)`; the gate returns `verified`
+and `rejected`, respectively. Umlaut also now preserves question annotation
+and conjecture negation as explicit archived proof steps rather than nesting
+them below later formula preprocessing.
+
 The following gaps are intentional and machine-visible:
 
-- the sampled `ContradictoryAxioms` proof makes ProofCheck abstain;
-- the sampled TFF proof makes ProofCheck abstain;
-- ProofCheck 1.0 is not used for THF;
+- TFF is not positively verified: ProofCheck abstains, GAPT 2.20 reports
+  `Unknown`, and Nörgler 1.1 reaches its FOF-only conjecture-negation routine
+  and returns `Error`;
+- THF is not positively verified: GAPT 2.20 reports `Unknown`, and Nörgler
+  1.1 reaches the same FOF-only routine and returns `Error`;
 - `Satisfiable` and `CounterSatisfiable` saturation paths do not emit a TPTP
   interpretation, so they cannot be independently evaluated as models.
 
