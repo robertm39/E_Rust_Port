@@ -248,7 +248,10 @@ a direct Otter-loop LRS port for the current DISCOUNT architecture. The
 opt-in per-queue schedule, priority, bypass, and wait instrumentation remains
 available through [`docs/search-telemetry.md`](docs/search-telemetry.md).
 The unexpected three-problem held-out gain from the simpler goal-hard-priority
-control is tracked separately under Bead `E_Rust_Port-9jt.3.8`.
+control is independently rejected by the 276-run, fresh-family 5/20-second
+escalation in
+[`experiments/2026-07-28-006-goal-hard-priority/`](experiments/2026-07-28-006-goal-hard-priority/):
+it matches baseline coverage and regresses paired CPU at the larger budget.
 
 ## C Source Documentation
 
