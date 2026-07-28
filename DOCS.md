@@ -268,6 +268,24 @@ fingerprint/discrimination-tree bake-off are recorded in
 candidate counts only marginally, regressed larger-budget CPU, and expanded
 UEQ index nodes, so `FP7` remains the default.
 
+## Higher-Order Inference Research
+
+The 500-problem failure taxonomy, higher-order capability audit, independent
+positive-extensionality option repair, 981-run staged/held-out/FOF study, and
+Nörgler semantic-checker evidence are recorded in
+[`experiments/2026-07-28-010-higher-order-gap-audit/`](experiments/2026-07-28-010-higher-order-gap-audit/).
+The repair makes `--pos-ext` obey its own option instead of E's accidental
+`--neg-ext` gate and adds explicit telemetry. Positive extensionality fired in
+only two direct held-out records and changed neither coverage nor search size;
+the selected choice-instantiation control was likewise neutral. Both features
+remain opt-in and the established higher-order defaults are unchanged.
+
+Nörgler 1.1 positively verifies the focused axiom-only THF refutation,
+including its `pos_ext` inference. General theorem-proof checking remains a
+machine-visible gap: none of the 22 reproducible held-out claims passed the
+current checker/adapter boundary, due to adapter-scope or Nörgler
+implementation gaps rather than a `VerifiedBad` result.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

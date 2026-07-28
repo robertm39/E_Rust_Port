@@ -71,8 +71,13 @@ The following gaps are intentional and machine-visible:
 - TFF is not positively verified: ProofCheck abstains, GAPT 2.20 reports
   `Unknown`, and Nörgler 1.1 reaches its FOF-only conjecture-negation routine
   and returns `Error`;
-- THF is not positively verified: GAPT 2.20 reports `Unknown`, and Nörgler
-  1.1 reaches the same FOF-only routine and returns `Error`;
+- general THF theorem proofs are not positively verified: GAPT 2.20 reports
+  `Unknown`, and Nörgler 1.1 reaches an unimplemented conjecture path or the
+  current audited adapter boundary. Nörgler does positively verify the
+  axiom-only PosExt=1/NegExt=0 refutation in
+  [`experiment 010`](../experiments/2026-07-28-010-higher-order-gap-audit/),
+  including semantic replay of the `pos_ext` step, but verifies 0/22
+  reproducible held-out theorem claims;
 - `Satisfiable` and `CounterSatisfiable` saturation paths do not emit a TPTP
   interpretation, so they cannot be independently evaluated as models.
 

@@ -131,6 +131,7 @@ pub struct ProofStateStatistics {
     pub paramod_count: u64,
     pub factor_count: u64,
     pub neg_ext_count: u64,
+    pub pos_ext_count: u64,
     pub resolv_count: u64,
     pub disequ_deco_count: u64,
     pub satcheck_count: u64,
@@ -2616,6 +2617,11 @@ impl ProofState {
             output,
             "{DEFAULT_COMCHAR_RAW} NegExts                              : {}",
             statistics.neg_ext_count
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} PosExts                              : {}",
+            statistics.pos_ext_count
         )?;
         writeln!(
             output,

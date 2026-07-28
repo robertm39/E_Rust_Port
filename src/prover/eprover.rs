@@ -4872,9 +4872,9 @@ fn parse_ext_inference_mode(
 
 fn ext_inference_error_message(option: EProverOption) -> &'static str {
     match option {
-        EProverOption::ArgCong => "neg-ext excepts either all, max or off",
-        EProverOption::NegExt => "neg-ext excepts either all or max",
-        EProverOption::PosExt => "pos-ext excepts either all or max",
+        EProverOption::ArgCong => "arg-cong expects either all, max or off",
+        EProverOption::NegExt => "neg-ext expects either all, max or off",
+        EProverOption::PosExt => "pos-ext expects either all, max or off",
         _ => unreachable!("non-extension-inference option routed to extension error helper"),
     }
 }
@@ -20175,15 +20175,15 @@ input_clause(c2,axiom,[++q(X)]).
 
         let error = process_options(["umlaut", "--arg-cong=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
-        assert_eq!(error.message(), "neg-ext excepts either all, max or off");
+        assert_eq!(error.message(), "arg-cong expects either all, max or off");
 
         let error = process_options(["umlaut", "--neg-ext=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
-        assert_eq!(error.message(), "neg-ext excepts either all or max");
+        assert_eq!(error.message(), "neg-ext expects either all, max or off");
 
         let error = process_options(["umlaut", "--pos-ext=bad"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::NO_ERROR);
-        assert_eq!(error.message(), "pos-ext excepts either all or max");
+        assert_eq!(error.message(), "pos-ext expects either all, max or off");
 
         let error = process_options(["umlaut", "--satcheck-proc-interval=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
@@ -37401,6 +37401,48 @@ cnf(c_0_12, negated_conjecture, ($false), inference(eval_answer_literal,[status(
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_refutes_thf_pointwise_disjunction_with_positive_extensionality_only() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-positive-extensionality-only-refutation");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(g_type, type, g: person > person).\n\
+             thf(p_type, type, p: $o).\n\
+             thf(pointwise_or_p, axiom, ![X: person]: ((f @ X = g @ X) | p)).\n\
+             thf(not_p, axiom, ~p).\n\
+             thf(functions_differ, axiom, f != g).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--pos-ext=all",
+                "--neg-ext=off",
+                "--arg-cong=off",
+                "--tstp-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(printed.contains("inference(pos_ext,[status(thm)]"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

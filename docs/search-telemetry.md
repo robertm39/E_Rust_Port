@@ -40,7 +40,7 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 | `input_funnel` | Parsed axioms, relevancy removals, raw clauses, and preprocessing removals |
 | `search_funnel` | Processed/redundant/resource-pruned/generated counts plus final and high-water clause-set sizes |
 | `clause_selection` | HCB queue quotas, selections by priority class, empty/orphan exhaustions, schedule gaps, and preferred-clause bypass/wait bounds |
-| `inferences` | Paramodulation, factoring, equation-resolution, disequality-decomposition, and negative-extensionality totals |
+| `inferences` | Paramodulation, factoring, equation-resolution, disequality-decomposition, and negative/positive-extensionality totals |
 | `simplification` | Rewrite, subsumption, condensation, and related contraction totals |
 | `indices` | Subsumption and demodulation activity plus fingerprint-index queries, candidate filtering, mutations, and final structure sizes |
 | `sat` | SAT checks, clause volumes, outcomes, and CPU-time components |

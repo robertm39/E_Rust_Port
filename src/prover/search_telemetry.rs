@@ -259,12 +259,13 @@ fn write_search_activity(
     let fingerprint = counters.fingerprint_index;
     writeln!(
         output,
-        "  \"inferences\": {{\"paramodulations\": {}, \"factorizations\": {}, \"equation_resolutions\": {}, \"disequality_decompositions\": {}, \"negative_extensionality\": {}}},",
+        "  \"inferences\": {{\"paramodulations\": {}, \"factorizations\": {}, \"equation_resolutions\": {}, \"disequality_decompositions\": {}, \"negative_extensionality\": {}, \"positive_extensionality\": {}}},",
         statistics.paramod_count,
         statistics.factor_count,
         statistics.resolv_count,
         statistics.disequ_deco_count,
-        statistics.neg_ext_count
+        statistics.neg_ext_count,
+        statistics.pos_ext_count
     )?;
     writeln!(
         output,

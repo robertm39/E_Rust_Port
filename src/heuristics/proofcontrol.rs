@@ -5003,6 +5003,7 @@ fn compute_ho_inferences(
 
     let mut generated = 0;
     let mut neg_ext_count = 0;
+    let mut pos_ext_count = 0;
     {
         let (terms, generation) = state.terms_and_generation_context_mut();
         if parms.arg_cong != ExtInferenceType::NoLits {
@@ -5013,8 +5014,10 @@ fn compute_ho_inferences(
             generated += neg_ext;
             neg_ext_count = neg_ext;
         }
-        if parms.neg_ext != ExtInferenceType::NoLits {
-            generated += compute_pos_ext(terms, clause, generation.tmp_store, parms.pos_ext)?;
+        if parms.pos_ext != ExtInferenceType::NoLits {
+            let pos_ext = compute_pos_ext(terms, clause, generation.tmp_store, parms.pos_ext)?;
+            generated += pos_ext;
+            pos_ext_count = pos_ext;
         }
         if parms.inverse_recognition {
             generated += compute_inverse_recognition(terms, clause, generation.tmp_store)?;
@@ -5071,6 +5074,7 @@ fn compute_ho_inferences(
         }
     }
     state.statistics_mut().neg_ext_count += u64::try_from(neg_ext_count).unwrap_or(u64::MAX);
+    state.statistics_mut().pos_ext_count += u64::try_from(pos_ext_count).unwrap_or(u64::MAX);
     Ok(generated)
 }
 
@@ -15735,10 +15739,11 @@ mod tests {
         for generated_clause in generated {
             assert_generated_pos_ext_clause(generated_clause);
         }
+        assert_eq!(state.statistics().pos_ext_count, 2);
     }
 
     #[test]
-    fn proof_state_generate_new_clauses_higher_order_pos_ext_alone_preserves_c_noop_gate() {
+    fn proof_state_generate_new_clauses_higher_order_pos_ext_uses_its_own_gate() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -15772,7 +15777,15 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(outcome, GenerateNewClausesOutcome::default());
-        assert_eq!(state.tmp_store().members(), 0);
+        assert_eq!(state.statistics().neg_ext_count, 0);
+        assert_eq!(state.statistics().pos_ext_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert!(generated.literals().as_slice()[0].is_positive());
+        assert_eq!(
+            generated.derivation().unwrap().as_slice().first().copied(),
+            Some(DerivationEntry::Operation(DC_POS_EXT))
+        );
     }
 
     #[test]
@@ -15812,6 +15825,7 @@ mod tests {
 
         assert_eq!(outcome, GenerateNewClausesOutcome::default());
         assert_eq!(state.statistics().neg_ext_count, 0);
+        assert_eq!(state.statistics().pos_ext_count, 0);
         assert_eq!(state.tmp_store().members(), 0);
     }
 
