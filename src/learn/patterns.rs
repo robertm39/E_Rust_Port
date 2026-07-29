@@ -467,7 +467,15 @@ pub fn pattern_translate_sig(
         }
 
         let f_code = subst.symbol_value(current.f_code());
-        let new_name = if pat_id_is_norm_id(f_code) {
+        let is_normalized = pat_id_is_norm_id(f_code);
+        let translated_type =
+            if !is_normalized && current.type_().is_some_and(|type_| type_.is_bool()) {
+                new_sig.type_bank().bool_type()
+            } else {
+                new_sig.type_bank().default_type()
+            };
+        current.set_type(Some(translated_type));
+        let new_name = if is_normalized {
             pattern_print_rep(f_code)
         } else {
             old_sig
@@ -478,6 +486,14 @@ pub fn pattern_translate_sig(
         let arity = i32::try_from(current.arity()).unwrap_or(i32::MAX);
         let new_code = new_sig.insert_id(&new_name, arity, false);
         assert_ne!(new_code, 0, "signature insertion must return a valid code");
+        if is_normalized {
+            // E's normalized learning symbols are deliberately untyped:
+            // predicate position is represented by the surrounding encoded
+            // equality, and the same f$arity_index may denote a function in
+            // another pattern. Keep that structural convention without
+            // allowing a previous Rust result sort to fix the shared symbol.
+            new_sig.set_polymorphic(new_code, true);
+        }
         current.set_f_code(new_code);
         push_arguments(&current, &mut stack);
     }
@@ -1424,11 +1440,49 @@ mod tests {
 
         assert!(var.binding().is_none());
         assert_eq!(new_sig.find_name(translated.f_code()), Some("f2_1"));
+        assert_eq!(translated.type_(), Some(new_sig.type_bank().default_type()));
+        assert!(new_sig.is_polymorphic(translated.f_code()));
         let translated_const = translated.argument(0).unwrap();
         assert_eq!(new_sig.find_name(translated_const.f_code()), Some("f0_1"));
+        assert_eq!(
+            translated_const.type_(),
+            Some(new_sig.type_bank().default_type())
+        );
+        assert!(new_sig.is_polymorphic(translated_const.f_code()));
         let translated_var = translated.argument(1).unwrap();
         assert_eq!(translated_var.f_code(), -1);
         assert_eq!(new_vars.f_code_find(-1), Some(translated_var));
+    }
+
+    #[test]
+    fn translate_sig_keeps_normalized_predicate_payload_untyped() {
+        let mut old_sig = Signature::new(TypeBank::new());
+        let individual = old_sig.type_bank().i_type();
+        let bool_type = old_sig.type_bank().bool_type();
+        let predicate = old_sig.insert_id("p", 1, false);
+        old_sig
+            .declare_final_type(
+                predicate,
+                alloc_arrow_type(vec![individual.clone(), bool_type.clone()]),
+            )
+            .unwrap();
+        let constant = old_sig.insert_id("a", 0, false);
+        old_sig
+            .declare_final_type(constant, individual.clone())
+            .unwrap();
+        let argument = typed_const_cell(constant, &individual);
+        let atom = typed_fun_cell(predicate, &[argument], &bool_type);
+        let mut subst = PatternSubst::new(&old_sig);
+        assert!(pattern_term_compute(&mut subst, &atom));
+        let mut new_sig = Signature::new(TypeBank::new());
+        let new_vars = crate::terms::termvars::VarBank::new(new_sig.type_bank());
+
+        let translated =
+            pattern_translate_sig(&atom, &mut subst, &old_sig, &mut new_sig, &new_vars);
+
+        assert_eq!(new_sig.find_name(translated.f_code()), Some("f1_1"));
+        assert_eq!(translated.type_(), Some(new_sig.type_bank().default_type()));
+        assert!(new_sig.is_polymorphic(translated.f_code()));
     }
 
     fn test_bank() -> TermBank {

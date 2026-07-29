@@ -7,7 +7,7 @@ use crate::learn::annotations::{
     annotation_list_parse, annotation_list_print_string, annotation_merge, Annotation,
     AnnotationTree, ANNOTATION_DEFAULT_SIZE,
 };
-use crate::learn::clauseenc::flat_recode_rec_clause_rep;
+use crate::learn::clauseenc::{flat_recode_rec_clause_rep, parse_recursive_clause_pattern};
 use crate::learn::patterns::{pattern_term_compute, PatternSubst};
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::termbanks::TermBank;
@@ -309,6 +309,27 @@ pub fn anno_term_parse(
     expected: i64,
 ) -> Result<AnnoTerm, Diagnostic> {
     let term = bank.parse_term_with_distinct_checks(scanner)?;
+    parse_anno_term_tail(scanner, term, expected)
+}
+
+pub fn anno_term_parse_clause_pattern(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    expected: i64,
+) -> Result<AnnoTerm, Diagnostic> {
+    let term = if scanner.test_id("$or") || scanner.test_id("$cnil") {
+        parse_recursive_clause_pattern(scanner, bank)?
+    } else {
+        bank.parse_term_with_distinct_checks(scanner)?
+    };
+    parse_anno_term_tail(scanner, term, expected)
+}
+
+fn parse_anno_term_tail(
+    scanner: &mut Scanner,
+    term: Term,
+    expected: i64,
+) -> Result<AnnoTerm, Diagnostic> {
     scanner.accept_tok(TokenType::COLON)?;
     let mut annotations = AnnotationTree::new();
     annotation_list_parse(scanner, &mut annotations, expected)?;
@@ -340,6 +361,19 @@ pub fn anno_set_parse(
     let mut set = anno_set_alloc(bank);
     while anno_term_starts(scanner, bank) {
         let term = anno_term_parse(scanner, bank, expected)?;
+        set.add_term(term);
+    }
+    Ok(set)
+}
+
+pub fn anno_set_parse_clause_patterns(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    expected: i64,
+) -> Result<AnnoSet, Diagnostic> {
+    let mut set = anno_set_alloc(bank);
+    while anno_term_starts(scanner, bank) {
+        let term = anno_term_parse_clause_pattern(scanner, bank, expected)?;
         set.add_term(term);
     }
     Ok(set)

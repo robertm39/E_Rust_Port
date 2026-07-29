@@ -6,16 +6,15 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::Scanner;
-use crate::learn::annoterms::{anno_set_parse, anno_set_print_string};
+use crate::learn::annoterms::{anno_set_parse_clause_patterns, anno_set_print_string};
 use crate::learn::examplerep::{
     example_set_delete_id, example_set_find_name, example_set_parse, example_set_print_string,
     ExampleSet,
 };
 use crate::learn::kbdesc::KB_ANNOTATION_NO;
+use crate::learn::kbinsert::kb_pattern_signature;
 use crate::prover::version::{footer, VERSION};
-use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -184,11 +183,11 @@ fn execute_ekb_delete(config: &EkbDeleteConfig, stderr: &mut impl Write) -> Resu
     let mut problems_scanner = Scanner::from_file(Path::new(&problems_path), true)?;
     example_set_parse(&mut problems_scanner, &mut proof_examples)?;
 
-    let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut bank = TermBank::new(kb_pattern_signature())?;
     let clausepatterns_path = kb_path(&config.kb_name, "clausepatterns");
     let mut clausepatterns_scanner = Scanner::from_file(Path::new(&clausepatterns_path), true)?;
     let mut clause_examples =
-        anno_set_parse(&mut clausepatterns_scanner, &mut bank, KB_ANNOTATION_NO)?;
+        anno_set_parse_clause_patterns(&mut clausepatterns_scanner, &mut bank, KB_ANNOTATION_NO)?;
 
     verbout_diag(stderr, "Old knowledge base files parsed successfully\n")?;
 

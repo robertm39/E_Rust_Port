@@ -7,7 +7,8 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::inout::scanner::Scanner;
 use crate::learn::annotations::Annotation;
 use crate::learn::annoterms::{
-    anno_set_compute_pattern_subst, anno_set_parse, anno_set_rec_to_flat_enc, AnnoSet,
+    anno_set_compute_pattern_subst, anno_set_parse_clause_patterns, anno_set_rec_to_flat_enc,
+    AnnoSet,
 };
 use crate::learn::examplerep::{example_set_parse, example_set_select_by_dist, ExampleSet};
 use crate::learn::flatannoterms::{flat_anno_set_alloc, flat_anno_set_translate, FlatAnnoSet};
@@ -344,7 +345,8 @@ fn tsm_from_kb_core(
 
     let clausepatterns_name = kb_file_name(&mut filename, kb, "clausepatterns");
     let mut clausepatterns_scanner = Scanner::from_file(Path::new(&clausepatterns_name), true)?;
-    let mut annoset = anno_set_parse(&mut clausepatterns_scanner, &mut bank, KB_ANNOTATION_NO)?;
+    let mut annoset =
+        anno_set_parse_clause_patterns(&mut clausepatterns_scanner, &mut bank, KB_ANNOTATION_NO)?;
 
     let signature_name = kb_file_name(&mut filename, kb, "signature");
     let mut signature_scanner = Scanner::from_file(Path::new(&signature_name), true)?;
@@ -809,8 +811,8 @@ mod tests {
             kb_dir.join("clausepatterns"),
             "\
 $cnil : 1:(1,1,0,0,0,0,0).
-$or(f0_1!=f0_2,$cnil) : 1:(2,1,0,0,0,0,0).
-$or(f0_1=f0_2,$cnil) : 1:(2,1,0,0,0,0,0).
+$or(~f1_1(X1),$or(f2_1(f1_1(X1)),$cnil)) : 1:(2,1,0,0,0,0,0).
+$or(f1_1(f0_1),$cnil) : 1:(2,1,0,0,0,0,0).
 ",
         )
         .expect("write generated clause patterns");

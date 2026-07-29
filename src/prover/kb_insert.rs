@@ -7,16 +7,14 @@ use crate::inout::commandline::{
 use crate::inout::fileops::{copy_file, file_find_base_name};
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::Scanner;
-use crate::learn::annoterms::{anno_set_parse, anno_set_print_string};
+use crate::learn::annoterms::{anno_set_parse_clause_patterns, anno_set_print_string};
 use crate::learn::examplerep::{
     example_set_find_name, example_set_parse, example_set_print_string, ExampleSet,
 };
 use crate::learn::kbdesc::KB_ANNOTATION_NO;
-use crate::learn::kbinsert::kb_parse_example_file;
+use crate::learn::kbinsert::{kb_parse_example_file, kb_pattern_signature};
 use crate::prover::version::{footer, VERSION};
-use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -196,7 +194,7 @@ fn execute_ekb_insert(
     let mut problems_scanner = Scanner::from_file(Path::new(&problems_path), true)?;
     example_set_parse(&mut problems_scanner, &mut proof_examples)?;
 
-    let mut reserved_symbols = Signature::new(TypeBank::new());
+    let mut reserved_symbols = kb_pattern_signature();
     let signature_path = kb_path(&config.kb_name, "signature");
     let mut signature_scanner = Scanner::from_file(Path::new(&signature_path), true)?;
     reserved_symbols.parse_declarations(&mut signature_scanner, true)?;
@@ -204,7 +202,7 @@ fn execute_ekb_insert(
     let mut internal_terms = TermBank::new(reserved_symbols)?;
     let clausepatterns_path = kb_path(&config.kb_name, "clausepatterns");
     let mut clausepatterns_scanner = Scanner::from_file(Path::new(&clausepatterns_path), true)?;
-    let mut clause_examples = anno_set_parse(
+    let mut clause_examples = anno_set_parse_clause_patterns(
         &mut clausepatterns_scanner,
         &mut internal_terms,
         KB_ANNOTATION_NO,

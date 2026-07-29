@@ -11,21 +11,19 @@ use crate::inout::fileops::file_find_base_name;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
-use crate::learn::annoterms::{anno_set_parse, anno_set_print_string};
+use crate::learn::annoterms::{anno_set_parse_clause_patterns, anno_set_print_string};
 use crate::learn::examplerep::{
     example_set_find_name, example_set_parse, example_set_print_string, ExampleSet,
 };
 use crate::learn::kbdesc::{kb_desc_parse, KbDesc, KB_ANNOTATION_NO};
-use crate::learn::kbinsert::kb_parse_example_file;
+use crate::learn::kbinsert::{kb_parse_example_file, kb_pattern_signature};
 use crate::pcl2::analysis::{
     protocol_proof_distance, protocol_select_examples, protocol_update_grefs,
 };
 use crate::pcl2::protocol::PclProtocol;
 use crate::pcl2::steps::{PclStepParseOptions, PCL_IS_INITIAL, PCL_IS_PROOF_STEP};
 use crate::prover::version::{footer, VERSION};
-use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
-use crate::terms::typebanks::TypeBank;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -234,7 +232,7 @@ fn execute_ekb_ginsert(
     let mut internal_terms = parse_reserved_data(&config.kb_name)?;
     let clausepatterns_path = kb_path(&config.kb_name, "clausepatterns");
     let mut clausepatterns_scanner = Scanner::from_file(Path::new(&clausepatterns_path), true)?;
-    let mut clause_examples = anno_set_parse(
+    let mut clause_examples = anno_set_parse_clause_patterns(
         &mut clausepatterns_scanner,
         &mut internal_terms,
         KB_ANNOTATION_NO,
@@ -282,7 +280,7 @@ fn read_existing_parameters(basename: &str) -> Result<(ExampleSet, KbDesc), Diag
 }
 
 fn parse_reserved_data(basename: &str) -> Result<TermBank, Diagnostic> {
-    let mut reserved_symbols = Signature::new(TypeBank::new());
+    let mut reserved_symbols = kb_pattern_signature();
     let signature_path = kb_path(basename, "signature");
     let mut signature_scanner = Scanner::from_file(Path::new(&signature_path), true)?;
     reserved_symbols.parse_declarations(&mut signature_scanner, true)?;
@@ -610,6 +608,18 @@ mod tests {
             std::fs::read_to_string(kb_path.join("clausepatterns")).expect("patterns readable");
         assert!(clausepatterns.starts_with("\n% Annotated terms:\n"));
         assert!(clausepatterns.contains("1:("));
+
+        let (status, stdout, stderr) = run_with_args(
+            &[PROGRAM_NAME, "--name=second", &kb_option],
+            protocol_source(),
+        );
+        assert_eq!(status, 0);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        assert!(std::fs::read_to_string(kb_path.join("problems"))
+            .expect("updated problems are readable")
+            .contains("2: \"second\""));
+        assert!(kb_path.join("FILES").join("second").is_file());
 
         remove_dir_if_present(&kb_path);
     }

@@ -10,7 +10,7 @@ use crate::learn::clauseenc::rec_encode_clause_list_rep;
 use crate::learn::examplerep::{ExampleRep, ExampleSet};
 use crate::learn::numfeatures::{compute_clause_set_num_features, Features};
 use crate::learn::patterns::{pattern_clause_compute, pattern_translate_sig, PatternSubst};
-use crate::terms::signature::Signature;
+use crate::terms::signature::{Signature, SIG_LET_CODE};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::DerefType;
 use crate::terms::typebanks::TypeBank;
@@ -43,6 +43,27 @@ impl KbParseExampleFileResult {
     pub const fn added_example_terms(self) -> i64 {
         self.added_example_terms
     }
+}
+
+/// Allocate the private untyped signature used by persisted learning patterns.
+///
+/// Compact term cells interpret codes through [`SIG_LET_CODE`] as built-in
+/// application, lambda, and formula constructors. E's KB signature is
+/// otherwise intentionally sparse, so reserve those numeric slots before
+/// normalized `f$arity_index` symbols are added. The placeholders are private
+/// to the in-memory learning bank and are never serialized.
+#[must_use]
+pub fn kb_pattern_signature() -> Signature {
+    let mut signature = Signature::new(TypeBank::new());
+    while signature.f_count() < SIG_LET_CODE {
+        let expected = signature.f_count() + 1;
+        let inserted = signature.insert_id(&format!("$kb_reserved_{expected}"), 0, true);
+        assert_eq!(
+            inserted, expected,
+            "learning signature reservation is dense"
+        );
+    }
+    signature
 }
 
 /// Parse one knowledge-base example clause into an annotated recursive clause
@@ -387,6 +408,44 @@ a=b.
         assert_close(annotation.count(), 2.0);
         assert_close(annotation.value(1).expect("proof count"), 0.5);
         assert_close(annotation.value(2).expect("proof distance"), 1.0);
+    }
+
+    #[test]
+    fn kb_parse_example_file_reuses_normalized_symbols_across_predicate_and_function_roles() {
+        let mut scanner = Scanner::from_user_string(
+            "\
+.
+0:(0): ssAccess(X1,authObj(X2,X3,X4)) <-
+        ssUserProfile(userProfileEntry(X1,authObj(X2,X3,X4))).
+1:(0): ssUserProfile(userProfileEntry(X1,authObj(X3,X4,X5))) <-
+        ssHolds(X1,X2), ssSingleRole(singleRoleEntry(X2,authObj(X3,X4,X5))).
+2:(0): ssSingleRole(
+        singleRoleEntry(ssRole,authObj(ssObject,ssField,ssValue))) <- .
+",
+            false,
+        )
+        .expect("scanner allocation");
+        let mut examples = AnnoSet::new();
+        let mut set = ExampleSet::new();
+        let mut internal_terms =
+            TermBank::new(super::kb_pattern_signature()).expect("internal term bank allocation");
+        let mut parse_terms =
+            TermBank::new(internal_terms.signature().clone()).expect("parser term bank allocation");
+
+        let result = kb_parse_example_file(
+            &mut scanner,
+            "mixed-normalized-roles",
+            &mut set,
+            &mut examples,
+            &mut parse_terms,
+            &mut internal_terms,
+            ProblemType::FirstOrder,
+        )
+        .expect("untyped normalized learning symbols must not acquire conflicting result sorts");
+
+        assert_eq!(result.parsed_example_clauses(), 3);
+        assert_eq!(examples.nodes(), 3);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]

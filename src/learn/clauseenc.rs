@@ -112,25 +112,59 @@ pub fn parse_clause_term_rep(
     term_encode_eqn_list(bank, &list, flat)
 }
 
+/// Parses the recursive clause-pattern syntax emitted by `AnnoTermPrint`.
+///
+/// The outer `$or(..., $cnil)` constructors are ordinary learning symbols,
+/// while encoded equality terms are printed using formula surface syntax such
+/// as `p(X1)` and `~p(X1)`. Parsing the payload terms without formula
+/// semantics preserves E's deliberately untyped normalized symbols when the
+/// same `f$arity_index` occurs in both predicate and function positions.
+pub fn parse_recursive_clause_pattern(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    let mut encoded_literals = Vec::new();
+    while scanner.test_id("$or") {
+        scanner.accept_id("$or")?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        encoded_literals.push(parse_persisted_pattern_literal(scanner, bank)?);
+        scanner.accept_tok(TokenType::COMMA)?;
+    }
+
+    scanner.accept_id("$cnil")?;
+    let cnil_code = bank.signature_mut().get_cnil_code();
+    let rest = Term::const_cell_alloc(cnil_code);
+    set_clause_rep_type(bank, &rest);
+    let mut rest = bank.term_top_insert(rest)?;
+
+    for encoded in encoded_literals.into_iter().rev() {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        let or_code = bank.signature_mut().get_or_code();
+        let recursive = Term::top_alloc(or_code, 2);
+        set_clause_rep_type(bank, &recursive);
+        recursive.set_argument(0, encoded);
+        recursive.set_argument(1, rest);
+        rest = bank.term_top_insert(recursive)?;
+    }
+    Ok(rest)
+}
+
 /// Recodes a recursive `$or(..., $cnil)` clause representation as a flat one.
 pub fn flat_recode_rec_clause_rep(
     bank: &mut TermBank,
     clauserep: &Term,
 ) -> Result<Term, Diagnostic> {
-    let mut stack = Vec::new();
+    let mut encoded_literals = Vec::new();
     let mut current = clauserep.clone();
     let or_code = bank.signature_mut().get_or_code();
 
     while current.f_code() == or_code {
         let encoded = required_argument(&current, 0)?;
         let rest = required_argument(&current, 1)?;
-        let positive = encoded_eqn_polarity(bank, &encoded)?;
-        let left = required_argument(&encoded, 0)?;
-        let right = required_argument(&encoded, 1)?;
-        stack.push((
-            Eqn::alloc(left, right, bank, positive)?,
-            PatEqnDirection::Normal,
-        ));
+        let _positive = encoded_eqn_polarity(bank, &encoded)?;
+        let _left = required_argument(&encoded, 0)?;
+        let _right = required_argument(&encoded, 1)?;
+        encoded_literals.push(encoded);
         current = rest;
     }
 
@@ -138,11 +172,15 @@ pub fn flat_recode_rec_clause_rep(
         return Err(recursive_clause_error());
     }
 
-    let rep: Vec<_> = stack
-        .iter()
-        .map(|(literal, direction)| (literal, *direction))
-        .collect();
-    flat_encode_clause_list_rep(bank, &rep)
+    let arity = c_arity(encoded_literals.len())?;
+    let flat_code = bank.signature_mut().get_or_n_code(arity);
+    assert_ne!(flat_code, 0, "flat clause representation symbol exists");
+    let flat = Term::top_alloc(flat_code, encoded_literals.len());
+    set_clause_rep_type(bank, &flat);
+    for (index, encoded) in encoded_literals.into_iter().enumerate() {
+        flat.set_argument(index, encoded);
+    }
+    bank.term_top_insert(flat)
 }
 
 fn is_recursive_clause_nil(bank: &TermBank, term: &Term) -> bool {
@@ -242,6 +280,30 @@ fn parse_lop_eqn(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diag
     Eqn::alloc(left, right, bank, positive)
 }
 
+fn parse_persisted_pattern_literal(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    let negative_prefix = scanner.test_tok(TokenType::TILDE_SIGN);
+    if negative_prefix {
+        scanner.accept_tok(TokenType::TILDE_SIGN)?;
+    }
+
+    let left = bank.parse_term_simple(scanner)?;
+    let (right, mut positive) =
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            let positive = !scanner.test_tok(TokenType::NEG_EQUAL_SIGN);
+            scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+            (bank.parse_term_simple(scanner)?, positive)
+        } else {
+            (bank.true_term().clone(), true)
+        };
+    if negative_prefix {
+        positive = !positive;
+    }
+    Eqn::terms_tb_term_encode(bank, &left, &right, positive, PatEqnDirection::Normal)
+}
+
 fn required_argument(term: &Term, index: usize) -> Result<Term, Diagnostic> {
     term.argument(index).ok_or_else(recursive_clause_error)
 }
@@ -270,7 +332,7 @@ fn recursive_clause_error() -> Diagnostic {
 mod tests {
     use super::{
         flat_encode_clause_list_rep, flat_recode_rec_clause_rep, parse_clause_term_rep,
-        rec_encode_clause_list_rep, term_encode_eqn_list,
+        parse_recursive_clause_pattern, rec_encode_clause_list_rep, term_encode_eqn_list,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::eqn::Eqn;
@@ -480,6 +542,53 @@ mod tests {
             bank.signature()
                 .find_name(encoded.argument(1).expect("right term").f_code()),
             Some("f0_2")
+        );
+    }
+
+    #[test]
+    fn recursive_recode_preserves_untyped_normalized_predicate_payload() {
+        let mut bank = TermBank::new(crate::learn::kbinsert::kb_pattern_signature())
+            .expect("learning term bank allocation");
+        let _ = bank.signature_mut().get_eqn_code(true);
+        let _ = bank.signature_mut().get_eqn_code(false);
+        let _ = bank.signature_mut().get_or_code();
+        let _ = bank.signature_mut().get_cnil_code();
+        let mut scanner = Scanner::from_user_string("$or(~f1_1(X1),$or(f1_1(X1),$cnil))", false)
+            .expect("scanner allocation");
+        let persisted = parse_recursive_clause_pattern(&mut scanner, &mut bank)
+            .expect("persisted predicate pattern");
+
+        let flat = flat_recode_rec_clause_rep(&mut bank, &persisted)
+            .expect("untyped normalized predicate should recode");
+
+        assert_eq!(flat.f_code(), bank.signature_mut().get_or_n_code(2));
+        let negative = flat.argument(0).expect("negative encoded literal");
+        assert_eq!(negative.f_code(), bank.signature().neqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(negative.argument(0).expect("negative payload").f_code()),
+            Some("f1_1")
+        );
+        assert_eq!(
+            negative
+                .argument(1)
+                .expect("negative truth marker")
+                .f_code(),
+            SIG_TRUE_CODE
+        );
+        let positive = flat.argument(1).expect("positive encoded literal");
+        assert_eq!(positive.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(positive.argument(0).expect("positive payload").f_code()),
+            Some("f1_1")
+        );
+        assert_eq!(
+            positive
+                .argument(1)
+                .expect("positive truth marker")
+                .f_code(),
+            SIG_TRUE_CODE
         );
     }
 
