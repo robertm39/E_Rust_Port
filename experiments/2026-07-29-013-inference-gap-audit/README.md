@@ -20,3 +20,10 @@ python experiments/2026-07-29-013-inference-gap-audit/audit_matrix.py `
 All empirical commands use the ephemeral Ubuntu runner. Raw proof objects,
 telemetry, timing samples, and extracted corpus files remain outside Git.
 
+The study is complete. The audit validates 11 direct production mechanisms,
+one library-only compatibility utility, two partial rules, two missing
+specializations, and one separately owned theory track. The evaluated
+default-off local/inner rewriting option changed search but added no solve and
+was about 7.8% slower on the three common proofs, so production remains
+unchanged. See [`FINDINGS.md`](FINDINGS.md) and
+[`RESULTS.md`](RESULTS.md).

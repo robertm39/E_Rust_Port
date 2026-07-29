@@ -201,6 +201,11 @@ def behavior_effects(
             continue
         candidate = indexed[(problem_id, strategy, repetition)]
         baseline = indexed[(problem_id, "baseline", repetition)]
+        if (
+            candidate["_telemetry"] is None
+            or baseline["_telemetry"] is None
+        ):
+            continue
         changed = [
             ".".join(path)
             for path in BEHAVIOR_PATHS
@@ -284,6 +289,23 @@ def local_rw_proof_records(
                 }
             )
     return records
+
+
+def missing_telemetry(
+    results: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "problem_id": result["problem_id"],
+            "strategy": result["strategy"],
+            "budget": result["budget"],
+            "repetition": result["repetition"],
+            "szs_status": result["szs_status"],
+            "return_code": result["return_code"],
+        }
+        for result in results
+        if result["_telemetry"] is None
+    ]
 
 
 def load_proof_validation(
@@ -397,6 +419,7 @@ def analyze(
             "focused_test_count": matrix_audit["focused_test_count"],
         },
         "run_count": len(results),
+        "missing_telemetry": missing_telemetry(results),
         "polarity_audit": polarity_audit(results),
         "budgets": budgets,
         "behavior_effect_coordinates": len(all_effects),
@@ -539,4 +562,3 @@ if __name__ == "__main__":
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-

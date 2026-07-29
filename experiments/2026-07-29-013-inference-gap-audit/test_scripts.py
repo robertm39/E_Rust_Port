@@ -76,6 +76,31 @@ class MatrixTests(unittest.TestCase):
         )
         self.assertIsNone(ANALYZE.status_polarity("ResourceOut"))
 
+    def test_behavior_effects_skip_missing_telemetry(self) -> None:
+        baseline = {
+            "problem_id": "P",
+            "strategy": "baseline",
+            "budget": "short",
+            "repetition": 1,
+            "_telemetry": {
+                "search_funnel": {
+                    "generated": 10,
+                    "processed": 5,
+                    "high_water_total": 8,
+                    "final_total": 7,
+                },
+                "simplification": {"rewrite_steps": 3},
+            },
+        }
+        candidate = {
+            **baseline,
+            "strategy": "local_rw",
+            "_telemetry": None,
+        }
+        self.assertEqual(
+            ANALYZE.behavior_effects([baseline, candidate], "short"), []
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
