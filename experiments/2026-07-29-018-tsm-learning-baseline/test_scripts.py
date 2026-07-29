@@ -145,6 +145,33 @@ class AnalysisTests(unittest.TestCase):
             ANALYZE.relative_range([9.0, 10.0, 11.0]), 0.2
         )
 
+    def test_missing_test_labels_produce_uncertain_decision(self) -> None:
+        search = {
+            "bad_statuses": [],
+            "load_failures": [],
+            "telemetry_failures": 0,
+            "control_only_reproducible_solves": [],
+            "learned_only_reproducible_solves": [],
+            "one_repeat_only_solves": {"control": [], "learned": []},
+            "median_common_solve_cpu_ratio": None,
+        }
+        reason = "no_successful_repetition_1_control_proofs"
+        summary = {
+            "classification": {
+                "test": ANALYZE.unavailable_classifier_metrics(reason)
+            },
+            "ranking_cost": {
+                "test": ANALYZE.unavailable_ranking_cost(reason)
+            },
+            "search": {"validation": search, "test": search},
+        }
+
+        decision = ANALYZE.decide(summary)
+
+        self.assertEqual(decision["verdict"], "uncertain")
+        self.assertFalse(decision["sufficient_classifier_coverage"])
+        self.assertFalse(decision["ranking_cost_pass"])
+
 
 if __name__ == "__main__":
     unittest.main()

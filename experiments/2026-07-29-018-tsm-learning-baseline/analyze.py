@@ -241,6 +241,36 @@ def ranking_cost(
     }
 
 
+def unavailable_classifier_metrics(reason: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "reason": reason,
+        "unique_patterns": 0,
+        "weighted_patterns": 0.0,
+        "positive_weight": 0.0,
+        "negative_weight": 0.0,
+        "accuracy": None,
+        "balanced_accuracy": None,
+        "brier_score": None,
+        "constant_prior_brier_score": None,
+        "expected_calibration_error": None,
+        "calibration_bins": [],
+    }
+
+
+def unavailable_ranking_cost(reason: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "reason": reason,
+        "median_cpu_seconds": None,
+        "median_wall_seconds": None,
+        "cpu_microseconds_per_weighted_pattern": None,
+        "wall_microseconds_per_weighted_pattern": None,
+        "cpu_relative_range": None,
+        "wall_relative_range": None,
+    }
+
+
 def result_records(search_root: Path, split: str) -> list[dict[str, Any]]:
     records = []
     for result_path in sorted((search_root / split).rglob("result.json")):
@@ -392,13 +422,17 @@ def decide(summary: dict[str, Any]) -> dict[str, Any]:
     )
     no_test_loss = not test["control_only_reproducible_solves"]
     calibration_pass = (
-        test_classifier["balanced_accuracy"] > 0.55
+        sufficient_classifier
+        and test_classifier["balanced_accuracy"] > 0.55
         and test_classifier["brier_score"]
         < test_classifier["constant_prior_brier_score"]
         and test_classifier["expected_calibration_error"] <= 0.20
     )
+    test_cost_per_pattern = test_cost[
+        "cpu_microseconds_per_weighted_pattern"
+    ]
     cost_pass = (
-        test_cost["cpu_microseconds_per_weighted_pattern"] < 50.0
+        test_cost_per_pattern is not None and test_cost_per_pattern < 50.0
     )
     solve_pass = bool(test["learned_only_reproducible_solves"]) or (
         validation["median_common_solve_cpu_ratio"] is not None
@@ -408,6 +442,7 @@ def decide(summary: dict[str, Any]) -> dict[str, Any]:
     )
     uncertain = (
         not sufficient_classifier
+        or test_cost_per_pattern is None
         or bool(validation["one_repeat_only_solves"]["control"])
         or bool(validation["one_repeat_only_solves"]["learned"])
         or bool(test["one_repeat_only_solves"]["control"])
@@ -425,7 +460,10 @@ def decide(summary: dict[str, Any]) -> dict[str, Any]:
     elif (
         not correctness
         or not no_test_loss
-        or test_cost["cpu_microseconds_per_weighted_pattern"] > 100.0
+        or (
+            test_cost_per_pattern is not None
+            and test_cost_per_pattern > 100.0
+        )
     ):
         verdict = "stop"
     elif uncertain:
@@ -475,9 +513,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     classification = {}
     costs = {}
     for split in ("validation", "test"):
+        split_metadata = metadata["heldout"][split]
+        if split_metadata.get("status") == "unavailable":
+            reason = str(split_metadata["reason"])
+            classification[split] = unavailable_classifier_metrics(reason)
+            costs[split] = unavailable_ranking_cost(reason)
+            continue
         classification[split] = weighted_classifier_metrics(
             classifier_scores(output_root / f"{split}.stdout"),
-            metadata["heldout"][split]["entries"],
+            split_metadata["entries"],
             model,
         )
         costs[split] = ranking_cost(timings, metadata, split)

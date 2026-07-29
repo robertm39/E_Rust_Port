@@ -89,6 +89,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.repetitions != 5:
         raise ExperimentError("the preregistered repetition count is five")
     output_root.mkdir(parents=True, exist_ok=True)
+    metadata = json.loads(
+        (input_root / "metadata.json").read_text(encoding="utf-8")
+    )
 
     summary: dict[str, Any] = {
         "schema_version": 1,
@@ -98,6 +101,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in ("train-self", "validation", "test"):
         input_path = input_root / f"{name}.tsm"
         if not input_path.is_file():
+            split_metadata = metadata.get("heldout", {}).get(name)
+            if (
+                name != "train-self"
+                and isinstance(split_metadata, dict)
+                and split_metadata.get("status") == "unavailable"
+                and not split_metadata.get("entries")
+            ):
+                summary["workloads"][name] = {
+                    "status": "skipped",
+                    "reason": split_metadata.get("reason"),
+                }
+                continue
             raise ExperimentError(f"missing classifier input: {input_path}")
         completed, _wall, _cpu = classify_once(binary, input_path)
         if completed.returncode != 0:
@@ -126,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if len({timing["stdout_sha256"] for timing in timings}) != 1:
             raise ExperimentError(f"classifier output changed across {name}")
         summary["workloads"][name] = {
+            "status": "completed",
             "input_sha256": sha256_file(input_path),
             "output_sha256": sha256_file(output_root / f"{name}.stdout"),
             "timings": timings,

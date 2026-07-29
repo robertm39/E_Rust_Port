@@ -21,4 +21,7 @@ preserves the recorded SZS status. The PCL proof-parent retention fix at
 `477fa727355bace7de39d043d9b18734bd16adf4` is the label-extraction revision
 only; measured search results remain frozen at `812323618aaa42d0f5e24bba8a0ef146ff1757cd`.
 Classifier metadata records the label-extraction revision and binary hash, and
-new label traces are isolated below the fresh classifier-input root.
+new label traces are isolated below the fresh classifier-input root. A split
+with no successful repetition-1 control proof is recorded as unavailable
+instead of receiving fabricated labels; its classifier workload is skipped and
+the frozen insufficient-coverage rule yields an `uncertain` decision.

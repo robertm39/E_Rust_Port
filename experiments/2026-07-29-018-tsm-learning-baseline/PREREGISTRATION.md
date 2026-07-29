@@ -46,6 +46,16 @@ traces are written below that fresh root so the failed extraction evidence
 remains immutable. No family, treatment, budget, metric, gate, or threshold
 changes.
 
+The patched extraction then found that all eight frozen test repetition-1
+controls ended `ResourceOut`, so no successful control proof exists from which
+to derive test labels. No classifier run or metric was observed before adding
+explicit missing-coverage reporting. The controller records that split as
+unavailable, does not fabricate negative labels or a classifier workload, and
+the analyzer applies the already-frozen `uncertain` rule for insufficient
+classifier coverage. Validation extraction and all search evidence are
+unchanged; the failed partial extraction root is preserved and the reporting
+rerun uses a fresh root.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.

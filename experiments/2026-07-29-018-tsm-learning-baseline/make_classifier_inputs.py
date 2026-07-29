@@ -244,8 +244,6 @@ def create_label_kb(
                 f"control proof insertion failed: {result['problem_id']}"
             )
         inserted.append(str(result["problem_id"]))
-    if not inserted:
-        raise ExperimentError(f"no successful control proofs for {split}")
     return kb_path, inserted
 
 
@@ -309,6 +307,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             kb_ginsert=kb_ginsert,
             problem_root=problem_root,
         )
+        if not inserted:
+            metadata["heldout"][split] = {
+                "status": "unavailable",
+                "reason": "no_successful_repetition_1_control_proofs",
+                "inserted_control_problems": [],
+                "knowledge_base": str(kb_path),
+                "clausepatterns_sha256": sha256_file(
+                    kb_path / "clausepatterns"
+                ),
+                "entries": [],
+                "input_sha256": None,
+            }
+            continue
         heldout = annotation_entries(kb_path / "clausepatterns")
         input_path = output_root / f"{split}.tsm"
         input_path.write_text(
@@ -317,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             newline="\n",
         )
         metadata["heldout"][split] = {
+            "status": "available",
             "inserted_control_problems": inserted,
             "knowledge_base": str(kb_path),
             "clausepatterns_sha256": sha256_file(kb_path / "clausepatterns"),
