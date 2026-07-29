@@ -10253,8 +10253,8 @@ mod tests {
         ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
         ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
         ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SatSolverBackendKind, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        SatCheckThresholds, SatCheckTrigger, SatSolverBackendKind, SaturateOutcome,
+        SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
