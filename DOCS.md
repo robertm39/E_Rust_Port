@@ -104,6 +104,10 @@ clausification and ancestry output while reducing held-out THF syntax wall time
 by 97.4% and allocated bytes by 99.86%; comprehensive compatibility and solve
 gates remain clean.
 
+The compact proof-trace storage, deterministic replay, independent proof
+checking, memory, latency, and failure-recovery study is recorded in
+[`experiments/2026-07-29-012-compact-proof-trace/`](experiments/2026-07-29-012-compact-proof-trace/).
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
