@@ -26,4 +26,8 @@ with no successful repetition-1 control proof is recorded as unavailable
 instead of receiving fabricated labels; its classifier workload is skipped and
 the frozen insufficient-coverage rule yields an `uncertain` decision. Classifier
 commands use the executable's `IndexIdentity` spelling for the frozen identity
-index mode and retain warm-up diagnostics on failure.
+index mode and retain warm-up diagnostics on failure. Classifier execution uses
+the KB clause-pattern parser fix at
+`9e15487cc0ca873686bb3caf13e3d1264f33bad0`; the controller records that
+separate revision and its binary hash. This does not change the frozen measured
+search or label-extraction revisions.

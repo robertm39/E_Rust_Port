@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
+CLASSIFIER_REVISION = "9e15487cc0ca873686bb3caf13e3d1264f33bad0"
+
+
 class ExperimentError(RuntimeError):
     """Raised when a classifier workload fails."""
 
@@ -78,6 +81,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--classifier-revision", required=True)
     parser.add_argument("--repetitions", type=int, default=5)
     return parser.parse_args(argv)
 
@@ -86,6 +90,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(argv)
     if sys.platform != "linux":
         raise ExperimentError("classifier execution may run only on Linux")
+    if arguments.classifier_revision != CLASSIFIER_REVISION:
+        raise ExperimentError(
+            "classifier revision differs from the transparent amendment"
+        )
     binary = arguments.binary.resolve()
     input_root = arguments.input_root.resolve()
     output_root = arguments.output_root.resolve()
@@ -100,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     summary: dict[str, Any] = {
         "schema_version": 1,
+        "classifier_revision": arguments.classifier_revision,
         "binary_sha256": sha256_file(binary),
         "workloads": {},
     }

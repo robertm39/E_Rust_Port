@@ -175,6 +175,12 @@ class AnalysisTests(unittest.TestCase):
 
 
 class ClassifierCommandTests(unittest.TestCase):
+    def test_classifier_revision_is_frozen_after_parser_amendment(self) -> None:
+        self.assertEqual(
+            CLASSIFY.CLASSIFIER_REVISION,
+            "9e15487cc0ca873686bb3caf13e3d1264f33bad0",
+        )
+
     def test_classifier_command_uses_frozen_identity_index_name(self) -> None:
         binary = Path("umlaut-tsm-classify")
         input_path = Path("input.tsm")

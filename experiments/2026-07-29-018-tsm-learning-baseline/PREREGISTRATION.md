@@ -64,6 +64,25 @@ failed classifier-output root remains immutable and a fresh output root is used.
 No classifier workload, TSM type, depth, repetition count, metric, threshold,
 or search evidence changes.
 
+The next fresh warm-up accepted `IndexIdentity` but stopped at the first
+production KB clause pattern containing a negated atom. It emitted no
+classifier score or timing metric. The classifier was using the generic
+annotated-term parser even though the KB tools serialize recursive
+`$or`/`$cnil` clause patterns and `~atom` literals. Production fix
+`9e15487cc0ca873686bb3caf13e3d1264f33bad0` routes both classifier input
+sections through the existing KB-compatible clause-pattern parser, whose
+fallback retains the generic annotated-term input language. The fix passed a
+negated recursive-pattern regression and the full test and Clippy gates.
+
+That revision is used only to execute the frozen classifier workloads. The
+measured search revision remains `812323618aaa42d0f5e24bba8a0ef146ff1757cd`
+and the label-extraction revision remains
+`477fa727355bace7de39d043d9b18734bd16adf4`; none of their evidence is rerun or
+replaced. The controller requires and records the classifier revision and
+binary hash. The parser-failure output root remains immutable and the next
+attempt uses a fresh root. No workload, index, TSM type, depth, repetition
+count, metric, threshold, gate, or search evidence changes.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.
