@@ -88,6 +88,30 @@ class AnnotationTests(unittest.TestCase):
             "Test:\na : 1:(2.000000,1.0).\n.\n",
         )
 
+    def test_pcl_label_command_changes_only_output_and_telemetry(self) -> None:
+        result = {
+            "command": [
+                "/tmp/umlaut",
+                "--tstp-out",
+                "--proof-object=1",
+                "--search-telemetry=/tmp/original.json",
+                "/tmp/problem.p",
+            ]
+        }
+        rendered = INPUTS.pcl_label_command(
+            result, Path("/tmp/classifier.json")
+        )
+        self.assertEqual(
+            rendered,
+            [
+                "/tmp/umlaut",
+                "--pcl-out",
+                "--proof-object=1",
+                f"--search-telemetry={Path('/tmp/classifier.json')}",
+                "/tmp/problem.p",
+            ],
+        )
+
 
 class AnalysisTests(unittest.TestCase):
     def test_logistic_calibrator_separates_monotonic_scores(self) -> None:

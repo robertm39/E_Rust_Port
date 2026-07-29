@@ -39,16 +39,50 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def run(
-    command: Sequence[str], *, cwd: Path
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         command,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
         timeout=120,
         check=False,
     )
+
+
+def final_status(output: bytes) -> str | None:
+    matches = re.findall(
+        r"(?:%|#) SZS status ([A-Za-z]+)",
+        output.decode("utf-8", errors="replace"),
+    )
+    return matches[-1] if matches else None
+
+
+def pcl_label_command(
+    result: dict[str, Any], telemetry_path: Path
+) -> list[str]:
+    original = result.get("command")
+    if not isinstance(original, list) or not all(
+        isinstance(argument, str) for argument in original
+    ):
+        raise ExperimentError("control result has no reusable command")
+    if original.count("--tstp-out") != 1 or "--pcl-out" in original:
+        raise ExperimentError("control result does not use the frozen TSTP output")
+
+    command = []
+    for argument in original:
+        if argument == "--tstp-out":
+            command.append("--pcl-out")
+        elif argument.startswith("--search-telemetry="):
+            command.append(f"--search-telemetry={telemetry_path}")
+        else:
+            command.append(argument)
+    return command
 
 
 def annotation_entries(path: Path) -> list[dict[str, Any]]:
@@ -112,6 +146,7 @@ def create_label_kb(
     output_root: Path,
     kb_create: Path,
     kb_ginsert: Path,
+    problem_root: Path,
 ) -> tuple[Path, list[str]]:
     kb_name = f"{split.upper()}_CONTROL_KB"
     kb_path = output_root / kb_name
@@ -139,7 +174,34 @@ def create_label_kb(
             raise ExperimentError(f"non-frozen label repetition: {result_path}")
         if result.get("szs_status") not in PROOF_STATUSES:
             continue
-        proof_path = result_path.parent / "stdout.txt"
+        proof_path = result_path.parent / "classifier-trace.pcl"
+        trace_stderr_path = result_path.parent / "classifier-trace.stderr"
+        trace_telemetry_path = (
+            result_path.parent / "classifier-trace-telemetry.json"
+        )
+        command = pcl_label_command(result, trace_telemetry_path)
+        environment = os.environ.copy()
+        environment["TPTP"] = str(problem_root / "problems" / "casc_2025")
+        trace = run(command, cwd=result_path.parent, environment=environment)
+        proof_path.write_bytes(trace.stdout)
+        trace_stderr_path.write_bytes(trace.stderr)
+        trace_status = final_status(trace.stdout)
+        write_json(
+            result_path.parent / "classifier-trace.json",
+            {
+                "schema_version": 1,
+                "source_result": str(result_path),
+                "command": command,
+                "return_code": trace.returncode,
+                "szs_status": trace_status,
+                "stdout_sha256": sha256_file(proof_path),
+                "stderr_sha256": sha256_file(trace_stderr_path),
+            },
+        )
+        if trace.returncode != 0 or trace_status != result.get("szs_status"):
+            raise ExperimentError(
+                f"PCL control rerun changed result: {result['problem_id']}"
+            )
         completed = run(
             [
                 str(kb_ginsert),
@@ -173,6 +235,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--search-root", type=Path, required=True)
     parser.add_argument("--kb-create", type=Path, required=True)
     parser.add_argument("--kb-ginsert", type=Path, required=True)
+    parser.add_argument("--problem-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -185,6 +248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     search_root = arguments.search_root.resolve()
     kb_create = arguments.kb_create.resolve()
     kb_ginsert = arguments.kb_ginsert.resolve()
+    problem_root = arguments.problem_root.resolve()
     output_root = arguments.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     for executable in (kb_create, kb_ginsert):
@@ -214,6 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_root=output_root,
             kb_create=kb_create,
             kb_ginsert=kb_ginsert,
+            problem_root=problem_root,
         )
         heldout = annotation_entries(kb_path / "clausepatterns")
         input_path = output_root / f"{split}.tsm"

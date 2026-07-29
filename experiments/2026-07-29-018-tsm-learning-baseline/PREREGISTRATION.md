@@ -16,6 +16,15 @@ not reused. This amendment changes only the source revision: the corpus,
 whole-family split, treatments, budgets, metrics, gates, and frozen decision
 rule remain unchanged.
 
+After the held-out search runs completed, classifier preparation found that the
+search harness had retained TSTP proof text while `umlaut-kb-ginsert` requires
+PCL. Search outcomes and telemetry are not rerun or replaced. For label
+extraction only, each already-successful repetition-1 control coordinate is
+re-executed with its recorded command, changing only `--tstp-out` to
+`--pcl-out` and redirecting telemetry to a separate file. The rerun must return
+the same SZS status before its trace is admitted. No failed coordinate,
+candidate coordinate, family, budget, metric, gate, or threshold changes.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.

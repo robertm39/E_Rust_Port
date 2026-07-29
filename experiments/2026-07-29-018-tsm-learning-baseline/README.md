@@ -14,3 +14,7 @@ The measured prover revision is
 `812323618aaa42d0f5e24bba8a0ef146ff1757cd`. This supersedes the invalid
 training-only attempt at `9263a0d362d5ec297f9e5305870b641626de107e`; see the
 transparent amendment in `PREREGISTRATION.md`.
+
+Classifier label extraction reruns only already-successful repetition-1
+control coordinates to serialize PCL traces; it verifies that every rerun
+preserves the recorded SZS status.
