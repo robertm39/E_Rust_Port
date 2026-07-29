@@ -11,3 +11,4 @@ docs/experiment-contract.md text eol=lf
 experiments/2026-07-29-014-rewrite-cache-evaluation/** text eol=lf
 experiments/2026-07-29-015-preprocessing-evaluation/** text eol=lf
 experiments/2026-07-29-016-experiment-contract-trials/** text eol=lf
+experiments/2026-07-29-017-ground-sat-trigger-evaluation/** text eol=lf
