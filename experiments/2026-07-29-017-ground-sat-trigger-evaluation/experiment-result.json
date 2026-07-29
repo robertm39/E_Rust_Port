@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "experiment": {
+    "id": "2026-07-29-017-ground-sat-trigger-evaluation",
+    "title": "Periodic pseudo-grounded SAT trigger evaluation",
+    "hypothesis": "A periodic pseudo-grounded SAT trigger can add complementary solves or reduce common-solve CPU without losing solves, exceeding search-size and memory guards, or spending more than 3% of reached-run CPU in SATCheck.",
+    "source_revision": "4e24b38c223617f7f2a55c23ab2295de7addd10e"
+  },
+  "treatments": {
+    "baseline": {
+      "name": "off",
+      "description": "The fixed search strategy with periodic SATCheck disabled through NoGrounding.",
+      "binary_sha256": "5d5e63ec77531e432823974f7fbf41e3f5205adfaa5cd707fbf28c2fc7cbb8c9"
+    },
+    "candidate": {
+      "name": "step5000, step10000, and size10000",
+      "description": "Three ConjMinMinFreq trigger policies using the same binary, search heuristic, decision limit, corpus, and resource limits as baseline.",
+      "binary_sha256": "5d5e63ec77531e432823974f7fbf41e3f5205adfaa5cd707fbf28c2fc7cbb8c9"
+    }
+  },
+  "reproduction": {
+    "platform": "Ubuntu 24.04; Linux 6.8.0-134-generic; AMD EPYC 9845; four dedicated CPUs",
+    "run_count": 192,
+    "seed_policy": "No prover RNG is used; the SHA-256-frozen corpus, fixed strategy arguments, hash-shuffled job order, and two repetition coordinates determine execution.",
+    "resource_limits": {
+      "workers": 4,
+      "memory_mib_per_job": 1536,
+      "soft_cpu_seconds": 10,
+      "hard_cpu_seconds": 13
+    },
+    "commands": [
+      {
+        "purpose": "execute or resume the frozen held-out trigger matrix",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-017-ground-sat-trigger-evaluation/run.py",
+          "--source-revision=4e24b38c223617f7f2a55c23ab2295de7addd10e",
+          "--phase=heldout",
+          "--manifest=experiments/2026-07-29-017-ground-sat-trigger-evaluation/corpus.jsonl",
+          "--problem-root=/opt/e-rust-port/ground-sat-corpus",
+          "--binary=target/release/umlaut",
+          "--output-root=/opt/e-rust-port/ground-sat-results",
+          "--workers=4",
+          "--memory-mib=1536"
+        ]
+      },
+      {
+        "purpose": "recompute and validate result, telemetry, proof, and prior-reuse evidence",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-017-ground-sat-trigger-evaluation/analyze.py",
+          ".artifacts/experiments/2026-07-29-017-ground-sat-trigger-evaluation/raw/ground-sat-results",
+          "--reuse-analysis=.artifacts/experiments/2026-07-29-017-ground-sat-trigger-evaluation/reuse-analysis.json",
+          "--proof-validation=.artifacts/experiments/2026-07-29-017-ground-sat-trigger-evaluation/proof-raw/ground-sat-proof/validation/proof-validation.json"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path": ".artifacts/experiments/2026-07-29-017-ground-sat-trigger-evaluation/results.tar.gz",
+        "role": "complete held-out contracts, commands, stdout, stderr, telemetry, proof objects, host metadata, and replay evidence",
+        "sha256": "b5f7da29bdbd5e6844d6188d9bf95ab8e4bef015bad116edc467f4e5be16ee5a",
+        "bytes": 4832702
+      },
+      {
+        "path": ".artifacts/experiments/2026-07-29-017-ground-sat-trigger-evaluation/proof-validation.tar.gz",
+        "role": "proof-only SATCheck witness, repeated proof, core, pinned CaDiCaL re-solve, and ProofCheck 1.0 validation",
+        "sha256": "2b4fae05e3d2fb57f4b3879abf71ebd906d9b47d7a14a2da218c04564832188f",
+        "bytes": 16769416
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/results-summary.json",
+        "role": "hash-validating source analysis and frozen decision report",
+        "sha256": "654bef83c13cb0f4017eee7d6f9b3500898205b897d11478856075a665139f24",
+        "bytes": 69378
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/PREREGISTRATION.md",
+        "role": "frozen hypothesis, corpus, strategies, correctness gates, and decision thresholds",
+        "sha256": "29d7c1b6db1fe270ad8e99c0410754af8334e0c310d6ba49b59256c59caff0a6",
+        "bytes": 6510
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/corpus.jsonl",
+        "role": "candidate-blind fresh-family corpus with source and prior-study hashes",
+        "sha256": "3fec449651e6fa9feb004ee4e43ffa67b936c135785cc5050fff6d9f32add6c8",
+        "bytes": 26517
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/run.py",
+        "role": "frozen execution controller",
+        "sha256": "6ec69105329b1862ffe1c5c3916be1538cadd9e91780d1d1b140684492ec1339",
+        "bytes": 7389
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/analyze.py",
+        "role": "source result analyzer",
+        "sha256": "ee56f4c1dbc9a1166ed24ceaf8e65983adee3d52b7b7477fb1c59fbce6c7b446",
+        "bytes": 23467
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/analyze_reuse.py",
+        "role": "prior captured-stream exact-clause reuse analyzer",
+        "sha256": "6fdd1df8ee9561c1b1f7cb2e225783dd6b9db18c6f5e6c82bd1bba085d5f95d1",
+        "bytes": 10158
+      },
+      {
+        "path": "experiments/2026-07-29-017-ground-sat-trigger-evaluation/verify_proof.py",
+        "role": "proof-only core and external proof validation controller",
+        "sha256": "710ff5412751d69b4fc997f517d0f44bddd5b1b3b864754d9696541becf1652e",
+        "bytes": 9800
+      }
+    ]
+  },
+  "correctness": {
+    "status": "pass",
+    "status_pairing": {
+      "paired_coordinates": 144,
+      "exact_matches": 144,
+      "polarity_disagreements": 0
+    },
+    "independent_validation": {
+      "status": "pass",
+      "verified_claims": 1,
+      "coverage_gaps": 0,
+      "rejected_claims": 0,
+      "candidate_witnesses": [
+        "satcheck-proof"
+      ]
+    },
+    "checks": [
+      {
+        "name": "paired SZS status and polarity audit",
+        "status": "pass",
+        "evidence": "All 144 candidate/baseline coordinates matched exactly, with zero proof/model polarity disagreements."
+      },
+      {
+        "name": "SATCheck controller and core regression tests",
+        "status": "pass",
+        "evidence": "Ubuntu all-feature tests passed 14 SATCheck-focused cases, the minimized-core test, and the selector-to-source-core CaDiCaL mapping test."
+      },
+      {
+        "name": "targeted terminal core reconstruction",
+        "status": "pass",
+        "evidence": "Two byte-identical proofs reconstructed a four-parent cdclpropres inference; pinned CaDiCaL 3.0.1 re-solved the four-clause core as UNSAT and ProofCheck 1.0 returned VerifiedGood. Report ca881498a41c926f779853e884d992363ccc9887b5f7ddcbacc2f0f22553ad81."
+      }
+    ]
+  },
+  "performance": {
+    "status": "valid",
+    "primary_metric": {
+      "name": "total_cpu_seconds",
+      "unit": "seconds",
+      "direction": "lower_is_better"
+    },
+    "pairing": {
+      "unit": "held-out problem-repetition",
+      "repetitions": 2
+    },
+    "observations": [
+      {
+        "scope": "step5000 on five common reproducible solves",
+        "paired_coordinates": 10,
+        "candidate_over_baseline_median": 1.0015143259938695,
+        "noise": {
+          "method": "within-problem two-repetition relative range",
+          "coordinate_count": 5,
+          "baseline_median_relative_range": 0.035099629338153894,
+          "baseline_max_relative_range": 0.042379883543150795,
+          "candidate_median_relative_range": 0.010188341061997822,
+          "candidate_max_relative_range": 0.016479404858781067,
+          "paired_ratio_median_relative_range": 0.024913515588016157,
+          "paired_ratio_max_relative_range": 0.05294292466327228
+        }
+      },
+      {
+        "scope": "step10000 on five common reproducible solves",
+        "paired_coordinates": 10,
+        "candidate_over_baseline_median": 1.0031027993727117,
+        "noise": {
+          "method": "within-problem two-repetition relative range",
+          "coordinate_count": 5,
+          "baseline_median_relative_range": 0.035099629338153894,
+          "baseline_max_relative_range": 0.042379883543150795,
+          "candidate_median_relative_range": 0.021169761582397105,
+          "candidate_max_relative_range": 0.09823153723336218,
+          "paired_ratio_median_relative_range": 0.04097168278127457,
+          "paired_ratio_max_relative_range": 0.06492585835983843
+        }
+      },
+      {
+        "scope": "size10000 on five common reproducible solves",
+        "paired_coordinates": 10,
+        "candidate_over_baseline_median": 1.5428132013101443,
+        "noise": {
+          "method": "within-problem two-repetition relative range",
+          "coordinate_count": 5,
+          "baseline_median_relative_range": 0.035099629338153894,
+          "baseline_max_relative_range": 0.042379883543150795,
+          "candidate_median_relative_range": 0.007497443230670335,
+          "candidate_max_relative_range": 0.035838117444131,
+          "paired_ratio_median_relative_range": 0.03985706920393219,
+          "paired_ratio_max_relative_range": 0.07689253584552436
+        }
+      }
+    ],
+    "secondary_metrics": [
+      {
+        "name": "step5000_sat_cpu_fraction",
+        "scope": "eight reached coordinates",
+        "value": 0.004606119266104706
+      },
+      {
+        "name": "step10000_reached_coordinates",
+        "scope": "48 held-out coordinates",
+        "value": 2
+      },
+      {
+        "name": "size10000_sat_cpu_fraction",
+        "scope": "38 telemetry-confirmed reached coordinates",
+        "value": 0.5581874229163666
+      },
+      {
+        "name": "size10000_maximum_resident_pages_ratio",
+        "scope": "five common reproducible solves",
+        "value": 1.1328131881654249
+      },
+      {
+        "name": "prior_stream_exact_clause_retention",
+        "scope": "126 consecutive captured SATCheck pairs",
+        "value": 0.6818181818181818
+      }
+    ]
+  },
+  "coverage": {
+    "baseline_reproducible_solves": 5,
+    "candidate_reproducible_solves": 5,
+    "common_reproducible_solves": 5,
+    "candidate_only": [],
+    "baseline_only": []
+  },
+  "decision": {
+    "outcome": "stop",
+    "rule": "Promote only a correctness-passing trigger with at least eight reached coordinates across four problems, no lost solve, and either a unique solve or common-solve CPU at most 0.95 with the preregistered size, memory, and SAT-cost guards.",
+    "reasons": [
+      "All candidates preserved the five-solve baseline but added no solve.",
+      "The dominant generated-schedule policy, step5000, reached the minimum eight coordinates cheaply but had a 1.001514 common-solve CPU ratio rather than the required 0.95.",
+      "step10000 reached only two coordinates on one problem.",
+      "size10000 made 656 calls, spent 55.8% of reached-run CPU inside SATCheck, regressed common-solve CPU to 1.542813, and regressed RSS to 1.132813."
+    ],
+    "production_effect": "Leave periodic ground-SAT checking default-off; reject the size-10000 trigger and do not promote either processed-step trigger."
+  }
+}

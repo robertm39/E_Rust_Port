@@ -112,6 +112,17 @@ and CNF proofs at 4.34% of aggregate eager bytes, but it is not integrated:
 post-render compression cannot release the live semantic derivation owners
 responsible for the measured LUSK6 search-memory pressure.
 
+The periodic pseudo-grounded SAT trigger, core reconstruction, captured-stream
+reuse, and solve-complementarity study is retained in
+[`experiments/2026-07-29-017-ground-sat-trigger-evaluation/`](experiments/2026-07-29-017-ground-sat-trigger-evaluation/).
+The 5,000-step policy was inexpensive but added no solve or common-solve
+benefit, 10,000 steps barely fired, and state-size triggering spent 55.8% of
+reached-run CPU in SATCheck while regressing common-solve CPU to 1.543 times
+baseline. Periodic checks remain default-off. A four-clause terminal core was
+independently re-solved by pinned CaDiCaL and verified by ProofCheck; captured
+call streams show 68.2% median exact-clause retention but require stable
+identities and selector retirement before persistent reuse can be sound.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

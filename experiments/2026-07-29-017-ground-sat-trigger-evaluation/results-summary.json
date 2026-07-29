@@ -1,0 +1,2310 @@
+{
+  "comparisons": {
+    "size10000": {
+      "baseline_only": [],
+      "candidate": "size10000",
+      "candidate_only": [],
+      "common_reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "common_solve_metrics": {
+        "cpu": {
+          "maximum_candidate_over_baseline": 1.987061802116987,
+          "median_candidate_over_baseline": 1.5428132013101443,
+          "noise": {
+            "baseline_max_relative_range": 0.042379883543150795,
+            "baseline_median_relative_range": 0.035099629338153894,
+            "candidate_max_relative_range": 0.035838117444131,
+            "candidate_median_relative_range": 0.007497443230670335,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.07689253584552436,
+            "paired_ratio_median_relative_range": 0.03985706920393219,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                0.729788,
+                0.703139
+              ],
+              "baseline_relative_range": 0.037195195568232066,
+              "candidate": [
+                1.100768,
+                1.109052
+              ],
+              "candidate_relative_range": 0.007497443230670335,
+              "paired_ratio_relative_range": 0.04468952316972667,
+              "ratios": [
+                1.5083394081568893,
+                1.5772869944633992
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                2.632515,
+                2.546138
+              ],
+              "baseline_relative_range": 0.03335886764376765,
+              "candidate": [
+                5.23097,
+                5.046802
+              ],
+              "candidate_relative_range": 0.035838117444131,
+              "paired_ratio_relative_range": 0.0024799910194695128,
+              "ratios": [
+                1.987061802116987,
+                1.9821400096931114
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                0.078481,
+                0.075224
+              ],
+              "baseline_relative_range": 0.042379883543150795,
+              "candidate": [
+                0.073575,
+                0.076161
+              ],
+              "candidate_relative_range": 0.03454079179355672,
+              "paired_ratio_relative_range": 0.07689253584552436,
+              "ratios": [
+                0.9374880544335572,
+                1.0124561310220144
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                0.842372,
+                0.813315
+              ],
+              "baseline_relative_range": 0.035099629338153894,
+              "candidate": [
+                1.449547,
+                1.456462
+              ],
+              "candidate_relative_range": 0.004759104324866168,
+              "paired_ratio_relative_range": 0.03985706920393219,
+              "ratios": [
+                1.7207920016334826,
+                1.7907723329829155
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                0.222981,
+                0.222562
+              ],
+              "baseline_relative_range": 0.0018808510065246348,
+              "candidate": [
+                0.233695,
+                0.234703
+              ],
+              "candidate_relative_range": 0.004304032041127337,
+              "paired_ratio_relative_range": 0.006184870530644379,
+              "ratios": [
+                1.0480489369049382,
+                1.054551091381278
+              ]
+            }
+          }
+        },
+        "generated": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                61258.0,
+                61258.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                61258.0,
+                61258.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                311126.0,
+                311126.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                311126.0,
+                311126.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1201.0,
+                1201.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1201.0,
+                1201.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                66849.0,
+                66849.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                66849.0,
+                66849.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                20969.0,
+                20969.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                20969.0,
+                20969.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "high_water": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                60879.0,
+                60879.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                60879.0,
+                60879.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                126466.0,
+                126466.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                126466.0,
+                126466.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1297.0,
+                1297.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1297.0,
+                1297.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                63451.0,
+                63451.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                63451.0,
+                63451.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                18830.0,
+                18830.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                18830.0,
+                18830.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "processed": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                1008.0,
+                1008.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1008.0,
+                1008.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                5726.0,
+                5726.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                5726.0,
+                5726.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                470.0,
+                470.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                470.0,
+                470.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                3161.0,
+                3161.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                3161.0,
+                3161.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                1852.0,
+                1852.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1852.0,
+                1852.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "rss": {
+          "maximum_candidate_over_baseline": 1.1522799758641495,
+          "median_candidate_over_baseline": 1.1328131881654249,
+          "noise": {
+            "baseline_max_relative_range": 0.014992141216297909,
+            "baseline_median_relative_range": 0.0017685483640927633,
+            "candidate_max_relative_range": 0.014992141216297909,
+            "candidate_median_relative_range": 0.0004936092559214414,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.014992141216297992,
+            "paired_ratio_median_relative_range": 0.0018189096662252133,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                70176.0,
+                70052.0
+              ],
+              "baseline_relative_range": 0.0017685483640927633,
+              "candidate": [
+                79424.0,
+                79428.0
+              ],
+              "candidate_relative_range": 5.0361342633394606e-05,
+              "paired_ratio_relative_range": 0.0018189096662252133,
+              "ratios": [
+                1.1317829457364341,
+                1.1338434305944156
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                232020.0,
+                232148.0
+              ],
+              "baseline_relative_range": 0.0005515244480446735,
+              "candidate": [
+                267352.0,
+                267484.0
+              ],
+              "candidate_relative_range": 0.0004936092559214414,
+              "paired_ratio_relative_range": 5.791519606489801e-05,
+              "ratios": [
+                1.1522799758641495,
+                1.1522132432758412
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                33332.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.014992141216297909,
+              "candidate": [
+                33332.0,
+                33332.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.014992141216297992,
+              "ratios": [
+                1.0,
+                1.0151053721525156
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                86604.0,
+                86352.0
+              ],
+              "baseline_relative_range": 0.0029140359397765905,
+              "candidate": [
+                98732.0,
+                98600.0
+              ],
+              "candidate_relative_range": 0.0013378468773437657,
+              "paired_ratio_relative_range": 0.0015761905986408451,
+              "ratios": [
+                1.1400397210290518,
+                1.1418380581804706
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                32836.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                32836.0,
+                33332.0
+              ],
+              "candidate_relative_range": 0.014992141216297909,
+              "paired_ratio_relative_range": 0.014992141216297992,
+              "ratios": [
+                1.0,
+                1.0151053721525156
+              ]
+            }
+          }
+        },
+        "term_storage": {
+          "maximum_candidate_over_baseline": 1.6900870593048893,
+          "median_candidate_over_baseline": 1.3154306749121187,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                879860.0,
+                879860.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1487040.0,
+                1487040.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.6900870593048893,
+                1.6900870593048893
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                41965760.0,
+                41965760.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                55203048.0,
+                55203048.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.3154306749121187,
+                1.3154306749121187
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                274376.0,
+                274376.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                274376.0,
+                274376.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                1989012.0,
+                1989012.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                3318148.0,
+                3318148.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.6682393067512915,
+                1.6682393067512915
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                259276.0,
+                259276.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                282100.0,
+                282100.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0880297443650782,
+                1.0880297443650782
+              ]
+            }
+          }
+        }
+      },
+      "decision": "reject",
+      "gates": {
+        "benefit": false,
+        "correctness": true,
+        "enough_reach": true,
+        "material_regression": true
+      },
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 17.263157894736842,
+        "checks": 656,
+        "combined_cpu_seconds": 176.566516,
+        "combined_cpu_seconds_per_call": 0.2691562743902439,
+        "combined_fraction_of_reached_cpu": 0.5581874229163666,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 144.359624,
+        "input_clauses": 0,
+        "limited_or_unknown": 6,
+        "missing_telemetry_resourceouts": [
+          {
+            "problem_id": "MGT054+1",
+            "repetition": 1,
+            "status": "ResourceOut"
+          },
+          {
+            "problem_id": "MGT054+1",
+            "repetition": 2,
+            "status": "ResourceOut"
+          }
+        ],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 38,
+        "reached_problems": [
+          "COL002-10",
+          "COL002-5",
+          "COL042-10",
+          "COL043-3",
+          "COM125+1",
+          "COM133+1",
+          "COM142+1",
+          "COM149+1",
+          "KLE084-10",
+          "KLE145-10",
+          "KLE147-10",
+          "KLE152-10",
+          "MGT039+2",
+          "MGT061+1",
+          "MSC024-1",
+          "SET090+1",
+          "SET144+3",
+          "SET637+3",
+          "SET649+3"
+        ],
+        "satisfiable": 650,
+        "solver_cpu_seconds": 32.206892,
+        "telemetry_coordinates": 46,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_audit": {
+        "exact_matches": 48,
+        "exact_mismatches": [],
+        "paired_coordinates": 48,
+        "polarity_disagreements": []
+      }
+    },
+    "step10000": {
+      "baseline_only": [],
+      "candidate": "step10000",
+      "candidate_only": [],
+      "common_reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "common_solve_metrics": {
+        "cpu": {
+          "maximum_candidate_over_baseline": 1.0641793114189282,
+          "median_candidate_over_baseline": 1.0031027993727117,
+          "noise": {
+            "baseline_max_relative_range": 0.042379883543150795,
+            "baseline_median_relative_range": 0.035099629338153894,
+            "candidate_max_relative_range": 0.09823153723336218,
+            "candidate_median_relative_range": 0.021169761582397105,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.06492585835983843,
+            "paired_ratio_median_relative_range": 0.04097168278127457,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                0.729788,
+                0.703139
+              ],
+              "baseline_relative_range": 0.037195195568232066,
+              "candidate": [
+                0.725201,
+                0.721364
+              ],
+              "candidate_relative_range": 0.00530498111042363,
+              "paired_ratio_relative_range": 0.03189178767817892,
+              "ratios": [
+                0.9937146130109018,
+                1.025919483914276
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                2.632515,
+                2.546138
+              ],
+              "baseline_relative_range": 0.03335886764376765,
+              "candidate": [
+                2.801468,
+                2.539159
+              ],
+              "candidate_relative_range": 0.09823153723336218,
+              "paired_ratio_relative_range": 0.06492585835983843,
+              "ratios": [
+                1.0641793114189282,
+                0.9972589859622691
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                0.078481,
+                0.075224
+              ],
+              "baseline_relative_range": 0.042379883543150795,
+              "candidate": [
+                0.076004,
+                0.075897
+              ],
+              "candidate_relative_range": 0.0014088123185495287,
+              "paired_ratio_relative_range": 0.04097168278127457,
+              "ratios": [
+                0.9684382207158422,
+                1.0089466127831543
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                0.842372,
+                0.813315
+              ],
+              "baseline_relative_range": 0.035099629338153894,
+              "candidate": [
+                0.830674,
+                0.855363
+              ],
+              "candidate_relative_range": 0.02928642728481043,
+              "paired_ratio_relative_range": 0.06436951457912946,
+              "ratios": [
+                0.9861130236997431,
+                1.051699526013906
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                0.222981,
+                0.222562
+              ],
+              "baseline_relative_range": 0.0018808510065246348,
+              "candidate": [
+                0.220693,
+                0.225415
+              ],
+              "candidate_relative_range": 0.021169761582397105,
+              "paired_ratio_relative_range": 0.02305038313868089,
+              "ratios": [
+                0.9897390360613684,
+                1.0128188999020498
+              ]
+            }
+          }
+        },
+        "generated": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                61258.0,
+                61258.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                61258.0,
+                61258.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                311126.0,
+                311126.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                311126.0,
+                311126.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1201.0,
+                1201.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1201.0,
+                1201.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                66849.0,
+                66849.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                66849.0,
+                66849.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                20969.0,
+                20969.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                20969.0,
+                20969.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "high_water": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                60879.0,
+                60879.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                60879.0,
+                60879.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                126466.0,
+                126466.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                126466.0,
+                126466.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1297.0,
+                1297.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1297.0,
+                1297.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                63451.0,
+                63451.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                63451.0,
+                63451.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                18830.0,
+                18830.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                18830.0,
+                18830.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "processed": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                1008.0,
+                1008.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1008.0,
+                1008.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                5726.0,
+                5726.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                5726.0,
+                5726.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                470.0,
+                470.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                470.0,
+                470.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                3161.0,
+                3161.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                3161.0,
+                3161.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                1852.0,
+                1852.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1852.0,
+                1852.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "rss": {
+          "maximum_candidate_over_baseline": 1.0018809849521204,
+          "median_candidate_over_baseline": 0.9987410410991575,
+          "noise": {
+            "baseline_max_relative_range": 0.014992141216297909,
+            "baseline_median_relative_range": 0.0017685483640927633,
+            "candidate_max_relative_range": 0.2589433131535498,
+            "candidate_median_relative_range": 0.0037048647724358063,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.24418816355316336,
+            "paired_ratio_median_relative_range": 0.0029140359397765367,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                70176.0,
+                70052.0
+              ],
+              "baseline_relative_range": 0.0017685483640927633,
+              "candidate": [
+                70308.0,
+                70048.0
+              ],
+              "candidate_relative_range": 0.0037048647724358063,
+              "paired_ratio_relative_range": 0.0019363195801471642,
+              "ratios": [
+                1.0018809849521204,
+                0.9999428995603266
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                232020.0,
+                232148.0
+              ],
+              "baseline_relative_range": 0.0005515244480446735,
+              "candidate": [
+                231768.0,
+                231768.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0005515244480446576,
+              "ratios": [
+                0.9989138867339022,
+                0.9983631131864156
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                33332.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.014992141216297909,
+              "candidate": [
+                32836.0,
+                25308.0
+              ],
+              "candidate_relative_range": 0.2589433131535498,
+              "paired_ratio_relative_range": 0.24418816355316336,
+              "ratios": [
+                0.9851194047761911,
+                0.7707394323303691
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                86604.0,
+                86352.0
+              ],
+              "baseline_relative_range": 0.0029140359397765905,
+              "candidate": [
+                86480.0,
+                86480.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0029140359397765367,
+              "ratios": [
+                0.9985681954644128,
+                1.0014823049842505
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                32836.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                30996.0,
+                32836.0
+              ],
+              "candidate_relative_range": 0.057651334753728536,
+              "paired_ratio_relative_range": 0.057651334753728495,
+              "ratios": [
+                0.9439639420148618,
+                1.0
+              ]
+            }
+          }
+        },
+        "term_storage": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                879860.0,
+                879860.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                879860.0,
+                879860.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                41965760.0,
+                41965760.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                41965760.0,
+                41965760.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                274376.0,
+                274376.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                274376.0,
+                274376.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                1989012.0,
+                1989012.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1989012.0,
+                1989012.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                259276.0,
+                259276.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                259276.0,
+                259276.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        }
+      },
+      "decision": "keep_default_off",
+      "gates": {
+        "benefit": false,
+        "correctness": true,
+        "enough_reach": false,
+        "material_regression": false
+      },
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 1.0,
+        "checks": 2,
+        "combined_cpu_seconds": 0.23624,
+        "combined_cpu_seconds_per_call": 0.11812,
+        "combined_fraction_of_reached_cpu": 0.011812962756464651,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 0.091285,
+        "input_clauses": 0,
+        "limited_or_unknown": 0,
+        "missing_telemetry_resourceouts": [
+          {
+            "problem_id": "KLE147-10",
+            "repetition": 1,
+            "status": "ResourceOut"
+          }
+        ],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 2,
+        "reached_problems": [
+          "MSC024-1"
+        ],
+        "satisfiable": 2,
+        "solver_cpu_seconds": 0.144955,
+        "telemetry_coordinates": 47,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_audit": {
+        "exact_matches": 48,
+        "exact_mismatches": [],
+        "paired_coordinates": 48,
+        "polarity_disagreements": []
+      }
+    },
+    "step5000": {
+      "baseline_only": [],
+      "candidate": "step5000",
+      "candidate_only": [],
+      "common_reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "common_solve_metrics": {
+        "cpu": {
+          "maximum_candidate_over_baseline": 1.0332872257366457,
+          "median_candidate_over_baseline": 1.0015143259938695,
+          "noise": {
+            "baseline_max_relative_range": 0.042379883543150795,
+            "baseline_median_relative_range": 0.035099629338153894,
+            "candidate_max_relative_range": 0.016479404858781067,
+            "candidate_median_relative_range": 0.010188341061997822,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.05294292466327228,
+            "paired_ratio_median_relative_range": 0.024913515588016157,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                0.729788,
+                0.703139
+              ],
+              "baseline_relative_range": 0.037195195568232066,
+              "candidate": [
+                0.723719,
+                0.724986
+              ],
+              "candidate_relative_range": 0.0017491483773439287,
+              "paired_ratio_relative_range": 0.03894371052694234,
+              "ratios": [
+                0.991683886279303,
+                1.0310706702373216
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                2.632515,
+                2.546138
+              ],
+              "baseline_relative_range": 0.03335886764376765,
+              "candidate": [
+                2.572756,
+                2.530705
+              ],
+              "candidate_relative_range": 0.016479404858781067,
+              "paired_ratio_relative_range": 0.016881782908703083,
+              "ratios": [
+                0.9772996545128897,
+                0.9939386631832211
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                0.078481,
+                0.075224
+              ],
+              "baseline_relative_range": 0.042379883543150795,
+              "candidate": [
+                0.074258,
+                0.075047
+              ],
+              "candidate_relative_range": 0.01056896955895647,
+              "paired_ratio_relative_range": 0.05294292466327228,
+              "ratios": [
+                0.9461907977727094,
+                0.9976470275444008
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                0.842372,
+                0.813315
+              ],
+              "baseline_relative_range": 0.035099629338153894,
+              "candidate": [
+                0.848994,
+                0.840388
+              ],
+              "candidate_relative_range": 0.010188341061997822,
+              "paired_ratio_relative_range": 0.024913515588016157,
+              "ratios": [
+                1.0078611349854933,
+                1.0332872257366457
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                0.222981,
+                0.222562
+              ],
+              "baseline_relative_range": 0.0018808510065246348,
+              "candidate": [
+                0.224181,
+                0.225745
+              ],
+              "candidate_relative_range": 0.006952254370718784,
+              "paired_ratio_relative_range": 0.008833076501574813,
+              "ratios": [
+                1.0053816244433382,
+                1.0143016328034435
+              ]
+            }
+          }
+        },
+        "generated": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                61258.0,
+                61258.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                61258.0,
+                61258.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                311126.0,
+                311126.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                311126.0,
+                311126.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1201.0,
+                1201.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1201.0,
+                1201.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                66849.0,
+                66849.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                66849.0,
+                66849.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                20969.0,
+                20969.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                20969.0,
+                20969.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "high_water": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                60879.0,
+                60879.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                60879.0,
+                60879.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                126466.0,
+                126466.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                126466.0,
+                126466.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                1297.0,
+                1297.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1297.0,
+                1297.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                63451.0,
+                63451.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                63451.0,
+                63451.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                18830.0,
+                18830.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                18830.0,
+                18830.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "processed": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                1008.0,
+                1008.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1008.0,
+                1008.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                5726.0,
+                5726.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                5726.0,
+                5726.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                470.0,
+                470.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                470.0,
+                470.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                3161.0,
+                3161.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                3161.0,
+                3161.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                1852.0,
+                1852.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1852.0,
+                1852.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "rss": {
+          "maximum_candidate_over_baseline": 1.0151053721525156,
+          "median_candidate_over_baseline": 0.9994484755100148,
+          "noise": {
+            "baseline_max_relative_range": 0.014992141216297909,
+            "baseline_median_relative_range": 0.0017685483640927633,
+            "candidate_max_relative_range": 0.18384328113739107,
+            "candidate_median_relative_range": 0.0018290940268648186,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.1986985089259319,
+            "paired_ratio_median_relative_range": 0.004346861704442841,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                70176.0,
+                70052.0
+              ],
+              "baseline_relative_range": 0.0017685483640927633,
+              "candidate": [
+                70044.0,
+                69916.0
+              ],
+              "candidate_relative_range": 0.0018290940268648186,
+              "paired_ratio_relative_range": 6.054571173596453e-05,
+              "ratios": [
+                0.9981190150478796,
+                0.9980585850511049
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                232020.0,
+                232148.0
+              ],
+              "baseline_relative_range": 0.0005515244480446735,
+              "candidate": [
+                231892.0,
+                232020.0
+              ],
+              "candidate_relative_range": 0.0005518287951163152,
+              "paired_ratio_relative_range": 3.0434709478344967e-07,
+              "ratios": [
+                0.9994483234203948,
+                0.9994486275996347
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                33332.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.014992141216297909,
+              "candidate": [
+                27720.0,
+                33332.0
+              ],
+              "candidate_relative_range": 0.18384328113739107,
+              "paired_ratio_relative_range": 0.1986985089259319,
+              "ratios": [
+                0.8316332653306132,
+                1.0151053721525156
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                86604.0,
+                86352.0
+              ],
+              "baseline_relative_range": 0.0029140359397765905,
+              "candidate": [
+                86480.0,
+                86604.0
+              ],
+              "candidate_relative_range": 0.0014328303020498718,
+              "paired_ratio_relative_range": 0.004346861704442841,
+              "ratios": [
+                0.9985681954644128,
+                1.0029182879377432
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                32836.0,
+                32836.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                32836.0,
+                33332.0
+              ],
+              "candidate_relative_range": 0.014992141216297909,
+              "paired_ratio_relative_range": 0.014992141216297992,
+              "ratios": [
+                1.0,
+                1.0151053721525156
+              ]
+            }
+          }
+        },
+        "term_storage": {
+          "maximum_candidate_over_baseline": 1.0,
+          "median_candidate_over_baseline": 1.0,
+          "noise": {
+            "baseline_max_relative_range": 0.0,
+            "baseline_median_relative_range": 0.0,
+            "candidate_max_relative_range": 0.0,
+            "candidate_median_relative_range": 0.0,
+            "method": "within-problem two-repetition relative range",
+            "paired_ratio_max_relative_range": 0.0,
+            "paired_ratio_median_relative_range": 0.0,
+            "problem_count": 5
+          },
+          "paired_coordinates": 10,
+          "per_problem": {
+            "COM125+1": {
+              "baseline": [
+                879860.0,
+                879860.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                879860.0,
+                879860.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "KLE145-10": {
+              "baseline": [
+                41965760.0,
+                41965760.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                41965760.0,
+                41965760.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "MGT067+1": {
+              "baseline": [
+                274376.0,
+                274376.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                274376.0,
+                274376.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET090+1": {
+              "baseline": [
+                1989012.0,
+                1989012.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                1989012.0,
+                1989012.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            },
+            "SET637+3": {
+              "baseline": [
+                259276.0,
+                259276.0
+              ],
+              "baseline_relative_range": 0.0,
+              "candidate": [
+                259276.0,
+                259276.0
+              ],
+              "candidate_relative_range": 0.0,
+              "paired_ratio_relative_range": 0.0,
+              "ratios": [
+                1.0,
+                1.0
+              ]
+            }
+          }
+        }
+      },
+      "decision": "keep_default_off",
+      "gates": {
+        "benefit": false,
+        "correctness": true,
+        "enough_reach": true,
+        "material_regression": false
+      },
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 1.25,
+        "checks": 10,
+        "combined_cpu_seconds": 0.368455,
+        "combined_cpu_seconds_per_call": 0.036845499999999996,
+        "combined_fraction_of_reached_cpu": 0.004606119266104706,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 0.148791,
+        "input_clauses": 0,
+        "limited_or_unknown": 0,
+        "missing_telemetry_resourceouts": [],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 8,
+        "reached_problems": [
+          "MSC015-1.022",
+          "MSC015-1.025",
+          "MSC015-1.030",
+          "MSC024-1"
+        ],
+        "satisfiable": 10,
+        "solver_cpu_seconds": 0.219664,
+        "telemetry_coordinates": 48,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_audit": {
+        "exact_matches": 48,
+        "exact_mismatches": [],
+        "paired_coordinates": 48,
+        "polarity_disagreements": []
+      }
+    }
+  },
+  "incremental_reuse": {
+    "capture_groups": 46,
+    "consecutive_pairs": 126,
+    "identical_pairs": 38,
+    "interpretation": {
+      "actual_runtime_cross_call_reuse": 0,
+      "limitation": "local atom renumbering can hide logically unchanged clauses; overlap is a conservative syntactic reuse estimate",
+      "metric": "multiset overlap of normalized exact integer clauses in consecutive captured sessions"
+    },
+    "monotonic_add_only_pairs": 41,
+    "retained_from_previous": {
+      "count": 126,
+      "maximum": 1.0,
+      "median": 0.6818181818181818,
+      "minimum": 0.0,
+      "p95": 1.0
+    },
+    "reusable_in_current": {
+      "count": 126,
+      "maximum": 1.0,
+      "median": 0.6813084344539486,
+      "minimum": 0.0,
+      "p95": 1.0
+    },
+    "sessions": 178,
+    "source_archive_sha256": "85356e073a26234f51e07898019d0a9a7685066eff21dd9350d621ede3158375"
+  },
+  "kind": "umlaut-ground-sat-trigger-analysis",
+  "overall_decision": "leave_default_off",
+  "proof_reconstruction": {
+    "heldout_satcheck_refutation_coordinates": 0,
+    "independent_validation": "pass",
+    "targeted_witness": {
+      "cadical_result": "unsatisfiable",
+      "core_parents": [
+        "c_0_7",
+        "c_0_8",
+        "c_0_9",
+        "c_0_10"
+      ],
+      "core_size": 4,
+      "proof_sha256": "53a7a1c320e7ca5ed7888648e6c936b7c38909b40950f247407a647a7f1c40b9",
+      "proofcheck_verdict": "verified",
+      "report_id": "ca881498a41c926f779853e884d992363ccc9887b5f7ddcbacc2f0f22553ad81"
+    },
+    "terminal_core_sizes": {
+      "off": [],
+      "size10000": [],
+      "step10000": [],
+      "step5000": []
+    }
+  },
+  "schema_version": 1,
+  "source": {
+    "binary_sha256": "5d5e63ec77531e432823974f7fbf41e3f5205adfaa5cd707fbf28c2fc7cbb8c9",
+    "contract_id": "c440e4c93bc73ec51f79a61a7817eacf610b40c51547648107bd523caa286bfa",
+    "proof_validation_sha256": "6756d1be01b14301da6b256c48e0265cbaef9d2306f6a5229ad315b2fe696ebf",
+    "result_count": 192,
+    "reuse_analysis_sha256": "157ef843bd984cb05e7cf111454a4ad4a3eebd965696dfdeebedba9eb36b93cf",
+    "run_root": "C:\\Code\\E_Rust_Port\\.artifacts\\experiments\\2026-07-29-017-ground-sat-trigger-evaluation\\raw\\ground-sat-results"
+  },
+  "strategies": {
+    "off": {
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": null,
+        "checks": 0,
+        "combined_cpu_seconds": 0.0,
+        "combined_cpu_seconds_per_call": null,
+        "combined_fraction_of_reached_cpu": null,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 0.0,
+        "input_clauses": 0,
+        "limited_or_unknown": 0,
+        "missing_telemetry_resourceouts": [],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 0,
+        "reached_problems": [],
+        "satisfiable": 0,
+        "solver_cpu_seconds": 0.0,
+        "telemetry_coordinates": 48,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_counts": {
+        "ResourceOut": 38,
+        "Theorem": 8,
+        "Unsatisfiable": 2
+      }
+    },
+    "size10000": {
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 17.263157894736842,
+        "checks": 656,
+        "combined_cpu_seconds": 176.566516,
+        "combined_cpu_seconds_per_call": 0.2691562743902439,
+        "combined_fraction_of_reached_cpu": 0.5581874229163666,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 144.359624,
+        "input_clauses": 0,
+        "limited_or_unknown": 6,
+        "missing_telemetry_resourceouts": [
+          {
+            "problem_id": "MGT054+1",
+            "repetition": 1,
+            "status": "ResourceOut"
+          },
+          {
+            "problem_id": "MGT054+1",
+            "repetition": 2,
+            "status": "ResourceOut"
+          }
+        ],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 38,
+        "reached_problems": [
+          "COL002-10",
+          "COL002-5",
+          "COL042-10",
+          "COL043-3",
+          "COM125+1",
+          "COM133+1",
+          "COM142+1",
+          "COM149+1",
+          "KLE084-10",
+          "KLE145-10",
+          "KLE147-10",
+          "KLE152-10",
+          "MGT039+2",
+          "MGT061+1",
+          "MSC024-1",
+          "SET090+1",
+          "SET144+3",
+          "SET637+3",
+          "SET649+3"
+        ],
+        "satisfiable": 650,
+        "solver_cpu_seconds": 32.206892,
+        "telemetry_coordinates": 46,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_counts": {
+        "ResourceOut": 38,
+        "Theorem": 8,
+        "Unsatisfiable": 2
+      }
+    },
+    "step10000": {
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 1.0,
+        "checks": 2,
+        "combined_cpu_seconds": 0.23624,
+        "combined_cpu_seconds_per_call": 0.11812,
+        "combined_fraction_of_reached_cpu": 0.011812962756464651,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 0.091285,
+        "input_clauses": 0,
+        "limited_or_unknown": 0,
+        "missing_telemetry_resourceouts": [
+          {
+            "problem_id": "KLE147-10",
+            "repetition": 1,
+            "status": "ResourceOut"
+          }
+        ],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 2,
+        "reached_problems": [
+          "MSC024-1"
+        ],
+        "satisfiable": 2,
+        "solver_cpu_seconds": 0.144955,
+        "telemetry_coordinates": 47,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_counts": {
+        "ResourceOut": 38,
+        "Theorem": 8,
+        "Unsatisfiable": 2
+      }
+    },
+    "step5000": {
+      "reproducible_solves": [
+        "COM125+1",
+        "KLE145-10",
+        "MGT067+1",
+        "SET090+1",
+        "SET637+3"
+      ],
+      "sat": {
+        "calls_per_reached_coordinate": 1.25,
+        "checks": 10,
+        "combined_cpu_seconds": 0.368455,
+        "combined_cpu_seconds_per_call": 0.036845499999999996,
+        "combined_fraction_of_reached_cpu": 0.004606119266104706,
+        "coordinates": 48,
+        "encoding_cpu_seconds": 0.148791,
+        "input_clauses": 0,
+        "limited_or_unknown": 0,
+        "missing_telemetry_resourceouts": [],
+        "post_purity_clauses": 0,
+        "preprocessing_cpu_seconds": 0.0,
+        "reached_coordinates": 8,
+        "reached_problems": [
+          "MSC015-1.022",
+          "MSC015-1.025",
+          "MSC015-1.030",
+          "MSC024-1"
+        ],
+        "satisfiable": 10,
+        "solver_cpu_seconds": 0.219664,
+        "telemetry_coordinates": 48,
+        "terminal_core_size_median": null,
+        "terminal_core_sizes": [],
+        "unsat_core_clauses": 0,
+        "unsatisfiable": 0
+      },
+      "status_counts": {
+        "ResourceOut": 38,
+        "Theorem": 8,
+        "Unsatisfiable": 2
+      }
+    }
+  }
+}

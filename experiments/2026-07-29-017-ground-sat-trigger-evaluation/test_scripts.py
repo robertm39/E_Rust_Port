@@ -30,6 +30,7 @@ SELECT = load("ground_sat_select_test", "select_corpus.py")
 PACK = load("ground_sat_pack_test", "pack_corpus.py")
 RUN = load("ground_sat_run_test", "run.py")
 REUSE = load("ground_sat_reuse_test", "analyze_reuse.py")
+ANALYZE = load("ground_sat_analyze_test", "analyze.py")
 
 
 class SelectionTests(unittest.TestCase):
@@ -147,6 +148,38 @@ class ReuseTests(unittest.TestCase):
 
     def test_percentile_interpolates(self) -> None:
         self.assertEqual(REUSE.percentile([0.0, 1.0], 0.5), 0.5)
+
+
+class AnalysisTests(unittest.TestCase):
+    def test_clean_hard_resourceout_is_counted_without_telemetry(self) -> None:
+        summary = ANALYZE.sat_summary(
+            [
+                {
+                    "problem_id": "EXAMPLE",
+                    "repetition": 1,
+                    "szs_status": "ResourceOut",
+                    "_telemetry": None,
+                }
+            ]
+        )
+        self.assertEqual(summary["coordinates"], 1)
+        self.assertEqual(summary["telemetry_coordinates"], 0)
+        self.assertEqual(summary["checks"], 0)
+        self.assertEqual(
+            summary["missing_telemetry_resourceouts"],
+            [
+                {
+                    "problem_id": "EXAMPLE",
+                    "repetition": 1,
+                    "status": "ResourceOut",
+                }
+            ],
+        )
+
+    def test_status_polarity_distinguishes_proofs_and_models(self) -> None:
+        self.assertEqual(ANALYZE.polarity("Theorem"), "proof")
+        self.assertEqual(ANALYZE.polarity("Satisfiable"), "model")
+        self.assertEqual(ANALYZE.polarity("ResourceOut"), "other")
 
 
 if __name__ == "__main__":
