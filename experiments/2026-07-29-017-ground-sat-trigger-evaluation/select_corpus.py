@@ -71,7 +71,11 @@ def select(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     excluded, prior_hashes = excluded_families(repo_root)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in read_jsonl(manifest_path):
+    manifest_records = read_jsonl(manifest_path)
+    source_header = manifest_records[0]
+    if source_header.get("record_type") != "manifest":
+        raise ValueError("source manifest must start with a manifest record")
+    for record in manifest_records[1:]:
         if record.get("record_type") != "problem":
             continue
         if (
@@ -124,7 +128,7 @@ def select(
             selected.append(record)
 
     header = {
-        "record_type": "manifest",
+        **source_header,
         "schema_version": 1,
         "kind": "umlaut-ground-sat-trigger-corpus",
         "selection_salt": SELECTION_SALT,
@@ -145,6 +149,7 @@ def select(
         "source_manifest_sha256": sha256_file(manifest_path),
         "prior_selection_sha256": prior_hashes,
         "problem_count": len(selected),
+        "family_count": len(chosen_families),
     }
     return header, selected
 
