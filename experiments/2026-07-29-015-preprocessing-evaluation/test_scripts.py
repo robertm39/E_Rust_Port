@@ -255,6 +255,37 @@ class VerificationTests(unittest.TestCase):
 
         self.assertEqual(len(claims), 12)
 
+    def test_candidate_validity_accepts_any_verified_active_witness(
+        self,
+    ) -> None:
+        cases = [
+            {
+                "phase": "casc",
+                "strategy": "bce",
+                "problem_id": "heldout-proof",
+                "transformation_active": True,
+                "gate_returncode": 0,
+                "gate_verdict": "verified",
+            },
+            {
+                "phase": "differential",
+                "strategy": "bce",
+                "problem_id": "bce-proof",
+                "transformation_active": True,
+                "gate_returncode": 2,
+                "gate_verdict": "coverage_gap",
+            },
+        ]
+
+        validity = VERIFY.candidate_validity(cases)
+
+        self.assertTrue(validity["bce"])
+        self.assertFalse(validity["predicate"])
+        self.assertFalse(validity["goal_defs"])
+        self.assertNotEqual(
+            cases[1]["gate_verdict"], "verified"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,11 +23,7 @@ PRIOR_VERIFY_PATH = (
 )
 PROOF_STATUSES = {"Theorem", "Unsatisfiable", "ContradictoryAxioms"}
 PHASE_BUDGETS = {"casc": "heldout", "differential": "differential"}
-DIFFERENTIAL_WITNESSES = {
-    "bce": "bce-proof",
-    "predicate": "predicate-elimination-proof",
-    "goal_defs": "goal-definitions-proof",
-}
+GATE_VERDICTS = {"verified", "coverage_gap", "rejected"}
 
 
 def load_module(name: str, path: Path) -> ModuleType:
@@ -46,6 +42,21 @@ PRIOR = load_module("preprocessing_prior_verify", PRIOR_VERIFY_PATH)
 
 class VerificationError(RuntimeError):
     """A proof-selection or merged-report contract failure."""
+
+
+def candidate_validity(
+    cases: Sequence[dict[str, Any]],
+) -> dict[str, bool]:
+    return {
+        candidate: any(
+            case["strategy"] == candidate
+            and case["transformation_active"]
+            and case["gate_returncode"] == 0
+            and case["gate_verdict"] == "verified"
+            for case in cases
+        )
+        for candidate in ANALYZE.CANDIDATES
+    }
 
 
 def representative_claims(
@@ -216,17 +227,25 @@ def verify(
     ):
         raise VerificationError("phase ProofCheck metadata differs")
 
-    candidate_validity = {}
-    for candidate, problem_id in DIFFERENTIAL_WITNESSES.items():
-        candidate_validity[candidate] = any(
-            case["phase"] == "differential"
-            and case["strategy"] == candidate
-            and case["problem_id"] == problem_id
-            and case["transformation_active"]
-            and case["gate_returncode"] == 0
-            and case["gate_verdict"] == "verified"
+    candidate_validity_report = candidate_validity(cases)
+    unexpected_verdicts = sorted(
+        {
+            case["gate_verdict"]
             for case in cases
-        )
+            if case["gate_verdict"] not in GATE_VERDICTS
+        }
+    )
+    coverage_gap_cases = sum(
+        case["gate_verdict"] == "coverage_gap" for case in cases
+    )
+    rejected_cases = sum(
+        case["gate_verdict"] == "rejected" for case in cases
+    )
+    verification_gate_passed = (
+        not unexpected_verdicts
+        and rejected_cases == 0
+        and all(candidate_validity_report.values())
+    )
     body = {
         "schema_version": 1,
         "contracts": {
@@ -242,8 +261,12 @@ def verify(
         ],
         "expected_cases": expected_cases,
         "verified_cases": verified_cases,
+        "coverage_gap_cases": coverage_gap_cases,
+        "rejected_cases": rejected_cases,
+        "unexpected_verdicts": unexpected_verdicts,
         "all_verified": verified_cases == expected_cases,
-        "candidate_validity": candidate_validity,
+        "verification_gate_passed": verification_gate_passed,
+        "candidate_validity": candidate_validity_report,
         "cases": cases,
     }
     return {
@@ -294,14 +317,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(
         f"OK: {report['verified_cases']}/{report['expected_cases']} "
-        f"proof claims verified; report {report['report_id']}"
+        f"proof claims verified; {report['coverage_gap_cases']} coverage "
+        f"gaps; {report['rejected_cases']} rejected; "
+        f"report {report['report_id']}"
     )
-    return (
-        0
-        if report["all_verified"]
-        and all(report["candidate_validity"].values())
-        else 1
-    )
+    return 0 if report["verification_gate_passed"] else 1
 
 
 if __name__ == "__main__":

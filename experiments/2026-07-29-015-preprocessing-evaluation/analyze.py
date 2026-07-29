@@ -386,10 +386,30 @@ def load_proof_validation(
     expected_binary = contracts["casc"]["binary_sha256"]
     if report.get("binary_sha256") != expected_binary:
         raise AnalysisError("proof validation names another binary")
-    if report.get("verified_cases") != report.get("expected_cases"):
-        raise AnalysisError("proof validation is incomplete")
-    if not report.get("all_verified"):
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        raise AnalysisError("proof validation has no case list")
+    if report.get("expected_cases") != len(cases):
+        raise AnalysisError("proof validation case count is inconsistent")
+    verdict_counts = {
+        verdict: sum(
+            case.get("gate_verdict") == verdict for case in cases
+        )
+        for verdict in ("verified", "coverage_gap", "rejected")
+    }
+    if report.get("verified_cases") != verdict_counts["verified"]:
+        raise AnalysisError("proof validation verified count is inconsistent")
+    if (
+        report.get("coverage_gap_cases")
+        != verdict_counts["coverage_gap"]
+    ):
+        raise AnalysisError("proof validation gap count is inconsistent")
+    if report.get("rejected_cases") != verdict_counts["rejected"]:
+        raise AnalysisError("proof validation rejection count is inconsistent")
+    if verdict_counts["rejected"] != 0:
         raise AnalysisError("proof validation rejected a claim")
+    if not report.get("verification_gate_passed"):
+        raise AnalysisError("proof validation gate did not pass")
     validity = report.get("candidate_validity")
     if not isinstance(validity, dict) or any(
         validity.get(candidate) is not True
@@ -530,7 +550,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
         (
             "- Independent proof claims: "
             f"{summary['proof_validation']['verified_cases']}/"
-            f"{summary['proof_validation']['expected_cases']} verified"
+            f"{summary['proof_validation']['expected_cases']} verified; "
+            f"{summary['proof_validation']['coverage_gap_cases']} "
+            "coverage gaps; "
+            f"{summary['proof_validation']['rejected_cases']} rejected"
             if summary["proof_validation"] is not None
             else "- Independent proof claims: pending"
         ),
