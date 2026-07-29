@@ -206,6 +206,13 @@ pub enum EProverOption {
     DeterministicRewriteSort,
     DeterministicNewSort,
     SearchTelemetry,
+    FiniteModelSearch,
+    FiniteModelMaxSize,
+    FiniteModelMaxVectors,
+    FiniteModelMaxGroundInstances,
+    FiniteModelMaxClauses,
+    FiniteModelMaxVariables,
+    FiniteModelSatTimeout,
 }
 
 pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
@@ -1889,6 +1896,62 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         None,
         "Write one stable JSON search-telemetry record to the named file. This Umlaut extension is disabled by default.",
     ),
+    OptCell::new(
+        EProverOption::FiniteModelSearch,
+        None,
+        Some("finite-model-search"),
+        OptArgType::NoArg,
+        None,
+        "Run the nondefault bounded typed finite-model worker. Requires a build with the cadical-static feature.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelMaxSize,
+        None,
+        Some("finite-model-max-size"),
+        OptArgType::ReqArg,
+        None,
+        "Set the maximum cardinality of each finite-model sort.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelMaxVectors,
+        None,
+        Some("finite-model-max-vectors"),
+        OptArgType::ReqArg,
+        None,
+        "Set the maximum number of finite-domain size vectors.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelMaxGroundInstances,
+        None,
+        Some("finite-model-max-ground-instances"),
+        OptArgType::ReqArg,
+        None,
+        "Set the finite-model ground-instance limit.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelMaxClauses,
+        None,
+        Some("finite-model-max-clauses"),
+        OptArgType::ReqArg,
+        None,
+        "Set the finite-model propositional-clause limit.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelMaxVariables,
+        None,
+        Some("finite-model-max-variables"),
+        OptArgType::ReqArg,
+        None,
+        "Set the finite-model propositional-variable limit.",
+    ),
+    OptCell::new(
+        EProverOption::FiniteModelSatTimeout,
+        None,
+        Some("finite-model-sat-timeout"),
+        OptArgType::ReqArg,
+        None,
+        "Set the per-domain-vector SAT timeout in seconds.",
+    ),
 ];
 
 #[cfg(test)]
@@ -1898,11 +1961,25 @@ mod tests {
 
     const C_E_OPTIONS_H: &str = include_str!("../../tests/fixtures/eprover-17026b1/e_options.h");
 
+    const fn is_umlaut_extension(option: EProverOption) -> bool {
+        matches!(
+            option,
+            EProverOption::SearchTelemetry
+                | EProverOption::FiniteModelSearch
+                | EProverOption::FiniteModelMaxSize
+                | EProverOption::FiniteModelMaxVectors
+                | EProverOption::FiniteModelMaxGroundInstances
+                | EProverOption::FiniteModelMaxClauses
+                | EProverOption::FiniteModelMaxVariables
+                | EProverOption::FiniteModelSatTimeout
+        )
+    }
+
     #[test]
     fn rust_option_table_matches_c_long_option_surface() {
         let rust_long_options = EPROVER_OPTIONS
             .iter()
-            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
+            .filter(|option| !is_umlaut_extension(option.option_code))
             .filter_map(|option| option.longopt)
             .collect::<Vec<_>>();
         let c_long_options = c_long_options();
@@ -1916,7 +1993,7 @@ mod tests {
     fn rust_option_table_matches_c_short_option_surface() {
         let rust_short_options = EPROVER_OPTIONS
             .iter()
-            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
+            .filter(|option| !is_umlaut_extension(option.option_code))
             .filter_map(|option| option.shortopt)
             .collect::<Vec<_>>();
         let c_short_options = c_short_options();
@@ -1938,7 +2015,7 @@ mod tests {
     fn rust_option_table_matches_c_help_prose() {
         let rust_help = EPROVER_OPTIONS
             .iter()
-            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
+            .filter(|option| !is_umlaut_extension(option.option_code))
             .map(|option| (option.longopt, option.desc.to_owned()))
             .collect::<Vec<_>>();
         let c_help = c_help_surface();
@@ -1974,14 +2051,20 @@ mod tests {
     }
 
     #[test]
-    fn umlaut_only_search_telemetry_extension_is_an_explicit_table_tail() {
-        let extension = EPROVER_OPTIONS
-            .last()
-            .expect("option table must not be empty");
-        assert_eq!(extension.option_code, EProverOption::SearchTelemetry);
-        assert_eq!(extension.shortopt, None);
-        assert_eq!(extension.longopt, Some("search-telemetry"));
-        assert_eq!(extension.arg_type, OptArgType::ReqArg);
+    fn umlaut_only_extensions_are_an_explicit_table_tail() {
+        let extensions = EPROVER_OPTIONS
+            .iter()
+            .rev()
+            .take_while(|option| is_umlaut_extension(option.option_code))
+            .collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 8);
+        assert!(extensions.iter().all(|option| option.shortopt.is_none()));
+        let telemetry = extensions
+            .iter()
+            .find(|option| option.option_code == EProverOption::SearchTelemetry)
+            .expect("search telemetry extension must remain present");
+        assert_eq!(telemetry.longopt, Some("search-telemetry"));
+        assert_eq!(telemetry.arg_type, OptArgType::ReqArg);
     }
 
     fn assert_has_no_duplicates<T>(table_name: &str, options: &[T])
@@ -2022,7 +2105,7 @@ mod tests {
     fn rust_argument_surface() -> Vec<ArgumentSurface> {
         EPROVER_OPTIONS
             .iter()
-            .filter(|option| option.option_code != EProverOption::SearchTelemetry)
+            .filter(|option| !is_umlaut_extension(option.option_code))
             .map(|option| ArgumentSurface {
                 short_option: option.shortopt,
                 long_option: option.longopt,

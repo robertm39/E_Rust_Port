@@ -19,6 +19,7 @@ pub mod epclanalyse;
 pub mod epclextract;
 pub mod epcllemma;
 pub mod eprover;
+pub(crate) mod fnt;
 pub mod options;
 pub(crate) mod search_telemetry;
 pub mod termprops;

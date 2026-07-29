@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{c_io_error_message, check_option_letter_string, Diagnostic, ErrorCode};
@@ -157,6 +158,7 @@ use crate::inout::signals::{
 use crate::inout::signals::{finalize_cpu_limit_outcome, silent_time_out};
 use crate::inout::tempfile::{temp_file_create, temp_file_remove};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
+use crate::prover::fnt::{FiniteModelConfig, FiniteModelOutcome};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::search_telemetry::{
     render_search_telemetry, SearchTelemetryCounterSnapshot, SearchTelemetryRecord,
@@ -1397,6 +1399,7 @@ pub struct EProverConfig {
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub search_telemetry_file: Option<PathBuf>,
+    pub finite_model: FiniteModelConfig,
     pub output_level: i64,
     pub verbose: i64,
     pub proof_object_level: i64,
@@ -1519,6 +1522,7 @@ impl Default for EProverConfig {
             files: Vec::new(),
             output_file: None,
             search_telemetry_file: None,
+            finite_model: FiniteModelConfig::default(),
             output_level: 1,
             verbose: 0,
             proof_object_level: 0,
@@ -3778,6 +3782,8 @@ fn apply_parsed_option(
         apply_schedule_option(config, parsed)?;
     } else if is_preprocessing_option(option_code) {
         apply_preprocessing_option(config, parsed)?;
+    } else if is_finite_model_option(option_code) {
+        apply_finite_model_option(config, parsed)?;
     } else if is_term_ordering_option(option_code) {
         apply_term_ordering_option(config, parsed)?;
     } else if is_search_control_option(option_code) {
@@ -3913,6 +3919,66 @@ const fn is_preprocessing_option(option: EProverOption) -> bool {
             | EProverOption::AcHandling
             | EProverOption::AcNonAggressive
     )
+}
+
+const fn is_finite_model_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::FiniteModelSearch
+            | EProverOption::FiniteModelMaxSize
+            | EProverOption::FiniteModelMaxVectors
+            | EProverOption::FiniteModelMaxGroundInstances
+            | EProverOption::FiniteModelMaxClauses
+            | EProverOption::FiniteModelMaxVariables
+            | EProverOption::FiniteModelSatTimeout
+    )
+}
+
+fn apply_finite_model_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let positive_usize = || {
+        let value =
+            get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 1, i64::MAX)?;
+        usize::try_from(value).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "finite-model limit cannot be represented on this platform",
+            )
+        })
+    };
+    match parsed.option().option_code {
+        EProverOption::FiniteModelSearch => config.finite_model.enabled = true,
+        EProverOption::FiniteModelMaxSize => {
+            config.finite_model.maximum_size = positive_usize()?;
+        }
+        EProverOption::FiniteModelMaxVectors => {
+            config.finite_model.maximum_vectors = positive_usize()?;
+        }
+        EProverOption::FiniteModelMaxGroundInstances => {
+            config.finite_model.maximum_ground_instances = positive_usize()?;
+        }
+        EProverOption::FiniteModelMaxClauses => {
+            config.finite_model.maximum_clauses = positive_usize()?;
+        }
+        EProverOption::FiniteModelMaxVariables => {
+            config.finite_model.maximum_variables = positive_usize()?;
+        }
+        EProverOption::FiniteModelSatTimeout => {
+            let seconds =
+                get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 1, i64::MAX)?;
+            config.finite_model.sat_timeout =
+                Duration::from_secs(u64::try_from(seconds).map_err(|_| {
+                    Diagnostic::new(
+                        ErrorCode::USAGE_ERROR,
+                        "finite-model SAT timeout cannot be represented",
+                    )
+                })?);
+        }
+        _ => unreachable!("non-finite-model option routed to finite-model handler"),
+    }
+    Ok(())
 }
 
 const fn is_search_control_option(option: EProverOption) -> bool {
@@ -5566,22 +5632,40 @@ fn run_config_with_stderr(
 }
 
 fn validate_search_telemetry_mode(config: &EProverConfig) -> Result<(), Diagnostic> {
-    if config.search_telemetry_file.is_none() {
-        return Ok(());
+    if config.search_telemetry_file.is_some() {
+        let unsupported_mode = config.flags.contains(EProverFlag::SyntaxOnly)
+            || config.encoding.app_encode
+            || config.flags.contains(EProverFlag::PruneOnly)
+            || config.print_strategy.is_some()
+            || config.finite_model.enabled
+            || (config.flags.contains(EProverFlag::CnfOnly)
+                && internal_search_selection(config).is_none());
+        if unsupported_mode {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "--search-telemetry requires a saturation-search mode",
+            ));
+        }
     }
-    let unsupported_mode = config.flags.contains(EProverFlag::SyntaxOnly)
-        || config.encoding.app_encode
-        || config.flags.contains(EProverFlag::PruneOnly)
-        || config.print_strategy.is_some()
-        || (config.flags.contains(EProverFlag::CnfOnly)
-            && internal_search_selection(config).is_none());
-    if unsupported_mode {
+    if config.finite_model.enabled
+        && (config.flags.contains(EProverFlag::SyntaxOnly)
+            || config.flags.contains(EProverFlag::PruneOnly)
+            || config.flags.contains(EProverFlag::CnfOnly)
+            || config.encoding.app_encode
+            || config.strategy_scheduling
+            || config.print_strategy.is_some())
+    {
         return Err(Diagnostic::new(
             ErrorCode::USAGE_ERROR,
-            "--search-telemetry requires a saturation-search mode",
+            "--finite-model-search is a standalone non-scheduled proof-search mode",
         ));
     }
     Ok(())
+}
+
+#[cfg_attr(not(feature = "cadical-static"), allow(dead_code))]
+pub(crate) fn finite_model_stop_requested() -> bool {
+    sig_term_caught() != 0 || time_limit_expired_kind().is_some()
 }
 
 fn run_config_action<W: Write + ?Sized>(
@@ -6091,6 +6175,9 @@ fn run_proof_search<W: Write + ?Sized>(
     )?;
     let raw_clause_no = state.axioms().members();
     debug_assert!(raw_clause_no >= formula_cnf_result.clauses_generated);
+    if config.finite_model.enabled {
+        return run_finite_model_search(output, config, &state);
+    }
     if !heuristic_params.no_preproc {
         write_verbose_progress(hard_timeout_stderr, "Clausal preprocessing started.\n")?;
     }
@@ -6362,6 +6449,85 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
     }
     Ok(exit_status)
+}
+
+fn run_finite_model_search<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    #[cfg_attr(not(feature = "cadical-static"), allow(unused_variables))] config: &EProverConfig,
+    #[cfg_attr(not(feature = "cadical-static"), allow(unused_variables))] state: &ProofState,
+) -> Result<u8, EProverError> {
+    #[cfg(feature = "cadical-static")]
+    let outcome = {
+        use crate::clauses::cadical::CadicalSatService;
+
+        match CadicalSatService::new() {
+            Ok(service) => crate::prover::fnt::search_with_service(
+                state.axioms(),
+                state.terms(),
+                config.flags.contains(EProverFlag::FormulaConjectureSeen),
+                finite_model_problem_name(config).as_str(),
+                &config.finite_model,
+                service,
+            ),
+            Err(error) => FiniteModelOutcome::Error(error.to_string()),
+        }
+    };
+    #[cfg(not(feature = "cadical-static"))]
+    let outcome = FiniteModelOutcome::Inappropriate(
+        "this build does not include the optional cadical-static SAT backend".to_owned(),
+    );
+
+    match outcome {
+        FiniteModelOutcome::Model(model) => {
+            write!(output, "{model}")?;
+            Ok(ErrorCode::SATISFIABLE.exit_status())
+        }
+        FiniteModelOutcome::BoundsExhausted => {
+            writeln!(
+                output,
+                "{DEFAULT_COMCHAR_RAW} Finite-model bounds exhausted without a model."
+            )?;
+            write_tstp_status(output, "GaveUp")?;
+            Ok(ErrorCode::INCOMPLETE_PROOFSTATE.exit_status())
+        }
+        FiniteModelOutcome::ResourceOut(message) => {
+            writeln!(
+                output,
+                "{DEFAULT_COMCHAR_RAW} Finite-model resource limit: {message}"
+            )?;
+            write_tstp_status(output, "ResourceOut")?;
+            Ok(ErrorCode::RESOURCE_OUT.exit_status())
+        }
+        FiniteModelOutcome::Inappropriate(message) => {
+            writeln!(
+                output,
+                "{DEFAULT_COMCHAR_RAW} Finite-model input inappropriate: {message}"
+            )?;
+            write_tstp_status(output, "Inappropriate")?;
+            Ok(ErrorCode::INCOMPLETE_PROOFSTATE.exit_status())
+        }
+        FiniteModelOutcome::Error(message) => {
+            writeln!(
+                output,
+                "{DEFAULT_COMCHAR_RAW} Finite-model worker error: {message}"
+            )?;
+            write_tstp_status(output, "Error")?;
+            Ok(ErrorCode::OTHER_ERROR.exit_status())
+        }
+    }
+}
+
+#[cfg(feature = "cadical-static")]
+fn finite_model_problem_name(config: &EProverConfig) -> String {
+    config
+        .files
+        .first()
+        .filter(|path| path.as_str() != "-")
+        .and_then(|path| Path::new(path).file_name())
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("umlaut_problem")
+        .to_owned()
 }
 
 fn hard_time_limit_expired_in_saturation(outcome: &SaturateOutcome) -> bool {
@@ -17065,6 +17231,121 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("umlaut-{name}-{}.out", std::process::id()))
+    }
+
+    #[cfg(feature = "cadical-static")]
+    #[test]
+    fn finite_model_search_emits_a_checked_typed_function_model() {
+        let _guard = global_state_lock();
+        let input = temp_path("finite-model-typed-input");
+        std::fs::write(
+            &input,
+            "tff(s,type,s:$tType).\n\
+             tff(a,type,a:s).\n\
+             tff(b,type,b:s).\n\
+             tff(f,type,f:s>s).\n\
+             tff(p,type,p:s>$o).\n\
+             tff(distinct,axiom,a!=b).\n\
+             tff(rows,axiom,! [X:s] : (f(f(X))=X & p(f(X)))).\n",
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                "umlaut",
+                "--finite-model-search",
+                "--finite-model-max-size=2",
+                input.to_str().unwrap(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&input);
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(output.contains("% SZS status Satisfiable"));
+        assert!(output.contains("% SZS output start FiniteModel"));
+        assert_eq!(output.matches("f(umlaut_fmb_d_s_").count(), 2);
+        assert_eq!(output.matches("p(umlaut_fmb_d_s_").count(), 2);
+        assert!(output.contains("% SZS output end FiniteModel"));
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    }
+
+    #[cfg(feature = "cadical-static")]
+    #[test]
+    fn finite_model_search_reports_bounded_exhaustion_without_a_claim() {
+        let _guard = global_state_lock();
+        let input = temp_path("finite-model-infinite-only-input");
+        std::fs::write(
+            &input,
+            "cnf(misses,axiom,f(X)!=c).\n\
+             cnf(injective,axiom,f(X)!=f(Y)|X=Y).\n",
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            [
+                "umlaut",
+                "--finite-model-search",
+                "--finite-model-max-size=2",
+                input.to_str().unwrap(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&input);
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(output.contains("% SZS status GaveUp"));
+        assert!(!output.contains("SZS output start FiniteModel"));
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    }
+
+    #[cfg(feature = "cadical-static")]
+    #[test]
+    fn finite_model_search_rejects_interpreted_arithmetic() {
+        let _guard = global_state_lock();
+        let input = temp_path("finite-model-arithmetic-input");
+        std::fs::write(&input, "tff(p,type,p:$int>$o).\ntff(ax,axiom,p(1)).\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            ["umlaut", "--finite-model-search", input.to_str().unwrap()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&input);
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(output.contains("% SZS status Inappropriate"));
+        assert!(!output.contains("SZS output start FiniteModel"));
+    }
+
+    #[cfg(not(feature = "cadical-static"))]
+    #[test]
+    fn finite_model_search_fails_closed_when_package_omits_cadical() {
+        let _guard = global_state_lock();
+        let input = temp_path("finite-model-disabled-input");
+        std::fs::write(&input, "cnf(a,axiom,p(a)).\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run(
+            ["umlaut", "--finite-model-search", input.to_str().unwrap()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&input);
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(output.contains("does not include the optional cadical-static"));
+        assert!(output.contains("% SZS status Inappropriate"));
+        assert!(!output.contains("SZS output start FiniteModel"));
     }
 
     fn empty_input_stdout() -> String {

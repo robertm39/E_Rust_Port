@@ -20,6 +20,11 @@ is tracked canonically in Beads; strategic improvement research is organized
 under `E_Rust_Port-9jt`. Use `bd ready`, `bd list`, and `bd search` to inspect
 current status.
 
+The opt-in typed finite-model worker, its supported fragment, resource
+controls, telemetry, SZS outcomes, validation boundary, and package
+disablement are documented in
+[`docs/finite-model-search.md`](docs/finite-model-search.md).
+
 ## Beads And Source Control
 
 This repository explicitly opts into the Beads `team-maintainer` workflow.
