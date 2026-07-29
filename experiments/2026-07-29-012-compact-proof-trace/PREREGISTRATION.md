@@ -56,10 +56,12 @@ solution stream:
 
 1. **Eager**: the original proof bytes retained as one in-memory byte string.
 2. **Compact immutable**: a versioned binary log containing independently
-   compressed frames. Each input line is one immutable frame with its
-   uncompressed length, compressed length, and CRC-32. Reconstruction validates
-   all framing, lengths, decompression boundaries, and checksums before
-   publishing any bytes.
+   compressed frames of at most 64 KiB under normal input. Frame cuts occur
+   only at exact input-line boundaries; a single longer line occupies one
+   bounded exceptional frame. Every frame carries its uncompressed length,
+   compressed length, and CRC-32. Reconstruction validates all framing,
+   lengths, decompression boundaries, and checksums before publishing any
+   bytes.
 3. **Streamed/spooled**: the same binary frames written incrementally to a
    regular file and replayed incrementally to a temporary output file. The
    final path is atomically replaced only after the complete log validates.
@@ -68,6 +70,14 @@ The format uses only Python's standard-library `zlib`; it introduces no Umlaut
 runtime dependency and stores the original bytes rather than reparsing TPTP.
 The codec must preserve empty lines and final-newline state exactly. Identical
 input bytes must produce identical log bytes.
+
+Pre-measurement amendment: the initial preregistration assigned one frame to
+every line. A synthetic controller test, run before any prover output or
+candidate measurement was collected, showed that the per-line zlib and header
+overhead made the frozen 70% size gate structurally unreachable. The frame
+boundary above was corrected to aggregate complete lines up to 64 KiB. No
+corpus, metric, integrity check, threshold, or production decision rule
+changed.
 
 This framing intentionally evaluates the safest output-log boundary first. It
 does not claim to be a compact semantic inference arena and cannot by itself

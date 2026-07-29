@@ -11,3 +11,23 @@ profiles, timing samples, and malformed logs are retained outside Git.
 
 No prover or checker command may run locally. Controller tests may run locally
 after the harness is added; all empirical work uses the Ubuntu runner.
+
+Local controller test:
+
+```powershell
+python experiments/2026-07-29-012-compact-proof-trace/test_proof_trace.py
+```
+
+Remote experiment command:
+
+```bash
+python3 experiments/2026-07-29-012-compact-proof-trace/run_experiment.py \
+  --repo-root /opt/e-rust-port/source \
+  --artifact-root /opt/e-rust-port/compact-proof-trace/results \
+  --umlaut /opt/e-rust-port/source/target/release/umlaut \
+  --proofcheck /opt/e-rust-port/compact-proof-trace/proofcheck-linux-x86_64/proofcheck \
+  --held-out-root /opt/e-rust-port/compact-proof-trace/held-out \
+  --source-commit SOURCE_COMMIT \
+  --source-snapshot-sha256 SOURCE_SNAPSHOT_SHA256 \
+  --repetitions 25
+```
