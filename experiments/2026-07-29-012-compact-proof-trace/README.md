@@ -9,6 +9,14 @@ The frozen design and decision rules are in
 [`PREREGISTRATION.md`](PREREGISTRATION.md). Raw proofs, checker binaries,
 profiles, timing samples, and malformed logs are retained outside Git.
 
+The study is complete. The output log passed: four proofs reconstructed
+deterministically, all 12 original/replayed proof objects were independently
+`VerifiedGood`, aggregate storage was 4.34% of eager bytes, and every malformed
+or interrupted replay failed closed. Production remains unchanged because a
+post-render byte log cannot release the live derivation parents and archived
+formula/clause bodies responsible for search memory. See
+[`FINDINGS.md`](FINDINGS.md) and [`results.json`](results.json).
+
 No prover or checker command may run locally. Controller tests may run locally
 after the harness is added; all empirical work uses the Ubuntu runner.
 

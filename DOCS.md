@@ -107,6 +107,10 @@ gates remain clean.
 The compact proof-trace storage, deterministic replay, independent proof
 checking, memory, latency, and failure-recovery study is recorded in
 [`experiments/2026-07-29-012-compact-proof-trace/`](experiments/2026-07-29-012-compact-proof-trace/).
+The checksummed output log reconstructs and independently verifies sampled FOF
+and CNF proofs at 4.34% of aggregate eager bytes, but it is not integrated:
+post-render compression cannot release the live semantic derivation owners
+responsible for the measured LUSK6 search-memory pressure.
 
 ## Third-Party Licenses
 

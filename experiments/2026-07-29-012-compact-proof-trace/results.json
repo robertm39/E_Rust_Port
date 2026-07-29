@@ -1,0 +1,98 @@
+{
+  "aggregate": {
+    "compact_bytes": 38175,
+    "compact_ratio": 0.04337033207984458,
+    "eager_bytes": 880210,
+    "inferred_record_count": 170,
+    "output_log_technically_viable": true,
+    "spool_bytes": 38175
+  },
+  "cases": [
+    {
+      "compact_bytes": 676,
+      "compact_bytes_per_inferred_record": 112.66666666666667,
+      "eager_bytes": 1334,
+      "eager_bytes_per_inferred_record": 222.33333333333334,
+      "inferred_record_count": 6,
+      "name": "fof-theorem",
+      "proofcheck": [
+        "verifiedgood",
+        "verifiedgood",
+        "verifiedgood"
+      ],
+      "spool_replay_median_seconds": 0.00060225
+    },
+    {
+      "compact_bytes": 656,
+      "compact_bytes_per_inferred_record": 218.66666666666666,
+      "eager_bytes": 1386,
+      "eager_bytes_per_inferred_record": 462.0,
+      "inferred_record_count": 3,
+      "name": "cnf-unsatisfiable",
+      "proofcheck": [
+        "verifiedgood",
+        "verifiedgood",
+        "verifiedgood"
+      ],
+      "spool_replay_median_seconds": 0.000597955
+    },
+    {
+      "compact_bytes": 1971,
+      "compact_bytes_per_inferred_record": 164.25,
+      "eager_bytes": 12887,
+      "eager_bytes_per_inferred_record": 1073.9166666666667,
+      "inferred_record_count": 12,
+      "name": "held-out-col003-19",
+      "proofcheck": [
+        "verifiedgood",
+        "verifiedgood",
+        "verifiedgood"
+      ],
+      "spool_replay_median_seconds": 0.000611644
+    },
+    {
+      "compact_bytes": 34872,
+      "compact_bytes_per_inferred_record": 234.04026845637583,
+      "eager_bytes": 864603,
+      "eager_bytes_per_inferred_record": 5802.704697986577,
+      "inferred_record_count": 149,
+      "name": "held-out-syn846-1",
+      "proofcheck": [
+        "verifiedgood",
+        "verifiedgood",
+        "verifiedgood"
+      ],
+      "rss_kib": {
+        "compact_replay": 21376,
+        "compact_retain": 20096,
+        "eager_retain": 20608,
+        "no_payload": 19712,
+        "spooled_replay": 20096
+      },
+      "spool_replay_median_seconds": 0.002864495
+    }
+  ],
+  "decision": {
+    "output_log": "viable",
+    "production_integration": "rejected",
+    "production_source_changed": false
+  },
+  "evidence": {
+    "archive_bytes": 372570,
+    "archive_sha256": "469d8d1819e33057ae8b76988511bb2f032c9f7394ce117fa0942362d96be09a",
+    "report_sha256": "8e00eefd4100408aa21cee74368327fee9f49ca4b607e6235370fd251a0eddd7"
+  },
+  "proofcheck": {
+    "executable_sha256": "92bb5193a9d8b2857fb97d9bd9fb6f16f5bcb57d07e4307d7f087e403ff51c7e",
+    "self_certification_passed": 117,
+    "version": "1.0"
+  },
+  "runner": {
+    "region": "us-iad",
+    "run_id": "260729-164307-f3c0",
+    "source_commit": "970353d0014792395eb0eb48a834b0f651750e52",
+    "source_snapshot_sha256": "49efed6f0a13c9e9e68612bfc5874eebc4e94ce9a64c5ec3cb5df37b22bc3318",
+    "umlaut_sha256": "d34912867aad36a621cd83fb9ed19c774e4f184d9be3f70fd3cd91da2556aa8a"
+  },
+  "schema": "umlaut.compact-proof-trace.summary.v1"
+}
