@@ -19,6 +19,11 @@ use schedule_vars_parser::{
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/heuristics/schedule.vars");
     println!("cargo:rerun-if-changed=src/heuristics/schedule_vars_parser.rs");
+    println!("cargo:rustc-check-cfg=cfg(umlaut_rewrite_cache_ablation)");
+    println!("cargo:rerun-if-env-changed=UMLAUT_EXPERIMENT_REWRITE_CACHE_ABLATION");
+    if env::var_os("UMLAUT_EXPERIMENT_REWRITE_CACHE_ABLATION").is_some() {
+        println!("cargo:rustc-cfg=umlaut_rewrite_cache_ablation");
+    }
 
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR")

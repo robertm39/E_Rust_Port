@@ -23,7 +23,8 @@ use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_match_complete_with_bank;
 use crate::terms::replace::{
-    make_rewritten_term, term_add_rw_link, term_follow_top_rw_chain, RwResultType,
+    make_rewritten_term, term_add_rw_link, term_delete_rw_link, term_follow_top_rw_chain,
+    term_follow_top_rw_chain_with_steps, RwResultType,
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -34,7 +35,7 @@ use crate::terms::termtypes::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
 type RewriteDocCallback<'a> =
@@ -44,8 +45,28 @@ pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNBOUND_VAR_FAILS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNCACHED: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_CACHE_LINK_LOOKUPS: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_CACHE_LINK_HITS: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_CACHE_LINK_EDGES: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_CACHE_NF_DATE_CHECKS: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_CACHE_NF_DATE_HITS: AtomicU64 = AtomicU64::new(0);
 pub static BWRW_MATCH_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static BWRW_MATCH_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static REWRITE_CACHE_TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) struct RewriteCacheTelemetryGuard;
+
+impl Drop for RewriteCacheTelemetryGuard {
+    fn drop(&mut self) {
+        REWRITE_CACHE_TELEMETRY_ENABLED.store(false, Ordering::Relaxed);
+    }
+}
+
+#[must_use]
+pub(crate) fn enable_rewrite_cache_telemetry() -> RewriteCacheTelemetryGuard {
+    REWRITE_CACHE_TELEMETRY_ENABLED.store(true, Ordering::Relaxed);
+    RewriteCacheTelemetryGuard
+}
 
 #[derive(Default)]
 struct PlainRewriteTrace {
@@ -491,7 +512,7 @@ fn term_li_normalform_plain_with_date(
 ) -> Result<Term, Diagnostic> {
     debug_assert_ne!(level, RewriteLevel::NoRewrite);
 
-    let (mut current, sos_rewritten) = term_follow_top_rw_chain(term, restricted_rw);
+    let (mut current, sos_rewritten) = follow_existing_top_rewrite_link(term, restricted_rw);
     trace.sos_rewritten |= sos_rewritten;
     assert!(
         !current.is_top_rewritten() || restricted_rw,
@@ -499,7 +520,7 @@ fn term_li_normalform_plain_with_date(
     );
 
     let date_level = rewrite_date_level(level);
-    if !current.is_rewritten() && !current.nf_date(date_level).is_earlier_than(demod_date) {
+    if normal_form_date_is_current(&current, date_level, demod_date) {
         return Ok(current);
     }
     if current.is_free_var() {
@@ -526,8 +547,9 @@ fn term_li_normalform_plain_with_date(
 
         if !current.is_free_var() {
             let follow_restricted = restricted_rw && !modified;
+            clear_existing_rewrite_link_for_ablation(&current);
             let (new_term, sos_rewritten) = if current.is_top_rewritten() {
-                term_follow_top_rw_chain(&current, follow_restricted)
+                follow_existing_top_rewrite_link(&current, follow_restricted)
             } else {
                 let _ = rewrite_with_clause_set_list_plain_with_subst(
                     bank,
@@ -556,6 +578,44 @@ fn term_li_normalform_plain_with_date(
         }
     }
     Ok(current)
+}
+
+fn follow_existing_top_rewrite_link(term: &Term, restricted_rw: bool) -> (Term, bool) {
+    record_rewrite_cache_counter(&REWRITE_CACHE_LINK_LOOKUPS, 1);
+    clear_existing_rewrite_link_for_ablation(term);
+
+    let (current, sos_rewritten, followed_edges) =
+        term_follow_top_rw_chain_with_steps(term, restricted_rw);
+    if followed_edges != 0 {
+        record_rewrite_cache_counter(&REWRITE_CACHE_LINK_HITS, 1);
+        record_rewrite_cache_counter(&REWRITE_CACHE_LINK_EDGES, followed_edges);
+    }
+    (current, sos_rewritten)
+}
+
+fn normal_form_date_is_current(term: &Term, level: RewriteLevel, demod_date: SysDate) -> bool {
+    if cfg!(umlaut_rewrite_cache_ablation) || term.is_rewritten() {
+        return false;
+    }
+
+    record_rewrite_cache_counter(&REWRITE_CACHE_NF_DATE_CHECKS, 1);
+    let current = !term.nf_date(level).is_earlier_than(demod_date);
+    if current {
+        record_rewrite_cache_counter(&REWRITE_CACHE_NF_DATE_HITS, 1);
+    }
+    current
+}
+
+fn clear_existing_rewrite_link_for_ablation(term: &Term) {
+    if cfg!(umlaut_rewrite_cache_ablation) && term.is_rewritten() {
+        term_delete_rw_link(term);
+    }
+}
+
+fn record_rewrite_cache_counter(counter: &AtomicU64, increment: u64) {
+    if REWRITE_CACHE_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        counter.fetch_add(increment, Ordering::Relaxed);
+    }
 }
 
 #[expect(
@@ -1860,11 +1920,14 @@ fn map_literal_terms(
 mod tests {
     use super::{
         clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
-        clause_local_rw, clause_set_compute_li_normalform_plain, eqn_has_rw_side,
-        eqn_li_normalform_plain, find_rewritable_clauses, find_rewritable_clauses_indexed,
-        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain, term_is_top_rewritable,
-        term_li_normalform_plain, RwResultType, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES,
-        REWRITE_ATTEMPTS, REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
+        clause_local_rw, clause_set_compute_li_normalform_plain, enable_rewrite_cache_telemetry,
+        eqn_has_rw_side, eqn_li_normalform_plain, find_rewritable_clauses,
+        find_rewritable_clauses_indexed, rewrite_with_clause_set_list_plain,
+        rewrite_with_clause_set_plain, term_is_top_rewritable, term_li_normalform_plain,
+        RwResultType, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
+        REWRITE_CACHE_LINK_EDGES, REWRITE_CACHE_LINK_HITS, REWRITE_CACHE_LINK_LOOKUPS,
+        REWRITE_CACHE_NF_DATE_CHECKS, REWRITE_CACHE_NF_DATE_HITS, REWRITE_SUCCESSES,
+        REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{set_problem_type, ProblemType};
@@ -2005,6 +2068,11 @@ mod tests {
         REWRITE_ATTEMPTS.store(0, Ordering::Relaxed);
         REWRITE_SUCCESSES.store(0, Ordering::Relaxed);
         REWRITE_UNCACHED.store(0, Ordering::Relaxed);
+        REWRITE_CACHE_LINK_LOOKUPS.store(0, Ordering::Relaxed);
+        REWRITE_CACHE_LINK_HITS.store(0, Ordering::Relaxed);
+        REWRITE_CACHE_LINK_EDGES.store(0, Ordering::Relaxed);
+        REWRITE_CACHE_NF_DATE_CHECKS.store(0, Ordering::Relaxed);
+        REWRITE_CACHE_NF_DATE_HITS.store(0, Ordering::Relaxed);
         BWRW_MATCH_ATTEMPTS.store(0, Ordering::Relaxed);
         BWRW_MATCH_SUCCESSES.store(0, Ordering::Relaxed);
         REWRITE_UNBOUND_VAR_FAILS.store(0, Ordering::Relaxed);
@@ -2791,6 +2859,189 @@ mod tests {
     }
 
     #[test]
+    fn plain_li_normalform_reuses_shared_link_and_records_cache_activity() {
+        let _counter_guard = reset_backward_rewrite_counters();
+        let _telemetry_guard = enable_rewrite_cache_telemetry();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "li_cache_a");
+        let b = typed_const(&mut bank, "li_cache_b");
+        let f_x = typed_unary(&mut bank, "li_cache_f", &x);
+        let f_b = typed_unary(&mut bank, "li_cache_f", &b);
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let first = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        let second = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(first, a);
+        assert_eq!(second, a);
+        assert!(REWRITE_CACHE_LINK_LOOKUPS.load(Ordering::Relaxed) >= 2);
+        if cfg!(umlaut_rewrite_cache_ablation) {
+            assert_eq!(REWRITE_CACHE_LINK_HITS.load(Ordering::Relaxed), 0);
+            assert_eq!(REWRITE_CACHE_LINK_EDGES.load(Ordering::Relaxed), 0);
+            assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 2);
+        } else {
+            assert!(REWRITE_CACHE_LINK_HITS.load(Ordering::Relaxed) >= 1);
+            assert!(REWRITE_CACHE_LINK_EDGES.load(Ordering::Relaxed) >= 1);
+            assert_eq!(REWRITE_UNCACHED.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[test]
+    fn newer_rule_epoch_invalidates_negative_normal_form_date() {
+        let _counter_guard = reset_backward_rewrite_counters();
+        let _telemetry_guard = enable_rewrite_cache_telemetry();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "li_epoch_a");
+        let b = typed_const(&mut bank, "li_epoch_b");
+        let f_x = typed_unary(&mut bank, "li_epoch_f", &x);
+        let f_b = typed_unary(&mut bank, "li_epoch_f", &b);
+        let mut empty = ClauseSet::new();
+        empty.set_date(SysDate::from_raw(5));
+        let empty_demodulators = [&empty];
+        let mut ocb = kbo_ocb(&bank);
+
+        let before = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &empty_demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(before, f_b);
+        assert_eq!(f_b.nf_date(RewriteLevel::RuleRewrite), SysDate::from_raw(5));
+        let before_cached = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &empty_demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(before_cached, f_b);
+
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(8));
+        let mut newer = ClauseSet::from_clauses([demod]);
+        newer.set_date(SysDate::from_raw(8));
+        let newer_demodulators = [&newer];
+
+        let after = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &newer_demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(after, a);
+        if !cfg!(umlaut_rewrite_cache_ablation) {
+            assert!(REWRITE_CACHE_NF_DATE_CHECKS.load(Ordering::Relaxed) >= 2);
+            assert!(REWRITE_CACHE_NF_DATE_HITS.load(Ordering::Relaxed) >= 1);
+        }
+    }
+
+    #[test]
+    fn newer_rule_extends_existing_shared_rewrite_chain() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "li_chain_a");
+        let b = typed_const(&mut bank, "li_chain_b");
+        let f_x = typed_unary(&mut bank, "li_chain_f", &x);
+        let f_b = typed_unary(&mut bank, "li_chain_f", &b);
+        let g_x = typed_unary(&mut bank, "li_chain_g", &x);
+        let g_b = typed_unary(&mut bank, "li_chain_g", &b);
+        let mut first_lit = eqn(&mut bank, &f_x, &g_x, true);
+        oriented_demod(&mut first_lit);
+        let mut first_demod = Clause::alloc(EqnList::from_vec(vec![first_lit.clone()]));
+        first_demod.set_date(SysDate::from_raw(5));
+        let mut first_set = ClauseSet::from_clauses([first_demod]);
+        first_set.set_date(SysDate::from_raw(5));
+        let first_demodulators = [&first_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let first = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &first_demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(first, g_b);
+
+        let mut second_lit = eqn(&mut bank, &g_x, &a, true);
+        oriented_demod(&mut second_lit);
+        let mut retained_demod = Clause::alloc(EqnList::from_vec(vec![first_lit]));
+        retained_demod.set_date(SysDate::from_raw(5));
+        let mut second_demod = Clause::alloc(EqnList::from_vec(vec![second_lit]));
+        second_demod.set_date(SysDate::from_raw(8));
+        let mut extended = ClauseSet::from_clauses([retained_demod, second_demod]);
+        extended.set_date(SysDate::from_raw(8));
+        let extended_demodulators = [&extended];
+
+        let second = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &extended_demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(second, a);
+        assert_eq!(f_b.rw_replace_field(), Some(g_b.clone()));
+        assert_eq!(g_b.rw_replace_field(), Some(a));
+    }
+
+    #[test]
     fn plain_li_normalform_rebuilds_binary_parent_from_either_changed_child() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
@@ -3048,6 +3299,54 @@ mod tests {
                 RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(101)),
                 RewriteSequenceEntry::Operation(516),
                 RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(102)),
+            ]
+        );
+    }
+
+    #[test]
+    fn cached_shared_term_reuse_preserves_each_demodulator_ancestor() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let replacement = typed_const(&mut bank, "clause_cache_a");
+        let argument = typed_const(&mut bank, "clause_cache_b");
+        let first_rhs = typed_const(&mut bank, "clause_cache_c");
+        let second_rhs = typed_const(&mut bank, "clause_cache_d");
+        let f_variable = typed_unary(&mut bank, "clause_cache_f", &variable);
+        let f_argument = typed_unary(&mut bank, "clause_cache_f", &argument);
+        let mut demod_lit = eqn(&mut bank, &f_variable, &replacement, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_ident(201);
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut first = eqn(&mut bank, &f_argument, &first_rhs, true);
+        first.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL);
+        let mut second = eqn(&mut bank, &f_argument, &second_rhs, true);
+        second.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let steps = clause_compute_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 2);
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                RewriteSequenceEntry::Operation(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(201)),
+                RewriteSequenceEntry::Operation(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(201)),
             ]
         );
     }

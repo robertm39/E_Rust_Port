@@ -41,7 +41,7 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 | `search_funnel` | Processed/redundant/resource-pruned/generated counts plus final and high-water clause-set sizes |
 | `clause_selection` | HCB queue quotas, selections by priority class, empty/orphan exhaustions, schedule gaps, and preferred-clause bypass/wait bounds |
 | `inferences` | Paramodulation, factoring, equation-resolution, disequality-decomposition, and negative/positive-extensionality totals |
-| `simplification` | Rewrite, subsumption, condensation, and related contraction totals |
+| `simplification` | Rewrite, subsumption, condensation, related contraction totals, and shared rewrite-cache activity |
 | `indices` | Subsumption and demodulation activity plus fingerprint-index queries, candidate filtering, mutations, and final structure sizes |
 | `sat` | SAT checks, clause volumes, outcomes, and CPU-time components |
 | `terms` | Shared term nodes, insertions, recoveries, and storage estimate |
@@ -51,6 +51,14 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 All process-global counters are captured at search entry and emitted as
 saturating per-run deltas. This matters for library tests and other callers
 that execute multiple searches in one process.
+
+The nested `simplification.rewrite_cache` object reports top-level shared-link
+lookups and hits, link edges followed, and rule/full normal-form-date checks
+and hits. `simplification.rewrite_uncached_links` counts newly installed
+rewrite links. These are operational diagnostics: a followed edge or current
+normal-form date is avoided traversal work, but neither is an instruction
+count. Relate them to CPU, clause, term-storage, and resident-memory measures
+before changing cache policy.
 
 The nested `indices.fingerprint` object separates compatible fingerprint
 leaves and candidate term payloads from exact unification successes. Its

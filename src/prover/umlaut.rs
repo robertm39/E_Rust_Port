@@ -93,6 +93,7 @@ use crate::clauses::proofstate::{
     ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
+use crate::clauses::rewrite::enable_rewrite_cache_telemetry;
 #[cfg(feature = "cadical-static")]
 use crate::clauses::satinterface::incremental_sat_error_to_diagnostic;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
@@ -6114,6 +6115,8 @@ fn run_proof_search<W: Write + ?Sized>(
         .map(|_| SearchTelemetryCounterSnapshot::capture());
     let _fingerprint_index_telemetry_guard =
         search_telemetry_baseline.map(|_| enable_fingerprint_index_telemetry());
+    let _rewrite_cache_telemetry_guard =
+        search_telemetry_baseline.map(|_| enable_rewrite_cache_telemetry());
     let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
     if search_telemetry_baseline.is_some() {
         state.enable_search_telemetry();
@@ -26838,6 +26841,10 @@ input_clause(c2,axiom,[++q(X)]).
             "\"high_water_unprocessed\"",
             "\"inferences\"",
             "\"simplification\"",
+            "\"rewrite_uncached_links\"",
+            "\"rewrite_cache\"",
+            "\"link_edges_followed\"",
+            "\"normal_form_date_hits\"",
             "\"indices\"",
             "\"sat\"",
             "\"terms\"",

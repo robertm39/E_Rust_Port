@@ -23,6 +23,12 @@ pub(crate) struct SearchTelemetryCounterSnapshot {
     clause_subsumption_successes: u64,
     unit_subsumption_calls: u64,
     rewrite_unbound_variable_failures: u64,
+    rewrite_uncached_links: u64,
+    rewrite_cache_link_lookups: u64,
+    rewrite_cache_link_hits: u64,
+    rewrite_cache_link_edges: u64,
+    rewrite_cache_nf_date_checks: u64,
+    rewrite_cache_nf_date_hits: u64,
     backward_rewrite_match_attempts: u64,
     backward_rewrite_match_successes: u64,
     condensation_attempts: u64,
@@ -47,6 +53,18 @@ impl SearchTelemetryCounterSnapshot {
                 crate::clauses::subsumption::unit_clause_clause_subsumption_calls(),
             ),
             rewrite_unbound_variable_failures: crate::clauses::rewrite::REWRITE_UNBOUND_VAR_FAILS
+                .load(Ordering::Relaxed),
+            rewrite_uncached_links: crate::clauses::rewrite::REWRITE_UNCACHED
+                .load(Ordering::Relaxed),
+            rewrite_cache_link_lookups: crate::clauses::rewrite::REWRITE_CACHE_LINK_LOOKUPS
+                .load(Ordering::Relaxed),
+            rewrite_cache_link_hits: crate::clauses::rewrite::REWRITE_CACHE_LINK_HITS
+                .load(Ordering::Relaxed),
+            rewrite_cache_link_edges: crate::clauses::rewrite::REWRITE_CACHE_LINK_EDGES
+                .load(Ordering::Relaxed),
+            rewrite_cache_nf_date_checks: crate::clauses::rewrite::REWRITE_CACHE_NF_DATE_CHECKS
+                .load(Ordering::Relaxed),
+            rewrite_cache_nf_date_hits: crate::clauses::rewrite::REWRITE_CACHE_NF_DATE_HITS
                 .load(Ordering::Relaxed),
             backward_rewrite_match_attempts: crate::clauses::rewrite::BWRW_MATCH_ATTEMPTS
                 .load(Ordering::Relaxed),
@@ -79,6 +97,24 @@ impl SearchTelemetryCounterSnapshot {
             rewrite_unbound_variable_failures: self
                 .rewrite_unbound_variable_failures
                 .saturating_sub(baseline.rewrite_unbound_variable_failures),
+            rewrite_uncached_links: self
+                .rewrite_uncached_links
+                .saturating_sub(baseline.rewrite_uncached_links),
+            rewrite_cache_link_lookups: self
+                .rewrite_cache_link_lookups
+                .saturating_sub(baseline.rewrite_cache_link_lookups),
+            rewrite_cache_link_hits: self
+                .rewrite_cache_link_hits
+                .saturating_sub(baseline.rewrite_cache_link_hits),
+            rewrite_cache_link_edges: self
+                .rewrite_cache_link_edges
+                .saturating_sub(baseline.rewrite_cache_link_edges),
+            rewrite_cache_nf_date_checks: self
+                .rewrite_cache_nf_date_checks
+                .saturating_sub(baseline.rewrite_cache_nf_date_checks),
+            rewrite_cache_nf_date_hits: self
+                .rewrite_cache_nf_date_hits
+                .saturating_sub(baseline.rewrite_cache_nf_date_hits),
             backward_rewrite_match_attempts: self
                 .backward_rewrite_match_attempts
                 .saturating_sub(baseline.backward_rewrite_match_attempts),
@@ -269,7 +305,7 @@ fn write_search_activity(
     )?;
     writeln!(
         output,
-        "  \"simplification\": {{\"rewrite_steps\": {}, \"contextual_simplify_reflections\": {}, \"backward_subsumed\": {}, \"backward_rewritten\": {}, \"aggressively_forward_subsumed\": {}, \"condensation_attempts\": {}, \"condensation_successes\": {}, \"rewrite_unbound_variable_failures\": {}}},",
+        "  \"simplification\": {{\"rewrite_steps\": {}, \"contextual_simplify_reflections\": {}, \"backward_subsumed\": {}, \"backward_rewritten\": {}, \"aggressively_forward_subsumed\": {}, \"condensation_attempts\": {}, \"condensation_successes\": {}, \"rewrite_unbound_variable_failures\": {}, \"rewrite_uncached_links\": {}, \"rewrite_cache\": {{\"link_lookups\": {}, \"link_hits\": {}, \"link_edges_followed\": {}, \"normal_form_date_checks\": {}, \"normal_form_date_hits\": {}}}}},",
         statistics.rw_count,
         statistics.context_sr_count,
         statistics.backward_subsumed_count,
@@ -277,7 +313,13 @@ fn write_search_activity(
         statistics.aggressive_forward_subsumed_count,
         counters.condensation_attempts,
         counters.condensation_successes,
-        counters.rewrite_unbound_variable_failures
+        counters.rewrite_unbound_variable_failures,
+        counters.rewrite_uncached_links,
+        counters.rewrite_cache_link_lookups,
+        counters.rewrite_cache_link_hits,
+        counters.rewrite_cache_link_edges,
+        counters.rewrite_cache_nf_date_checks,
+        counters.rewrite_cache_nf_date_hits
     )?;
     write!(
         output,
@@ -574,16 +616,22 @@ mod tests {
         let baseline = SearchTelemetryCounterSnapshot {
             clause_subsumption_calls: 10,
             condensation_successes: 5,
+            rewrite_cache_link_lookups: 7,
+            rewrite_cache_nf_date_hits: 9,
             ..SearchTelemetryCounterSnapshot::default()
         };
         let current = SearchTelemetryCounterSnapshot {
             clause_subsumption_calls: 14,
             condensation_successes: 3,
+            rewrite_cache_link_lookups: 12,
+            rewrite_cache_nf_date_hits: 4,
             ..SearchTelemetryCounterSnapshot::default()
         };
         let delta = current.since(baseline);
         assert_eq!(delta.clause_subsumption_calls, 4);
         assert_eq!(delta.condensation_successes, 0);
+        assert_eq!(delta.rewrite_cache_link_lookups, 5);
+        assert_eq!(delta.rewrite_cache_nf_date_hits, 0);
     }
 
     #[test]

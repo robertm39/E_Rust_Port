@@ -79,8 +79,23 @@ pub fn term_follow_rw_chain(term: &Term) -> Term {
 /// the C assertion while traversing `TermRWReplaceField`.
 #[must_use]
 pub fn term_follow_top_rw_chain(term: &Term, restricted_rw: bool) -> (Term, bool) {
+    let (current, sos_rewritten, _followed_edges) =
+        term_follow_top_rw_chain_with_steps(term, restricted_rw);
+    (current, sos_rewritten)
+}
+
+/// Follows top-level rewrite links and also returns the traversed edge count.
+///
+/// The count supports aggregate cache telemetry without changing the
+/// compatibility-facing [`term_follow_top_rw_chain`] result.
+#[must_use]
+pub(crate) fn term_follow_top_rw_chain_with_steps(
+    term: &Term,
+    restricted_rw: bool,
+) -> (Term, bool, u64) {
     let mut current = term.clone();
     let mut sos_rewritten = false;
+    let mut followed_edges = 0_u64;
 
     while current.is_top_rewritten() && (!restricted_rw || current.is_rrewritten()) {
         if current.query_prop(TP_IS_SOS_REWRITTEN) {
@@ -89,9 +104,10 @@ pub fn term_follow_top_rw_chain(term: &Term, restricted_rw: bool) -> (Term, bool
         current = current
             .rw_replace_field()
             .expect("top-rewritten term must have a replacement");
+        followed_edges = followed_edges.saturating_add(1);
     }
 
-    (current, sos_rewritten)
+    (current, sos_rewritten, followed_edges)
 }
 
 /// Replaces the subterm denoted by `pos` with `repl` and shares the result in
@@ -231,8 +247,8 @@ fn deref_always(term: &Term) -> Term {
 mod tests {
     use super::{
         tb_term_pos_replace, term_add_rw_link, term_delete_rw_link, term_follow_rw_chain,
-        term_follow_top_rw_chain, RewriteDemodulator, RwResultType, TP_IS_REWRITTEN,
-        TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
+        term_follow_top_rw_chain, term_follow_top_rw_chain_with_steps, RewriteDemodulator,
+        RwResultType, TP_IS_REWRITTEN, TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
     };
     use crate::inout::scanner::Scanner;
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
@@ -347,9 +363,14 @@ mod tests {
         term_add_rw_link(&second, &third, None, false, RwResultType::AlwaysRewritable);
 
         let (followed, sos_rewritten) = term_follow_top_rw_chain(&first, false);
+        let (counted, counted_sos, followed_edges) =
+            term_follow_top_rw_chain_with_steps(&first, false);
 
         assert_eq!(followed, second);
         assert!(sos_rewritten);
+        assert_eq!(counted, followed);
+        assert_eq!(counted_sos, sos_rewritten);
+        assert_eq!(followed_edges, 1);
     }
 
     #[test]
