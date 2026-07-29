@@ -71,6 +71,15 @@ The evaluated fresh per-call SAT path had zero ordinary-result disagreements
 but no latency crossover, so Umlaut's production recursive matcher remains
 unchanged.
 
+The clean-room bounded AVATAR restart prototype, independent component/SAT
+certificate replay, family-separated split-sensitive and neutral comparison,
+and negative integration decision are retained in
+[`experiments/2026-07-29-008-avatar-restart-prototype/`](experiments/2026-07-29-008-avatar-restart-prototype/).
+The prototype soundly verified one branch conflict but no complete AVATAR
+result, lost one held-out verified baseline solve, and exposed broad
+first-order proof-leaf provenance failures. Production splitting remains
+unchanged.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

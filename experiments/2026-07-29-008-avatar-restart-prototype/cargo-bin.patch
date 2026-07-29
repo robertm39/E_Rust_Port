@@ -1,0 +1,15 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,7 +39,11 @@
+ [[bin]]
+ name = "umlaut-csscpa-filter"
+ path = "src/bin/umlaut-csscpa-filter.rs"
+ 
++[[bin]]
++name = "avatar-sat-driver"
++path = "experiments/2026-07-29-008-avatar-restart-prototype/avatar_sat_driver.rs"
++
+ [[bin]]
+ name = "umlaut-stratpar"
+ path = "src/bin/umlaut-stratpar.rs"

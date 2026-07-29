@@ -4,3 +4,5 @@ tools/linode-runner/remote_run.sh text eol=lf
 tools/packaging/starexec_run_default text eol=lf
 src/heuristics/schedule.vars -text -whitespace
 licenses/* -whitespace
+experiments/2026-07-29-008-avatar-restart-prototype/cargo-bin.patch text eol=lf -whitespace
+experiments/2026-07-29-008-avatar-restart-prototype/tptp_split.py text eol=lf -whitespace
