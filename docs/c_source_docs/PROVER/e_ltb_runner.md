@@ -96,7 +96,7 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_ltb_runner.rs` and `src/bin/e_ltb_runner.rs` port the standalone runner wrapper over the Rust batch backend, including global output redirection through `-o`, the `-o -` stdout route, C-shaped `OutOpen` diagnostics for configured output files, the C ordering where configured output is opened before positional usage validation, and the C `OutClose(GlobalOut)` final flush/error check on the execution path.
+- `src/prover/ltb_runner.rs` and `src/bin/umlaut-ltb-runner.rs` port the standalone runner wrapper over the Rust batch backend, including global output redirection through `-o`, the `-o -` stdout route, C-shaped `OutOpen` diagnostics for configured output files, the C ordering where configured output is opened before positional usage validation, and the C `OutClose(GlobalOut)` final flush/error check on the execution path.
 
 ### Change Later
 

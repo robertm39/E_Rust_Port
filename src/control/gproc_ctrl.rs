@@ -5,10 +5,10 @@ use crate::basics::os_wrapper::{
     ResourceUsage,
 };
 use crate::basics::simple_stuff::ProverResult;
-use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::control::proc_ctrl::{
     SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
 };
+use crate::control::session::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::inout::signals::terminate_process;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -799,7 +799,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
-    use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+    use crate::control::session::{Descriptor, DescriptorInterestSet, SessionProcessSet};
     use std::process::Command;
     use std::sync::mpsc;
     use std::time::Duration;

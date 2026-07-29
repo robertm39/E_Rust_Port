@@ -181,7 +181,7 @@ where
     F: FnMut(
         &mut EPCtrlSet,
         &mut W,
-    ) -> Result<Option<crate::control::esession::Descriptor>, Diagnostic>,
+    ) -> Result<Option<crate::control::session::Descriptor>, Diagnostic>,
 {
     let mut proof_descriptor = None;
     while !controls.is_empty() {
@@ -258,8 +258,8 @@ mod tests {
         OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
-    use crate::control::esession::{Descriptor, DescriptorInterestSet};
     use crate::control::proc_ctrl::{EPCtrl, EPCtrlSet};
+    use crate::control::session::{Descriptor, DescriptorInterestSet};
     use crate::prover::version::{assert_help_matches_fixture, footer, VERSION, VERSION_QUALIFIER};
     use crate::test_support::global_state_lock;
     use std::io::{self, Write};

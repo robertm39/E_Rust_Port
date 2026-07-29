@@ -1,5 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::control::esession::{
+use crate::control::session::{
     descriptor_from_tcp_stream, Descriptor, DescriptorInterestSet, ESession, NoProcessControlSet,
     SessionProcessSet,
 };
@@ -149,7 +149,7 @@ fn server_error(message: impl Into<String>) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{write_accept_warning, EServer};
-    use crate::control::esession::{Descriptor, DescriptorInterestSet, NoProcessControlSet};
+    use crate::control::session::{Descriptor, DescriptorInterestSet, NoProcessControlSet};
     use std::net::TcpStream;
 
     #[test]

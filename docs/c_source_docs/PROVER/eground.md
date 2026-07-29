@@ -112,7 +112,7 @@ Source files reviewed: `PROVER/eground.c`.
 
 ### Rust Port Notes
 
-- `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
+- `src/prover/grounder.rs` and `src/bin/umlaut-ground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
 - The Rust wrapper parses supported normal input owners into a represented `FormulaSet` without eagerly locking TSTP input to first-order, accepts and validates `--miniscope-limit` while intentionally discarding it like C, runs `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` with C's hard-coded `1048576` miniscope limit and parsed definitional-CNF limit, then continues through the grounding pipeline while carrying the parsed problem type into TSTP progress and final ground-set output.
 - The wrapper preserves default stdin through `-` while labeling scanner tokens `<stdin>`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, `stat`-before-open named-input handling with two-line `SysError`-style scanner/output diagnostics, C `OutClose` wording on final flush failure, `--give-up` success-status failure exits, and the C DIMACS split between the configured output stream and raw stdout.
 - The executable wrapper now returns each `Diagnostic`'s C exit status. Syntax, usage, file, and input-semantic failures therefore exit 3, 5, 6, and 12 instead of the former Rust wrapper's undifferentiated status 1.

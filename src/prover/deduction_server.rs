@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{BatchOutputType, BatchProcCtrlRunnerSet, BatchSpec};
-use crate::control::einteractive_mode::{
+use crate::control::interactive_mode::{
     run_command_with_runner_backend, start_deduction_server_tcp_with, InteractiveCommandOutput,
     InteractiveRunReport, InteractiveServerReport, InteractiveSpec,
 };
@@ -523,7 +523,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::control::batch_spec::{BatchOutputType, BatchProcessProblemReport, BatchSpec};
-    use crate::control::einteractive_mode::{
+    use crate::control::interactive_mode::{
         InteractiveCommandOutput, InteractiveRunReport, END_OF_BLOCK_TOKEN, HELP_MESSAGE,
         OK_SUCCESS_MESSAGE,
     };
@@ -559,7 +559,7 @@ mod tests {
         tcp_string_send_to_or_error(stream, END_OF_BLOCK_TOKEN).unwrap();
         assert_eq!(
             tcp_string_recv_from_or_error(stream).unwrap(),
-            crate::control::einteractive_mode::OK_ADDED_MESSAGE
+            crate::control::interactive_mode::OK_ADDED_MESSAGE
         );
     }
 
@@ -568,7 +568,7 @@ mod tests {
         let raw = tcp_string_recv_from_or_error(stream).unwrap();
         assert_eq!(
             tcp_string_recv_from_or_error(stream).unwrap(),
-            crate::control::einteractive_mode::OK_DOWNLOADED_MESSAGE
+            crate::control::interactive_mode::OK_DOWNLOADED_MESSAGE
         );
         raw
     }

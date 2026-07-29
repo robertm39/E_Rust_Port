@@ -272,7 +272,7 @@ fn spawn_eligible_processes<F>(
     max_cores: i32,
     next: &mut usize,
     controls: &mut EGPCtrlSet,
-    descriptors: &mut BTreeMap<crate::control::esession::Descriptor, usize>,
+    descriptors: &mut BTreeMap<crate::control::session::Descriptor, usize>,
     output: &mut impl Write,
     spawn: &mut F,
 ) -> Result<bool, Diagnostic>

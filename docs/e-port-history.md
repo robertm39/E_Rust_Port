@@ -17,14 +17,14 @@ used to establish the baseline.
 
 Rust files:
 
-- `src/prover/ekb_create.rs`
-- `src/bin/ekb_create.rs`
-- `src/prover/ekb_delete.rs`
-- `src/bin/ekb_delete.rs`
-- `src/prover/ekb_ginsert.rs`
-- `src/bin/ekb_ginsert.rs`
-- `src/prover/ekb_insert.rs`
-- `src/bin/ekb_insert.rs`
+- `src/prover/kb_create.rs`
+- `src/bin/umlaut-kb-create.rs`
+- `src/prover/kb_delete.rs`
+- `src/bin/umlaut-kb-delete.rs`
+- `src/prover/kb_ginsert.rs`
+- `src/bin/umlaut-kb-ginsert.rs`
+- `src/prover/kb_insert.rs`
+- `src/bin/umlaut-kb-insert.rs`
 - `src/prover/tsm_classify.rs`
 - `src/bin/tsm_classify.rs`
 - `src/prover/direct_examples.rs`
@@ -278,15 +278,15 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `src/control/mod.rs`
-- `src/control/einteractive_mode.rs`
-- `src/control/eserver.rs`
-- `src/control/esession.rs`
-- `src/prover/e_client.rs`
-- `src/prover/e_deduction_server.rs`
-- `src/prover/e_server.rs`
-- `src/bin/e_client.rs`
-- `src/bin/e_deduction_server.rs`
-- `src/bin/e_server.rs`
+- `src/control/interactive_mode.rs`
+- `src/control/server.rs`
+- `src/control/session.rs`
+- `src/prover/client.rs`
+- `src/prover/deduction_server.rs`
+- `src/prover/server.rs`
+- `src/bin/umlaut-client.rs`
+- `src/bin/umlaut-deduction-server.rs`
+- `src/bin/umlaut-server.rs`
 
 C source references:
 
@@ -317,8 +317,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 
 Rust files:
 
-- `src/prover/e_axfilter.rs`
-- `src/bin/e_axfilter.rs`
+- `src/prover/axiom_filter.rs`
+- `src/bin/umlaut-axiom-filter.rs`
 
 C source references:
 
@@ -402,8 +402,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 
 Rust files:
 
-- `src/prover/e_stratpar.rs`
-- `src/bin/e_stratpar.rs`
+- `src/prover/strategy_parallel.rs`
+- `src/bin/umlaut-stratpar.rs`
 
 C source references:
 
@@ -488,8 +488,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/epclextract.rs`
-- `src/bin/epclextract.rs`
+- `src/prover/pcl_extract.rs`
+- `src/bin/umlaut-pcl-extract.rs`
 
 C source references:
 
@@ -508,8 +508,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/epclanalyse.rs`
-- `src/bin/epclanalyse.rs`
+- `src/prover/pcl_analyse.rs`
+- `src/bin/umlaut-pcl-analyse.rs`
 
 C source references:
 
@@ -550,8 +550,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/epcllemma.rs`
-- `src/bin/epcllemma.rs`
+- `src/prover/pcl_lemma.rs`
+- `src/bin/umlaut-pcl-lemma.rs`
 
 C source references:
 
@@ -602,8 +602,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/edpll.rs`
-- `src/bin/edpll.rs`
+- `src/prover/dpll.rs`
+- `src/bin/umlaut-dpll.rs`
 
 C source references:
 
@@ -627,8 +627,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/eground.rs`
-- `src/bin/eground.rs`
+- `src/prover/grounder.rs`
+- `src/bin/umlaut-ground.rs`
 
 C source references:
 
@@ -654,8 +654,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/enormalizer.rs`
-- `src/bin/enormalizer.rs`
+- `src/prover/normalizer.rs`
+- `src/bin/umlaut-normalizer.rs`
 
 C source references:
 
@@ -679,8 +679,8 @@ Active work for this section is tracked under Beads epic `E_Rust_Port-j76.1` wit
 Rust files:
 
 - `Cargo.toml`
-- `src/prover/epatternize.rs`
-- `src/bin/epatternize.rs`
+- `src/prover/patternize.rs`
+- `src/bin/umlaut-patternize.rs`
 
 C source references:
 
@@ -706,8 +706,8 @@ Rust files:
 - `Cargo.toml`
 - `src/control/batch_spec.rs`
 - `src/control/sine.rs`
-- `src/prover/e_ltb_runner.rs`
-- `src/bin/e_ltb_runner.rs`
+- `src/prover/ltb_runner.rs`
+- `src/bin/umlaut-ltb-runner.rs`
 
 C source references:
 
@@ -847,7 +847,7 @@ Rust files:
 - `src/inout/tempfile.rs`
 - `src/prover/version.rs`
 - `src/prover/options.rs`
-- `src/prover/eprover.rs`
+- `src/prover/umlaut.rs`
 - `src/terms/acterms.rs`
 - `src/terms/dbvars.rs`
 - `src/terms/fp_index.rs`
@@ -873,7 +873,7 @@ Rust files:
 - `src/terms/typebanks.rs`
 - `src/terms/varhash.rs`
 - `src/terms/varsets.rs`
-- `src/bin/eprover.rs`
+- `src/bin/umlaut.rs`
 
 Original C references:
 

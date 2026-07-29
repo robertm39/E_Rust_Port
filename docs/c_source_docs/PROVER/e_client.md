@@ -101,7 +101,7 @@ Source files reviewed: `PROVER/e_client.c`.
 
 ### Rust Port Notes
 
-- `src/prover/e_client.rs` and `src/bin/e_client.rs` port the standalone client executable over the Rust TCP string-message helpers from `cio_network`, with exact C-shaped full help text pinned by a byte-for-byte unit snapshot.
+- `src/prover/client.rs` and `src/bin/umlaut-client.rs` port the standalone client executable over the Rust TCP string-message helpers from `cio_network`, with exact C-shaped full help text pinned by a byte-for-byte unit snapshot.
 - The Rust wrapper preserves the C option surface, including `-V`/`--version`, optional `--verbose`, `-o` including `-o -`, `-S`/`--server`, both `--service-port` and `--port`, default server `localhost`, default port `3666`, and the warning-but-continue behavior for ports below `IPPORT_RESERVED`.
 - The executable loads all positional inputs, defaulting to `-`, concatenates them without inserted separators, preserves C-shaped `InputOpen` stat/non-regular/open diagnostics, opens the output route before loading inputs or connecting, sends `hello`, waits while echoing `% Server: ...` until `ready`, sends `add`, the problem text, and `prove`, then echoes until `result`.
 - Output-file open and final output-flush failures preserve the C `OutOpen`/`OutClose` diagnostic wording.

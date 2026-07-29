@@ -28,7 +28,7 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
-use crate::prover::eprover::{
+use crate::prover::umlaut::{
     apply_proof_state_sine_silent, parse_clause_scanner_into_formula_set_with_options, FoolUnroll,
     FormulaPreprocessing,
 };

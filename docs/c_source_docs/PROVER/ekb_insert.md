@@ -94,7 +94,7 @@ Source files reviewed: `PROVER/ekb_insert.c`.
 
 ### Rust Port Notes
 
-- Rust ports this executable as `src/prover/ekb_insert.rs` with a thin `src/bin/ekb_insert.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only `--name` behavior, basename selection, duplicate-name rejection before copy, stored-file parse flow, and C-shaped KB output formatting.
+- Rust ports this executable as `src/prover/kb_insert.rs` with a thin `src/bin/umlaut-kb-insert.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only `--name` behavior, basename selection, duplicate-name rejection before copy, stored-file parse flow, and C-shaped KB output formatting.
 - Filesystem tests cover stdin insertion, file insertion, first-use name override, duplicate rejection before file copy, stored example payloads, problem-list rewriting, annotation output, help/version text, and verbose progress output.
 
 ### Change Later

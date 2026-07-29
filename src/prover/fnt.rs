@@ -627,7 +627,7 @@ impl<'a, S: IncrementalSatService> Encoding<'a, S> {
             &assumptions,
             &SatSolveOptions {
                 deadline: Some(self.config.sat_timeout),
-                external_stop: Some(super::eprover::finite_model_stop_requested),
+                external_stop: Some(super::umlaut::finite_model_stop_requested),
                 ..SatSolveOptions::default()
             },
         )
@@ -1362,7 +1362,7 @@ fn search_problem_with_service<S: IncrementalSatService>(
     };
     let mut telemetry = String::new();
     for sizes in vectors {
-        if super::eprover::finite_model_stop_requested() {
+        if super::umlaut::finite_model_stop_requested() {
             return FiniteModelOutcome::ResourceOut("external time or signal limit".to_owned());
         }
         let clauses_before = encoding.clause_count;

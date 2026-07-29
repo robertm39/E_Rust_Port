@@ -15,11 +15,11 @@ use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::sine::{pstack_clause_write_tstp, pstack_formula_write_tstp};
-use crate::control::esession::{Descriptor, DescriptorInterestSet};
 use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::proc_ctrl::{
     prover_result_table_entry, EPCtrl, EPCtrlSet, EPCTRL_SET_WAIT_TIMEOUT, MAX_CORES,
 };
+use crate::control::session::{Descriptor, DescriptorInterestSet};
 use crate::control::sine::{StructFofSpec, StructFofSpecSelection};
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
@@ -2234,9 +2234,9 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::FormulaSet;
-    use crate::control::esession::{Descriptor, DescriptorInterestSet};
     use crate::control::gproc_ctrl::EGPCtrl;
     use crate::control::proc_ctrl::{EPCtrl, MAX_CORES};
+    use crate::control::session::{Descriptor, DescriptorInterestSet};
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};

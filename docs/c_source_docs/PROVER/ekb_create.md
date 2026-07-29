@@ -90,7 +90,7 @@ Source files reviewed: `PROVER/ekb_create.c`.
 
 ### Rust Port Notes
 
-- `src/prover/ekb_create.rs` and `src/bin/ekb_create.rs` port the standalone KB creation executable over the Rust `learn::kbdesc` helper.
+- `src/prover/kb_create.rs` and `src/bin/umlaut-kb-create.rs` port the standalone KB creation executable over the Rust `learn::kbdesc` helper.
 - The Rust wrapper preserves the default basename `E_KNOWLEDGE`, short/long `-V`/`--version`, optional `--verbose`, negative-example count/proportion options, the one-argument limit, and the C typo in the negative-proportion diagnostic.
 - File creation is intentionally C-shaped: create the base directory, write `description`, `signature`, `problems`, and `clausepatterns`, then create the `FILES` subdirectory. Later failures do not roll back earlier filesystem changes.
 

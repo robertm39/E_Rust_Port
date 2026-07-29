@@ -2,7 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::record_waited_child_resource_usage;
 use crate::basics::simple_stuff::ProverResult;
-use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+use crate::control::session::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::inout::signals::terminate_process;
 use crate::inout::tempfile::temp_file_remove;
 use std::collections::BTreeMap;
@@ -741,7 +741,7 @@ mod tests {
         SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
     };
     use crate::basics::simple_stuff::ProverResult;
-    use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+    use crate::control::session::{Descriptor, DescriptorInterestSet, SessionProcessSet};
     use std::ffi::OsStr;
     use std::process::Command;
     use std::sync::mpsc;

@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use umlaut::basics::error::{init_error, report_fatal_diagnostic};
-use umlaut::prover::enormalizer::{run, PROGRAM_NAME};
+use umlaut::prover::normalizer::{run, PROGRAM_NAME};
 
 fn main() -> ExitCode {
     init_error(PROGRAM_NAME);

@@ -2,7 +2,7 @@ use std::io;
 use std::process::ExitCode;
 
 use umlaut::basics::error::{init_error, report_fatal_diagnostic};
-use umlaut::prover::eprover::run;
+use umlaut::prover::umlaut::run;
 use umlaut::prover::version::PROGRAM_NAME;
 
 fn main() -> ExitCode {

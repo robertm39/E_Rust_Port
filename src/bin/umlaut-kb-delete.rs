@@ -2,7 +2,7 @@ use std::io;
 use std::process::ExitCode;
 
 use umlaut::basics::error::{init_error, report_fatal_diagnostic};
-use umlaut::prover::ekb_delete::{run, PROGRAM_NAME};
+use umlaut::prover::kb_delete::{run, PROGRAM_NAME};
 
 fn main() -> ExitCode {
     init_error(PROGRAM_NAME);

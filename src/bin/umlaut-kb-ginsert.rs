@@ -2,7 +2,7 @@ use std::io;
 use std::process::ExitCode;
 
 use umlaut::basics::error::{init_error_from_invocation, report_fatal_diagnostic};
-use umlaut::prover::ekb_ginsert::{run, PROGRAM_NAME};
+use umlaut::prover::kb_ginsert::{run, PROGRAM_NAME};
 
 fn main() -> ExitCode {
     init_error_from_invocation(PROGRAM_NAME);

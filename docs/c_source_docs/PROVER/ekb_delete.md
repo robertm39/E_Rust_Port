@@ -90,7 +90,7 @@ Source files reviewed: `PROVER/ekb_delete.c`.
 
 ### Rust Port Notes
 
-- Rust ports this executable as `src/prover/ekb_delete.rs` with a thin `src/bin/ekb_delete.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, one-argument validation, unreachable `OPT_NAME` omission, read/remove/write order, and C-shaped KB output formatting.
+- Rust ports this executable as `src/prover/kb_delete.rs` with a thin `src/bin/umlaut-kb-delete.rs` wrapper. It preserves the default `E_KNOWLEDGE` basename, one-argument validation, unreachable `OPT_NAME` omission, read/remove/write order, and C-shaped KB output formatting.
 - Filesystem tests cover deletion of the selected `FILES/<name>` payload, retention of unrelated stored examples, problem-list rewriting, annotation removal by source id, missing-example rejection before file removal, help/version text, and verbose progress output.
 
 ### Change Later

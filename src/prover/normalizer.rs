@@ -37,7 +37,7 @@ use crate::inout::output::set_output_level;
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::orderings::ocb::OrderControlBlock;
-use crate::prover::eprover::{
+use crate::prover::umlaut::{
     parse_clause_scanner_into_formula_set_with_options, FoolUnroll, FormulaPreprocessing,
 };
 use crate::prover::version::{footer, VERSION};

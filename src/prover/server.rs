@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::basics::error::{c_io_error_message, Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::BatchSpec;
-use crate::control::esession::descriptor_from_tcp_stream;
+use crate::control::session::descriptor_from_tcp_stream;
 use crate::control::sine::StructFofSpec;
 use crate::heuristics::axfilter::AxFilterSet;
 use crate::inout::commandline::{
