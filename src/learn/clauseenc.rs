@@ -4,6 +4,7 @@ use crate::clauses::eqn_props::{PatEqnDirection, EQUAL_PREDICATE};
 use crate::clauses::eqnlist::EqnList;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::functypes::func_symb_start_token;
+use crate::terms::signature::SIG_TRUE_CODE;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::Term;
@@ -133,7 +134,7 @@ pub fn flat_recode_rec_clause_rep(
         current = rest;
     }
 
-    if current.f_code() != bank.signature().cnil_code() {
+    if !is_recursive_clause_nil(bank, &current) {
         return Err(recursive_clause_error());
     }
 
@@ -142,6 +143,22 @@ pub fn flat_recode_rec_clause_rep(
         .map(|(literal, direction)| (literal, *direction))
         .collect();
     flat_encode_clause_list_rep(bank, &rep)
+}
+
+fn is_recursive_clause_nil(bank: &TermBank, term: &Term) -> bool {
+    if term.f_code() == bank.signature().cnil_code() {
+        return true;
+    }
+
+    if term.f_code() != bank.signature().eqn_code() || term.arity() != 2 {
+        return false;
+    }
+
+    term.argument(0)
+        .zip(term.argument(1))
+        .is_some_and(|(left, right)| {
+            left.f_code() == bank.signature().cnil_code() && right.f_code() == SIG_TRUE_CODE
+        })
 }
 
 fn encoded_eqn_polarity(bank: &mut TermBank, encoded: &Term) -> Result<bool, Diagnostic> {
@@ -260,7 +277,7 @@ mod tests {
     use crate::clauses::eqn_props::PatEqnDirection;
     use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::Scanner;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_TRUE_CODE};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::Term;
@@ -399,6 +416,70 @@ mod tests {
             bank.signature().neqn_code(),
             &c,
             &b,
+        );
+    }
+
+    #[test]
+    fn recursive_recode_accepts_persisted_pattern_with_internal_codes() {
+        let mut signature = Signature::new(TypeBank::new());
+        signature
+            .insert_internal_codes()
+            .expect("internal code insertion");
+        let mut bank = TermBank::new(signature).expect("term bank allocation");
+        let _ = bank.signature_mut().get_eqn_code(true);
+        let _ = bank.signature_mut().get_eqn_code(false);
+        let _ = bank.signature_mut().get_or_code();
+        let _ = bank.signature_mut().get_cnil_code();
+        let mut scanner =
+            Scanner::from_user_string("$or(f0_1!=f0_2,$cnil)", false).expect("scanner allocation");
+
+        let persisted = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .expect("persisted recursive pattern");
+        assert_eq!(
+            persisted.f_code(),
+            bank.signature().or_code(),
+            "root symbol is {:?}",
+            bank.signature().find_name(persisted.f_code())
+        );
+        let persisted_literal = persisted.argument(0).expect("persisted literal");
+        assert_eq!(
+            persisted_literal.f_code(),
+            bank.signature().neqn_code(),
+            "literal symbol is {:?}",
+            bank.signature().find_name(persisted_literal.f_code())
+        );
+        let persisted_tail = persisted.argument(1).expect("persisted tail");
+        assert_eq!(persisted_tail.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            persisted_tail
+                .argument(0)
+                .expect("normalized clause nil")
+                .f_code(),
+            bank.signature().cnil_code()
+        );
+        assert_eq!(
+            persisted_tail
+                .argument(1)
+                .expect("normalized Boolean truth")
+                .f_code(),
+            SIG_TRUE_CODE
+        );
+        let flat = flat_recode_rec_clause_rep(&mut bank, &persisted)
+            .expect("persisted pattern should recode");
+
+        assert_eq!(flat.f_code(), bank.signature_mut().get_or_n_code(1));
+        let encoded = flat.argument(0).expect("encoded literal");
+        assert_eq!(encoded.f_code(), bank.signature().neqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(encoded.argument(0).expect("left term").f_code()),
+            Some("f0_1")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(encoded.argument(1).expect("right term").f_code()),
+            Some("f0_2")
         );
     }
 

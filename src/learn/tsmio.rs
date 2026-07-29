@@ -350,7 +350,6 @@ fn tsm_from_kb_core(
     let mut signature_scanner = Scanner::from_file(Path::new(&signature_name), true)?;
     bank.signature_mut()
         .parse_declarations(&mut signature_scanner, true)?;
-    *sig = bank.signature().clone();
 
     let problems_name = kb_file_name(&mut filename, kb, "problems");
     let mut problems_scanner = Scanner::from_file(Path::new(&problems_name), true)?;
@@ -361,6 +360,10 @@ fn tsm_from_kb_core(
     if flat_patterns {
         anno_set_rec_to_flat_enc(&mut bank, &mut annoset)?;
     }
+    // Flattening interns `$orN` constructors. Publish the completed scratch
+    // signature so both live evaluation and the private TSM index use the same
+    // function codes.
+    *sig = bank.signature().clone();
     let target_features = match target {
         TsmTargetSource::Clauses(target) => {
             let mut target_features = Features::new();
@@ -790,6 +793,63 @@ mod tests {
         assert_close(admin.unmapped_eval(), 7.0);
         assert_close(admin.unmapped_weight(), LARGE_TSM_WEIGHT);
         assert_ne!(signature.find_f_code("left_sym"), 0);
+
+        remove_dir_if_present(&kb_dir);
+    }
+
+    #[test]
+    fn tsm_from_kb_flattens_persisted_recursive_clause_patterns() {
+        let _guard = global_state_lock();
+        init_error("Unknown program");
+        set_verbose_level(0);
+        let kb_dir = temp_kb_dir("tsm-from-generated-pattern");
+        remove_dir_if_present(&kb_dir);
+        std::fs::create_dir_all(&kb_dir).expect("create temporary KB directory");
+        std::fs::write(
+            kb_dir.join("clausepatterns"),
+            "\
+$cnil : 1:(1,1,0,0,0,0,0).
+$or(f0_1!=f0_2,$cnil) : 1:(2,1,0,0,0,0,0).
+$or(f0_1=f0_2,$cnil) : 1:(2,1,0,0,0,0,0).
+",
+        )
+        .expect("write generated clause patterns");
+        std::fs::write(kb_dir.join("signature"), "").expect("write signature file");
+        std::fs::write(
+            kb_dir.join("problems"),
+            format!("1: \"toy\" {}", zero_feature_source()),
+        )
+        .expect("write problems file");
+        let mut signature = Signature::new(TypeBank::new());
+        signature
+            .insert_internal_codes()
+            .expect("internal code insertion");
+        let target = ClauseSet::new();
+        let kb_name = kb_dir.to_string_lossy();
+
+        let admin = tsm_from_kb(
+            true,
+            &[-20.0, 20.0, -2.0, -1.0, 0.0, 2.0],
+            &kb_name,
+            &mut signature,
+            &target,
+            100_000,
+            1.0,
+            1.0,
+            IndexType::IDENTITY,
+            TsmType::Flat,
+            100_000,
+        )
+        .expect("generated recursive patterns should flatten");
+
+        assert_eq!(admin.tsm_type(), TsmType::Flat);
+        assert!(admin.root_tsm().is_some());
+        let flat_code = signature.find_f_code("$or1");
+        assert_ne!(flat_code, 0);
+        assert_eq!(
+            flat_code,
+            admin.index_bank().signature().find_f_code("$or1")
+        );
 
         remove_dir_if_present(&kb_dir);
     }
