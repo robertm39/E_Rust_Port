@@ -244,18 +244,24 @@ def contract_preview() -> dict[str, Any]:
     }
 
 
-def parse_ablation_binary(
+def parse_experiment_inputs(
     argv: Sequence[str],
-) -> tuple[Path, list[str]]:
+) -> tuple[Path, str, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--ablation-binary", type=Path, required=True)
+    parser.add_argument("--source-revision", required=True)
     arguments, remaining = parser.parse_known_args(argv)
     binary = arguments.ablation_binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ExperimentError(
             f"ablation binary is missing or not executable: {binary}"
         )
-    return binary, remaining
+    revision = arguments.source_revision.lower()
+    if len(revision) != 40 or any(
+        character not in "0123456789abcdef" for character in revision
+    ):
+        raise ExperimentError("--source-revision must be a full Git SHA")
+    return binary, revision, remaining
 
 
 def verify_manifest_argument(argv: Sequence[str]) -> None:
@@ -285,9 +291,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if actual_argv == ["--contract-preview"]:
         print(json.dumps(contract_preview(), indent=2, sort_keys=True))
         return 0
-    ABLATION_BINARY, remaining = parse_ablation_binary(actual_argv)
+    ABLATION_BINARY, source_revision, remaining = (
+        parse_experiment_inputs(actual_argv)
+    )
     ABLATION_BINARY_SHA256 = BASE.sha256_file(ABLATION_BINARY)
     STRATEGIES["recompute"]["binary_sha256"] = ABLATION_BINARY_SHA256
+    for strategy_config in STRATEGIES.values():
+        strategy_config["source_revision"] = source_revision
     verify_manifest_argument(remaining)
     configure_base()
     return BASE.main(remaining)

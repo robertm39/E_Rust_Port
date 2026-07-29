@@ -126,6 +126,15 @@ class RunContractTests(unittest.TestCase):
             RUN.hashlib.sha256(RUN.BASE.canonical_json(body)).hexdigest(),
         )
 
+    def test_source_revision_requires_a_full_git_sha(self) -> None:
+        with self.assertRaises(RUN.ExperimentError):
+            RUN.parse_experiment_inputs(
+                [
+                    f"--ablation-binary={Path(sys.executable)}",
+                    "--source-revision=abc123",
+                ]
+            )
+
 
 class AnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -196,4 +205,3 @@ class AnalysisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
