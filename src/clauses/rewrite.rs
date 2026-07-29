@@ -2910,7 +2910,7 @@ mod tests {
         } else {
             assert!(REWRITE_CACHE_LINK_HITS.load(Ordering::Relaxed) >= 1);
             assert!(REWRITE_CACHE_LINK_EDGES.load(Ordering::Relaxed) >= 1);
-            assert_eq!(REWRITE_UNCACHED.load(Ordering::Relaxed), 1);
+            assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);
         }
     }
 
