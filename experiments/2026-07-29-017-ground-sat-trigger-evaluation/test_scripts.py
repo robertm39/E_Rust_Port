@@ -69,12 +69,33 @@ class PackingTests(unittest.TestCase):
             PACK.safe_relative("../outside")
 
     def test_archive_is_deterministic(self) -> None:
-        sources = PACK.collect(EXPERIMENT / "corpus.jsonl", ROOT)
         with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            problem = repository / "problems/casc_2025/FEQ/example.p"
+            axiom = repository / "problems/casc_2025/Axioms/example.ax"
+            problem.parent.mkdir(parents=True)
+            axiom.parent.mkdir(parents=True)
+            problem.write_text(
+                "include('Axioms/example.ax').\nfof(goal,conjecture,p).\n",
+                encoding="utf-8",
+            )
+            axiom.write_text("fof(a,axiom,p).\n", encoding="utf-8")
+            selection = repository / "selection.jsonl"
+            selection.write_text(
+                json.dumps(
+                    {
+                        "record_type": "problem",
+                        "path": "problems/casc_2025/FEQ/example.p",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            sources = PACK.collect(selection, repository)
             first = Path(temporary) / "first.tar.gz"
             second = Path(temporary) / "second.tar.gz"
-            PACK.write_archive(first, ROOT, sources)
-            PACK.write_archive(second, ROOT, sources)
+            PACK.write_archive(first, repository, sources)
+            PACK.write_archive(second, repository, sources)
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
 
