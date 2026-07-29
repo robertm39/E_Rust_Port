@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "d21e1a7d22d6d2d2ef4cc9ace95a9b9404b5e2fa",
+  "rows": [
+    {
+      "id": "ordered_superposition_and_predicate_resolution",
+      "reference_operation": "ordered superposition plus binary predicate resolution",
+      "soundness_preconditions": "eligible selected/maximal source and target positions; unifiable overlap; ordering and generation gates",
+      "umlaut_equivalent": "plain/simultaneous paramodulation, with predicates encoded as Boolean equations",
+      "status": "direct",
+      "cli_reachability": "default search; simultaneous variants have explicit E-compatible options",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "compute_all_paramodulants_indexed"],
+        ["src/clauses/paramodulation.rs", "compute_clause_clause_paramodulants_resolves_predicate_rule_with_ground_unit"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_PARAMOD"],
+      "test_filter": "compute_clause_clause_paramodulants_resolves_predicate_rule_with_ground_unit"
+    },
+    {
+      "id": "equality_resolution",
+      "reference_operation": "remove a negative equality whose sides unify",
+      "soundness_preconditions": "eligible negative literal; unifier and maximality/generation gates",
+      "umlaut_equivalent": "equation resolution",
+      "status": "direct",
+      "cli_reachability": "default search",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "compute_all_eqn_resolvents_with_fresh_vars"],
+        ["src/clauses/eqnresolution.rs", "compute_eq_res_instantiates_remaining_literals"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_EQ_RES"],
+      "test_filter": "compute_eq_res_instantiates_remaining_literals"
+    },
+    {
+      "id": "equality_factoring",
+      "reference_operation": "factor eligible positive equalities while adding the equality side condition",
+      "soundness_preconditions": "unifiable eligible sides and ordered side condition",
+      "umlaut_equivalent": "equality factoring",
+      "status": "direct",
+      "cli_reachability": "default on; --disable-eq-factoring disables it",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "compute_all_equality_factors"],
+        ["src/clauses/factor.rs", "compute_equality_factor_adds_condition_and_removes_first_literal"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_EQ_FACTOR"],
+      "test_filter": "compute_equality_factor_adds_condition_and_removes_first_literal"
+    },
+    {
+      "id": "ordered_factoring",
+      "reference_operation": "merge unifiable duplicate literals under eligibility/order constraints",
+      "soundness_preconditions": "eligible literals and maximality after unification",
+      "umlaut_equivalent": "tested ordered-factor constructors; production search dispatches equality factoring instead",
+      "status": "library_only",
+      "cli_reachability": "no production route; inherited E search also leaves ComputeAllOrderedFactors dormant",
+      "route_markers": [
+        ["src/clauses/factor.rs", "pub fn compute_all_ordered_factors"],
+        ["src/clauses/factor.rs", "compute_ordered_factor_rechecks_maximality_after_unification"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_ORDERED_FACTOR"],
+      "test_filter": "compute_ordered_factor_rechecks_maximality_after_unification"
+    },
+    {
+      "id": "ordinary_demodulation",
+      "reference_operation": "rewrite clauses with external oriented unit equalities",
+      "soundness_preconditions": "matching demodulator, rewrite ordering, date and rewrite-level gates",
+      "umlaut_equivalent": "forward and indexed backward demodulation",
+      "status": "direct",
+      "cli_reachability": "--forward-demod-level and backward-rewrite index controls; enabled by normal strategies",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "proof_state_eliminate_backward_rewritten_clauses"],
+        ["src/clauses/rewrite.rs", "plain_li_normalform_rewrites_subterm_then_top"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_REWRITE"],
+      "test_filter": "plain_li_normalform_rewrites_subterm_then_top"
+    },
+    {
+      "id": "clause_subsumption",
+      "reference_operation": "delete a clause matched by a more general unit or non-unit clause",
+      "soundness_preconditions": "one shared substitution covers distinct target literals; polarity and equality-side rules",
+      "umlaut_equivalent": "unit and non-unit direct/fingerprint-indexed subsumption",
+      "status": "direct",
+      "cli_reachability": "default indexed; --conventional-subsumption selects direct reference",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "proof_state_forward_subsumption_with_bank"],
+        ["src/clauses/subsumption.rs", "clause_subsumption_uses_shared_substitution_and_strict_literal_picking"]
+      ],
+      "proof_operation": null,
+      "test_filter": "clause_subsumption_uses_shared_substitution_and_strict_literal_picking"
+    },
+    {
+      "id": "contextual_simplify_reflect",
+      "reference_operation": "remove a literal when its complement plus the remaining clause is subsumed by context",
+      "soundness_preconditions": "flipped literal and remaining-clause match under one substitution",
+      "umlaut_equivalent": "forward/aggressive/backward contextual simplify-reflect",
+      "status": "direct",
+      "cli_reachability": "--forward-context-sr, --forward-context-sr-aggressive, --backward-context-sr",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "proof_state_eliminate_context_sr_clauses"],
+        ["src/clauses/context_sr.rs", "contextual_simplify_reflect_removes_flipped_subsumed_literal"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_CONTEXT_SR"],
+      "test_filter": "contextual_simplify_reflect_removes_flipped_subsumed_literal"
+    },
+    {
+      "id": "condensation",
+      "reference_operation": "replace a clause by a proper substitution instance that subsumes it",
+      "soundness_preconditions": "factor substitution yields a strictly smaller subsuming clause",
+      "umlaut_equivalent": "iterated clause condensation",
+      "status": "direct",
+      "cli_reachability": "--condense and --condense-aggressive",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "forward_modify_condense"],
+        ["src/clauses/condensation.rs", "condense_repeats_until_no_further_factor_is_found_and_updates_counters"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_CONDENSE"],
+      "test_filter": "condense_repeats_until_no_further_factor_is_found_and_updates_counters"
+    },
+    {
+      "id": "equational_tautology_deletion",
+      "reference_operation": "delete a clause whose positive equality is entailed by its ground negative equalities",
+      "soundness_preconditions": "ground completion and normalization within the literal-count guard",
+      "umlaut_equivalent": "ground-completion equational tautology checking",
+      "status": "direct",
+      "cli_reachability": "preprocessing and forward modification unless preprocessing is disabled",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "clause_is_tautology"],
+        ["src/clauses/tautologies.rs", "tautology_completion_chains_negative_equalities"]
+      ],
+      "proof_operation": null,
+      "test_filter": "tautology_completion_chains_negative_equalities"
+    },
+    {
+      "id": "fool_lowering_and_boolean_simplification",
+      "reference_operation": "lower first-class Boolean formulas/terms and simplify Boolean clauses",
+      "soundness_preconditions": "typed Boolean terms; freshness and phase-ordering invariants",
+      "umlaut_equivalent": "FOOL unrolling, ITE/LET lifting, literal expansion, and Boolean simplification",
+      "status": "direct",
+      "cli_reachability": "normal clausification; --fool-unroll controls the phase",
+      "route_markers": [
+        ["src/clauses/clausefunc.rs", "tformula_unroll_fool"],
+        ["src/clauses/clausefunc.rs", "tformula_conjunctive_nf3_records_fool_unroll_and_followup_nnf"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_FOOL_UNROLL"],
+      "test_filter": "tformula_conjunctive_nf3_records_fool_unroll_and_followup_nnf"
+    },
+    {
+      "id": "inner_rewriting",
+      "reference_operation": "use an oriented negative equality inside a clause to rewrite its other literals",
+      "soundness_preconditions": "eligible local negative equality, orientable sides, no rewriting of the source literal",
+      "umlaut_equivalent": "clause_local_rw",
+      "status": "direct",
+      "cli_reachability": "--local-rw=true; default false in generated schedules",
+      "route_markers": [
+        ["src/heuristics/proofcontrol.rs", "if local_rw && clause_local_rw"],
+        ["src/prover/options.rs", "Some(\"local-rw\")"],
+        ["src/clauses/rewrite.rs", "negative_oriented_literal_rewrites_other_literals"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_LOCAL_REWRITE"],
+      "test_filter": "negative_oriented_literal_rewrites_other_literals",
+      "secondary_test_filter": "proof_state_forward_modify_clause_honors_local_rewrite_option"
+    },
+    {
+      "id": "injectivity_definition_preprocessing",
+      "reference_operation": "recognize an injectivity definition and introduce an inverse-function clause",
+      "soundness_preconditions": "recognized two-literal injectivity shape and fresh inverse symbol",
+      "umlaut_equivalent": "injectivity recognition/replacement preprocessing",
+      "status": "direct",
+      "cli_reachability": "--inverse-recognition and --replace-inj-defs",
+      "route_markers": [
+        ["src/clauses/clausefunc.rs", "clause_recognize_injectivity"],
+        ["src/heuristics/proofcontrol.rs", "clause_recognize_injectivity"]
+      ],
+      "proof_operation": ["src/clauses/derivation.rs", "DC_INV_REC"],
+      "test_filter": "recognize_injectivity_builds_inverse_definition_clause"
+    },
+    {
+      "id": "nonunit_subsumption_demodulation",
+      "reference_operation": "rewrite an unmatched literal with a conditional equality after the other literals match",
+      "soundness_preconditions": "one shared substitution, eligible equality orientation, redundancy ordering",
+      "umlaut_equivalent": "contextual simplify-reflect plus unit demodulation, but non-unit equalities are not demodulators",
+      "status": "partial",
+      "cli_reachability": "no dedicated route",
+      "absence_tokens": ["subsumption_demodulation", "subsumption-demodulation"],
+      "prior_executable_evidence": "experiments/2026-07-28-008-stronger-redundancy/results-summary.json"
+    },
+    {
+      "id": "forward_ground_joinability",
+      "reference_operation": "delete an ordered ground equality whose sides join under older rewrite rules",
+      "soundness_preconditions": "ground equality, older demodulators, joinability and ordering constraint",
+      "umlaut_equivalent": "full forward demodulation and strong RHS instantiation without a dedicated constrained deletion",
+      "status": "partial",
+      "cli_reachability": "no dedicated route",
+      "absence_tokens": ["forward_ground_joinability", "ground_joinability"],
+      "prior_executable_evidence": "experiments/2026-07-28-008-stronger-redundancy/results-summary.json"
+    },
+    {
+      "id": "ur_resolution",
+      "reference_operation": "derive a unit by resolving every non-selected literal of a clause against units",
+      "soundness_preconditions": "simultaneously compatible unit resolutions and eligible selected/result literal",
+      "umlaut_equivalent": "ordinary ordered predicate resolution through paramodulation, without a UR specialization",
+      "status": "missing",
+      "cli_reachability": "no dedicated route",
+      "absence_tokens": ["ur_resolution", "ur-resolution"]
+    },
+    {
+      "id": "term_algebra_rules",
+      "reference_operation": "constructor distinctness/injectivity, exhaustiveness, and acyclicity reasoning for declared term algebras",
+      "soundness_preconditions": "typed closed constructor declarations and well-founded term-algebra semantics",
+      "umlaut_equivalent": "generic equality plus injectivity-definition preprocessing; not a term-algebra calculus",
+      "status": "missing",
+      "cli_reachability": "no dedicated route",
+      "absence_tokens": ["term_algebra", "term-algebra", "acyclicity_check"]
+    },
+    {
+      "id": "theory_instantiation_and_arithmetic_simplification",
+      "reference_operation": "instantiate and simplify interpreted arithmetic/theory constraints",
+      "soundness_preconditions": "sound interpreted semantics and backend certificate boundary",
+      "umlaut_equivalent": "parser/evaluator fragments only; architecture evaluated by the arithmetic/QE track",
+      "status": "owned_elsewhere",
+      "cli_reachability": "not evaluated here",
+      "prior_executable_evidence": "experiments/2026-07-29-005-arithmetic-qe-oracle/FINDINGS.md"
+    }
+  ],
+  "shortlist": [
+    {
+      "rank": 1,
+      "id": "inner_rewriting",
+      "decision": "evaluate_existing_default_off_route"
+    },
+    {
+      "rank": 2,
+      "id": "ur_resolution",
+      "decision": "defer_missing_specialization"
+    },
+    {
+      "rank": 3,
+      "id": "term_algebra_rules",
+      "decision": "defer_broad_typed_calculus"
+    }
+  ]
+}
