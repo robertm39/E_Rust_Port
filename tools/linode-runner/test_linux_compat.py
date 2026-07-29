@@ -400,14 +400,25 @@ class ComparisonTests(unittest.TestCase):
             )
         )
 
-    def test_checker_complete_skolem_differences_are_hash_pinned(self):
+    def test_proof_output_expected_differences_are_hash_pinned(self):
         expected_cases = {
             ("fol", "ALL_RULES.p"),
+            ("fol", "BOO006-1.p"),
+            ("fol", "BOO010-2.p"),
             ("fol", "CNFTest.p"),
+            ("fol", "COL042-8.p"),
+            ("fol", "GRP237-1.p"),
             ("fol", "GROUP1st.p"),
+            ("fol", "HEN011-2.p"),
+            ("fol", "LCL365-1.p"),
             ("fol", "LUSK3.p"),
+            ("fol", "PUZ028-6.p"),
             ("fol", "SEU027+1.p"),
+            ("fol", "SET183-6.p"),
+            ("fol", "SET844-1.p"),
             ("fol", "SWB030+3.p"),
+            ("fol", "SWC078-1.p"),
+            ("fol", "SYN190-1.p"),
             ("ho", "permute_func_axioms.p"),
             ("ho", "permute_func_no_axioms.p"),
             ("ho", "SEV286^5.p"),

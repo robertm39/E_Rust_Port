@@ -7246,6 +7246,25 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
         inference_system_complete,
         next_doc_ident,
     )?;
+    let mut proof_object = Vec::new();
+    match outcome {
+        SaturateOutcome::Returned { clause, .. } => {
+            write_proof_success_object_output(
+                &mut proof_object,
+                config,
+                state,
+                clause,
+                next_doc_ident,
+            )?;
+        }
+        SaturateOutcome::Stopped { .. } => {
+            if let Some(status) =
+                stopped_proof_object_status(config, state, outcome, inference_system_complete)
+            {
+                write_stopped_proof_output(&mut proof_object, config, state, status)?;
+            }
+        }
+    }
     write_proof_search_result(
         output,
         config,
@@ -7254,18 +7273,7 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     )?;
-    match outcome {
-        SaturateOutcome::Returned { clause, .. } => {
-            write_proof_success_object_output(output, config, state, clause, next_doc_ident)?;
-        }
-        SaturateOutcome::Stopped { .. } => {
-            if let Some(status) =
-                stopped_proof_object_status(config, state, outcome, inference_system_complete)
-            {
-                write_stopped_proof_output(output, config, state, status)?;
-            }
-        }
-    }
+    output.write_all(&proof_object)?;
     Ok(())
 }
 
@@ -9713,6 +9721,7 @@ fn write_saturation_proof_object_clause_with_formula_ids(
     formula_ids: &BTreeMap<i64, String>,
     ac_axioms: &[ClauseDerivationRef],
 ) -> Result<(), EProverError> {
+    maybe_delay_proof_render_for_test();
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
@@ -9783,6 +9792,7 @@ fn write_saturation_proof_object_formula_with_formula_ids(
     formula_ids: &BTreeMap<i64, String>,
     ac_axioms: &[ClauseDerivationRef],
 ) -> Result<(), EProverError> {
+    maybe_delay_proof_render_for_test();
     let mut rendered = String::new();
     let proof_problem_type = proof_output_problem_type(proof_problem_type);
     match effective_doc_output_format(config) {
@@ -9885,6 +9895,28 @@ fn write_saturation_proof_object_formula_with_formula_ids(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
+fn maybe_delay_proof_render_for_test() {
+    const VARIABLE: &str = "UMLAUT_TEST_PROOF_RENDER_DELAY_MS";
+    static DELAYED: OnceLock<()> = OnceLock::new();
+
+    let Ok(raw_delay) = std::env::var(VARIABLE) else {
+        return;
+    };
+    let Ok(delay_ms) = raw_delay.parse::<u64>() else {
+        return;
+    };
+    if delay_ms == 0 || DELAYED.set(()).is_err() {
+        return;
+    }
+
+    eprintln!("% UMLAUT test proof-render delay active");
+    std::thread::sleep(Duration::from_millis(delay_ms));
+}
+
+#[cfg(not(debug_assertions))]
+const fn maybe_delay_proof_render_for_test() {}
+
 fn proof_object_derivation_stack(entries: &[DerivationEntry]) -> PStack<DerivationEntry> {
     let mut derivation = PStack::with_exact_capacity(entries.len().max(1));
     for entry in entries {
@@ -9949,7 +9981,16 @@ fn append_proof_object_formula_tstp(
         proof_problem_type,
         identifier,
     )?);
-    let derivation = if let Some(details) = skolem_details {
+    let introduced_definition =
+        formula
+            .introduced_definition_symbol(bank.signature())
+            .map(|symbol| {
+                let name = bank.signature().func(symbol).print_name();
+                format!("introduced(definition,[new_symbols(definition,[{name}])],[])")
+            });
+    let derivation = if introduced_definition.is_some() {
+        None
+    } else if let Some(details) = skolem_details {
         deriv_stack_tstp_string_with_formula_ids_and_skolem_details(
             derivation,
             ac_axioms,
@@ -9959,7 +10000,10 @@ fn append_proof_object_formula_tstp(
     } else {
         deriv_stack_tstp_string_with_formula_ids(derivation, ac_axioms, formula_ids)
     };
-    if let Some(derivation) = derivation {
+    if let Some(introduced_definition) = introduced_definition {
+        rendered.push_str(", ");
+        rendered.push_str(&introduced_definition);
+    } else if let Some(derivation) = derivation {
         rendered.push_str(", ");
         rendered.push_str(&derivation);
     } else {
@@ -33183,6 +33227,89 @@ input_clause(c2,axiom,[++q(X)]).
             "cnf(c_0_3, plain, ($false), inference(cn,[status(thm)],[c_0_2]), ['proof']).\n"
         ));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_preserves_cited_cnf_source_surface() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-cnf-source-surface");
+        std::fs::write(
+            &path,
+            "cnf(mixed_source,axiom,(~q(A)|p(A,B,C))).\n\
+             cnf(q_source,axiom,q(a)).\n\
+             cnf(goal,negated_conjecture,~p(a,b,c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--tstp-in",
+                "--tstp-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(
+            printed.contains("cnf(mixed_source, axiom, (~q(A)|p(A,B,C)), file("),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("cnf(goal, negated_conjecture, ~p(a,b,c), file("),
+            "{printed}"
+        );
+        assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_records_conservative_definition_symbols() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-definition-symbol");
+        std::fs::write(
+            &path,
+            "fof(disjunction,axiom,((p(a)&q(a))|(r(a)&s(a)))).\n\
+             fof(no_p,axiom,~p(a)).\n\
+             fof(no_r,axiom,~r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--tstp-out",
+                "--proof-object=1",
+                "--definitional-cnf=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains(", definition, "), "{printed}");
+        assert!(
+            printed.contains("introduced(definition,[new_symbols(definition,[epred"),
+            "{printed}"
+        );
+        assert!(printed.contains("])],[]))."), "{printed}");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

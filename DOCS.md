@@ -80,6 +80,14 @@ result, lost one held-out verified baseline solve, and exposed broad
 first-order proof-leaf provenance failures. Production splitting remains
 unchanged.
 
+The first-order TSTP source-leaf repair, minimized mutation matrix, held-out
+CASC evidence, atomic proof-publication fault injection, and ProofCheck 1.0
+conservative-definition coverage boundary are retained in
+[`experiments/2026-07-29-009-tstp-input-leaf-provenance/`](experiments/2026-07-29-009-tstp-input-leaf-provenance/).
+Plain and negated-conjecture source proofs now verify externally, while used
+conservative definitions remain a fail-closed coverage gap tracked by
+`E_Rust_Port-9jt.2.10`.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

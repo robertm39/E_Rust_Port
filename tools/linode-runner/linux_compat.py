@@ -132,6 +132,22 @@ MAIN_COMPARISON_EXPECTED_MISMATCHES = {
     ("ho", "permute_func_no_axioms.p"): ("normalized_stdout",),
     ("ho", "SEV286^5.p"): ("normalized_stdout",),
     ("ho", "tffex01.p"): ("normalized_stdout",),
+    # A file-cited CNF source leaf must reproduce the source body rather than
+    # Umlaut's canonicalized internal clause.  That preserves the source's
+    # variable names, literal order, and signs for independent proof checkers.
+    # E prints its canonicalized clause in these cases.  The complete output
+    # pairs are hash-pinned below.
+    ("fol", "BOO006-1.p"): ("normalized_stdout",),
+    ("fol", "BOO010-2.p"): ("normalized_stdout",),
+    ("fol", "COL042-8.p"): ("normalized_stdout",),
+    ("fol", "GRP237-1.p"): ("normalized_stdout",),
+    ("fol", "HEN011-2.p"): ("normalized_stdout",),
+    ("fol", "LCL365-1.p"): ("normalized_stdout",),
+    ("fol", "PUZ028-6.p"): ("normalized_stdout",),
+    ("fol", "SET183-6.p"): ("normalized_stdout",),
+    ("fol", "SET844-1.p"): ("normalized_stdout",),
+    ("fol", "SWC078-1.p"): ("normalized_stdout",),
+    ("fol", "SYN190-1.p"): ("normalized_stdout",),
     # Umlaut deliberately archives conjecture-preprocessing formulas as
     # standalone proof records.  E nests or omits those records, which leaves
     # otherwise valid derivations without independently checkable parents.
@@ -149,11 +165,11 @@ MAIN_COMPARISON_EXPECTED_MISMATCHES = {
     ("ho", "sledgehammer.p"): ("normalized_stdout",),
 }
 MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256 = {
-    # Recorded by Ubuntu 24.04 comprehensive run 260728-223644-efcf against
+    # Audited by Ubuntu 24.04 comprehensive run 260729-122332-1e42 against
     # pinned E revision 17026b1bfe61aaf223cfaae54947c8d2679c31a0.
     ("fol", "ALL_RULES.p"): {
         "reference": "5046054144345b5538b29de83c508d9e42beadd97d10aa7c39bc8ededd585c66",
-        "candidate": "e0d74d02c48def455eded89fea2dd8d3732a96634251c45588287cbb1bc36a45",
+        "candidate": "f6f6f3d902ea049037d9a21460660b37f04c824fb32ba1898e3a08852fa74f38",
     },
     ("fol", "CNFTest.p"): {
         "reference": "253f2d3974b84e6ac91ad9f2e118ef335eb087c7e9c4fd235b2e35ac4a4955c5",
@@ -165,7 +181,51 @@ MAIN_COMPARISON_EXPECTED_NORMALIZED_STDOUT_SHA256 = {
     },
     ("fol", "LUSK3.p"): {
         "reference": "2927887593896fe8f39425d2a8c84363ff9cb521394ed4b5f2f4e6c221993f7f",
-        "candidate": "19bd3b5bd3ddba3334d0c000f60ed9413b98eefbfaa988b56cc53e62859241c8",
+        "candidate": "7b36fe8418918b8b7b1450440f9d4fa5029feff29c86b1d6c40987edc98c85ae",
+    },
+    ("fol", "BOO006-1.p"): {
+        "reference": "39617e042de88b88c8e14b9f5b0a3f1e434ad81cdbeb667473dc14f8550487ae",
+        "candidate": "e8d37bafed961705f01f0f894bef0b415c387574476503cbf117fdd48a82f91d",
+    },
+    ("fol", "BOO010-2.p"): {
+        "reference": "a3d670ac86e1ab6042c0c41c09aaa5be8ca1f69ae079433e25c84ee6c682dde3",
+        "candidate": "aea1b0d0d79daaf1ace3fcf84f531f3e18724b254f73bc6c97e6708fca072e2f",
+    },
+    ("fol", "COL042-8.p"): {
+        "reference": "92906b5f8ae6c5ba5631e222c76a927ed4aedcfb51f8be7f22123a60c7c206e3",
+        "candidate": "1a065a61e28846ab122dabed276df5acf6597dc5ff985cb405ef678483e7f989",
+    },
+    ("fol", "GRP237-1.p"): {
+        "reference": "8968b26d9f570e0764a477a8bb381d7ef6c592266057e492eed3055ca900e7b4",
+        "candidate": "f041d116ee2e2f9ae34fffd547f1e146c3432e70bf6e7900518361e70420937d",
+    },
+    ("fol", "HEN011-2.p"): {
+        "reference": "cd8372411f150a4179a4f50820bbe5b01e3f585299ababb4356be464201fc0fc",
+        "candidate": "5e2c8fc0cee19b3c1d1913ffeaba0804237738e86eadb6ace9a72f66af26053e",
+    },
+    ("fol", "LCL365-1.p"): {
+        "reference": "782f502fb6aec873671a0e5ba1d689c4a5b9d2cebc2a5fdd5c3a14b7474b7f02",
+        "candidate": "e96edf09771868e25a7659971b7a0270af255e87392fdc2176585034bd97fc85",
+    },
+    ("fol", "PUZ028-6.p"): {
+        "reference": "83bcaa18ab14d8d3c0af111072675d4e758cbc69b1ac4a9b57f6f1ad49381919",
+        "candidate": "9b6c2cbcd4cab404b74468c8619d67ecce760bd60791ebe09e325d7069e0f16c",
+    },
+    ("fol", "SET183-6.p"): {
+        "reference": "3aa1066549f5cf77e13b1faa9128a5c048d7f6f0a0b05b043325cbd21cc41d3a",
+        "candidate": "e5c7050d75ab183e0acf4fbcb80afede8dc77e0a695a6bbc882b62bddce62d4d",
+    },
+    ("fol", "SET844-1.p"): {
+        "reference": "bd0b8ed60ddc4f4fc456b8036602d11357f773417a772272131018b6216b770e",
+        "candidate": "83728adbb1f430bebad51b41f28517ed6c11f685f690186d9989773c40ba08e3",
+    },
+    ("fol", "SWC078-1.p"): {
+        "reference": "7f4447f0cdbb3d3f6febf111bdea990a16b7393cb0dfaf9157db38715c79d387",
+        "candidate": "c802965a3d574a9ebaceebcf73917cf68de9275bba16226b2f2eee0bd90d315a",
+    },
+    ("fol", "SYN190-1.p"): {
+        "reference": "1ce5b17fcbacbb98a6bf5a71f915d81ed1703883bfd691b84ee5448c63df8d61",
+        "candidate": "6ae28f5be0c48c40391147aa3c0c477de6194477c450010955e35aac2c3ba4ad",
     },
     ("fol", "SEU027+1.p"): {
         "reference": "0dc960e3f278884bed68f1a2c8e81e13c67c06cb1ed3819bc72c5502fb436d70",

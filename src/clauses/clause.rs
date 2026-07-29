@@ -1461,6 +1461,7 @@ pub fn clause_parse_with_options(
     options: ClauseParseOptions,
 ) -> Result<Clause, Diagnostic> {
     apply_clause_parse_var_scope(bank, options);
+    let source_tstp_body = capture_source_tstp_clause_body(scanner)?;
     let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
@@ -1479,13 +1480,70 @@ pub fn clause_parse_with_options(
     let mut clause = Clause::alloc(literals);
     clause.set_tptp_type(type_);
     clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
-    clause.set_info(Some(ClauseInfo::new(
+    let mut info = ClauseInfo::new(
         name.as_deref(),
         Some(start_source.as_str()),
         start_line,
         start_column,
-    )));
+    );
+    if let Some(body) = source_tstp_body {
+        info = info.with_source_tstp_body(body);
+    }
+    clause.set_info(Some(info));
     Ok(clause)
+}
+
+fn capture_source_tstp_clause_body(scanner: &Scanner) -> Result<Option<String>, Diagnostic> {
+    if scanner.format() != IoFormat::Tstp || !scanner.test_id("cnf") {
+        return Ok(None);
+    }
+
+    let mut source = scanner.clone();
+    source.accept_id("cnf")?;
+    source.accept_tok(TokenType::OPEN_BRACKET)?;
+    source.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    source.accept_tok(TokenType::COMMA)?;
+    source.accept_tok(TokenType::IDENTIFIER)?;
+    source.accept_tok(TokenType::COMMA)?;
+
+    let mut body = String::new();
+    let mut round_depth = 0_i64;
+    let mut square_depth = 0_i64;
+    let mut curly_depth = 0_i64;
+    loop {
+        let token = source.current_token();
+        let kind = token.kind();
+        if kind == TokenType::NO_TOKEN {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "unterminated TSTP clause while preserving the source body",
+            ));
+        }
+        if round_depth == 0
+            && square_depth == 0
+            && curly_depth == 0
+            && (kind == TokenType::COMMA || kind == TokenType::CLOSE_BRACKET)
+        {
+            break;
+        }
+
+        body.push_str(&token.literal());
+        if kind == TokenType::OPEN_BRACKET {
+            round_depth += 1;
+        } else if kind == TokenType::CLOSE_BRACKET {
+            round_depth -= 1;
+        } else if kind == TokenType::OPEN_SQUARE {
+            square_depth += 1;
+        } else if kind == TokenType::CLOSE_SQUARE {
+            square_depth -= 1;
+        } else if kind == TokenType::OPEN_CURLY {
+            curly_depth += 1;
+        } else if kind == TokenType::CLOSE_CURLY {
+            curly_depth -= 1;
+        }
+        source.next_token()?;
+    }
+    Ok(Some(body))
 }
 
 pub fn clause_pcl_parse(
@@ -3319,6 +3377,10 @@ mod tests {
         assert_eq!(parsed_tstp.literal_number(), 2);
         assert_eq!(parsed_tstp.positive_literal_count(), 1);
         assert_eq!(parsed_tstp.negative_literal_count(), 1);
+        assert_eq!(
+            parsed_tstp.info().and_then(ClauseInfo::source_tstp_body),
+            Some("(p(a)|~q(a))")
+        );
     }
 
     #[test]

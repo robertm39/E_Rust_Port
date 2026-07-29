@@ -2,6 +2,7 @@
 pub struct ClauseInfo {
     name: Option<String>,
     source: Option<String>,
+    source_tstp_body: Option<String>,
     line: i64,
     column: i64,
 }
@@ -12,6 +13,7 @@ impl ClauseInfo {
         Self {
             name: name.map(str::to_owned),
             source: source.map(str::to_owned),
+            source_tstp_body: None,
             line,
             column,
         }
@@ -22,6 +24,7 @@ impl ClauseInfo {
         Self {
             name: None,
             source: None,
+            source_tstp_body: None,
             line: -1,
             column: -1,
         }
@@ -35,6 +38,22 @@ impl ClauseInfo {
     #[must_use]
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
+    }
+
+    /// Preserves the parsed TSTP body for a source clause.
+    ///
+    /// The represented clause may subsequently canonicalize variable names or
+    /// literal order. Proof leaves that cite the source file must nevertheless
+    /// reproduce the source body faithfully.
+    #[must_use]
+    pub fn source_tstp_body(&self) -> Option<&str> {
+        self.source_tstp_body.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_source_tstp_body(mut self, body: impl Into<String>) -> Self {
+        self.source_tstp_body = Some(body.into());
+        self
     }
 
     #[must_use]

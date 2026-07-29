@@ -1661,6 +1661,70 @@ pub fn wformula_deriv_find_first<'a>(
     current
 }
 
+fn normalize_introduced_definition_polarity(signature: &Signature, formula: &Term) -> Option<Term> {
+    if formula.f_code() == signature.qall_code() && formula.arity() == 2 {
+        let normalized_body =
+            normalize_introduced_definition_polarity(signature, &formula.argument(1)?)?;
+        let normalized = Term::top_copy_without_args(formula);
+        normalized.set_argument(0, formula.argument(0)?);
+        normalized.set_argument(1, normalized_body);
+        return Some(normalized);
+    }
+    if formula.f_code() != signature.equiv_code() || formula.arity() != 2 {
+        return None;
+    }
+
+    let left = formula.argument(0)?;
+    let right = formula.argument(1)?;
+    let positive_left = cancel_outer_formula_negation(signature, &left)?;
+    let normalized_right = cancel_outer_formula_negation(signature, &right)
+        .unwrap_or_else(|| negate_formula_for_print(signature, &right));
+
+    let normalized = Term::top_copy_without_args(formula);
+    normalized.set_argument(0, positive_left);
+    normalized.set_argument(1, normalized_right);
+    Some(normalized)
+}
+
+fn cancel_outer_formula_negation(signature: &Signature, formula: &Term) -> Option<Term> {
+    if formula.f_code() == signature.not_code() && formula.arity() == 1 {
+        return formula.argument(0);
+    }
+    if formula.f_code() == signature.neqn_code() && formula.arity() == 2 {
+        let positive = Term::top_copy_without_args(formula);
+        positive.set_f_code(signature.eqn_code());
+        positive.set_argument(0, formula.argument(0)?);
+        positive.set_argument(1, formula.argument(1)?);
+        return Some(positive);
+    }
+    None
+}
+
+fn negate_formula_for_print(signature: &Signature, formula: &Term) -> Term {
+    if formula.f_code() == signature.eqn_code() && formula.arity() == 2 {
+        let negative = Term::top_copy_without_args(formula);
+        negative.set_f_code(signature.neqn_code());
+        negative.set_argument(
+            0,
+            formula
+                .argument(0)
+                .expect("encoded formula literal left side is uninitialized"),
+        );
+        negative.set_argument(
+            1,
+            formula
+                .argument(1)
+                .expect("encoded formula literal right side is uninitialized"),
+        );
+        return negative;
+    }
+
+    let negative = Term::top_alloc(signature.not_code(), 1);
+    negative.set_type(formula.type_());
+    negative.set_argument(0, formula.clone());
+    negative
+}
+
 impl WrappedFormula {
     #[must_use]
     pub fn default_alloc() -> Self {
@@ -2761,6 +2825,23 @@ impl WrappedFormula {
         problem_type: ProblemType,
         identifier: &str,
     ) -> Result<String, Diagnostic> {
+        let is_source_leaf = self.derivation().is_none_or(PStack::is_empty);
+        if self.is_clause && is_source_leaf {
+            if let Some(source_body) = self.info().and_then(ClauseInfo::source_tstp_body) {
+                let formula_kind = if problem_type == ProblemType::HigherOrder {
+                    "thf"
+                } else if self.is_untyped() {
+                    "cnf"
+                } else {
+                    "tcf"
+                };
+                return Ok(format!(
+                    "{formula_kind}({identifier}, {}, {source_body}",
+                    self.tstp_role_name()
+                ));
+            }
+        }
+
         let formula_kind = if problem_type == ProblemType::HigherOrder {
             "thf"
         } else if self.is_clause {
@@ -2774,22 +2855,64 @@ impl WrappedFormula {
         } else {
             "tff"
         };
+        let introduced_definition = self.introduced_definition_symbol(bank.signature());
         let rendered = if self.is_clause {
             let clause = self.form_clause_to_clause_for_print(bank)?;
             clause_print_tstp_core_string(bank, &clause, true, false)
         } else {
+            let normalized_definition = introduced_definition.and_then(|_| {
+                normalize_introduced_definition_polarity(bank.signature(), self.formula())
+            });
             tformula_tptp_string(
                 bank,
-                self.formula(),
+                normalized_definition
+                    .as_ref()
+                    .unwrap_or_else(|| self.formula()),
                 true,
                 TFormulaTptpPrintOptions::tstp(problem_type),
             )?
         };
-        Ok(format!(
-            "{formula_kind}({}, {}, {rendered}",
-            identifier,
+        let role = if introduced_definition.is_some() {
+            "definition"
+        } else {
             self.tstp_role_name()
-        ))
+        };
+        Ok(format!("{formula_kind}({identifier}, {role}, {rendered}"))
+    }
+
+    /// Returns the fresh principal symbol of an archived definitional-CNF
+    /// introduction.
+    #[must_use]
+    pub(crate) fn introduced_definition_symbol(&self, signature: &Signature) -> Option<FunCode> {
+        let derivation = self.derivation()?.as_slice();
+        if derivation != [DerivationEntry::Operation(DC_INTRO_DEF)] {
+            return None;
+        }
+
+        let mut formula = self.formula().clone();
+        while formula.f_code() == signature.qall_code() && formula.arity() == 2 {
+            formula = formula.argument(1)?;
+        }
+        if formula.f_code() != signature.equiv_code() || formula.arity() != 2 {
+            return None;
+        }
+
+        let mut defined = formula.argument(0)?;
+        if defined.f_code() == signature.not_code() && defined.arity() == 1 {
+            defined = defined.argument(0)?;
+        }
+        if matches!(
+            defined.f_code(),
+            code if code == signature.eqn_code() || code == signature.neqn_code()
+        ) && defined.arity() == 2
+        {
+            defined = defined.argument(0)?;
+        }
+        if defined.is_phony_app() && defined.arity() != 0 {
+            defined = defined.argument(0)?;
+        }
+
+        (defined.f_code() > signature.internal_symbols()).then_some(defined.f_code())
     }
 
     /// Renders C's `WFormulaTSTPPrint` macro shape with `as_formula=true`.
@@ -6110,6 +6233,65 @@ mod tests {
         assert!(tstp_output.ends_with(")."));
         assert!(incomplete_tstp.starts_with("fof(wf_print_neg, negated_conjecture, "));
         assert!(!incomplete_tstp.ends_with(")."));
+    }
+
+    #[test]
+    fn introduced_definition_output_cancels_matching_outer_negations() {
+        let mut bank = test_bank();
+        let head = typed_predicate_const(&mut bank, "definition_head");
+        let body = typed_predicate_const(&mut bank, "definition_body");
+        let bool_type = bank.signature().type_bank().bool_type();
+        let not_code = bank.signature().not_code();
+        let equiv_code = bank.signature().equiv_code();
+        let not_head = Term::top_alloc(not_code, 1);
+        not_head.set_type(Some(bool_type.clone()));
+        not_head.set_argument(0, head);
+        let not_head = bank.term_top_insert(not_head).unwrap();
+        let not_body = Term::top_alloc(not_code, 1);
+        not_body.set_type(Some(bool_type));
+        not_body.set_argument(0, body);
+        let not_body = bank.term_top_insert(not_body).unwrap();
+        let equivalence = bool_binary_with_code(&mut bank, equiv_code, &not_head, &not_body);
+        let mut definition = WrappedFormula::wt_formula_alloc(equivalence);
+        definition.push_formula_derivation(DC_INTRO_DEF, None, None);
+
+        let rendered = definition
+            .proof_object_tstp_string_with_id(&bank, ProblemType::FirstOrder, "definition_polarity")
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(definition_polarity, definition, (definition_head<=>definition_body)"
+        );
+    }
+
+    #[test]
+    fn introduced_definition_output_cancels_encoded_negative_literals() {
+        let mut bank = test_bank();
+        let head = typed_predicate_const(&mut bank, "encoded_definition_head");
+        let body = typed_predicate_const(&mut bank, "encoded_definition_body");
+        let true_term = bank.true_term().clone();
+        let eqn_code = bank.signature().eqn_code();
+        let neqn_code = bank.signature().neqn_code();
+        let equiv_code = bank.signature().equiv_code();
+        let not_head = bool_binary_with_code(&mut bank, neqn_code, &head, &true_term);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &body, &true_term);
+        let equivalence = bool_binary_with_code(&mut bank, equiv_code, &not_head, &body);
+        let mut definition = WrappedFormula::wt_formula_alloc(equivalence);
+        definition.push_formula_derivation(DC_INTRO_DEF, None, None);
+
+        let rendered = definition
+            .proof_object_tstp_string_with_id(
+                &bank,
+                ProblemType::FirstOrder,
+                "encoded_definition_polarity",
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(encoded_definition_polarity, definition, (encoded_definition_head<=>~encoded_definition_body)"
+        );
     }
 
     #[test]
