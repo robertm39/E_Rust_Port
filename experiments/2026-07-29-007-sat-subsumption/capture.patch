@@ -1,0 +1,45 @@
+diff --git a/src/clauses/mod.rs b/src/clauses/mod.rs
+index 78b45180..ccecf614 100644
+--- a/src/clauses/mod.rs
++++ b/src/clauses/mod.rs
+@@ -48,6 +48,8 @@ pub mod propclauses;
+ pub mod propclauses;
+ pub mod relevance;
+ pub mod rewrite;
++#[path = "../../experiments/2026-07-29-007-sat-subsumption/sat_subsumption.rs"]
++pub mod sat_subsumption_experiment;
+ pub mod satinterface;
+ pub mod satservice;
+ pub mod sine;
+diff --git a/src/clauses/subsumption.rs b/src/clauses/subsumption.rs
+index 61795840..9e607219 100644
+--- a/src/clauses/subsumption.rs
++++ b/src/clauses/subsumption.rs
+@@ -829,7 +829,27 @@ pub fn clause_subsumes_clause_with_bank(
+ ) -> Result<bool, Diagnostic> {
+     let _timer = crate::basics::perf_counters::start(
+         crate::basics::perf_counters::PerfCounter::SubsumeTimer,
+     );
++    let started = std::time::Instant::now();
++    let result = clause_subsumes_clause_with_bank_inner(subsumer, sub_candidate, bank);
++    let elapsed_ns = started.elapsed().as_nanos();
++    if let Ok(baseline) = result.as_ref() {
++        crate::clauses::sat_subsumption_experiment::record_capture(
++            subsumer,
++            sub_candidate,
++            bank,
++            *baseline,
++            elapsed_ns,
++        );
++    }
++    result
++}
++
++fn clause_subsumes_clause_with_bank_inner(
++    subsumer: &Clause,
++    sub_candidate: &Clause,
++    bank: &mut TermBank,
++) -> Result<bool, Diagnostic> {
+     debug_assert!(clause_is_subsume_ordered(subsumer, bank));
+     debug_assert!(clause_is_subsume_ordered(sub_candidate, bank));
+     debug_assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());

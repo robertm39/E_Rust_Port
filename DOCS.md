@@ -62,6 +62,15 @@ This is a selection study rather than dependency adoption: the root package
 remains dependency-free until a production theory consumer passes the
 documented adoption gates.
 
+The clean-room SAT ordinary-subsumption and prospective
+subsumption-resolution crossover study, independent oracle, family-separated
+CASC-30 capture, full threshold surface, and negative integration decision are
+retained in
+[`experiments/2026-07-29-007-sat-subsumption/`](experiments/2026-07-29-007-sat-subsumption/).
+The evaluated fresh per-call SAT path had zero ordinary-result disagreements
+but no latency crossover, so Umlaut's production recursive matcher remains
+unchanged.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
