@@ -47,6 +47,13 @@ implementation blueprint, validation vectors, source provenance, and paper
 errata. It was prepared without inspecting or using the unlicensed VIRAS
 GitHub implementation.
 
+The independent bounded arithmetic/QE oracle, external SMT-LIB process
+boundary, outcome taxonomy, and disagreement shrinker are documented in
+[`tools/validation/README.md`](tools/validation/README.md). The pinned-Z3
+falsification run is retained in
+[`experiments/2026-07-29-005-arithmetic-qe-oracle/`](experiments/2026-07-29-005-arithmetic-qe-oracle/).
+Neither path imports Umlaut arithmetic code or adopts Z3 as a dependency.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
