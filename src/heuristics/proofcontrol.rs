@@ -7509,7 +7509,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     };
     let Some(mut packed) = packed else {
         if let Some(archived_ref) = archived_ref {
-            let _ = state.archive_mut().delete_by_id(archived_ref.ident());
+            let _ = state.archive_mut().extract_by_derivation_ref(archived_ref);
         }
         return Ok(ProcessClauseOutcome::ContractedAway);
     };
@@ -15124,6 +15124,55 @@ mod tests {
 
         assert_eq!(outcome, ProcessClauseOutcome::NoClause);
         assert_eq!(state.statistics().processed_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_removes_exact_gc_archive_after_contraction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let collision_ident = 4_144;
+        let (mut retained_parent, subsumer, selected) = {
+            let terms = state.terms_mut();
+            let mut retained_parent =
+                unit_clause_with_id(terms, "pc_process_retained_archive", collision_ident);
+            retained_parent.refresh_derivation_generation();
+            let variable = typed_var(terms, -2);
+            let replacement = typed_const(terms, "pc_process_contract_replacement");
+            let instance = typed_const(terms, "pc_process_contract_instance");
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &replacement,
+                true,
+            )]));
+            subsumer.set_ident(4_145);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &instance,
+                &replacement,
+                true,
+            )]));
+            selected.set_ident(collision_ident);
+            (retained_parent, subsumer, selected)
+        };
+        let retained_ref = ClauseDerivationRef::from(&retained_parent);
+        retained_parent.set_prop(CP_IS_DEAD);
+        state.archive_mut().insert(retained_parent);
+        state.processed_pos_eqns_mut().insert(subsumer);
+
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.set_record_gc_selection(true);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, ProcessClauseOutcome::ContractedAway);
+        assert_eq!(state.archive().members(), 1);
+        assert!(state
+            .archive()
+            .find_by_derivation_ref(retained_ref)
+            .is_some());
     }
 
     #[test]
