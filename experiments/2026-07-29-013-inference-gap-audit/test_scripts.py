@@ -26,6 +26,7 @@ def load(name: str, path: Path):
 
 AUDIT = load("inference_gap_audit_matrix", ROOT / "audit_matrix.py")
 RUN = load("inference_gap_run", ROOT / "run.py")
+ANALYZE = load("inference_gap_analyze", ROOT / "analyze.py")
 
 
 class MatrixTests(unittest.TestCase):
@@ -67,6 +68,13 @@ class MatrixTests(unittest.TestCase):
     def test_audit_phase_rejects_selection_file(self) -> None:
         with self.assertRaises(RUN.ExperimentError):
             RUN.phase_strategies("audit", ROOT / "unexpected.json")
+
+    def test_analysis_status_polarity_is_explicit(self) -> None:
+        self.assertEqual(ANALYZE.status_polarity("Theorem"), "proof")
+        self.assertEqual(
+            ANALYZE.status_polarity("CounterSatisfiable"), "model"
+        )
+        self.assertIsNone(ANALYZE.status_polarity("ResourceOut"))
 
 
 if __name__ == "__main__":
