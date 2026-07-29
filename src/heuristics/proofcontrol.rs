@@ -10921,10 +10921,7 @@ mod tests {
         params.sat_check_size_limit = 10;
         let thresholds = SatCheckThresholds::new(&params);
 
-        let advanced = thresholds.advance_after(
-            SatCheckTrigger::Size { cardinality: 35 },
-            &params,
-        );
+        let advanced = thresholds.advance_after(SatCheckTrigger::Size { cardinality: 35 }, &params);
 
         assert_eq!(advanced.size, 40);
         assert_eq!(advanced.step, thresholds.step);
@@ -10950,8 +10947,7 @@ mod tests {
         params.sat_check_ttinsert_limit = 5_000_000;
         let thresholds = SatCheckThresholds::new(&params);
 
-        let advanced =
-            thresholds.advance_after(SatCheckTrigger::TermBankInsertions, &params);
+        let advanced = thresholds.advance_after(SatCheckTrigger::TermBankInsertions, &params);
 
         assert_eq!(advanced.ttinsert, 10_000_000);
         assert_eq!(advanced.size, thresholds.size);
