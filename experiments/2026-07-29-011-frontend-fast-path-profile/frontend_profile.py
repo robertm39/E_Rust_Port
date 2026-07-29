@@ -21,14 +21,14 @@ DIALECTS = ("cnf", "fof", "tff", "thf")
 SIZES = (1_000, 10_000, 50_000)
 MODES = ("syntax", "cnf_no_preprocessing", "cnf")
 TIME_FORMAT = "%e\\t%U\\t%S\\t%M\\t%x"
-DHAT_FIELDS = (
-    "tb",
-    "tbk",
-    "mb",
-    "mbk",
-    "eb",
-    "ebk",
-)
+DHAT_TOTAL_FIELDS = {
+    "total_bytes": "tb",
+    "total_blocks": "tbk",
+    "peak_live_bytes": "gb",
+    "peak_live_blocks": "gbk",
+    "end_live_bytes": "eb",
+    "end_live_blocks": "ebk",
+}
 ANCESTRY_RE = re.compile(r"\binference\s*\(")
 CNF_NAME_RE = re.compile(r"(?m)^\s*cnf\s*\(\s*([^,\s]+)")
 
@@ -563,10 +563,19 @@ def analyze_records(
 
 def parse_dhat(path: Path) -> dict[str, int]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    missing = [field for field in DHAT_FIELDS if field not in payload]
-    if missing:
-        raise ExperimentError(f"DHAT output lacks fields: {missing}")
-    return {field: int(payload[field]) for field in DHAT_FIELDS}
+    allocation_points = payload.get("pps")
+    if not isinstance(allocation_points, list) or not allocation_points:
+        raise ExperimentError("DHAT output has no allocation points")
+    result = {}
+    for output_name, point_name in DHAT_TOTAL_FIELDS.items():
+        if any(point_name not in point for point in allocation_points):
+            raise ExperimentError(
+                f"DHAT allocation point lacks field: {point_name}"
+            )
+        result[output_name] = sum(
+            int(point[point_name]) for point in allocation_points
+        )
+    return result
 
 
 def profile_command(arguments: argparse.Namespace) -> None:
@@ -673,6 +682,205 @@ def profile_command(arguments: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
 
 
+def exact_cnf_output(binary: Path, problem: Path) -> bytes:
+    return run_capture(
+        binary,
+        ["--cnf", "--tstp-out", "--output-level=4", str(problem)],
+        timeout=600,
+    )
+
+
+def percentage_improvement(baseline: float, candidate: float) -> float:
+    if baseline <= 0.0:
+        raise ExperimentError("baseline metric must be positive")
+    return (baseline - candidate) / baseline * 100.0
+
+
+def candidate_command(arguments: argparse.Namespace) -> None:
+    if sys.platform != "linux":
+        raise ExperimentError("candidate comparison must run on Linux")
+    corpus_root = arguments.corpus_root.resolve()
+    output_root = arguments.output_root.resolve()
+    baseline_bin = arguments.baseline_bin.resolve()
+    candidate_bin = arguments.candidate_bin.resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    manifest = load_manifest(corpus_root)
+    for binary in (baseline_bin, candidate_bin):
+        if not binary.is_file():
+            raise ExperimentError(f"missing comparison binary: {binary}")
+
+    origins = []
+    for size in (1_000, 10_000):
+        for dialect in DIALECTS:
+            problem = corpus_path(corpus_root, dialect, size)
+            baseline = exact_cnf_output(baseline_bin, problem)
+            candidate = exact_cnf_output(candidate_bin, problem)
+            baseline_path = output_root / f"origin-baseline-{dialect}-{size}.out"
+            candidate_path = output_root / f"origin-candidate-{dialect}-{size}.out"
+            baseline_path.write_bytes(baseline)
+            candidate_path.write_bytes(candidate)
+            exact = baseline == candidate
+            if not exact:
+                raise ExperimentError(
+                    f"candidate TSTP output differs for {dialect}/{size}"
+                )
+            text = candidate.decode("utf-8", errors="strict")
+            origins.append(
+                {
+                    "dialect": dialect,
+                    "records": size,
+                    "exact": exact,
+                    "sha256": sha256_bytes(candidate),
+                    "bytes": len(candidate),
+                    "cnf_records": len(CNF_NAME_RE.findall(text)),
+                    "inference_records": len(ANCESTRY_RE.findall(text)),
+                }
+            )
+
+    rows = []
+    for size in SIZES:
+        for dialect in DIALECTS:
+            problem = corpus_path(corpus_root, dialect, size)
+            for mode in MODES:
+                for repetition in range(arguments.repetitions):
+                    for implementation, binary in (
+                        ("baseline", baseline_bin),
+                        ("candidate", candidate_bin),
+                    ):
+                        stem = (
+                            f"{implementation}-{dialect}-{size}-"
+                            f"{mode}-{repetition}"
+                        )
+                        record = run_timed(
+                            binary,
+                            mode_arguments(mode, problem),
+                            output_root=output_root,
+                            stem=stem,
+                            timeout=600,
+                        )
+                        record.update(
+                            {
+                                "implementation": implementation,
+                                "dialect": dialect,
+                                "records": size,
+                                "mode": mode,
+                                "repetition": repetition,
+                            }
+                        )
+                        rows.append(record)
+    timing_path = output_root / "candidate-timing.jsonl"
+    timing_path.write_text(
+        "".join(canonical_json(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    grouped: dict[tuple[str, str, int, str], list[dict[str, Any]]] = defaultdict(
+        list
+    )
+    for row in rows:
+        grouped[
+            (
+                row["implementation"],
+                row["dialect"],
+                row["records"],
+                row["mode"],
+            )
+        ].append(row)
+    medians = []
+    for key, samples in sorted(grouped.items()):
+        if len(samples) != arguments.repetitions:
+            raise ExperimentError(f"incomplete candidate timing group: {key}")
+        implementation, dialect, size, mode = key
+        medians.append(
+            {
+                "implementation": implementation,
+                "dialect": dialect,
+                "records": size,
+                "mode": mode,
+                **median_metrics(samples),
+            }
+        )
+
+    heldout = {}
+    for mode in ("syntax", "cnf"):
+        values = {}
+        for implementation in ("baseline", "candidate"):
+            values[implementation] = next(
+                row
+                for row in medians
+                if row["implementation"] == implementation
+                and row["dialect"] == "thf"
+                and row["records"] == 10_000
+                and row["mode"] == mode
+            )
+        heldout[mode] = {
+            **values,
+            "wall_improvement_percent": percentage_improvement(
+                values["baseline"]["wall_seconds"],
+                values["candidate"]["wall_seconds"],
+            ),
+        }
+
+    candidate_dhat_path = output_root / "candidate-syntax.dhat.json"
+    dhat_timing = run_timed(
+        Path("/usr/bin/valgrind"),
+        [
+            "--tool=dhat",
+            f"--dhat-out-file={candidate_dhat_path}",
+            str(candidate_bin),
+            *mode_arguments(
+                "syntax", corpus_path(corpus_root, "thf", 10_000)
+            ),
+        ],
+        output_root=output_root,
+        stem="candidate-syntax-dhat",
+        timeout=1800,
+    )
+    candidate_dhat = parse_dhat(candidate_dhat_path)
+    baseline_profile = json.loads(
+        arguments.baseline_profile.read_text(encoding="utf-8")
+    )
+    baseline_dhat = next(
+        record["dhat"]
+        for record in baseline_profile["dhat"]
+        if record["mode"] == "syntax"
+    )
+    allocation = {
+        "baseline": baseline_dhat,
+        "candidate": candidate_dhat,
+        "total_bytes_improvement_percent": percentage_improvement(
+            baseline_dhat["total_bytes"], candidate_dhat["total_bytes"]
+        ),
+        "peak_live_bytes_improvement_percent": percentage_improvement(
+            baseline_dhat["peak_live_bytes"],
+            candidate_dhat["peak_live_bytes"],
+        ),
+    }
+    report = {
+        "schema_version": 1,
+        "manifest_id": manifest["manifest_id"],
+        "repetitions": arguments.repetitions,
+        "binary_sha256": {
+            "baseline": sha256_file(baseline_bin),
+            "candidate": sha256_file(candidate_bin),
+        },
+        "origins": origins,
+        "timing_medians": medians,
+        "heldout": heldout,
+        "allocation": allocation,
+        "candidate_dhat_timing": dhat_timing,
+        "all_exit_codes_zero": all(row["exit_code"] == 0 for row in rows),
+    }
+    report["report_id"] = sha256_bytes(
+        canonical_json(report).encode("ascii")
+    )
+    (output_root / "candidate.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
 def analyze_command(arguments: argparse.Namespace) -> None:
     records = [
         json.loads(line)
@@ -718,6 +926,15 @@ def make_parser() -> argparse.ArgumentParser:
     profile.add_argument("--rust-bin", type=Path, required=True)
     profile.add_argument("--output-root", type=Path, required=True)
     profile.set_defaults(function=profile_command)
+
+    candidate = subparsers.add_parser("candidate")
+    candidate.add_argument("--corpus-root", type=Path, required=True)
+    candidate.add_argument("--baseline-bin", type=Path, required=True)
+    candidate.add_argument("--candidate-bin", type=Path, required=True)
+    candidate.add_argument("--baseline-profile", type=Path, required=True)
+    candidate.add_argument("--output-root", type=Path, required=True)
+    candidate.add_argument("--repetitions", type=int, default=5)
+    candidate.set_defaults(function=candidate_command)
     return parser
 
 
@@ -739,4 +956,3 @@ if __name__ == "__main__":
     ) as error:
         print(f"experiment error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
-

@@ -64,17 +64,37 @@ class ParsingTests(unittest.TestCase):
             path.write_text(
                 json.dumps(
                     {
-                        "tb": 10,
-                        "tbk": 2,
-                        "mb": 8,
-                        "mbk": 1,
-                        "eb": 3,
-                        "ebk": 1,
+                        "pps": [
+                            {
+                                "tb": 10,
+                                "tbk": 2,
+                                "gb": 8,
+                                "gbk": 1,
+                                "eb": 3,
+                                "ebk": 1,
+                            },
+                            {
+                                "tb": 5,
+                                "tbk": 1,
+                                "gb": 4,
+                                "gbk": 1,
+                                "eb": 0,
+                                "ebk": 0,
+                            },
+                        ]
                     }
                 ),
                 encoding="utf-8",
             )
-            self.assertEqual(PROFILE.parse_dhat(path)["mb"], 8)
+            result = PROFILE.parse_dhat(path)
+            self.assertEqual(result["total_bytes"], 15)
+            self.assertEqual(result["peak_live_bytes"], 12)
+            self.assertEqual(result["end_live_bytes"], 3)
+
+    def test_percentage_improvement(self) -> None:
+        self.assertEqual(PROFILE.percentage_improvement(10.0, 8.0), 20.0)
+        with self.assertRaises(PROFILE.ExperimentError):
+            PROFILE.percentage_improvement(0.0, 0.0)
 
 
 def sample(
@@ -158,4 +178,3 @@ class AnalysisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

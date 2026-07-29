@@ -95,6 +95,15 @@ It verifies the minimized proof and `PUZ008-2` static splitting, rejects four
 definition/ancestry mutations, and keeps the unlicensed external checker
 strictly caller-supplied and outside Umlaut packages.
 
+The current CNF/FOF/TFF/THF frontend phase, allocation, and instruction profile
+is retained in
+[`experiments/2026-07-29-011-frontend-fast-path-profile/`](experiments/2026-07-29-011-frontend-fast-path-profile/).
+It found a THF-only represented-owner routing path that unnecessarily ran
+first-order `$distinct` parser probes. The adopted early return preserves exact
+clausification and ancestry output while reducing held-out THF syntax wall time
+by 97.4% and allocated bytes by 99.86%; comprehensive compatibility and solve
+gates remain clean.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

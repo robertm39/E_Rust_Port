@@ -12904,6 +12904,13 @@ fn should_parse_tstp_formula_as_represented_owner(
         return false;
     }
 
+    // Every THF body uses the represented formula owner. Avoid the
+    // first-order `$distinct` compatibility probes below: they clone and parse
+    // against a detached term bank even though they cannot change this route.
+    if formula_kind == "thf" {
+        return true;
+    }
+
     if matches!(formula_kind, "fof" | "tff") && tstp_body_is_unambiguous_plain_formula(scanner) {
         return true;
     }
@@ -12924,7 +12931,6 @@ fn should_parse_tstp_formula_as_represented_owner(
                 && (raw_formula_type != CP_TYPE_WATCH_CLAUSE
                     || tcf_watchlist_body_can_be_collected_without_bridge(scanner))
         }
-        "thf" => true,
         _ => false,
     }
 }
@@ -17576,6 +17582,47 @@ mod tests {
             ));
         }
         assert_eq!(bank.signature().f_count(), symbol_count);
+    }
+
+    #[test]
+    fn thf_formula_owner_route_is_independent_of_first_order_probes() {
+        let _guard = global_state_lock();
+        reset_problem_type();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        for index in 0..4_096 {
+            bank.signature_mut().insert_id_for_problem(
+                &format!("existing_{index}"),
+                0,
+                false,
+                ProblemType::HigherOrder,
+            );
+        }
+        let symbol_count = bank.signature().f_count();
+
+        for formula_owner_handling in [
+            super::InputFormulaOwnerHandling::FormulaSetPrint,
+            super::InputFormulaOwnerHandling::FormulaSetCnf,
+        ] {
+            for body in [
+                "![X:$i]:((p@X)=>(q@(f@X))))",
+                "(^[X:$i]:(p@X))",
+                "$distinct(a,b,c)",
+            ] {
+                let mut scanner = Scanner::from_user_string(body, false).unwrap();
+                scanner.set_format(IoFormat::Tstp);
+                assert!(super::should_parse_tstp_formula_as_represented_owner(
+                    "thf",
+                    &scanner,
+                    &bank,
+                    CP_TYPE_AXIOM,
+                    ProblemType::HigherOrder,
+                    formula_owner_handling,
+                ));
+            }
+        }
+
+        assert_eq!(bank.signature().f_count(), symbol_count);
+        reset_problem_type();
     }
 
     #[test]

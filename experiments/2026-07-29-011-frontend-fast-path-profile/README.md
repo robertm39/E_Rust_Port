@@ -47,3 +47,16 @@ python3 experiments/2026-07-29-011-frontend-fast-path-profile/frontend_profile.p
   --output-root /opt/e-rust-port/frontend-profile/profile
 ```
 
+When the frozen go/no-go rule permits a prototype, `candidate` compares all
+corpus modes, exact 1,000- and 10,000-record TSTP outputs, held-out timing,
+allocations, and peak memory:
+
+```bash
+python3 experiments/2026-07-29-011-frontend-fast-path-profile/frontend_profile.py \
+  candidate \
+  --corpus-root /opt/e-rust-port/frontend-profile/corpus \
+  --baseline-bin /opt/e-rust-port/frontend-profile/baseline-umlaut \
+  --candidate-bin /opt/e-rust-port/source/target/release/umlaut \
+  --baseline-profile /opt/e-rust-port/frontend-profile/profile/profile.json \
+  --output-root /opt/e-rust-port/frontend-profile/candidate
+```
