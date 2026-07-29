@@ -3,9 +3,18 @@
 ## Scope and source revision
 
 This experiment addresses Bead `E_Rust_Port-9jt.3.3`. The measured prover
-revision is `9263a0d362d5ec297f9e5305870b641626de107e`, including the generated-KB
-activation fix. No result from the candidate, validation, or test runs was
-observed before this protocol and its harness were committed.
+revision is `812323618aaa42d0f5e24bba8a0ef146ff1757cd`, including the generated-KB
+activation and persistence fixes.
+
+This revision supersedes the initially frozen
+`9263a0d362d5ec297f9e5305870b641626de107e`. An invalid training-only attempt
+under that revision observed two fixed-control `ResourceOut` results
+(`CSR052+3`, `CSR039+2`) and one theorem trace (`MGT067+1`), then failed while
+integrating the first proof into the knowledge base. No learned treatment,
+validation, test, or classifier result was observed. The invalid artifacts are
+not reused. This amendment changes only the source revision: the corpus,
+whole-family split, treatments, budgets, metrics, gates, and frozen decision
+rule remain unchanged.
 
 The production audit found these reachable paths:
 

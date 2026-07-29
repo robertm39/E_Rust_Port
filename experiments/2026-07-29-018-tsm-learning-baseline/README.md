@@ -11,4 +11,6 @@ timing samples belong under
 `.artifacts/experiments/2026-07-29-018-tsm-learning-baseline/`.
 
 The measured prover revision is
-`9263a0d362d5ec297f9e5305870b641626de107e`.
+`812323618aaa42d0f5e24bba8a0ef146ff1757cd`. This supersedes the invalid
+training-only attempt at `9263a0d362d5ec297f9e5305870b641626de107e`; see the
+transparent amendment in `PREREGISTRATION.md`.

@@ -22,7 +22,7 @@ BASE_RUN_PATH = (
 )
 CORPUS_PATH = EXPERIMENT_ROOT / "corpus.jsonl"
 CATEGORIES = ("FNE", "FEQ", "EPU", "UEQ")
-SOURCE_REVISION = "9263a0d362d5ec297f9e5305870b641626de107e"
+SOURCE_REVISION = "812323618aaa42d0f5e24bba8a0ef146ff1757cd"
 PROOF_STATUSES = {"Theorem", "Unsatisfiable", "ContradictoryAxioms"}
 
 

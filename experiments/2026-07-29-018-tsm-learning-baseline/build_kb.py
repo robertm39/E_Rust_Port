@@ -141,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(argv)
     if sys.platform != "linux":
         raise ExperimentError("prover training may run only on Linux")
-    if arguments.source_revision != "9263a0d362d5ec297f9e5305870b641626de107e":
+    if arguments.source_revision != "812323618aaa42d0f5e24bba8a0ef146ff1757cd":
         raise ExperimentError("source revision differs from preregistration")
 
     corpus = arguments.corpus.resolve()
