@@ -685,14 +685,14 @@ def main() -> None:
             held_out / "UEQ/COL003-19.p",
             20,
             120,
-            "theorem",
+            "unsatisfiable",
         ),
         Case(
             "held-out-syn846-1",
             held_out / "EPU/SYN846-1.p",
             20,
             120,
-            "theorem",
+            "unsatisfiable",
         ),
     )
     for case in cases:
