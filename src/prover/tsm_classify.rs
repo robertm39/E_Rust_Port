@@ -7,7 +7,7 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::{output_level, set_output_level};
 use crate::inout::scanner::{Scanner, TokenType};
-use crate::learn::annoterms::{anno_set_compute_pattern_subst, anno_set_parse};
+use crate::learn::annoterms::{anno_set_compute_pattern_subst, anno_set_parse_clause_patterns};
 use crate::learn::classification::tsm_classify_set_write;
 use crate::learn::flatannoterms::{
     flat_anno_set_alloc, flat_anno_set_size, flat_anno_set_translate,
@@ -289,13 +289,13 @@ fn execute_tsm_classify(
 
     scanner.accept_id("Training")?;
     scanner.accept_tok(TokenType::COLON)?;
-    let mut training_set = anno_set_parse(&mut scanner, &mut bank, 2)?;
+    let mut training_set = anno_set_parse_clause_patterns(&mut scanner, &mut bank, 2)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
     training_set.flatten(None);
 
     scanner.accept_id("Test")?;
     scanner.accept_tok(TokenType::COLON)?;
-    let mut test_set = anno_set_parse(&mut scanner, &mut bank, 2)?;
+    let mut test_set = anno_set_parse_clause_patterns(&mut scanner, &mut bank, 2)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
     test_set.flatten(None);
 
@@ -550,6 +550,16 @@ a : 1:(1,-1).
 f(a) : 2:(1,1).
 .
 ";
+    const CLAUSE_PATTERN_CLASSIFICATION_INPUT: &str = "\
+Training:
+$or(~f1_1(f0_1),$cnil) : 1:(1,-1).
+$or(f1_1(f0_1),$cnil) : 2:(1,1).
+.
+Test:
+$or(~f1_1(f0_1),$cnil) : 1:(1,-1).
+$or(f1_1(f0_1),$cnil) : 2:(1,1).
+.
+";
     const CLASSIFICATION_TRACE: &str = "\
 Evaluation: -1.0000  Termeval: -1.0000 OKOK a
 Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
@@ -712,6 +722,23 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
                 "% Index type: 64\n{SELECTION_TRACE}{CLASSIFICATION_TRACE} 2 terms, 2 successes, 100.000 percent\n"
             )
         );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn stdin_run_classifies_recursive_clause_patterns_with_negation() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(
+            &[
+                PROGRAM_NAME,
+                "--index-type=IndexIdentity",
+                "--tsm-type=Flat",
+            ],
+            CLAUSE_PATTERN_CLASSIFICATION_INPUT,
+        );
+
+        assert_eq!(status, 0);
+        assert!(output.contains("2 terms, 2 successes, 100.000 percent"));
         assert!(stderr.is_empty());
     }
 
