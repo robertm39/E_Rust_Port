@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "bead": "E_Rust_Port-9jt.7.1",
+  "generated_schedule_counts": {
+    "bce_enabled": 0,
+    "predicate_elimination_enabled": 0,
+    "predicate_gate_recognition_enabled": 0,
+    "goal_definitions_positive_enabled": 0,
+    "goal_definitions_negative_enabled": 0,
+    "goal_definition_subterms_enabled": 0
+  },
+  "transformations": [
+    {
+      "name": "formula_definition_introduction",
+      "classification": "direct_default_on",
+      "route": "FormulaSetCNF2 -> TFormulaSetIntroduceDefs",
+      "control": "formula_def_limit",
+      "provenance": "represented formula definition-introduction derivations"
+    },
+    {
+      "name": "equation_definition_unfolding",
+      "classification": "direct_default_on",
+      "route": "apply_clause_set_preprocessing_with_docs -> clause_set_unfold_eq_def_normalize_with_docs",
+      "control": "eqdef_incrlimit and eqdef_maxclauses",
+      "provenance": "documented source clauses and rewrite ancestry"
+    },
+    {
+      "name": "blocked_clause_elimination",
+      "classification": "direct_default_off_schedule_inactive",
+      "route": "run_proof_search -> apply_blocked_clause_elimination -> eliminate_blocked_clauses",
+      "control": "--bce and --bce-max-occs",
+      "provenance": "deleted originals move to the proof-state archive"
+    },
+    {
+      "name": "singular_predicate_elimination",
+      "classification": "direct_default_off_schedule_inactive",
+      "route": "run_proof_search -> apply_predicate_elimination -> eliminate_predicates_singular",
+      "control": "--pred-elim and predicate-elimination guard options",
+      "provenance": "generated resolvents carry DC_PE_RESOLVE"
+    },
+    {
+      "name": "goal_definitions",
+      "classification": "direct_default_off_schedule_inactive",
+      "route": "run_proof_search -> apply_goal_definition_transformation -> clause_set_gd_transform",
+      "control": "--goal-defs and --add-gd-subterms",
+      "provenance": "generated unit definitions carry DC_INTRO_DEF"
+    },
+    {
+      "name": "sine_relevancy_filtering",
+      "classification": "direct_configurable",
+      "route": "apply_proof_state_sine before clausification",
+      "control": "--sine",
+      "provenance": "retained represented input owners remain proof roots"
+    },
+    {
+      "name": "conjecture_relevance_pruning",
+      "classification": "direct_default_off",
+      "route": "apply_relevance_pruning before clausification",
+      "control": "--rel-pruning-level",
+      "provenance": "retained represented input owners remain proof roots"
+    },
+    {
+      "name": "formula_and_clause_splitting",
+      "classification": "direct_configurable",
+      "route": "formula CNF split_conjunct and clause splitting controls",
+      "control": "definitional CNF and split_clauses strategy fields",
+      "provenance": "split_conjunct and clause-splitting derivations"
+    },
+    {
+      "name": "fool_ite_let_lambda_lowering",
+      "classification": "direct_configurable",
+      "route": "FormulaSetCNF2 represented preprocessing pipeline",
+      "control": "fool_unroll, lift_lambdas, lambda_to_forall, and related limits",
+      "provenance": "represented formula-phase and generated-definition derivations"
+    }
+  ],
+  "evaluation_candidates": [
+    "blocked_clause_elimination",
+    "singular_predicate_elimination",
+    "goal_definitions"
+  ],
+  "prototype_decision": "no_new_pass_the_relevant_options_are_already_production_connected"
+}

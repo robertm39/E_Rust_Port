@@ -36,7 +36,9 @@ use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::{
     set_verbose_level, verbose2_enabled, verbose_enabled, verbout, verbout2,
 };
-use crate::clauses::bce::eliminate_blocked_clauses_with_output;
+use crate::clauses::bce::{
+    eliminate_blocked_clauses_with_output, BceEliminationResult,
+};
 use crate::clauses::clause::{
     clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
     clause_print_tptp_format_string_with_options, clause_starts_maybe,
@@ -85,6 +87,7 @@ use crate::clauses::picosat::PicoSat;
 use crate::clauses::pred_elim::{
     eliminate_predicates_singular, eliminate_predicates_singular_with_picosat,
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
+    PredicateEliminationResult,
 };
 use crate::clauses::proofstate::{
     derived_dot_node_colour, derived_dot_node_colour_for_proof_member, derived_in_proof,
@@ -162,7 +165,8 @@ use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::fnt::{FiniteModelConfig, FiniteModelOutcome};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::search_telemetry::{
-    render_search_telemetry, SearchTelemetryCounterSnapshot, SearchTelemetryRecord,
+    render_search_telemetry, PreprocessingTransformStats, SearchTelemetryCounterSnapshot,
+    SearchTelemetryRecord,
 };
 use crate::prover::version::{self, PROGRAM_NAME, VERSION, VERSION_QUALIFIER};
 use crate::terms::fp_index::enable_fingerprint_index_telemetry;
@@ -6205,13 +6209,13 @@ fn run_proof_search<W: Write + ?Sized>(
         apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
     let _induction_instances =
         apply_induction_preinstantiation(&mut state, heuristic_params.preinstantiate_induction)?;
-    apply_blocked_clause_elimination(
+    let bce_result = apply_blocked_clause_elimination(
         output,
         heuristic_params.bce,
         heuristic_params.bce_max_occs,
         &mut state,
     )?;
-    apply_predicate_elimination(
+    let predicate_result = apply_predicate_elimination(
         output,
         PredicateEliminationPreprocessingConfig {
             enabled: heuristic_params.pred_elim,
@@ -6226,12 +6230,18 @@ fn run_proof_search<W: Write + ?Sized>(
         config.picosat_library.as_deref(),
         &mut state,
     )?;
-    apply_goal_definition_transformation(
+    let goal_definitions_added = apply_goal_definition_transformation(
         &mut state,
         heuristic_params.add_goal_defs_pos,
         heuristic_params.add_goal_defs_neg,
         heuristic_params.add_goal_defs_subterms,
     )?;
+    let preprocessing_transformations = PreprocessingTransformStats {
+        bce_removed: bce_result.eliminated_count,
+        predicate_removed: predicate_result.eliminated_count,
+        predicate_generated: predicate_result.generated_count,
+        goal_definitions_added,
+    };
     let mut next_doc_ident = preproc_result.next_doc_ident;
 
     match apply_auto_mode_search_selection(
@@ -6337,6 +6347,7 @@ fn run_proof_search<W: Write + ?Sized>(
                 relevancy_pruned: total_pruned,
                 raw_clause_no,
                 preproc_removed,
+                preprocessing_transformations,
             },
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
@@ -6375,6 +6386,7 @@ fn run_proof_search<W: Write + ?Sized>(
         relevancy_pruned: total_pruned,
         raw_clause_no,
         preproc_removed,
+        preprocessing_transformations,
     };
     if hard_time_limit_expired_in_saturation(&outcome) {
         if let Some(counter_baseline) = search_telemetry_baseline {
@@ -8402,9 +8414,9 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
     enabled: bool,
     max_occs: i32,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<i64, EProverError> {
+) -> Result<BceEliminationResult, EProverError> {
     if !enabled || problem_type() != ProblemType::FirstOrder {
-        return Ok(0);
+        return Ok(BceEliminationResult::default());
     }
 
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
@@ -8421,7 +8433,7 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
         )?
     };
     output.write_stdout_side_channel(bce_output.as_bytes())?;
-    Ok(result.eliminated_count)
+    Ok(result)
 }
 
 fn apply_predicate_elimination<W: Write + ?Sized>(
@@ -8429,9 +8441,9 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     config: PredicateEliminationPreprocessingConfig,
     picosat_library: Option<&Path>,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<i64, EProverError> {
+) -> Result<PredicateEliminationResult, EProverError> {
     if !config.enabled || problem_type() != ProblemType::FirstOrder {
-        return Ok(0);
+        return Ok(PredicateEliminationResult::default());
     }
 
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
@@ -8470,7 +8482,7 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
         result.eliminated_count
     );
     output.write_stdout_side_channel(pred_elim_output.as_bytes())?;
-    Ok(result.eliminated_count)
+    Ok(result)
 }
 
 fn apply_goal_definition_transformation(
@@ -10831,6 +10843,7 @@ fn write_search_telemetry(
         relevancy_pruned: input.relevancy_pruned,
         raw_clauses: input.raw_clause_no,
         preprocessing_removed: input.preproc_removed,
+        preprocessing_transformations: input.preprocessing_transformations,
         state,
         selection_telemetry: control.active_hcb_selection_telemetry(),
         counter_baseline,
@@ -10880,6 +10893,7 @@ struct ProofStatisticsInput {
     relevancy_pruned: i64,
     raw_clause_no: i64,
     preproc_removed: i64,
+    preprocessing_transformations: PreprocessingTransformStats,
 }
 
 fn write_proof_statistics(
@@ -26837,6 +26851,7 @@ input_clause(c2,axiom,[++q(X)]).
         for required in [
             "\"schema\": \"umlaut.search-telemetry\"",
             "\"schema_version\": 1",
+            "\"transformations\"",
             "\"search_funnel\"",
             "\"high_water_unprocessed\"",
             "\"inferences\"",
@@ -30849,6 +30864,7 @@ input_clause(c2,axiom,[++q(X)]).
                 relevancy_pruned: 2,
                 raw_clause_no: 3,
                 preproc_removed: 4,
+                preprocessing_transformations: PreprocessingTransformStats::default(),
             },
         )
         .unwrap();
@@ -30886,6 +30902,7 @@ input_clause(c2,axiom,[++q(X)]).
                 relevancy_pruned: 2,
                 raw_clause_no: 3,
                 preproc_removed: 4,
+                preprocessing_transformations: PreprocessingTransformStats::default(),
             },
         )
         .unwrap();
@@ -30918,6 +30935,7 @@ input_clause(c2,axiom,[++q(X)]).
                 relevancy_pruned: 2,
                 raw_clause_no: 3,
                 preproc_removed: 4,
+                preprocessing_transformations: PreprocessingTransformStats::default(),
             },
         )
         .unwrap();
@@ -31269,6 +31287,7 @@ input_clause(c2,axiom,[++q(X)]).
     fn run_proof_search_applies_selected_bce_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-bce");
+        let telemetry_path = temp_path("proof-bce-telemetry");
         std::fs::write(
             &path,
             "cnf(left, axiom, (p(a)|q(a))).\n\
@@ -31276,6 +31295,8 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
+        let telemetry_arg = telemetry_path.to_string_lossy().into_owned();
+        let telemetry_option = format!("--search-telemetry={telemetry_arg}");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -31283,6 +31304,7 @@ input_clause(c2,axiom,[++q(X)]).
             [
                 "umlaut",
                 "--bce=true",
+                telemetry_option.as_str(),
                 "--print-statistics",
                 path_arg.as_str(),
             ],
@@ -31297,8 +31319,17 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Parsed axioms                        : 2\n"));
         assert!(printed.contains("% Initial clauses                      : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
+        assert!(telemetry.contains(
+            "\"blocked_clause_elimination\": {\"removed\": 2}"
+        ));
+        assert!(telemetry.contains(
+            "\"predicate_elimination\": {\"removed\": 0, \"generated\": 0}"
+        ));
+        assert!(telemetry.contains("\"goal_definitions\": {\"added\": 0}"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(telemetry_path).unwrap();
     }
 
     #[test]
@@ -31484,6 +31515,7 @@ input_clause(c2,axiom,[++q(X)]).
     fn run_proof_search_applies_selected_pred_elim_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-pred-elim");
+        let telemetry_path = temp_path("proof-pred-elim-telemetry");
         std::fs::write(
             &path,
             "cnf(pos, axiom, (p(a)|s(a))).\n\
@@ -31492,6 +31524,8 @@ input_clause(c2,axiom,[++q(X)]).
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
+        let telemetry_arg = telemetry_path.to_string_lossy().into_owned();
+        let telemetry_option = format!("--search-telemetry={telemetry_arg}");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -31499,6 +31533,7 @@ input_clause(c2,axiom,[++q(X)]).
             [
                 "umlaut",
                 "--pred-elim=true",
+                telemetry_option.as_str(),
                 "--print-statistics",
                 path_arg.as_str(),
             ],
@@ -31513,8 +31548,13 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Parsed axioms                        : 3\n"));
         assert!(printed.contains("% Initial clauses                      : 3\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
+        assert!(telemetry.contains(
+            "\"predicate_elimination\": {\"removed\": 1, \"generated\": 1}"
+        ));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(telemetry_path).unwrap();
     }
 
     #[test]
@@ -31601,8 +31641,11 @@ input_clause(c2,axiom,[++q(X)]).
     fn run_proof_search_applies_selected_goal_defs_preprocessing() {
         let _guard = global_state_lock();
         let path = temp_path("proof-goal-defs");
+        let telemetry_path = temp_path("proof-goal-defs-telemetry");
         std::fs::write(&path, "cnf(goal, negated_conjecture, (f(a)=a)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
+        let telemetry_arg = telemetry_path.to_string_lossy().into_owned();
+        let telemetry_option = format!("--search-telemetry={telemetry_arg}");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -31610,6 +31653,7 @@ input_clause(c2,axiom,[++q(X)]).
             [
                 "umlaut",
                 "--goal-defs=All",
+                telemetry_option.as_str(),
                 "--print-statistics",
                 path_arg.as_str(),
             ],
@@ -31624,8 +31668,11 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Initial clauses                      : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
+        assert!(telemetry.contains("\"goal_definitions\": {\"added\": 1}"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(telemetry_path).unwrap();
     }
 
     #[test]

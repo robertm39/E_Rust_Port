@@ -132,6 +132,14 @@ impl SearchTelemetryCounterSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PreprocessingTransformStats {
+    pub bce_removed: i64,
+    pub predicate_removed: i64,
+    pub predicate_generated: i64,
+    pub goal_definitions_added: i64,
+}
+
 pub(crate) struct SearchTelemetryRecord<'a> {
     pub files: &'a [String],
     pub problem_type: ProblemType,
@@ -142,6 +150,7 @@ pub(crate) struct SearchTelemetryRecord<'a> {
     pub relevancy_pruned: i64,
     pub raw_clauses: i64,
     pub preprocessing_removed: i64,
+    pub preprocessing_transformations: PreprocessingTransformStats,
     pub state: &'a ProofState,
     pub selection_telemetry: Option<&'a HcbSelectionTelemetry>,
     pub counter_baseline: SearchTelemetryCounterSnapshot,
@@ -247,11 +256,15 @@ fn write_identity_and_outcome(
     )?;
     writeln!(
         output,
-        "  \"input_funnel\": {{\"parsed_axioms\": {}, \"relevancy_pruned\": {}, \"raw_clauses\": {}, \"preprocessing_removed\": {}}},",
+        "  \"input_funnel\": {{\"parsed_axioms\": {}, \"relevancy_pruned\": {}, \"raw_clauses\": {}, \"preprocessing_removed\": {}, \"transformations\": {{\"blocked_clause_elimination\": {{\"removed\": {}}}, \"predicate_elimination\": {{\"removed\": {}, \"generated\": {}}}, \"goal_definitions\": {{\"added\": {}}}}}}},",
         record.parsed_axioms,
         record.relevancy_pruned,
         record.raw_clauses,
-        record.preprocessing_removed
+        record.preprocessing_removed,
+        record.preprocessing_transformations.bce_removed,
+        record.preprocessing_transformations.predicate_removed,
+        record.preprocessing_transformations.predicate_generated,
+        record.preprocessing_transformations.goal_definitions_added
     )
 }
 
