@@ -1,0 +1,74 @@
+{
+  "coauthor_or_signoff_trailer_count": 0,
+  "decision": "not_authorized_pending_attestation_and_qualified_legal_review",
+  "e_source": {
+    "copying_sha256": "6252a1a029c731e5161ff89b89abc0d5661e9965242c5218b331f15d583546a2",
+    "core_c_h_files": 481,
+    "header_license_class_counts": {
+      "gpl_and_lgpl_phrases": 434,
+      "gpl_phrase_only": 45,
+      "no_gnu_license_phrase": 2
+    },
+    "named_header_authors": [
+      "Joachim Steinbach",
+      "Martin M\u00f6hrmann",
+      "Petar Vukmirovic",
+      "Petar Vukmirovic, Stephan Schulz",
+      "Petar Vukmirovic.",
+      "Simon Cruanes (simon.cruanes@inria.fr)",
+      "Simon Cruanes (simon.cruanes@inria.fr),  Petar Vukmirovic,",
+      "Simon Cruanes, Petar Vucmirovic, Stephan Schulz",
+      "Stephan Schulz",
+      "Stephan Schulz (original Version and some comments by JS)",
+      "Stephan Schulz (original implementation and definitions by",
+      "Stephan Schulz (schulz@eprover.org)",
+      "Stephan Schulz (schulz@eprover.org), Mohamed Bassem Hasona",
+      "Stephan Schulz (schulz@eprover.org), Petar Vukmirovic",
+      "Stephan Schulz and Joachim Steinbach",
+      "Stephan Schulz, schulz@eprover.org",
+      "Stephan Schulz, yan"
+    ],
+    "revision": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+  },
+  "observed_git_author_identities": [
+    "Robert Morton <robertpmorton39@gmail.com>",
+    "robertm39 <robertpmorton39@gmail.com>"
+  ],
+  "observed_git_committer_identities": [
+    "GitHub <noreply@github.com>",
+    "Robert Morton <robertpmorton39@gmail.com>"
+  ],
+  "repository_commit_count": 2159,
+  "repository_head": "96561cd3defd333da100ccb50ff12b9da1e65d10",
+  "runtime_archive": {
+    "members": 5,
+    "sha256": "e79448ef845c83e1f7022a2b9b12949a16db722812862a15e104526197c687a3"
+  },
+  "runtime_origin_counts": {
+    "compiled_product_aggregate": 1,
+    "generated_runtime_metadata": 1,
+    "umlaut_original_documentation": 1,
+    "umlaut_original_packaging": 1,
+    "verbatim_license_text": 1
+  },
+  "schema_version": 1,
+  "source_archive": {
+    "members": 314,
+    "repository_head_exact_byte_matches": 41,
+    "repository_head_normalized_content_matches": 313,
+    "sha256": "2d82e62955b0f2eb1a9a1c2c77007e05fefc3af0c4130aee83618416664a5b3f"
+  },
+  "source_origin_counts": {
+    "cargo_generated_lockfile": 1,
+    "cargo_generated_manifest": 1,
+    "mixed_e_port_and_umlaut": 287,
+    "umlaut_original_documentation": 5,
+    "umlaut_original_metadata": 1,
+    "umlaut_original_packaging": 4,
+    "umlaut_original_source": 4,
+    "verbatim_e_data": 1,
+    "verbatim_license_text": 1,
+    "verbatim_third_party_license_record": 9
+  },
+  "unclassified_member_count": 0
+}

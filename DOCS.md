@@ -350,6 +350,20 @@ timeouts across three abstraction sessions fail the gate despite strong
 descriptive CaDiCaL timings on complete pairs. Therefore `off` remains the
 default and both thresholds remain explicit opt-ins.
 
+## Relicensing Readiness Audit
+
+The complete file-level source/runtime package inventory, pinned E header scan,
+Git-contributor evidence, owner-attestation template, authoritative references,
+and decision for the intended LGPL-3.0 move are recorded in
+[`experiments/2026-07-29-002-lgpl-relicensing-audit/`](experiments/2026-07-29-002-lgpl-relicensing-audit/).
+All 314 source and five runtime members are classified with zero gaps. The
+technical E `LGPL-2.1-or-later` route is plausible, but 45 relevant upstream
+headers mention only GPL and two have no GNU-license phrase. Umlaut owner and
+employment authority is also not attested, and `LGPL-3.0-only` versus
+`LGPL-3.0-or-later` is undecided. Relicensing is therefore not authorized;
+`Cargo.toml`, `LICENSE`, notices, and package metadata remain unchanged pending
+a signed owner attestation and qualified review.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
