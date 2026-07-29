@@ -119,7 +119,15 @@ def verify_phase(
             raise VerificationError(
                 f"proof verifier expected test alias, got {requested_phase}"
             )
-        return contract, results
+        if "larger" in contract["budgets"]:
+            return contract, results
+        aliased_contract = {
+            **contract,
+            "budgets": {
+                "larger": contract["budgets"][PHASE_BUDGETS[phase]]
+            },
+        }
+        return aliased_contract, results
 
     def proof_claims(
         _contract: dict[str, Any],
