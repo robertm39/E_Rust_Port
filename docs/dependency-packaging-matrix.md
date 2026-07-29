@@ -1,6 +1,6 @@
 # Dependency, provenance, and CASC packaging matrix
 
-Last reviewed: 2026-07-28 for `E_Rust_Port-9jt.4.1`.
+Last reviewed: 2026-07-29 for `E_Rust_Port-9jt.4.8`.
 
 This is the decision boundary for code, data, libraries, models, solvers, and
 reference artifacts considered for Umlaut. It is an engineering and provenance
@@ -18,7 +18,7 @@ The current distributable boundary has two independently auditable archives:
 
 | Package | Included | Excluded |
 | --- | --- | --- |
-| Source `.tgz` | `Cargo.toml`, `Cargo.lock`, `build.rs`, Rust sources, the tracked schedule input, package tooling and its self-tests, the root license, notices, this matrix, and verbatim license records | Rust and controller tests; historical experiments; Beads and Git/Dolt state; local PDFs; build output; every ignored reference tree; every local artifact |
+| Source `.tgz` | `Cargo.toml`, `Cargo.lock`, `build.rs`, Rust sources, the tracked schedule input, the independent `native/cadical_ffi` interface shim, package tooling and its self-tests, the root license, notices, this matrix, and verbatim license records | Upstream CaDiCaL source; Rust and controller tests; historical experiments; Beads and Git/Dolt state; local PDFs; build output; every ignored reference tree; every local artifact |
 | Linux runtime candidate `.tgz` | `bin/umlaut`, a runtime readme, `LICENSE`, and `THIRD_PARTY_NOTICES.md` | Source code; companion/development binaries; all optional backends; all reference trees and experiment artifacts |
 
 The runtime archive is a CASC packaging candidate, not yet a final StarExec
@@ -43,7 +43,7 @@ package audit.
 | `LINUX-SYSTEM` | Ubuntu 24.04 target runtime and its standard ELF loader/libraries. | Supplied by the target operating system under their own licenses; they are not copied into the runtime candidate. | Dynamic dependencies are recorded by `ldd` in every package audit. The audit rejects any linked optional solver/backend. | Zero packaged bytes. Reproduce on the mandatory Linode target. Disablement means choosing a different supported target and repeating the complete build/runtime audit. |
 | `RUST-TOOLCHAIN` | Rust/Cargo versions recorded in `package-audit.json`; build-time input only. | Rust toolchain components retain their upstream licenses. They are not redistributed in either current archive. | Builds dependency-free `Cargo.lock`; no Cargo registry or Git package is needed after toolchain installation. | Zero packaged bytes. The source archive builds with `--locked --offline`. A toolchain change requires rerunning all quality and package gates. |
 | `PICOSAT-965` | Optional runtime-loaded PicoSAT 965-compatible shared library through `src/clauses/picosat.rs`; no library is supplied. The `E_Rust_Port-9jt.4.1` bake-off also evaluated the pinned E copy but did not select it for the new incremental service. | MIT; verbatim notice in `licenses/picosat-MIT.txt`. A distributor that bundles the library must ship the notice and audit that exact binary/source revision. | Dynamic, late-bound ABI only. No Cargo dependency or transitive library is adopted. The experiment's static adapter is evidence, not a new link. | Zero baseline bytes. Unset `E_RUST_PORT_PICOSAT_LIBRARY` and omit executable-adjacent PicoSAT libraries to disable it; Umlaut uses its internal SAT solver. |
-| `CADICAL` | Selected optional incremental-SAT integration candidate at `c60730422e758ef1cebe7aeddf2dda31c996bf04` (3.0.1), based on `E_Rust_Port-9jt.4.1`. The pinned Vampire reference separately contains CaDiCaL `f13d74439a5b5c963ac5b02d05ce93a8098018b8`. No code or binary is adopted yet. | MIT; `licenses/cadical-MIT.txt`. A future static or dynamic adoption must preserve the notice and review the exact revision and build flags. | None today. The isolated public-C-API prototype built fully static on Linux and Windows-GNU, produced independently checked DRAT, and retained the internal fallback. Production FFI, build integration, and proof scope belong to the follow-up Bead. | Zero bytes today. Prospective experiment artifacts measured 3,441,616 bytes static on Linux, 4,342,733 bytes on Windows-GNU, and about 2.7 MiB additional median adapter RSS. Disabled by absence; a future backend must remain selectable/removable behind the SAT service boundary. |
+| `CADICAL` | Adopted optional incremental-SAT backend at `c60730422e758ef1cebe7aeddf2dda31c996bf04` (3.0.1). The source package ships only the independent `native/cadical_ffi` C ABI shim; `UMLAUT_CADICAL_SOURCE` supplies upstream source at feature-build time. The pinned Vampire reference separately contains an unrelated CaDiCaL revision. | MIT; verbatim notice in `licenses/cadical-MIT.txt` and runtime notice in `THIRD_PARTY_NOTICES.md`. Preserve both with any feature binary or source offer. No CaDiCaL source was copied or translated into the shim. | `cadical-static` compiles upstream C/C++ plus the shim into `libumlaut_cadical.a`. The Linux feature ELF dynamically uses the normal system `libstdc++`, `libgcc_s`, `libm`, and `libc`; the Windows-GNU PE imports `libstdc++-6.dll` plus Windows runtime DLLs. The proof checker is a separate caller-supplied process and is not linked or shipped. No Cargo dependency is added. | Default source/runtime packages still contain zero upstream solver bytes and build offline without the feature. Feature builds require the exact external source and a C++17 toolchain. The measured clean Linux feature ELF is 9,922,496 bytes (SHA-256 `691a23aa6651cd978a14a3f6c746ff64e0835c29024aafadfc885897cd774b4b`); the compile-only Windows-GNU PE is 9,596,246 bytes (SHA-256 `129e7de4b235c239f627893e7487a0c5fb97669b538b4bfb919a0c53ce126fc1`). Omit the feature for complete build-time removal; at runtime `UMLAUT_CADICAL_MODE=off` is the default and uses the internal service. `always`, `auto-128`, and `auto-256` are explicit opt-ins. |
 | `MINISAT` | Evaluated but rejected incremental-SAT candidate at `37dc6c67e2af26379d88ce349eb9c4c6160e8543`; no code or binary is adopted. It had the best validation aggregate timing but no proof output, looser cancellation, and more Windows build maintenance than CaDiCaL. | MIT; `licenses/minisat-MIT.txt`. Preserve the notice if any substantial code is incorporated. | None today. The isolated build needed `-fpermissive`, MinGW zlib, and a temporary compatibility correction. | Zero bytes. Disabled by absence; the internal solver remains. Any later reconsideration requires new proof/trust and held-out evidence rather than silent copying. |
 | `Z3` | Candidate ground-theory/SMT backend and ignored reference at `2d48fd119ce5074b880944c2b1c59e537c99cd46`; no code or binary is adopted. The pinned Vampire reference separately contains static Z3 `3c47fd96cf5645d0c42b2c819d9e9a84380aa721`. | MIT; `licenses/z3-MIT.txt`. Preserve the exact notice and record generated/build components if adopted. | None today. FFI, static, and external-process alternatives remain open under `E_Rust_Port-9jt.5.7`; proof/trust obligations are not waived by licensing. | Zero bytes. Disabled by absence; Umlaut must retain a no-SMT path and explicit `Unknown`/fallback behavior. |
 | `GMP` | Candidate exact-integer/rational substrate; ignored reference distribution 6.3.0. No code, library, Mini-GMP source, or Cargo wrapper is adopted. | GMP library and Mini-GMP are LGPL-3.0-or-later or GPL-2.0-or-later; retained build helpers can have GPL-3.0 terms with exceptions. Verbatim notices are in `licenses/gmp-*`. | None today. Static FFI, dynamic FFI, Mini-GMP, and permissive Rust alternatives remain candidates under `E_Rust_Port-9jt.5.1`. | Zero bytes. Disabled by absence. Any numeric interface must support a dependency-free or independently replaceable backend until evidence justifies removing it. |
@@ -75,7 +75,8 @@ Ubuntu 24.04 Linode it:
    checkout available;
 5. builds every declared binary with `--locked --release --bins --offline`;
 6. runs the extracted `umlaut --version`;
-7. rejects dynamically linked optional backends;
+7. rejects dynamically linked optional backends from the default runtime
+   candidate;
 8. creates a deterministic four-file runtime candidate; and
 9. records toolchain, archive/binary sizes, SHA-256 values, members, and dynamic
    libraries in `package-audit.json`.
@@ -90,19 +91,29 @@ python3 tools/packaging/verify_casc_package.py \
 The reviewed experiment and exact measurements are retained in
 `experiments/2026-07-27-001-reversible-casc-packaging/`.
 
-The 2026-07-27 Ubuntu 24.04 audit produced:
+The 2026-07-29 Ubuntu 24.04 audit produced:
 
 | Measured artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| Source `.tgz` (307 members) | 1,908,463 | `e55002e237d22adea396b8fb0fd10b10f07a60cf1f5b806aacf4518e37acf645` |
-| Minimal runtime candidate `.tgz` (four members) | 2,754,919 | `ffcac4ccba770e13fd534918f3366e0a98fa859c21525b93a05537567424d53b` |
-| Uncompressed primary Linux ELF | 8,160,376 | `7fa340a6abb21d712869187e42977d71399ab0ddf8abdabeb6d6d125904cc3dc` |
+| Source `.tgz` (314 members) | 1,955,806 | `2d82e62955b0f2eb1a9a1c2c77007e05fefc3af0c4130aee83618416664a5b3f` |
+| Minimal StarExec candidate `.tgz` (five members) | 2,794,141 | `e79448ef845c83e1f7022a2b9b12949a16db722812862a15e104526197c687a3` |
+| Uncompressed primary Linux ELF | 8,255,312 | `84897ed61fd114a08582780a67665ad321b923cfa270bce334a71e17be8dba17` |
 
-The extracted source built all 26 declared release binaries offline. The
-primary binary dynamically needs only the Linux loader, `libgcc_s`, `libm`, and
-`libc`; no optional backend was linked. These measurements are a baseline, not
-a permanent size allowance. Re-run the audit after any source, toolchain,
-profile, or package-content change.
+The extracted source built all 26 declared release binaries offline. The source
+archive contains the independent `native/cadical_ffi` shim and excludes
+upstream CaDiCaL source. The primary binary dynamically needs only the Linux
+loader, `libgcc_s`, `libm`, and `libc`; no optional backend was linked. StarExec
+include resolution, wrapper argument forwarding, `SIGALRM`, and `SIGXCPU`
+emulation all passed. These measurements are a baseline, not a permanent size
+allowance. Re-run the audit after any source, toolchain, profile, or
+package-content change.
+
+The optional feature is reproduced separately by the Linode bootstrap. It
+downloads the exact upstream archive, requires SHA-256
+`ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444`,
+checks `VERSION` is `3.0.1`, exports `UMLAUT_CADICAL_SOURCE`, and uses the
+POSIX-thread MinGW C/C++ compilers for `x86_64-pc-windows-gnu`. This feature
+path does not weaken the clean default package gate.
 
 ## Change gate and unresolved questions
 

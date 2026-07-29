@@ -184,6 +184,31 @@ internal solver. The user-configured variables `E_RUST_PORT_COMPAT_ROOT`,
 `E_RUST_PORT_COMPAT_ARTIFACT_ROOT`, and `E_RUST_PORT_PICOSAT_LIBRARY` retain
 their names for operational compatibility.
 
+## Optional Static CaDiCaL
+
+The `cadical-static` Cargo feature compiles pinned CaDiCaL 3.0.1 behind
+Umlaut's safe, backend-neutral incremental SAT service. The build must set
+`UMLAUT_CADICAL_SOURCE` to that source tree. Routine Linode validation
+downloads revision `c60730422e758ef1cebe7aeddf2dda31c996bf04`, verifies the
+upstream archive SHA-256
+`ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444`,
+and supplies both Linux and Windows-GNU C++17 toolchains.
+
+Runtime selection is explicit through `UMLAUT_CADICAL_MODE`:
+
+- `off` or an unset variable keeps the dependency-free internal service;
+- `always` sends every SATCheck call to CaDiCaL;
+- `auto-128` and `auto-256` retain the internal service below the named
+  post-filter clause threshold.
+
+Automatic dispatch remains nondefault. A feature-less binary rejects an
+explicit CaDiCaL request rather than silently changing behavior. For
+proof-required UNSAT, set both `UMLAUT_CADICAL_PROOF_CHECKER` and
+`UMLAUT_CADICAL_PROOF_DIR`; the service replays the exact clause/assumption
+scope into a fresh proof-enabled solver, invokes the independent checker, and
+returns an error instead of UNSAT if replay, trace creation, or checking fails.
+The checker is external and is never bundled automatically.
+
 ## Search Telemetry
 
 The opt-in, versioned JSON search telemetry contract, schedule-worker file
@@ -306,13 +331,24 @@ The backend-neutral incremental SAT contract, exact semantic suite, instrumented
 cancellation measurements, and Linux/Windows packaging bake-off are recorded
 in
 [`experiments/2026-07-28-012-incremental-sat-service/`](experiments/2026-07-28-012-incremental-sat-service/).
-CaDiCaL 3.0.1 is selected for an optional production-integration follow-up: the
+CaDiCaL 3.0.1 was selected for an optional production-integration follow-up: the
 frozen 128-clause policy reduced held-out query p95 by 75.2% and aggregate
 measured SAT cost by 34.3%, while independently checked DRAT, native
 cancellation, static Linux, and Windows-GNU gates passed. The positive
 threshold sample is narrow, so this research changes neither the production
 dependency set nor the default solver. The internal solver remains the complete
 disablement path.
+
+That production follow-up is now implemented and evaluated in
+[`experiments/2026-07-29-001-cadical-production-gate/`](experiments/2026-07-29-001-cadical-production-gate/).
+The safe Rust service, static public-API shim, scoped independently checked
+proof path, focused reset/model/core/limit/cancellation tests, and Linux plus
+Windows-GNU builds pass. A new 134-session SATCheck set from six previously
+unused CASC families and a 12-session AVATAR-style selector workload compared
+only the preregistered 128/256 policies. Fifteen guarded internal-fallback
+timeouts across three abstraction sessions fail the gate despite strong
+descriptive CaDiCaL timings on complete pairs. Therefore `off` remains the
+default and both thresholds remain explicit opt-ins.
 
 ## C Source Documentation
 

@@ -351,6 +351,14 @@ exclusions, safe artifact extraction, stale-resource selection, label-matching
 deletion guards, compatibility matrices, report normalization, and disposable
 C-source preparation. They do not compile or execute Rust or C.
 
+The bootstrap also installs the POSIX-thread MinGW C++ compiler and downloads
+the pinned CaDiCaL 3.0.1 source archive for `--all-features` validation. It
+checks SHA-256
+`ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444`
+before extraction and exports the source/toolchain variables in the remote
+quality script. The ordinary source snapshot and default package continue to
+exclude every ignored `cadical/` reference tree.
+
 Current Akamai references:
 
 - [Create a Linode](https://techdocs.akamai.com/linode-api/reference/post-linode-instance)

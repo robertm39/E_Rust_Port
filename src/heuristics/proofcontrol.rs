@@ -3,6 +3,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
+#[cfg(feature = "cadical-static")]
+use crate::clauses::cadical::CadicalSatService;
 use crate::clauses::clause::{clause_print_format_string, clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM,
@@ -72,10 +74,17 @@ use crate::clauses::rewrite::{
     clause_local_rw,
 };
 use crate::clauses::rewrite::{find_rewritable_clauses, find_rewritable_clauses_indexed};
+#[cfg(feature = "cadical-static")]
+use crate::clauses::satinterface::{
+    incremental_sat_error_to_diagnostic,
+    sat_check_proof_state_with_incremental_service_until_time_limit,
+};
 use crate::clauses::satinterface::{
     picosat_error_to_diagnostic, sat_check_proof_state_until_time_limit,
     sat_check_proof_state_with_picosat_until_time_limit, SatCheckReport,
 };
+#[cfg(feature = "cadical-static")]
+use crate::clauses::satservice::{IncrementalSatService, SatProofRequest, SatServiceError};
 use crate::clauses::splitting::{
     clause_split, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod, SplitDefinitionStore,
 };
@@ -129,6 +138,8 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_has_f_code, term_is_db_closed};
 use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
 use crate::terms::termvars::VarBank;
+#[cfg(feature = "cadical-static")]
+use std::path::PathBuf;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{self, Write as _},
@@ -239,11 +250,21 @@ impl Default for SatSolverState {
 pub enum SatSolverBackendKind {
     Internal,
     PicoSat,
+    #[cfg(feature = "cadical-static")]
+    Cadical,
 }
 
 enum SatSolverBackend {
     Internal,
     PicoSat(PicoSat),
+    #[cfg(feature = "cadical-static")]
+    Cadical {
+        solver: CadicalSatService,
+        minimum_clauses: usize,
+        proof_checker: Option<PathBuf>,
+        proof_directory: Option<PathBuf>,
+        proof_sequence: u64,
+    },
 }
 
 impl SatSolverBackend {
@@ -252,9 +273,30 @@ impl SatSolverBackend {
         match self {
             Self::Internal => SatSolverBackendKind::Internal,
             Self::PicoSat(_) => SatSolverBackendKind::PicoSat,
+            #[cfg(feature = "cadical-static")]
+            Self::Cadical { .. } => SatSolverBackendKind::Cadical,
         }
     }
 }
+
+#[derive(Debug)]
+pub enum SatSolverError {
+    PicoSat(PicoSatError),
+    #[cfg(feature = "cadical-static")]
+    Incremental(SatServiceError),
+}
+
+impl fmt::Display for SatSolverError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PicoSat(error) => error.fmt(formatter),
+            #[cfg(feature = "cadical-static")]
+            Self::Incremental(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SatSolverError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LiteralSelectionOutcome {
@@ -592,14 +634,48 @@ impl ProofControl {
         Ok(version)
     }
 
+    #[cfg(feature = "cadical-static")]
+    pub fn install_cadical_solver(
+        &mut self,
+        minimum_clauses: usize,
+        checked_proof: Option<(PathBuf, PathBuf)>,
+    ) -> Result<Option<String>, SatServiceError> {
+        let solver = CadicalSatService::new()?;
+        let version = CadicalSatService::signature();
+        let (proof_checker, proof_directory) = match checked_proof {
+            Some((checker, directory)) => {
+                std::fs::create_dir_all(&directory)
+                    .map_err(|error| SatServiceError::ProofPath(error.to_string()))?;
+                (Some(checker), Some(directory))
+            }
+            None => (None, None),
+        };
+        self.solver = SatSolverState::new();
+        self.sat_solver_backend = SatSolverBackend::Cadical {
+            solver,
+            minimum_clauses,
+            proof_checker,
+            proof_directory,
+            proof_sequence: 0,
+        };
+        Ok(version)
+    }
+
     pub fn clear_picosat_solver(&mut self) {
         self.solver = SatSolverState::new();
         self.sat_solver_backend = SatSolverBackend::Internal;
     }
 
-    pub fn reset_sat_solver(&mut self) -> Result<(), PicoSatError> {
-        if let SatSolverBackend::PicoSat(solver) = &mut self.sat_solver_backend {
-            solver.reset()?;
+    pub fn reset_sat_solver(&mut self) -> Result<(), SatSolverError> {
+        match &mut self.sat_solver_backend {
+            SatSolverBackend::Internal => {}
+            SatSolverBackend::PicoSat(solver) => {
+                solver.reset().map_err(SatSolverError::PicoSat)?;
+            }
+            #[cfg(feature = "cadical-static")]
+            SatSolverBackend::Cadical { solver, .. } => {
+                solver.reset().map_err(SatSolverError::Incremental)?;
+            }
         }
         self.solver.reset();
         Ok(())
@@ -635,7 +711,7 @@ pub fn proof_control_alloc() -> ProofControl {
     ProofControl::new()
 }
 
-pub fn proof_control_reset_sat_solver(control: &mut ProofControl) -> Result<(), PicoSatError> {
+pub fn proof_control_reset_sat_solver(control: &mut ProofControl) -> Result<(), SatSolverError> {
     control.reset_sat_solver()
 }
 
@@ -8573,6 +8649,10 @@ fn proof_state_saturate_sat_check_gate<W: fmt::Write>(
     Ok(empty)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "SATCheck keeps its preprocessing restoration and backend dispatch in one failure-atomic operation"
+)]
 fn proof_state_sat_check<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -8644,18 +8724,57 @@ fn proof_state_sat_check<W: fmt::Write>(
             sat_check_decision_limit,
             solver,
         )?,
+        #[cfg(feature = "cadical-static")]
+        SatSolverBackend::Cadical {
+            solver,
+            minimum_clauses,
+            proof_checker,
+            proof_directory,
+            proof_sequence,
+        } => {
+            let proof = match (proof_checker.as_ref(), proof_directory.as_ref()) {
+                (Some(checker), Some(directory)) => {
+                    *proof_sequence = proof_sequence.saturating_add(1);
+                    Some(SatProofRequest {
+                        trace_path: directory.join(format!(
+                            "satcheck-{}-{proof_sequence}.drat",
+                            std::process::id()
+                        )),
+                        checker_path: checker.clone(),
+                    })
+                }
+                _ => None,
+            };
+            sat_check_proof_state_with_incremental_service_until_time_limit(
+                state,
+                sat_check_grounding,
+                sat_check_normconst,
+                sat_check_decision_limit,
+                solver,
+                *minimum_clauses,
+                proof,
+            )?
+        }
     };
     let Some(report) = report else {
         return Ok(None);
     };
     control
         .reset_sat_solver()
-        .map_err(|error| picosat_error_to_diagnostic(&error))?;
+        .map_err(sat_solver_error_to_diagnostic)?;
     apply_sat_check_report(state, preproc_time, &report);
     Ok(report.empty.map(|clause| SatCheckRefutation {
         clause,
         solver_reported: true,
     }))
+}
+
+fn sat_solver_error_to_diagnostic(error: SatSolverError) -> Diagnostic {
+    match error {
+        SatSolverError::PicoSat(error) => picosat_error_to_diagnostic(&error),
+        #[cfg(feature = "cadical-static")]
+        SatSolverError::Incremental(error) => incremental_sat_error_to_diagnostic(&error),
+    }
 }
 
 fn apply_sat_check_report(state: &mut ProofState, preproc_time: f64, report: &SatCheckReport) {

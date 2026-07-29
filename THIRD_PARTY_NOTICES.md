@@ -22,8 +22,17 @@ absent. Distributors that add PicoSAT must include its MIT notice, retained in
 `licenses/picosat-MIT.txt`, and must re-run the package audit described in
 `docs/dependency-packaging-matrix.md`.
 
-The ignored E, Vampire, CaDiCaL, MiniSat, Z3, GMP, and local artifact trees are
-reference or experiment inputs. They are not part of Umlaut's distributable
-package. In particular, the pinned local Vampire executable incorporates an
-unlicensed VIRAS revision and must not be committed, published, redistributed,
-or placed in a Umlaut or CASC package.
+The `cadical-static` Cargo feature optionally compiles CaDiCaL 3.0.1 revision
+`c60730422e758ef1cebe7aeddf2dda31c996bf04` into Umlaut through the tracked
+`native/cadical_ffi` shim. CaDiCaL is copyright Armin Biere and contributors
+and is offered under the MIT license retained in `licenses/cadical-MIT.txt`.
+The default feature set contains no CaDiCaL code. The source package contains
+the independent shim and notice, but not upstream CaDiCaL source; a feature
+build must supply the pinned source explicitly. A proof checker is also an
+external, user-supplied executable and is never shipped implicitly.
+
+The ignored E, Vampire, CaDiCaL reference, MiniSat, Z3, GMP, and local artifact
+trees are reference or experiment inputs. They are not part of Umlaut's
+distributable package. In particular, the pinned local Vampire executable
+incorporates an unlicensed VIRAS revision and must not be committed, published,
+redistributed, or placed in a Umlaut or CASC package.

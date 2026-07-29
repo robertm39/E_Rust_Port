@@ -7,6 +7,10 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::PatEqnDirection;
 use crate::clauses::picosat::{PicoSat, PicoSatError, PicoSatSolveResult};
 use crate::clauses::proofstate::ProofState;
+use crate::clauses::satservice::{
+    IncrementalSatService, InternalSatService, SatProofRequest, SatServiceError, SatSolveOptions,
+    SatSolveOutcome,
+};
 use crate::heuristics::hcb::GroundingStrategy;
 use crate::inout::signals::time_is_up;
 use crate::terms::functypes::FunCode;
@@ -423,6 +427,7 @@ impl<'a> SatClauseSet<'a> {
         Ok(next)
     }
 
+    #[cfg(test)]
     fn check_unsat(&mut self, decision_limit: i32) -> (ProverResult, Option<Clause>) {
         let _ = self.mark_pure_and_export_non_pure();
         self.core.clear();
@@ -449,6 +454,100 @@ impl<'a> SatClauseSet<'a> {
         decision_limit: i32,
     ) -> Result<(ProverResult, Option<Clause>), PicoSatError> {
         self.check_unsat_with_external_solver(solver, decision_limit)
+    }
+
+    pub fn check_unsat_with_incremental_service<S>(
+        &mut self,
+        solver: &mut S,
+        decision_limit: i32,
+        minimum_backend_clauses: usize,
+        external_stop: Option<fn() -> bool>,
+        proof: Option<SatProofRequest>,
+    ) -> Result<(ProverResult, Option<Clause>), SatServiceError>
+    where
+        S: IncrementalSatService,
+    {
+        self.core.clear();
+        self.core_size = 0;
+
+        let solver_clauses = self.export_non_pure_to_solver_clauses();
+        let use_selected_backend =
+            proof.is_some() || solver_clauses.len() >= minimum_backend_clauses;
+        if use_selected_backend {
+            self.check_unsat_with_selected_incremental_service(
+                solver,
+                &solver_clauses,
+                decision_limit,
+                external_stop,
+                proof,
+            )
+        } else {
+            let mut internal = InternalSatService::new();
+            self.check_unsat_with_selected_incremental_service(
+                &mut internal,
+                &solver_clauses,
+                decision_limit,
+                external_stop,
+                None,
+            )
+        }
+    }
+
+    fn check_unsat_with_selected_incremental_service<S>(
+        &mut self,
+        solver: &mut S,
+        solver_clauses: &[Vec<i32>],
+        decision_limit: i32,
+        external_stop: Option<fn() -> bool>,
+        proof: Option<SatProofRequest>,
+    ) -> Result<(ProverResult, Option<Clause>), SatServiceError>
+    where
+        S: IncrementalSatService,
+    {
+        let (selected_clauses, selectors) = selector_guarded_clauses(solver_clauses, self.max_lit)?;
+        let options = SatSolveOptions {
+            decision_limit: if decision_limit >= 0 {
+                Some(
+                    u64::try_from(decision_limit)
+                        .expect("nonnegative i32 SAT limit is representable as u64"),
+                )
+            } else {
+                None
+            },
+            external_stop,
+            proof,
+            ..SatSolveOptions::default()
+        };
+        let outcome = with_fresh_incremental_service(solver, |solver| {
+            for clause in &selected_clauses {
+                solver.add_clause(clause)?;
+            }
+            Ok(solver.solve(&selectors, &options))
+        })?;
+        match outcome {
+            SatSolveOutcome::Sat { .. } => Ok((ProverResult::Satisfiable, None)),
+            SatSolveOutcome::Unknown(_) => Ok((ProverResult::GaveUp, None)),
+            SatSolveOutcome::Error(error) => Err(error),
+            SatSolveOutcome::Unsat {
+                failed_assumptions, ..
+            } => {
+                self.core = failed_assumptions
+                    .iter()
+                    .map(|selector| {
+                        selectors
+                            .iter()
+                            .position(|candidate| candidate == selector)
+                            .and_then(|index| self.exported.get(index).copied())
+                            .ok_or(SatServiceError::InvalidFailedCore)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.core_size = usize_to_u64(self.core.len());
+                Ok((
+                    ProverResult::Unsatisfiable,
+                    Some(self.empty_clause_from_core()),
+                ))
+            }
+        }
     }
 
     fn check_unsat_with_external_solver<S>(
@@ -635,19 +734,68 @@ where
     }
 }
 
+fn with_fresh_incremental_service<S, T>(
+    solver: &mut S,
+    action: impl FnOnce(&mut S) -> Result<T, SatServiceError>,
+) -> Result<T, SatServiceError>
+where
+    S: IncrementalSatService,
+{
+    solver.reset()?;
+    let result = action(solver);
+    let reset_result = solver.reset();
+    match (result, reset_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+fn selector_guarded_clauses(
+    clauses: &[Vec<i32>],
+    max_variable: i32,
+) -> Result<(Vec<Vec<i32>>, Vec<i32>), SatServiceError> {
+    let mut selected = Vec::with_capacity(clauses.len());
+    let mut selectors = Vec::with_capacity(clauses.len());
+    for (index, clause) in clauses.iter().enumerate() {
+        let offset = i32::try_from(index)
+            .map_err(|_| SatServiceError::LiteralOutOfRange(max_variable))?
+            .checked_add(1)
+            .ok_or(SatServiceError::LiteralOutOfRange(max_variable))?;
+        let selector = max_variable
+            .checked_add(offset)
+            .ok_or(SatServiceError::LiteralOutOfRange(max_variable))?;
+        let mut guarded = Vec::with_capacity(clause.len().saturating_add(1));
+        guarded.extend_from_slice(clause);
+        guarded.push(-selector);
+        selected.push(guarded);
+        selectors.push(selector);
+    }
+    Ok((selected, selectors))
+}
+
 pub fn sat_check_proof_state(
     state: &mut ProofState,
     grounding: GroundingStrategy,
     norm_const: bool,
     decision_limit: i32,
 ) -> Result<SatCheckReport, Diagnostic> {
-    sat_check_proof_state_with_stop(state, grounding, norm_const, decision_limit, || false)?
-        .ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::CPU_LIMIT_ERROR,
-                "uninterruptible SAT check stopped",
-            )
-        })
+    let mut solver = InternalSatService::new();
+    sat_check_proof_state_with_incremental_service_and_stop(
+        state,
+        grounding,
+        norm_const,
+        decision_limit,
+        &mut solver,
+        0,
+        never_stop,
+        None,
+    )?
+    .ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::CPU_LIMIT_ERROR,
+            "uninterruptible SAT check stopped",
+        )
+    })
 }
 
 pub(crate) fn sat_check_proof_state_until_time_limit(
@@ -656,9 +804,20 @@ pub(crate) fn sat_check_proof_state_until_time_limit(
     norm_const: bool,
     decision_limit: i32,
 ) -> Result<Option<SatCheckReport>, Diagnostic> {
-    sat_check_proof_state_with_stop(state, grounding, norm_const, decision_limit, time_is_up)
+    let mut solver = InternalSatService::new();
+    sat_check_proof_state_with_incremental_service_and_stop(
+        state,
+        grounding,
+        norm_const,
+        decision_limit,
+        &mut solver,
+        0,
+        time_is_up,
+        None,
+    )
 }
 
+#[cfg(test)]
 fn sat_check_proof_state_with_stop(
     state: &mut ProofState,
     grounding: GroundingStrategy,
@@ -676,6 +835,78 @@ fn sat_check_proof_state_with_stop(
     }
     let solver_start = Instant::now();
     let (result, empty) = satset.check_unsat(decision_limit);
+    let solver_time = solver_start.elapsed().as_secs_f64();
+
+    Ok(Some(sat_check_report(
+        &satset,
+        result,
+        empty,
+        encoding_time,
+        solver_time,
+    )))
+}
+
+#[cfg(feature = "cadical-static")]
+pub(crate) fn sat_check_proof_state_with_incremental_service_until_time_limit<S>(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    solver: &mut S,
+    minimum_backend_clauses: usize,
+    proof: Option<SatProofRequest>,
+) -> Result<Option<SatCheckReport>, Diagnostic>
+where
+    S: IncrementalSatService,
+{
+    sat_check_proof_state_with_incremental_service_and_stop(
+        state,
+        grounding,
+        norm_const,
+        decision_limit,
+        solver,
+        minimum_backend_clauses,
+        time_is_up,
+        proof,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "SATCheck faithfully threads C controls plus the selected service policy"
+)]
+fn sat_check_proof_state_with_incremental_service_and_stop<S>(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    solver: &mut S,
+    minimum_backend_clauses: usize,
+    stop: fn() -> bool,
+    proof: Option<SatProofRequest>,
+) -> Result<Option<SatCheckReport>, Diagnostic>
+where
+    S: IncrementalSatService,
+{
+    let mut should_stop = stop;
+    let Some((mut satset, encoding_time)) =
+        encode_sat_check_set(state, grounding, norm_const, &mut should_stop)?
+    else {
+        return Ok(None);
+    };
+    if stop() {
+        return Ok(None);
+    }
+    let solver_start = Instant::now();
+    let (result, empty) = satset
+        .check_unsat_with_incremental_service(
+            solver,
+            decision_limit,
+            minimum_backend_clauses,
+            Some(stop),
+            proof,
+        )
+        .map_err(|error| incremental_sat_error_to_diagnostic(&error))?;
     let solver_time = solver_start.elapsed().as_secs_f64();
 
     Ok(Some(sat_check_report(
@@ -764,6 +995,18 @@ pub fn picosat_error_to_diagnostic(error: &PicoSatError) -> Diagnostic {
         ErrorCode::INTERFACE_ERROR,
         format!("PicoSAT communication failed: {error}"),
     )
+}
+
+#[must_use]
+pub fn incremental_sat_error_to_diagnostic(error: &SatServiceError) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::INTERFACE_ERROR,
+        format!("incremental SAT service failed: {error}"),
+    )
+}
+
+fn never_stop() -> bool {
+    false
 }
 
 fn encode_sat_check_set<'a>(
@@ -1875,5 +2118,41 @@ mod tests {
         assert_eq!(report.core_size, 2);
         assert!(x.binding().is_none());
         assert!(y.binding().is_none());
+    }
+
+    #[cfg(feature = "cadical-static")]
+    #[test]
+    fn cadical_satcheck_maps_failed_selectors_back_to_clause_core() {
+        use crate::clauses::cadical::CadicalSatService;
+        use crate::clauses::satservice::IncrementalSatService;
+
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let a = typed_const(state.terms_mut(), "cadical_satcheck_a");
+        let x = typed_var(state.terms(), -2);
+        let y = typed_var(state.terms(), -4);
+        let positive = unit_clause(state.terms_mut(), &x, &a, true);
+        let negative = unit_clause(state.terms_mut(), &y, &a, false);
+        state.unprocessed_mut().insert(positive);
+        state.unprocessed_mut().insert(negative);
+        let mut solver = CadicalSatService::new().unwrap();
+
+        let report = super::sat_check_proof_state_with_incremental_service_and_stop(
+            &mut state,
+            GroundingStrategy::FirstConst,
+            false,
+            -1,
+            &mut solver,
+            0,
+            super::never_stop,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(report.result, ProverResult::Unsatisfiable);
+        assert!(report.empty.as_ref().is_some_and(Clause::is_empty));
+        assert_eq!(report.actual_size, 2);
+        assert_eq!(report.core_size, 2);
+        assert_eq!(solver.permanent_clause_count(), 0);
     }
 }

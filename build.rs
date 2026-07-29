@@ -9,7 +9,8 @@ use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use schedule_vars_parser::{
     parse_schedule_vars, ParsedSchedule, ParsedScheduleCell, ParsedScheduleClass,
@@ -31,7 +32,191 @@ fn main() -> Result<(), Box<dyn Error>> {
         env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("OUT_DIR is not set"))?,
     );
     fs::write(output_dir.join("schedule_tables.rs"), generated)?;
+    if env::var_os("CARGO_FEATURE_CADICAL_STATIC").is_some() {
+        build_static_cadical(&manifest_dir, &output_dir)?;
+    }
     Ok(())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the optional native build keeps source selection, compilation, archiving, and link directives in one auditable transaction"
+)]
+fn build_static_cadical(manifest_dir: &Path, output_dir: &Path) -> Result<(), Box<dyn Error>> {
+    const EXPECTED_VERSION: &str = "3.0.1";
+
+    println!("cargo:rerun-if-env-changed=UMLAUT_CADICAL_SOURCE");
+    println!("cargo:rerun-if-env-changed=CXX");
+    println!("cargo:rerun-if-env-changed=CC");
+    println!("cargo:rerun-if-env-changed=AR");
+    println!("cargo:rerun-if-changed=native/cadical_ffi/umlaut_cadical.cpp");
+    println!("cargo:rerun-if-changed=native/cadical_ffi/umlaut_cadical.h");
+
+    let source_root = PathBuf::from(env::var_os("UMLAUT_CADICAL_SOURCE").ok_or_else(|| {
+        io::Error::other(
+            "cadical-static requires UMLAUT_CADICAL_SOURCE pointing to pinned CaDiCaL 3.0.1",
+        )
+    })?);
+    let version_path = source_root.join("VERSION");
+    let version = fs::read_to_string(&version_path)?.trim().to_owned();
+    if version != EXPECTED_VERSION {
+        return Err(io::Error::other(format!(
+            "UMLAUT_CADICAL_SOURCE has version {version:?}, expected {EXPECTED_VERSION:?}"
+        ))
+        .into());
+    }
+    let source_dir = source_root.join("src");
+    if !source_dir.join("cadical.hpp").is_file() {
+        return Err(io::Error::other(format!(
+            "{} does not contain src/cadical.hpp",
+            source_root.display()
+        ))
+        .into());
+    }
+
+    let target = env::var("TARGET")?;
+    let build_dir = output_dir.join("umlaut-cadical");
+    fs::create_dir_all(&build_dir)?;
+    let cxx = compiler_from_env("CXX", &target, default_cxx(&target));
+    let cc = compiler_from_env("CC", &target, default_cc(&target));
+    let ar = compiler_from_env("AR", &target, default_ar(&target));
+    let mut objects = Vec::new();
+
+    let mut cpp_sources = fs::read_dir(&source_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "cpp"))
+        .filter(|path| {
+            !matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("cadical.cpp" | "mobical.cpp" | "ipasir.cpp")
+            )
+        })
+        .collect::<Vec<_>>();
+    cpp_sources.sort();
+    cpp_sources.push(manifest_dir.join("native/cadical_ffi/umlaut_cadical.cpp"));
+
+    for source in cpp_sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+        let object = object_path(&build_dir, &source, "cpp");
+        let mut command = Command::new(&cxx);
+        command
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-DNDEBUG")
+            .arg("-DNBUILD")
+            .arg("-I")
+            .arg(&source_dir)
+            .arg("-I")
+            .arg(manifest_dir.join("native/cadical_ffi"))
+            .arg("-c")
+            .arg(&source)
+            .arg("-o")
+            .arg(&object);
+        if target.contains("windows-gnu") {
+            command.arg("-DNUNLOCKED");
+        } else {
+            command.arg("-fPIC");
+        }
+        run_build_command(&mut command, "compile CaDiCaL C++ source")?;
+        objects.push(object);
+    }
+
+    let mut c_sources = fs::read_dir(&source_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+        .collect::<Vec<_>>();
+    c_sources.sort();
+    for source in c_sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+        let object = object_path(&build_dir, &source, "c");
+        let mut command = Command::new(&cc);
+        command
+            .arg("-O3")
+            .arg("-DNDEBUG")
+            .arg("-DNBUILD")
+            .arg("-I")
+            .arg(&source_dir)
+            .arg("-c")
+            .arg(&source)
+            .arg("-o")
+            .arg(&object);
+        if target.contains("windows-gnu") {
+            command.arg("-DNUNLOCKED");
+        } else {
+            command.arg("-fPIC");
+        }
+        run_build_command(&mut command, "compile CaDiCaL C source")?;
+        objects.push(object);
+    }
+
+    let archive = build_dir.join("libumlaut_cadical.a");
+    let mut archive_command = Command::new(&ar);
+    archive_command.arg("crs").arg(&archive).args(&objects);
+    run_build_command(&mut archive_command, "archive CaDiCaL static library")?;
+
+    println!("cargo:rustc-link-search=native={}", build_dir.display());
+    println!("cargo:rustc-link-lib=static=umlaut_cadical");
+    if target.contains("windows-gnu") {
+        println!("cargo:rustc-link-lib=stdc++");
+        println!("cargo:rustc-link-lib=winpthread");
+    } else if target.contains("apple") {
+        println!("cargo:rustc-link-lib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=stdc++");
+    }
+    Ok(())
+}
+
+fn compiler_from_env(prefix: &str, target: &str, fallback: &str) -> String {
+    let target_key = target.replace('-', "_");
+    env::var(format!("{prefix}_{target_key}"))
+        .ok()
+        .or_else(|| env::var(format!("TARGET_{prefix}")).ok())
+        .or_else(|| env::var(prefix).ok())
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn default_cxx(target: &str) -> &'static str {
+    if target == "x86_64-pc-windows-gnu" {
+        "x86_64-w64-mingw32-g++"
+    } else {
+        "c++"
+    }
+}
+
+fn default_cc(target: &str) -> &'static str {
+    if target == "x86_64-pc-windows-gnu" {
+        "x86_64-w64-mingw32-gcc"
+    } else {
+        "cc"
+    }
+}
+
+fn default_ar(target: &str) -> &'static str {
+    if target == "x86_64-pc-windows-gnu" {
+        "x86_64-w64-mingw32-ar"
+    } else {
+        "ar"
+    }
+}
+
+fn object_path(build_dir: &Path, source: &Path, language: &str) -> PathBuf {
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source");
+    build_dir.join(format!("{language}-{stem}.o"))
+}
+
+fn run_build_command(command: &mut Command, action: &str) -> Result<(), Box<dyn Error>> {
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("{action} failed with {status}: {command:?}")).into())
+    }
 }
 
 fn generate_tables(

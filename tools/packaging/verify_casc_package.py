@@ -54,6 +54,8 @@ REQUIRED_SOURCE_PATHS = {
     "build.rs",
     "docs/dependency-packaging-matrix.md",
     "docs/search-telemetry.md",
+    "native/cadical_ffi/umlaut_cadical.cpp",
+    "native/cadical_ffi/umlaut_cadical.h",
     "src/heuristics/schedule.vars",
     "tools/packaging/README-CASC.md",
     "tools/packaging/starexec_run_default",
@@ -834,12 +836,14 @@ def main(argv: Iterable[str] | None = None) -> int:
             "optional_backends": {
                 "bundled": [],
                 "linked": [],
+                "source_interfaces": ["native/cadical_ffi"],
                 "internal_sat_fallback": True,
             },
             "checks": {
                 "cargo_lock_dependency_free": True,
                 "source_archive_forbidden_components_absent": True,
                 "source_archive_pdfs_absent": True,
+                "source_archive_cadical_shim_present": True,
                 "extracted_source_release_build_offline": True,
                 "runtime_archive_minimal": True,
                 "runtime_archive_rootless": True,

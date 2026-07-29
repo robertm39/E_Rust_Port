@@ -1,17 +1,17 @@
 # Third-Party Licenses
 
-The `licenses/` directory contains verbatim copies of the license notices
-distributed with the third-party source trees bundled as references for
-Umlaut. These trees provide provenance, compatibility evidence, algorithmic
-ideas, and comparative implementations; their presence does not make them
-part of Umlaut or authorize automatic incorporation of their code. Any
-incorporation requires a compatible license and recorded provenance. The
-copies retain each project's copyright notice even when multiple projects use
-the same license family.
+The `licenses/` directory contains verbatim copies of notices for optional
+build inputs and third-party source trees retained as references for Umlaut.
+Reference trees provide provenance, compatibility evidence, algorithmic ideas,
+and comparative implementations; their presence does not make them part of
+Umlaut or authorize automatic incorporation of their code. Any incorporation
+requires a compatible license and recorded provenance. The copies retain each
+project's copyright notice even when multiple projects use the same license
+family.
 
 | Project | Bundled revision | Declared license | Verbatim copy |
 | --- | --- | --- | --- |
-| [CaDiCaL](https://github.com/arminbiere/cadical) | `c60730422e758ef1cebe7aeddf2dda31c996bf04` | MIT | [`cadical-MIT.txt`](../licenses/cadical-MIT.txt) |
+| [CaDiCaL](https://github.com/arminbiere/cadical) | Optional static build input `c60730422e758ef1cebe7aeddf2dda31c996bf04` (3.0.1); upstream source is not shipped | MIT | [`cadical-MIT.txt`](../licenses/cadical-MIT.txt) |
 | [E](https://github.com/eprover/eprover) | `17026b1bfe61aaf223cfaae54947c8d2679c31a0` | Dual-licensed under GPL-2.0-or-later or LGPL-2.1-or-later | [`eprover-GPL-2.0-or-later_OR_LGPL-2.1-or-later.txt`](../licenses/eprover-GPL-2.0-or-later_OR_LGPL-2.1-or-later.txt) |
 | [GMP](https://gmplib.org/) | 6.3.0 | The retained library, including Mini-GMP, is dual-licensed under LGPL-3.0-or-later or GPL-2.0-or-later. The upstream demo and test trees have been removed. Some retained distribution build helpers use GPL-3.0-or-later with special exceptions. | [`gmp-LGPL-3.0-or-later.txt`](../licenses/gmp-LGPL-3.0-or-later.txt), [`gmp-GPL-2.0-or-later.txt`](../licenses/gmp-GPL-2.0-or-later.txt), and [`gmp-GPL-3.0-or-later.txt`](../licenses/gmp-GPL-3.0-or-later.txt) |
 | [MiniSat](https://github.com/niklasso/minisat) | `37dc6c67e2af26379d88ce349eb9c4c6160e8543` | MIT | [`minisat-MIT.txt`](../licenses/minisat-MIT.txt) |
@@ -22,10 +22,10 @@ the same license family.
 
 ## Provenance
 
-The CaDiCaL, E, MiniSat, PicoSAT, and Z3 copies come from `LICENSE`,
+The CaDiCaL, E, MiniSat, PicoSAT, and Z3 notices come from `LICENSE`,
 `COPYING`, `LICENSE`, `CONTRIB/picosat-965/LICENSE`, and `LICENSE.txt`,
-respectively, in the bundled checkouts. The Vampire copy comes from `LICENCE`
-at the revision above. The GMP copies come from the 6.3.0 distribution's
+respectively, at the revisions above. The Vampire copy comes from `LICENCE`
+at its recorded revision. The GMP copies come from the 6.3.0 distribution's
 `COPYING.LESSERv3`, `COPYINGv2`, and `COPYINGv3`; the
 [GMP copying conditions](https://gmplib.org/manual/Copying) describe which
 parts use each license.

@@ -17,12 +17,14 @@ include = [
     "/docs/search-telemetry.md",
     "/docs/third-party-licenses.md",
     "/licenses/**",
+    "/native/cadical_ffi/**",
     "/src/**",
     "/tools/packaging/**",
 ]
 
 [features]
 default = []
+cadical-static = []
 measure-expensive = []
 measure-unification = []
 instrument-perf-ctr = []

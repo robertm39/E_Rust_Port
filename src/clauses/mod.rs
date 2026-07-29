@@ -1,5 +1,10 @@
 pub mod axiomsorter;
 pub mod bce;
+#[cfg(feature = "cadical-static")]
+// Allowed static C++ FFI boundary: cadical keeps every raw call and callback
+// invariant behind a safe incremental service.
+#[allow(unsafe_code)]
+pub mod cadical;
 pub mod clause;
 pub mod clause_props;
 pub mod clausecpos;
@@ -44,6 +49,7 @@ pub mod propclauses;
 pub mod relevance;
 pub mod rewrite;
 pub mod satinterface;
+pub mod satservice;
 pub mod sine;
 pub mod splitting;
 pub mod subsumption;

@@ -224,9 +224,15 @@ class ExplicitTransferTests(unittest.TestCase):
         script = runner.bootstrap_script()
 
         self.assertIn("gcc-mingw-w64-x86-64", script)
+        self.assertIn("g++-mingw-w64-x86-64", script)
+        self.assertIn(
+            "ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444",
+            script,
+        )
         self.assertIn("rustup component add rustfmt clippy", script)
         self.assertIn("rustup target add x86_64-pc-windows-gnu", script)
         self.assertIn("x86_64-w64-mingw32-gcc --version", script)
+        self.assertIn("x86_64-w64-mingw32-g++-posix --version", script)
 
     def test_remote_workload_contains_comprehensive_remote_only_gates(self):
         script = MODULE_PATH.with_name("remote_run.sh").read_text(encoding="utf-8")

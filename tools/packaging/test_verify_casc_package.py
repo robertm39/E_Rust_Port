@@ -63,6 +63,18 @@ class SourceArchiveTests(unittest.TestCase):
                     ):
                         audit.source_members(archive)
 
+    def test_source_requires_the_optional_cadical_interface_shim(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "source.crate"
+            names = [
+                name
+                for name in self.valid_names()
+                if not name.endswith("native/cadical_ffi/umlaut_cadical.cpp")
+            ]
+            write_tar(archive, names)
+            with self.assertRaisesRegex(audit.AuditError, "umlaut_cadical.cpp"):
+                audit.source_members(archive)
+
     def test_pdf_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "source.crate"

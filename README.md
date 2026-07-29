@@ -68,6 +68,16 @@ resource usage. See
 [docs/search-telemetry.md](docs/search-telemetry.md) for the schema and
 schedule-worker naming contract.
 
+## Optional incremental SAT backend
+
+The default build uses Umlaut's dependency-free internal SAT service. The
+`cadical-static` feature can compile pinned CaDiCaL 3.0.1 from an explicitly
+supplied `UMLAUT_CADICAL_SOURCE` tree. Runtime mode
+`UMLAUT_CADICAL_MODE=always`, `auto-128`, or `auto-256` is opt-in; unset or
+`off` remains the default. Build provenance, proof-checker controls, packaging,
+and disablement are documented in [DOCS.md](DOCS.md) and
+[docs/dependency-packaging-matrix.md](docs/dependency-packaging-matrix.md).
+
 ## Development and validation
 
 Start with [DOCS.md](DOCS.md) for the documentation index and

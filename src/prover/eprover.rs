@@ -92,6 +92,8 @@ use crate::clauses::proofstate::{
     ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_formula_sets_relevance_prune;
+#[cfg(feature = "cadical-static")]
+use crate::clauses::satinterface::incremental_sat_error_to_diagnostic;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
     select_axioms_clause_formula_sets_with_stats, select_threshold_clause_formula_sets,
@@ -340,6 +342,9 @@ const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const PICOSAT_LIBRARY_ENV: &str = "E_RUST_PORT_PICOSAT_LIBRARY";
+const CADICAL_MODE_ENV: &str = "UMLAUT_CADICAL_MODE";
+const CADICAL_PROOF_CHECKER_ENV: &str = "UMLAUT_CADICAL_PROOF_CHECKER";
+const CADICAL_PROOF_DIRECTORY_ENV: &str = "UMLAUT_CADICAL_PROOF_DIR";
 #[cfg(windows)]
 const PICOSAT_LIBRARY_NAMES: &[&str] = &["picosat.dll", "libpicosat.dll"];
 #[cfg(target_os = "macos")]
@@ -355,6 +360,26 @@ const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
     "Formula has free variables (check parentheses and quantifier precedence)";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CadicalMode {
+    #[default]
+    Disabled,
+    Always,
+    Auto128,
+    Auto256,
+}
+
+impl CadicalMode {
+    const fn minimum_clauses(self) -> Option<usize> {
+        match self {
+            Self::Disabled => None,
+            Self::Always => Some(0),
+            Self::Auto128 => Some(128),
+            Self::Auto256 => Some(256),
+        }
+    }
+}
 
 const GROUNDING_STRATEGY_NAMES: &[&str] = &[
     "NoGrounding",
@@ -1394,6 +1419,9 @@ pub struct EProverConfig {
     pub preprocessing: PreprocessingConfig,
     pub search: SearchControlConfig,
     pub picosat_library: Option<PathBuf>,
+    pub cadical_mode: CadicalMode,
+    pub cadical_proof_checker: Option<PathBuf>,
+    pub cadical_proof_directory: Option<PathBuf>,
     pub strategy_scheduling: bool,
     pub schedule_cores: i64,
     pub serialize_schedule: bool,
@@ -1513,6 +1541,9 @@ impl Default for EProverConfig {
             preprocessing: PreprocessingConfig::default(),
             search: SearchControlConfig::default(),
             picosat_library: None,
+            cadical_mode: CadicalMode::Disabled,
+            cadical_proof_checker: None,
+            cadical_proof_directory: None,
             strategy_scheduling: false,
             schedule_cores: 1,
             serialize_schedule: false,
@@ -1743,14 +1774,40 @@ fn proof_control_from_heuristic_parms(
     control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
     control
         .set_strong_unit_forward_subsumption(config.search.support.strong_unit_forward_subsumption);
-    install_configured_picosat_solver(config, &mut control)?;
+    install_configured_sat_solver(config, &mut control)?;
     Ok(control)
 }
 
-fn install_configured_picosat_solver(
+fn install_configured_sat_solver(
     config: &EProverConfig,
     control: &mut ProofControl,
 ) -> Result<(), Diagnostic> {
+    if let Some(minimum_clauses) = config.cadical_mode.minimum_clauses() {
+        #[cfg(feature = "cadical-static")]
+        {
+            let checked_proof = match (
+                config.cadical_proof_checker.clone(),
+                config.cadical_proof_directory.clone(),
+            ) {
+                (Some(checker), Some(directory)) => Some((checker, directory)),
+                _ => None,
+            };
+            return control
+                .install_cadical_solver(minimum_clauses, checked_proof)
+                .map(|_| ())
+                .map_err(|error| incremental_sat_error_to_diagnostic(&error));
+        }
+        #[cfg(not(feature = "cadical-static"))]
+        {
+            let _ = minimum_clauses;
+            return Err(Diagnostic::new(
+                ErrorCode::INTERFACE_ERROR,
+                format!(
+                    "{CADICAL_MODE_ENV} requests CaDiCaL, but this binary was built without --features cadical-static"
+                ),
+            ));
+        }
+    }
     let Some(path) = &config.picosat_library else {
         return Ok(());
     };
@@ -3540,9 +3597,17 @@ where
 {
     let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
     let mut state = CommandLineState::new(argv.clone());
+    let cadical_mode = configured_cadical_mode()
+        .map_err(|diagnostic| OptionProcessingError::new(diagnostic, Vec::new()))?;
+    let (cadical_proof_checker, cadical_proof_directory) =
+        configured_cadical_proof(cadical_mode)
+            .map_err(|diagnostic| OptionProcessingError::new(diagnostic, Vec::new()))?;
     let mut config = EProverConfig {
         invocation_args: argv,
         picosat_library: configured_picosat_library(),
+        cadical_mode,
+        cadical_proof_checker,
+        cadical_proof_directory,
         ..EProverConfig::default()
     };
     while let Some(parsed) = match state.next_opt(EPROVER_OPTIONS) {
@@ -3577,6 +3642,73 @@ where
 
 fn runtime_picosat_library_from_env() -> Option<PathBuf> {
     std::env::var_os(PICOSAT_LIBRARY_ENV)
+        .filter(|value| !value.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
+fn configured_cadical_mode() -> Result<CadicalMode, Diagnostic> {
+    let Some(value) = std::env::var_os(CADICAL_MODE_ENV) else {
+        return Ok(CadicalMode::Disabled);
+    };
+    let value = value.to_str().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!("{CADICAL_MODE_ENV} is not valid UTF-8"),
+        )
+    })?;
+    parse_cadical_mode(value)
+}
+
+fn parse_cadical_mode(value: &str) -> Result<CadicalMode, Diagnostic> {
+    match value {
+        "" | "off" | "disabled" => Ok(CadicalMode::Disabled),
+        "always" => Ok(CadicalMode::Always),
+        "auto-128" => Ok(CadicalMode::Auto128),
+        "auto-256" => Ok(CadicalMode::Auto256),
+        _ => Err(Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!(
+                "invalid {CADICAL_MODE_ENV} value {value:?}; expected off, always, auto-128, or auto-256"
+            ),
+        )),
+    }
+}
+
+fn configured_cadical_proof(
+    mode: CadicalMode,
+) -> Result<(Option<PathBuf>, Option<PathBuf>), Diagnostic> {
+    let checker = nonempty_env_path(CADICAL_PROOF_CHECKER_ENV);
+    let directory = nonempty_env_path(CADICAL_PROOF_DIRECTORY_ENV);
+    validate_cadical_proof_paths(mode, checker, directory)
+}
+
+fn validate_cadical_proof_paths(
+    mode: CadicalMode,
+    checker: Option<PathBuf>,
+    directory: Option<PathBuf>,
+) -> Result<(Option<PathBuf>, Option<PathBuf>), Diagnostic> {
+    match (checker, directory) {
+        (None, None) => Ok((None, None)),
+        (Some(checker), Some(directory)) if mode != CadicalMode::Disabled => {
+            Ok((Some(checker), Some(directory)))
+        }
+        (Some(_), Some(_)) => Err(Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!(
+                "{CADICAL_PROOF_CHECKER_ENV} and {CADICAL_PROOF_DIRECTORY_ENV} require an enabled {CADICAL_MODE_ENV}"
+            ),
+        )),
+        _ => Err(Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!(
+                "{CADICAL_PROOF_CHECKER_ENV} and {CADICAL_PROOF_DIRECTORY_ENV} must be set together"
+            ),
+        )),
+    }
+}
+
+fn nonempty_env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
         .filter(|value| !value.as_os_str().is_empty())
         .map(PathBuf::from)
 }
@@ -16796,7 +16928,7 @@ mod tests {
         bundled_picosat_library_for_executable, clause_proof_doc_session,
         core_limit_failure_messages, cpu_rlimit_to_apply, filter_schedule_worker_original_args,
         fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
-        order_parms_from_config, parse_app_encode_file,
+        order_parms_from_config, parse_app_encode_file, parse_cadical_mode,
         parse_clause_scanner_into_sets_with_options, parse_input_files_into_formula_owners,
         parse_schedule_worker_args, parse_simple_tstp_app_encode_formula,
         preprocessing_config_debug_line, problem_input_scanner_with_stdin, process_options,
@@ -16809,18 +16941,19 @@ mod tests {
         schedule_worker_run_args, search_schedule_worker_command_args,
         search_telemetry_output_path, simple_fof_bool_term_to_formulas, take_selected_clause_ids,
         take_selected_formula_entry_ids, temporary_executable_term_bank,
-        validate_search_telemetry_mode, write_proof_object_dot, write_proof_object_list_graph,
-        write_proof_statistics, write_proof_success_list_output, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        ConfiguredOutput, DocOutputFormat, EProverAction, EProverConfig, EProverFlag,
-        EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing, FvIndexFeatureType,
-        GroundingStrategy, InternalScheduleWorkerMode, LiteralComparison, ParamodulationType,
-        ParsedAppEncodeFormula, PdtConstraintRunGuard, PredicateEliminationFlag, PrimEnumMode,
-        ProblemTypeRunGuard, ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome,
-        SaturateReturnReason, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering,
-        UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
-        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
-        PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        validate_cadical_proof_paths, validate_search_telemetry_mode, write_proof_object_dot,
+        write_proof_object_list_graph, write_proof_statistics, write_proof_success_list_output,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, CadicalMode, ConfiguredOutput, DocOutputFormat,
+        EProverAction, EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
+        FormulaPreprocessing, FvIndexFeatureType, GroundingStrategy, InternalScheduleWorkerMode,
+        LiteralComparison, ParamodulationType, ParsedAppEncodeFormula, PdtConstraintRunGuard,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, ProofObjectListDisplayItem,
+        ProofStatisticsInput, SaturateOutcome, SaturateReturnReason, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource, EMPTY_INPUT_MESSAGE,
+        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
+        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -19957,6 +20090,67 @@ input_clause(c2,axiom,[++q(X)]).
         let _guard = set_env_var(PICOSAT_LIBRARY_ENV, "");
 
         assert_eq!(runtime_picosat_library_from_env(), None);
+    }
+
+    #[test]
+    fn parses_explicit_cadical_dispatch_mode() {
+        assert_eq!(
+            parse_cadical_mode("auto-256").unwrap(),
+            CadicalMode::Auto256
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_cadical_dispatch_mode() {
+        let error = parse_cadical_mode("adaptive").unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(error.message().contains("expected off, always, auto-128"));
+    }
+
+    #[test]
+    fn requires_complete_cadical_proof_configuration() {
+        let error = validate_cadical_proof_paths(
+            CadicalMode::Always,
+            Some(PathBuf::from("drat-trim")),
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(error.message().contains("must be set together"));
+    }
+
+    #[cfg(feature = "cadical-static")]
+    #[test]
+    fn proof_control_installs_opt_in_static_cadical() {
+        let config = EProverConfig {
+            cadical_mode: CadicalMode::Auto128,
+            ..EProverConfig::default()
+        };
+
+        let control = proof_control_from_config(&config).unwrap();
+
+        assert_eq!(
+            control.sat_solver_backend_kind(),
+            crate::heuristics::proofcontrol::SatSolverBackendKind::Cadical
+        );
+    }
+
+    #[cfg(not(feature = "cadical-static"))]
+    #[test]
+    fn proof_control_rejects_cadical_mode_when_feature_is_absent() {
+        let config = EProverConfig {
+            cadical_mode: CadicalMode::Always,
+            ..EProverConfig::default()
+        };
+
+        let error = proof_control_from_config(&config).err().unwrap();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(error
+            .message()
+            .contains("without --features cadical-static"));
     }
 
     #[test]

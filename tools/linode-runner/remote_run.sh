@@ -32,6 +32,9 @@ export PATH="/root/.cargo/bin:$PATH"
 export CARGO_TERM_COLOR=never
 export RUST_BACKTRACE=1
 export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+export UMLAUT_CADICAL_SOURCE=/opt/e-rust-port/cadical-3.0.1
+export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc-posix
+export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++-posix
 export E_RUST_PORT_COMPAT_ROOT="/opt/e-rust-port/compat-cache/$(basename "$artifact_root")"
 export E_RUST_PORT_COMPAT_ARTIFACT_ROOT="$artifact_root/compatibility"
 
@@ -47,6 +50,7 @@ cargo fmt --version
 cargo clippy --version
 gcc --version | head -n 1
 x86_64-w64-mingw32-gcc --version | head -n 1
+x86_64-w64-mingw32-g++-posix --version | head -n 1
 valgrind --version
 df -h /opt/e-rust-port
 
