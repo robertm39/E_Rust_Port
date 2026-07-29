@@ -1064,16 +1064,12 @@ apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl file gawk gcc-mingw-w64-x86-64 \
     g++-mingw-w64-x86-64 git pkg-config python3 time valgrind
 install -d -m 0755 /opt/e-rust-port
-cadical_archive=/opt/e-rust-port/cadical-3.0.1.tar.gz
 cadical_source=/opt/e-rust-port/cadical-3.0.1
-curl --proto '=https' --tlsv1.2 -fL \
-    https://github.com/arminbiere/cadical/archive/c60730422e758ef1cebe7aeddf2dda31c996bf04.tar.gz \
-    -o "$cadical_archive"
-echo 'ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444  '"$cadical_archive" |
-    sha256sum -c -
-rm -rf "$cadical_source"
-install -d -m 0755 "$cadical_source"
-tar -xzf "$cadical_archive" --strip-components=1 -C "$cadical_source"
+cadical_commit=c60730422e758ef1cebe7aeddf2dda31c996bf04
+git clone --quiet --depth=1 --branch rel-3.0.1 \
+    https://github.com/arminbiere/cadical.git "$cadical_source"
+test "$(git -C "$cadical_source" rev-parse HEAD)" = "$cadical_commit"
+git -C "$cadical_source" fsck --strict
 test "$(cat "$cadical_source/VERSION")" = 3.0.1
 if ! command -v cargo >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
