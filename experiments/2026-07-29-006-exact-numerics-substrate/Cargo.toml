@@ -1,0 +1,16 @@
+[package]
+name = "umlaut-exact-numerics-study"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+dashu-int = { version = "=0.5.1", default-features = false, features = ["std"] }
+dashu-ratio = { version = "=0.5.1", default-features = false, features = ["std"] }
+num-bigint = "=0.4.8"
+num-rational = "=0.4.2"
+rug = { version = "=1.30.0", default-features = false, features = ["rational", "std"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

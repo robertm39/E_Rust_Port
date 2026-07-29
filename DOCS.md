@@ -54,6 +54,14 @@ falsification run is retained in
 [`experiments/2026-07-29-005-arithmetic-qe-oracle/`](experiments/2026-07-29-005-arithmetic-qe-oracle/).
 Neither path imports Umlaut arithmetic code or adopts Z3 as a dependency.
 
+The exact integer/rational substrate matrix, independent
+`fractions.Fraction` conformance run, performance evidence, preferred Dashu
+candidate, and backend-private interface boundary are retained in
+[`experiments/2026-07-29-006-exact-numerics-substrate/`](experiments/2026-07-29-006-exact-numerics-substrate/).
+This is a selection study rather than dependency adoption: the root package
+remains dependency-free until a production theory consumer passes the
+documented adoption gates.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
