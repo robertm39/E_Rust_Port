@@ -29,6 +29,9 @@ RUN = load_module("rewrite_cache_run_tests", EXPERIMENT_ROOT / "run.py")
 ANALYZE = load_module(
     "rewrite_cache_analyze_tests", EXPERIMENT_ROOT / "analyze.py"
 )
+VERIFY = load_module(
+    "rewrite_cache_verify_tests", EXPERIMENT_ROOT / "verify.py"
+)
 
 
 def telemetry(
@@ -201,6 +204,55 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(ratios["median_cpu_ratio"], 0.5)
         self.assertEqual(ratios["median_generated_ratio"], 1.0)
         self.assertEqual(ratios["median_link_hits_ratio"], None)
+
+
+class VerificationTests(unittest.TestCase):
+    def test_representative_claims_cover_each_proof_category(self) -> None:
+        contract = {
+            "strategies": {"cache": {}, "recompute": {}},
+            "repetitions": 2,
+        }
+        results = []
+        for strategy in contract["strategies"]:
+            for problem_id, category, status in (
+                ("A1", "A", "Theorem"),
+                ("A2", "A", "Theorem"),
+                ("B1", "B", "Satisfiable"),
+            ):
+                for repetition in (1, 2):
+                    results.append(
+                        {
+                            "strategy": strategy,
+                            "budget": "larger",
+                            "problem_id": problem_id,
+                            "category": category,
+                            "repetition": repetition,
+                            "szs_status": status,
+                            "expected_status_match": True,
+                        }
+                    )
+
+        claims, boundaries = VERIFY.representative_claims(
+            contract, results, "larger"
+        )
+
+        self.assertEqual(
+            [
+                (strategy, problem_id, result["category"])
+                for strategy, problem_id, result in claims
+            ],
+            [
+                ("cache", "A1", "A"),
+                ("recompute", "A1", "A"),
+            ],
+        )
+        self.assertEqual(
+            [
+                (boundary["strategy"], boundary["category"])
+                for boundary in boundaries
+            ],
+            [("cache", "B"), ("recompute", "B")],
+        )
 
 
 if __name__ == "__main__":
