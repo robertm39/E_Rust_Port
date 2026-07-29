@@ -17,4 +17,8 @@ transparent amendment in `PREREGISTRATION.md`.
 
 Classifier label extraction reruns only already-successful repetition-1
 control coordinates to serialize PCL traces; it verifies that every rerun
-preserves the recorded SZS status.
+preserves the recorded SZS status. The PCL proof-parent retention fix at
+`477fa727355bace7de39d043d9b18734bd16adf4` is the label-extraction revision
+only; measured search results remain frozen at `812323618aaa42d0f5e24bba8a0ef146ff1757cd`.
+Classifier metadata records the label-extraction revision and binary hash, and
+new label traces are isolated below the fresh classifier-input root.

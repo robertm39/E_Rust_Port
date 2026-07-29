@@ -25,6 +25,27 @@ re-executed with its recorded command, changing only `--tstp-out` to
 the same SZS status before its trace is admitted. No failed coordinate,
 candidate coordinate, family, budget, metric, gate, or threshold changes.
 
+The first PCL extraction attempt under the measured revision was also invalid.
+It inserted three validation proofs, then `ROB005-1` exposed negative internal
+clause identifiers in the PCL justification field. No classifier metric or
+final analysis was observed. Investigation found that recorded-GC cleanup
+removed a contracted-away archive entry by its non-unique visible identifier,
+which could instead delete an older proof parent with the same identifier.
+Production fix `477fa727355bace7de39d043d9b18734bd16adf4` removes the exact stable
+derivation identity and passed both a collision regression and a real
+`ROB005-1` PCL-to-KB round trip.
+
+That fix is used only as the label-extraction prover revision. The measured
+search revision remains `812323618aaa42d0f5e24bba8a0ef146ff1757cd`; its
+training, validation, test, telemetry, and search outcomes are not rerun or
+replaced. A fresh classifier-input root re-executes only already-successful
+repetition-1 controls from their recorded commands, changes TSTP output to PCL,
+redirects telemetry, and requires the same SZS status. The label-extraction
+revision and executable hash are recorded in classifier metadata, and all new
+traces are written below that fresh root so the failed extraction evidence
+remains immutable. No family, treatment, budget, metric, gate, or threshold
+changes.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.

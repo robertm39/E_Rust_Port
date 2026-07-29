@@ -16,6 +16,7 @@ from typing import Any, Sequence
 
 PROOF_STATUSES = {"Theorem", "Unsatisfiable", "ContradictoryAxioms"}
 ANNOTATION_RE = re.compile(r"(\d+):\(([^)]*)\)")
+LABEL_EXTRACTION_REVISION = "477fa727355bace7de39d043d9b18734bd16adf4"
 
 
 class ExperimentError(RuntimeError):
@@ -83,6 +84,21 @@ def pcl_label_command(
         else:
             command.append(argument)
     return command
+
+
+def label_extraction_binary(search_root: Path) -> Path:
+    result_paths = sorted(
+        (search_root / "validation" / "runs" / "heldout" / "control").glob(
+            "*/*/rep-1/result.json"
+        )
+    )
+    if not result_paths:
+        raise ExperimentError("no validation control result for binary identity")
+    result = json.loads(result_paths[0].read_text(encoding="utf-8"))
+    command = pcl_label_command(
+        result, Path("binary-identity-telemetry.json")
+    )
+    return Path(command[0]).resolve()
 
 
 def annotation_entries(path: Path) -> list[dict[str, Any]]:
@@ -174,11 +190,15 @@ def create_label_kb(
             raise ExperimentError(f"non-frozen label repetition: {result_path}")
         if result.get("szs_status") not in PROOF_STATUSES:
             continue
-        proof_path = result_path.parent / "classifier-trace.pcl"
-        trace_stderr_path = result_path.parent / "classifier-trace.stderr"
-        trace_telemetry_path = (
-            result_path.parent / "classifier-trace-telemetry.json"
+        trace_output = (
+            output_root
+            / "traces"
+            / result_path.relative_to(search_root).parent
         )
+        trace_output.mkdir(parents=True, exist_ok=False)
+        proof_path = trace_output / "classifier-trace.pcl"
+        trace_stderr_path = trace_output / "classifier-trace.stderr"
+        trace_telemetry_path = trace_output / "classifier-trace-telemetry.json"
         command = pcl_label_command(result, trace_telemetry_path)
         environment = os.environ.copy()
         environment["TPTP"] = str(problem_root / "problems" / "casc_2025")
@@ -187,7 +207,7 @@ def create_label_kb(
         trace_stderr_path.write_bytes(trace.stderr)
         trace_status = final_status(trace.stdout)
         write_json(
-            result_path.parent / "classifier-trace.json",
+            trace_output / "classifier-trace.json",
             {
                 "schema_version": 1,
                 "source_result": str(result_path),
@@ -213,10 +233,10 @@ def create_label_kb(
             ],
             cwd=output_root,
         )
-        (result_path.parent / "classifier-insert.stdout").write_bytes(
+        (trace_output / "classifier-insert.stdout").write_bytes(
             completed.stdout
         )
-        (result_path.parent / "classifier-insert.stderr").write_bytes(
+        (trace_output / "classifier-insert.stderr").write_bytes(
             completed.stderr
         )
         if completed.returncode != 0:
@@ -237,6 +257,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--kb-ginsert", type=Path, required=True)
     parser.add_argument("--problem-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--label-extraction-revision", required=True)
     return parser.parse_args(argv)
 
 
@@ -251,13 +272,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     problem_root = arguments.problem_root.resolve()
     output_root = arguments.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    for executable in (kb_create, kb_ginsert):
+    if arguments.label_extraction_revision != LABEL_EXTRACTION_REVISION:
+        raise ExperimentError(
+            "label-extraction revision differs from the transparent amendment"
+        )
+    label_binary = label_extraction_binary(search_root)
+    for executable in (kb_create, kb_ginsert, label_binary):
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ExperimentError(f"missing executable: {executable}")
 
     training = annotation_entries(training_kb / "clausepatterns")
     metadata: dict[str, Any] = {
         "schema_version": 1,
+        "label_extraction_revision": arguments.label_extraction_revision,
+        "label_extraction_binary": str(label_binary),
+        "label_extraction_binary_sha256": sha256_file(label_binary),
         "training_kb": str(training_kb),
         "training_clausepatterns_sha256": sha256_file(
             training_kb / "clausepatterns"
