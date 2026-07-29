@@ -10898,10 +10898,12 @@ mod tests {
 
     #[test]
     fn sat_check_thresholds_start_from_heuristic_parameters() {
-        let mut params = HeuristicParmsCell::default();
-        params.sat_check_size_limit = 11;
-        params.sat_check_step_limit = 13;
-        params.sat_check_ttinsert_limit = 17;
+        let params = HeuristicParmsCell {
+            sat_check_size_limit: 11,
+            sat_check_step_limit: 13,
+            sat_check_ttinsert_limit: 17,
+            ..HeuristicParmsCell::default()
+        };
 
         let thresholds = SatCheckThresholds::new(&params);
 
@@ -10917,8 +10919,10 @@ mod tests {
 
     #[test]
     fn sat_check_size_threshold_catches_up_past_current_cardinality() {
-        let mut params = HeuristicParmsCell::default();
-        params.sat_check_size_limit = 10;
+        let params = HeuristicParmsCell {
+            sat_check_size_limit: 10,
+            ..HeuristicParmsCell::default()
+        };
         let thresholds = SatCheckThresholds::new(&params);
 
         let advanced = thresholds.advance_after(SatCheckTrigger::Size { cardinality: 35 }, &params);
@@ -10930,8 +10934,10 @@ mod tests {
 
     #[test]
     fn sat_check_step_threshold_advances_by_configured_interval() {
-        let mut params = HeuristicParmsCell::default();
-        params.sat_check_step_limit = 5_000;
+        let params = HeuristicParmsCell {
+            sat_check_step_limit: 5_000,
+            ..HeuristicParmsCell::default()
+        };
         let thresholds = SatCheckThresholds::new(&params);
 
         let advanced = thresholds.advance_after(SatCheckTrigger::Step, &params);
@@ -10943,8 +10949,10 @@ mod tests {
 
     #[test]
     fn sat_check_term_insertion_threshold_doubles() {
-        let mut params = HeuristicParmsCell::default();
-        params.sat_check_ttinsert_limit = 5_000_000;
+        let params = HeuristicParmsCell {
+            sat_check_ttinsert_limit: 5_000_000,
+            ..HeuristicParmsCell::default()
+        };
         let thresholds = SatCheckThresholds::new(&params);
 
         let advanced = thresholds.advance_after(SatCheckTrigger::TermBankInsertions, &params);
