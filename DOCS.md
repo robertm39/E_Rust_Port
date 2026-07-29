@@ -445,6 +445,18 @@ the same solve set, used about 89.1% of recomputation CPU on common
 larger-budget CASC solves, stayed within the memory guard, and verified all
 6/6 representative proof claims. Production cache policy remains unchanged.
 
+## Preprocessing Evaluation
+
+The transformation inventory, additive telemetry, focused provenance tests,
+184-run frozen evaluation, and integrity-pinned proof checks for blocked-clause
+elimination, singular predicate elimination, and goal definitions are recorded
+in
+[`experiments/2026-07-29-015-preprocessing-evaluation/`](experiments/2026-07-29-015-preprocessing-evaluation/).
+All three candidates preserved the three-solve baseline set and had measurable
+held-out reach, but none added a unique solve or met the preregistered common
+CPU threshold. They remain explicit default-off compatibility options, and no
+generated schedule or production default changed.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
