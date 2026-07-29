@@ -17181,10 +17181,9 @@ mod tests {
         PredicateEliminationFlag, PreprocessingTransformStats, PrimEnumMode, ProblemTypeRunGuard,
         ProofObjectListDisplayItem, ProofStatisticsInput, SaturateOutcome, SaturateReturnReason,
         SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, EMPTY_INPUT_MESSAGE,
-        INTERNAL_SCHEDULE_SEARCH_WORKER_ARG, INTERNAL_SCHEDULE_WORKER_ARG,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR, PICOSAT_LIBRARY_ENV,
-        PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
+        WatchlistSource, EMPTY_INPUT_MESSAGE, INTERNAL_SCHEDULE_SEARCH_WORKER_ARG,
+        INTERNAL_SCHEDULE_WORKER_ARG, LPO_RECURSION_LIMIT_WARNING, MEGA, OUTPUT_CLOSE_ERROR,
+        PICOSAT_LIBRARY_ENV, PICOSAT_LIBRARY_NAMES, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
