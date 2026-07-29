@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://umlaut-prover.org/schema/experiment-result-v1.json",
+  "title": "Umlaut experiment result contract",
+  "description": "A minimal, decision-oriented record for paired empirical work.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment",
+    "treatments",
+    "reproduction",
+    "correctness",
+    "performance",
+    "coverage",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "experiment": {
+      "$ref": "#/$defs/experiment"
+    },
+    "treatments": {
+      "$ref": "#/$defs/treatments"
+    },
+    "reproduction": {
+      "$ref": "#/$defs/reproduction"
+    },
+    "correctness": {
+      "$ref": "#/$defs/correctness"
+    },
+    "performance": {
+      "$ref": "#/$defs/performance"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    }
+  },
+  "$defs": {
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonnegative_integer": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "experiment": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "hypothesis",
+        "source_revision"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "title": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "hypothesis": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "source_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "treatment": {
+      "type": "object",
+      "required": [
+        "name",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "description": {
+          "$ref": "#/$defs/nonempty_string"
+        }
+      }
+    },
+    "treatments": {
+      "type": "object",
+      "required": [
+        "baseline",
+        "candidate"
+      ],
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/treatment"
+        },
+        "candidate": {
+          "$ref": "#/$defs/treatment"
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": [
+        "purpose",
+        "argv"
+      ],
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonempty_string"
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "path",
+        "role",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "role": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "$ref": "#/$defs/nonnegative_integer"
+        }
+      }
+    },
+    "reproduction": {
+      "type": "object",
+      "required": [
+        "platform",
+        "run_count",
+        "seed_policy",
+        "resource_limits",
+        "commands",
+        "artifacts"
+      ],
+      "properties": {
+        "platform": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "run_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "seed_policy": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "resource_limits": {
+          "type": "object"
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/command"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        }
+      }
+    },
+    "status_pairing": {
+      "type": "object",
+      "required": [
+        "paired_coordinates",
+        "exact_matches",
+        "polarity_disagreements"
+      ],
+      "properties": {
+        "paired_coordinates": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "exact_matches": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "polarity_disagreements": {
+          "$ref": "#/$defs/nonnegative_integer"
+        }
+      }
+    },
+    "independent_validation": {
+      "type": "object",
+      "required": [
+        "status",
+        "verified_claims",
+        "coverage_gaps",
+        "rejected_claims",
+        "candidate_witnesses"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "incomplete"
+          ]
+        },
+        "verified_claims": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "coverage_gaps": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "rejected_claims": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "candidate_witnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonempty_string"
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": [
+        "name",
+        "status",
+        "evidence"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "incomplete"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/nonempty_string"
+        }
+      }
+    },
+    "correctness": {
+      "type": "object",
+      "required": [
+        "status",
+        "status_pairing",
+        "independent_validation",
+        "checks"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "incomplete"
+          ]
+        },
+        "status_pairing": {
+          "$ref": "#/$defs/status_pairing"
+        },
+        "independent_validation": {
+          "$ref": "#/$defs/independent_validation"
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": [
+        "name",
+        "unit",
+        "direction"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "unit": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "direction": {
+          "enum": [
+            "lower_is_better",
+            "higher_is_better",
+            "descriptive"
+          ]
+        }
+      }
+    },
+    "noise": {
+      "type": "object",
+      "required": [
+        "method",
+        "coordinate_count",
+        "baseline_median_relative_range",
+        "baseline_max_relative_range",
+        "candidate_median_relative_range",
+        "candidate_max_relative_range",
+        "paired_ratio_median_relative_range",
+        "paired_ratio_max_relative_range"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "coordinate_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "baseline_median_relative_range": {
+          "type": "number",
+          "minimum": 0
+        },
+        "baseline_max_relative_range": {
+          "type": "number",
+          "minimum": 0
+        },
+        "candidate_median_relative_range": {
+          "type": "number",
+          "minimum": 0
+        },
+        "candidate_max_relative_range": {
+          "type": "number",
+          "minimum": 0
+        },
+        "paired_ratio_median_relative_range": {
+          "type": "number",
+          "minimum": 0
+        },
+        "paired_ratio_max_relative_range": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "required": [
+        "scope",
+        "paired_coordinates",
+        "candidate_over_baseline_median",
+        "noise"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "paired_coordinates": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_over_baseline_median": {
+          "type": "number",
+          "minimum": 0
+        },
+        "noise": {
+          "$ref": "#/$defs/noise"
+        }
+      }
+    },
+    "secondary_metric": {
+      "type": "object",
+      "required": [
+        "name",
+        "scope",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "scope": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "value": {
+          "type": "number"
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "required": [
+        "status",
+        "primary_metric",
+        "pairing",
+        "observations",
+        "secondary_metrics"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "valid",
+            "invalid",
+            "not_measured"
+          ]
+        },
+        "primary_metric": {
+          "$ref": "#/$defs/metric"
+        },
+        "pairing": {
+          "type": "object",
+          "required": [
+            "unit",
+            "repetitions"
+          ],
+          "properties": {
+            "unit": {
+              "$ref": "#/$defs/nonempty_string"
+            },
+            "repetitions": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/observation"
+          }
+        },
+        "secondary_metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/secondary_metric"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "baseline_reproducible_solves",
+        "candidate_reproducible_solves",
+        "common_reproducible_solves",
+        "candidate_only",
+        "baseline_only"
+      ],
+      "properties": {
+        "baseline_reproducible_solves": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "candidate_reproducible_solves": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "common_reproducible_solves": {
+          "$ref": "#/$defs/nonnegative_integer"
+        },
+        "candidate_only": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonempty_string"
+          }
+        },
+        "baseline_only": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonempty_string"
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "rule",
+        "reasons",
+        "production_effect"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "continue",
+            "stop",
+            "uncertain"
+          ]
+        },
+        "rule": {
+          "$ref": "#/$defs/nonempty_string"
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonempty_string"
+          }
+        },
+        "production_effect": {
+          "$ref": "#/$defs/nonempty_string"
+        }
+      }
+    }
+  }
+}

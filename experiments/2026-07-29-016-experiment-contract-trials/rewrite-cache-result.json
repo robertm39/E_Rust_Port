@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "experiment": {
+    "id": "2026-07-29-014-rewrite-cache-evaluation",
+    "title": "Shared rewrite-cache performance comparison",
+    "hypothesis": "The production shared rewrite links and normal-form dates reduce common-solve CPU without changing proof/model polarity, solve coverage, search size, or the preregistered larger-budget memory guard.",
+    "source_revision": "e3393c26c53ca9d59947963a221b309ef91655d6"
+  },
+  "treatments": {
+    "baseline": {
+      "name": "recompute",
+      "description": "Proof-preserving compile-time ablation that ignores persistent rewrite links and normal-form-date fast returns.",
+      "binary_sha256": "730d6f98e5ef7beca0f45949e3d061eca16308f221e4d55abf15499aa906a247"
+    },
+    "candidate": {
+      "name": "cache",
+      "description": "Production shared rewrite links plus rule and full normal-form dates.",
+      "binary_sha256": "3656385cda4b785f008caa289189900636e8fd3036767aeed2f67cc2d682afb1"
+    }
+  },
+  "reproduction": {
+    "platform": "Ubuntu 24.04; Linux 6.8; glibc 2.39; four CPUs",
+    "run_count": 180,
+    "seed_policy": "No RNG is used; the frozen manifests, SHA-256-ranked job order, strategy arguments, and two repetition coordinates determine execution.",
+    "resource_limits": {
+      "workers": 4,
+      "memory_mib_per_job": 1536,
+      "casc_short_soft_hard_cpu_seconds": [
+        5,
+        7
+      ],
+      "casc_larger_soft_hard_cpu_seconds": [
+        20,
+        23
+      ],
+      "targeted_soft_hard_cpu_seconds": [
+        30,
+        33
+      ]
+    },
+    "commands": [
+      {
+        "purpose": "execute or resume the held-out CASC phase",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-014-rewrite-cache-evaluation/run.py",
+          "--ablation-binary=/opt/e-rust-port/target-rewrite-cache-ablation/release/umlaut",
+          "--source-revision=e3393c26c53ca9d59947963a221b309ef91655d6",
+          "--phase=casc",
+          "--manifest=benchmarks/casc_2025_manifest.jsonl",
+          "--problem-root=/opt/e-rust-port/casc20",
+          "--binary=/opt/e-rust-port/target-rewrite-cache-normal/release/umlaut",
+          "--output-root=/opt/e-rust-port/rewrite-cache-results",
+          "--workers=4",
+          "--memory-mib=1536"
+        ]
+      },
+      {
+        "purpose": "execute or resume the rewrite-heavy targeted phase",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-014-rewrite-cache-evaluation/run.py",
+          "--ablation-binary=/opt/e-rust-port/target-rewrite-cache-ablation/release/umlaut",
+          "--source-revision=e3393c26c53ca9d59947963a221b309ef91655d6",
+          "--phase=targeted",
+          "--manifest=experiments/2026-07-29-014-rewrite-cache-evaluation/targeted-manifest.jsonl",
+          "--problem-root=/opt/e-rust-port/source",
+          "--binary=/opt/e-rust-port/target-rewrite-cache-normal/release/umlaut",
+          "--output-root=/opt/e-rust-port/rewrite-cache-results",
+          "--workers=4",
+          "--memory-mib=1536"
+        ]
+      },
+      {
+        "purpose": "recompute and validate both version-1 trial records from the preserved archives",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-016-experiment-contract-trials/verify_trials.py",
+          "--verify-artifacts"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path": ".artifacts/experiments/2026-07-29-014-rewrite-cache-evaluation/rewrite-cache-results-final.tar.gz",
+        "role": "complete raw contracts, commands, outputs, telemetry, proofs, and checker reports",
+        "sha256": "4c154b26822193578198a4bb54a3caa554076df52aef51476bd65392ebaa6fe6",
+        "bytes": 23397005
+      },
+      {
+        "path": "experiments/2026-07-29-014-rewrite-cache-evaluation/results-summary.json",
+        "role": "source analyzer result and proof-validation report",
+        "sha256": "39d324849d4760ac7907b36b545fdecec8075f85bd23c0f0c125bbf2a97d3ad1",
+        "bytes": 20961
+      },
+      {
+        "path": "experiments/2026-07-29-014-rewrite-cache-evaluation/PREREGISTRATION.md",
+        "role": "frozen hypothesis, gates, budgets, and decision rule",
+        "sha256": "9aa0fa542eff65b75c914b1b47ed1e50fdce2ba183fd7ecb79bada2234cad4a4",
+        "bytes": 7047
+      },
+      {
+        "path": "experiments/2026-07-29-014-rewrite-cache-evaluation/run.py",
+        "role": "frozen execution controller",
+        "sha256": "c9af08b63a9c844130d69876b6a5a51ce2f37bf5e856cc6c3f63639fbe99ffaa",
+        "bytes": 10492
+      },
+      {
+        "path": "experiments/2026-07-29-014-rewrite-cache-evaluation/analyze.py",
+        "role": "source result analyzer",
+        "sha256": "6d51827c2d7e6b8b4846011ffdbda376e04e26f9fb1543526af56d6373007b3a",
+        "bytes": 20186
+      },
+      {
+        "path": "experiments/2026-07-29-014-rewrite-cache-evaluation/verify.py",
+        "role": "independent proof-validation controller",
+        "sha256": "a77ce5fb2484b4d4d97336ac1e3a547eb5c22117a861858930bfb156e889bb3a",
+        "bytes": 9702
+      }
+    ]
+  },
+  "correctness": {
+    "status": "pass",
+    "status_pairing": {
+      "paired_coordinates": 90,
+      "exact_matches": 90,
+      "polarity_disagreements": 0
+    },
+    "independent_validation": {
+      "status": "pass",
+      "verified_claims": 6,
+      "coverage_gaps": 0,
+      "rejected_claims": 0,
+      "candidate_witnesses": [
+        "NUN086+2",
+        "NUN134-1",
+        "COL042-8"
+      ]
+    },
+    "checks": [
+      {
+        "name": "paired SZS status and polarity audit",
+        "status": "pass",
+        "evidence": "All 90 cache/recompute coordinates had exact matching SZS statuses and zero proof/model polarity disagreements."
+      },
+      {
+        "name": "independent representative proof validation",
+        "status": "pass",
+        "evidence": "ProofCheck 1.0 returned VerifiedGood for all 6/6 selected proof claims; report id 2f5a2de81fb9e91b2644b98feae82ab8ee4adcfee2161e124d389513cc8fd590."
+      }
+    ]
+  },
+  "performance": {
+    "status": "valid",
+    "primary_metric": {
+      "name": "total_cpu_seconds",
+      "unit": "seconds",
+      "direction": "lower_is_better"
+    },
+    "pairing": {
+      "unit": "held-out problem-budget-repetition",
+      "repetitions": 2
+    },
+    "observations": [
+      {
+        "scope": "CASC test split, larger budget, common reproducible solves",
+        "paired_coordinates": 6,
+        "candidate_over_baseline_median": 0.890751,
+        "noise": {
+          "method": "within-coordinate relative range, summarized across three common-solve problems",
+          "coordinate_count": 3,
+          "baseline_median_relative_range": 0.027384,
+          "baseline_max_relative_range": 0.046688,
+          "candidate_median_relative_range": 0.008723,
+          "candidate_max_relative_range": 0.029071,
+          "paired_ratio_median_relative_range": 0.042882,
+          "paired_ratio_max_relative_range": 0.055405
+        }
+      }
+    ],
+    "secondary_metrics": [
+      {
+        "name": "generated_clause_ratio",
+        "scope": "CASC larger common reproducible solves",
+        "value": 1.0
+      },
+      {
+        "name": "high_water_total_ratio",
+        "scope": "CASC larger common reproducible solves",
+        "value": 1.0
+      },
+      {
+        "name": "maximum_resident_pages_ratio",
+        "scope": "CASC larger all runs",
+        "value": 0.958982
+      },
+      {
+        "name": "targeted_total_cpu_ratio",
+        "scope": "rewrite-heavy common reproducible solves",
+        "value": 0.847211
+      }
+    ]
+  },
+  "coverage": {
+    "baseline_reproducible_solves": 3,
+    "candidate_reproducible_solves": 3,
+    "common_reproducible_solves": 3,
+    "candidate_only": [],
+    "baseline_only": []
+  },
+  "decision": {
+    "outcome": "continue",
+    "rule": "Retain the full production cache when correctness passes and either it adds a larger-budget solve or common-solve CPU is at most 0.95 with generated and high-water ratios at most 1.02 and larger-budget maximum RSS at most 1.05.",
+    "reasons": [
+      "Correctness, polarity, and independent proof gates passed.",
+      "The 0.890751 primary CPU ratio passes the 0.95 retention threshold and is larger than the observed paired-ratio repetition movement.",
+      "Generated clauses, high-water clauses, and the larger-budget memory guard passed with no lost solve."
+    ],
+    "production_effect": "Retain the full shared rewrite cache as the enabled production implementation.",
+    "source_result": "retain_full_shared_rewrite_cache"
+  }
+}

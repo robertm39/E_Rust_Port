@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "experiment": {
+    "id": "2026-07-29-015-preprocessing-evaluation-bce-trial",
+    "title": "Blocked-clause elimination default-off toggle",
+    "hypothesis": "Enabling the existing blocked-clause elimination pass reaches held-out problems and either adds a reproducible solve or reduces common-solve CPU to at most 0.95 without correctness, search-size, or memory regression.",
+    "source_revision": "23a8a9700dffb18df57502cb600accaee3513887"
+  },
+  "treatments": {
+    "baseline": {
+      "name": "baseline",
+      "description": "Production preprocessing defaults with blocked-clause elimination disabled.",
+      "binary_sha256": "5ddef5ac691a078e015d21e79a7ecc31e628da26353fca82b4c6c095bcb785a3"
+    },
+    "candidate": {
+      "name": "bce",
+      "description": "The same binary and search strategy with --bce=true as the only treatment difference.",
+      "binary_sha256": "5ddef5ac691a078e015d21e79a7ecc31e628da26353fca82b4c6c095bcb785a3"
+    }
+  },
+  "reproduction": {
+    "platform": "Ubuntu 24.04; Linux 6.8; glibc 2.39; four CPUs",
+    "run_count": 184,
+    "seed_policy": "No RNG is used; frozen manifests, SHA-256-ranked job order, fixed strategy arguments, and two repetition coordinates determine execution.",
+    "resource_limits": {
+      "workers": 4,
+      "memory_mib_per_job": 1536,
+      "differential_soft_hard_cpu_seconds": [
+        5,
+        8
+      ],
+      "heldout_soft_hard_cpu_seconds": [
+        10,
+        13
+      ]
+    },
+    "commands": [
+      {
+        "purpose": "execute or resume the synthetic differential phase",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-015-preprocessing-evaluation/run.py",
+          "--source-revision=23a8a9700dffb18df57502cb600accaee3513887",
+          "--phase=differential",
+          "--manifest=experiments/2026-07-29-015-preprocessing-evaluation/targeted-manifest.jsonl",
+          "--problem-root=/opt/e-rust-port/source",
+          "--binary=/opt/e-rust-port/target-preprocessing/release/umlaut",
+          "--output-root=/opt/e-rust-port/preprocessing-results",
+          "--workers=4",
+          "--memory-mib=1536"
+        ]
+      },
+      {
+        "purpose": "execute or resume the held-out CASC phase",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-015-preprocessing-evaluation/run.py",
+          "--source-revision=23a8a9700dffb18df57502cb600accaee3513887",
+          "--phase=casc",
+          "--manifest=benchmarks/casc_2025_manifest.jsonl",
+          "--problem-root=/opt/e-rust-port/casc20",
+          "--binary=/opt/e-rust-port/target-preprocessing/release/umlaut",
+          "--output-root=/opt/e-rust-port/preprocessing-results",
+          "--workers=4",
+          "--memory-mib=1536"
+        ]
+      },
+      {
+        "purpose": "recompute and validate both version-1 trial records from the preserved archives",
+        "argv": [
+          "python3",
+          "experiments/2026-07-29-016-experiment-contract-trials/verify_trials.py",
+          "--verify-artifacts"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path": ".artifacts/experiments/2026-07-29-015-preprocessing-evaluation/preprocessing-results.tar.gz",
+        "role": "complete raw contracts, commands, outputs, telemetry, proofs, and checker reports",
+        "sha256": "6da8483fe84a98e328e1d08e8a457451a962b1ca338204934cddf2389ef4f733",
+        "bytes": 21224572
+      },
+      {
+        "path": "experiments/2026-07-29-015-preprocessing-evaluation/results-summary.json",
+        "role": "source analyzer result and proof-validation report",
+        "sha256": "ad1576d50fb5f6dcdb2cd48aa209d24f4ba4247a82788dce5eb9ad7f89d5bcbc",
+        "bytes": 38777
+      },
+      {
+        "path": "experiments/2026-07-29-015-preprocessing-evaluation/PREREGISTRATION.md",
+        "role": "frozen hypothesis, gates, budgets, and decision rule",
+        "sha256": "57624705b4c6a80d561b651fb50d3df57fd7620c89ddfb75ac1ebbf5518668c6",
+        "bytes": 5949
+      },
+      {
+        "path": "experiments/2026-07-29-015-preprocessing-evaluation/run.py",
+        "role": "frozen execution controller",
+        "sha256": "2d90fd7dbc679d800b185ba253cba482990a9aba7860fdf59d2135a9fd6da412",
+        "bytes": 9233
+      },
+      {
+        "path": "experiments/2026-07-29-015-preprocessing-evaluation/analyze.py",
+        "role": "source result analyzer",
+        "sha256": "d7883b8a8cf6ed6eac73bf9535552688f21e45fd02c151e4b08c341e62d465b7",
+        "bytes": 20587
+      },
+      {
+        "path": "experiments/2026-07-29-015-preprocessing-evaluation/verify.py",
+        "role": "independent proof-validation controller",
+        "sha256": "937a4bc4d601e43a8a43af5883818561f90af2773a2b7a6dc35c79ed669134f9",
+        "bytes": 10798
+      }
+    ]
+  },
+  "correctness": {
+    "status": "pass",
+    "status_pairing": {
+      "paired_coordinates": 46,
+      "exact_matches": 46,
+      "polarity_disagreements": 0
+    },
+    "independent_validation": {
+      "status": "pass",
+      "verified_claims": 15,
+      "coverage_gaps": 5,
+      "rejected_claims": 0,
+      "candidate_witnesses": [
+        "NUN086+2"
+      ]
+    },
+    "checks": [
+      {
+        "name": "paired SZS status and polarity audit",
+        "status": "pass",
+        "evidence": "All 46 BCE/baseline coordinates had exact matching SZS statuses and zero proof/model polarity disagreements."
+      },
+      {
+        "name": "independent transformed-proof gate",
+        "status": "pass",
+        "evidence": "The overall preprocessing proof report verified 15/20 claims with five explicit coverage gaps, zero rejected claims, and a verified transformation-active BCE witness on NUN086+2; report id 794147d79081186ca0ea9b11392a40c3b28d80e4d79ebde3cc0ee3b5ed046fa4."
+      }
+    ]
+  },
+  "performance": {
+    "status": "valid",
+    "primary_metric": {
+      "name": "total_cpu_seconds",
+      "unit": "seconds",
+      "direction": "lower_is_better"
+    },
+    "pairing": {
+      "unit": "held-out problem-budget-repetition",
+      "repetitions": 2
+    },
+    "observations": [
+      {
+        "scope": "CASC test split, held-out budget, common reproducible solves",
+        "paired_coordinates": 6,
+        "candidate_over_baseline_median": 0.987599,
+        "noise": {
+          "method": "within-coordinate relative range, summarized across three common-solve problems",
+          "coordinate_count": 3,
+          "baseline_median_relative_range": 0.008343,
+          "baseline_max_relative_range": 0.042434,
+          "candidate_median_relative_range": 0.046647,
+          "candidate_max_relative_range": 0.050162,
+          "paired_ratio_median_relative_range": 0.004215,
+          "paired_ratio_max_relative_range": 0.058499
+        }
+      }
+    ],
+    "secondary_metrics": [
+      {
+        "name": "generated_clause_ratio",
+        "scope": "held-out common reproducible solves",
+        "value": 1.0
+      },
+      {
+        "name": "high_water_total_ratio",
+        "scope": "held-out common reproducible solves",
+        "value": 1.0
+      },
+      {
+        "name": "maximum_resident_pages_ratio",
+        "scope": "held-out all runs",
+        "value": 0.951625
+      },
+      {
+        "name": "blocked_clauses_removed",
+        "scope": "held-out transformation-active coordinates",
+        "value": 6538
+      }
+    ]
+  },
+  "coverage": {
+    "baseline_reproducible_solves": 3,
+    "candidate_reproducible_solves": 3,
+    "common_reproducible_solves": 3,
+    "candidate_only": [],
+    "baseline_only": []
+  },
+  "decision": {
+    "outcome": "stop",
+    "rule": "Do not enable BCE by default unless correctness passes and it either adds a held-out solve or reaches at least two held-out problems while common-solve CPU is at most 0.95 and generated and high-water ratios are at most 1.02.",
+    "reasons": [
+      "Correctness passed and BCE had measurable held-out reach, but it added no reproducible solve.",
+      "The 0.987599 primary CPU ratio missed the 0.95 benefit threshold and is not a material improvement relative to the observed paired-ratio repetition movement.",
+      "No production schedule or default should change on clause-removal activity alone."
+    ],
+    "production_effect": "Stop this enable-by-default proposal and retain BCE as an explicit default-off compatibility option.",
+    "source_result": "retain_explicit_default_off"
+  }
+}

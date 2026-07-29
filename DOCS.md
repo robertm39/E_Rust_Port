@@ -457,6 +457,17 @@ held-out reach, but none added a unique solve or met the preregistered common
 CPU threshold. They remain explicit default-off compatibility options, and no
 generated schedule or production default changed.
 
+## Empirical Experiment Contracts
+
+The lightweight schema, template, standard-library validator, paired-noise
+practice, and two archive-backed trials for experiment decisions are
+documented in [`docs/experiment-contract.md`](docs/experiment-contract.md).
+The trial records reuse the completed preprocessing-toggle and shared
+rewrite-cache evaluations, recompute their common-solve CPU effects and
+within-coordinate repeat variation from raw artifacts, and independently
+arrive at `stop` and `continue` decisions without mixing correctness with
+performance.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.

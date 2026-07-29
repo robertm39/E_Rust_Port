@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "experiment": {
+    "id": "YYYY-MM-DD-NNN-short-slug",
+    "title": "Replace with the experiment title",
+    "hypothesis": "State the falsifiable expected effect before measurement.",
+    "source_revision": "0000000000000000000000000000000000000000"
+  },
+  "treatments": {
+    "baseline": {
+      "name": "baseline",
+      "description": "Describe the unchanged comparison."
+    },
+    "candidate": {
+      "name": "candidate",
+      "description": "Describe the single intended difference."
+    }
+  },
+  "reproduction": {
+    "platform": "Ubuntu release and version; CPU and worker count",
+    "run_count": 1,
+    "seed_policy": "State every seed, or explain why the run has no RNG.",
+    "resource_limits": {
+      "workers": 1,
+      "memory_mib_per_job": 1536,
+      "soft_cpu_seconds": 1,
+      "hard_cpu_seconds": 2
+    },
+    "commands": [
+      {
+        "purpose": "execute the frozen controller",
+        "argv": [
+          "python3",
+          "experiments/YYYY-MM-DD-NNN-short-slug/run.py"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "tools/experiment_contract/experiment-result.schema.json",
+        "role": "result schema used by this template",
+        "sha256": "11696658893400844e690a6191206b7daa8e8c0909b80bd38dbcbcbad9530493",
+        "bytes": 11637
+      }
+    ]
+  },
+  "correctness": {
+    "status": "incomplete",
+    "status_pairing": {
+      "paired_coordinates": 0,
+      "exact_matches": 0,
+      "polarity_disagreements": 0
+    },
+    "independent_validation": {
+      "status": "incomplete",
+      "verified_claims": 0,
+      "coverage_gaps": 0,
+      "rejected_claims": 0,
+      "candidate_witnesses": []
+    },
+    "checks": [
+      {
+        "name": "replace with a correctness gate",
+        "status": "incomplete",
+        "evidence": "Record the command, report identifier, and verdict."
+      }
+    ]
+  },
+  "performance": {
+    "status": "not_measured",
+    "primary_metric": {
+      "name": "total_cpu_seconds",
+      "unit": "seconds",
+      "direction": "lower_is_better"
+    },
+    "pairing": {
+      "unit": "problem-budget-repetition",
+      "repetitions": 1
+    },
+    "observations": [],
+    "secondary_metrics": []
+  },
+  "coverage": {
+    "baseline_reproducible_solves": 0,
+    "candidate_reproducible_solves": 0,
+    "common_reproducible_solves": 0,
+    "candidate_only": [],
+    "baseline_only": []
+  },
+  "decision": {
+    "outcome": "uncertain",
+    "rule": "Replace with the preregistered go/no-go rule.",
+    "reasons": [
+      "Correctness and performance evidence are not complete."
+    ],
+    "production_effect": "No production change while the result is uncertain."
+  }
+}
