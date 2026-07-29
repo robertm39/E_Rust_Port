@@ -20,6 +20,29 @@ python3 tools/validation/validate_tptp_solution.py \
   '["/opt/proofcheck/proofcheck","-p","{problem}","{artifact}"]'
 ```
 
+ProofCheck 1.0 reports `Unknown` when a refutation depends on an
+`introduced(definition)` step. For that first-order coverage class, the
+repository provides an integrity-checking adapter for a caller-supplied
+ProofGuard checkout:
+
+```text
+python3 tools/validation/validate_tptp_solution.py \
+  problem.p solution.s \
+  --proof-command-json \
+  '["python3","tools/validation/run_pinned_proofguard.py",
+    "--proofguard-root","/opt/proofguard",
+    "--eprover","/opt/eprover",
+    "--expected-eprover-sha256","<64-digit SHA-256>",
+    "{problem}","{artifact}"]'
+```
+
+The adapter verifies the exact upstream Git remote, commit, clean worktree,
+checker/engine hashes, and caller-declared E hash before running either
+external program. It does not download or bundle ProofGuard. The pinned
+ProofGuard revision has no upstream license declaration, so obtain any
+required permission and keep its checkout outside Umlaut's source and runtime
+packages.
+
 The exit codes are:
 
 | Code | Meaning |

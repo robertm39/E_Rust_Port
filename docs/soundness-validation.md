@@ -66,6 +66,24 @@ and `rejected`, respectively. Umlaut also now preserves question annotation
 and conjecture negation as explicit archived proof steps rather than nesting
 them below later formula preprocessing.
 
+Experiment
+[`2026-07-29-010`](../experiments/2026-07-29-010-conservative-definition-checker/)
+adds an external first-order path for refutations that depend on fresh
+conservative predicate definitions. ProofGuard 1.0 independently checks
+definition freshness, acyclicity, and variable discipline, then uses a
+separate E process to replay every dependent inference. The minimized proof
+and `PUZ008-2` static-splitting proof receive `VerifiedGood`; reused-symbol,
+circular, altered-body, and missing-parent mutations receive `VerifiedBad`.
+ProofCheck 1.0 remains the negative coverage control and reports `Unknown` on
+the two valid definition-dependent proofs.
+
+[`run_pinned_proofguard.py`](../tools/validation/run_pinned_proofguard.py)
+turns this into a shell-free, fail-closed optional command for the existing
+gate. It requires an exact clean upstream checkout plus checker, engine, and E
+hashes. ProofGuard is not bundled: the pinned upstream revision has no license
+declaration, so callers must obtain any required permission and keep it
+outside Umlaut's source and runtime packages.
+
 The following gaps are intentional and machine-visible:
 
 - TFF is not positively verified: ProofCheck abstains, GAPT 2.20 reports

@@ -88,6 +88,13 @@ Plain and negated-conjecture source proofs now verify externally, while used
 conservative definitions remain a fail-closed coverage gap tracked by
 `E_Rust_Port-9jt.2.10`.
 
+The optional, integrity-pinned external validation path for used conservative
+definitions is documented in
+[`experiments/2026-07-29-010-conservative-definition-checker/`](experiments/2026-07-29-010-conservative-definition-checker/).
+It verifies the minimized proof and `PUZ008-2` static splitting, rejects four
+definition/ancestry mutations, and keeps the unlicensed external checker
+strictly caller-supplied and outside Umlaut packages.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
