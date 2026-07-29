@@ -10897,6 +10897,68 @@ mod tests {
     }
 
     #[test]
+    fn sat_check_thresholds_start_from_heuristic_parameters() {
+        let mut params = HeuristicParmsCell::default();
+        params.sat_check_size_limit = 11;
+        params.sat_check_step_limit = 13;
+        params.sat_check_ttinsert_limit = 17;
+
+        let thresholds = SatCheckThresholds::new(&params);
+
+        assert_eq!(
+            thresholds,
+            SatCheckThresholds {
+                size: 11,
+                step: 13,
+                ttinsert: 17,
+            }
+        );
+    }
+
+    #[test]
+    fn sat_check_size_threshold_catches_up_past_current_cardinality() {
+        let mut params = HeuristicParmsCell::default();
+        params.sat_check_size_limit = 10;
+        let thresholds = SatCheckThresholds::new(&params);
+
+        let advanced = thresholds.advance_after(
+            SatCheckTrigger::Size { cardinality: 35 },
+            &params,
+        );
+
+        assert_eq!(advanced.size, 40);
+        assert_eq!(advanced.step, thresholds.step);
+        assert_eq!(advanced.ttinsert, thresholds.ttinsert);
+    }
+
+    #[test]
+    fn sat_check_step_threshold_advances_by_configured_interval() {
+        let mut params = HeuristicParmsCell::default();
+        params.sat_check_step_limit = 5_000;
+        let thresholds = SatCheckThresholds::new(&params);
+
+        let advanced = thresholds.advance_after(SatCheckTrigger::Step, &params);
+
+        assert_eq!(advanced.step, 10_000);
+        assert_eq!(advanced.size, thresholds.size);
+        assert_eq!(advanced.ttinsert, thresholds.ttinsert);
+    }
+
+    #[test]
+    fn sat_check_term_insertion_threshold_doubles() {
+        let mut params = HeuristicParmsCell::default();
+        params.sat_check_ttinsert_limit = 5_000_000;
+        let thresholds = SatCheckThresholds::new(&params);
+
+        let advanced =
+            thresholds.advance_after(SatCheckTrigger::TermBankInsertions, &params);
+
+        assert_eq!(advanced.ttinsert, 10_000_000);
+        assert_eq!(advanced.size, thresholds.size);
+        assert_eq!(advanced.step, thresholds.step);
+    }
+
+    #[test]
     fn proof_control_keeps_internal_backend_after_missing_picosat_install() {
         let mut control = proof_control_alloc();
 
