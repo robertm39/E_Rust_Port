@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source_manifest_sha256": "31c9a99e4b34b56352b3311f3efe5c97f728fd078783085e1811d83eec271f6d",
+  "source_split": "test",
+  "categories": {
+    "FEQ": [
+      {"problem_id": "NUN086+2", "sha256": "b8b7a611284b051b8b21ed1c4ce9751d8b09fbbe641e40f7bd329e276759714a"},
+      {"problem_id": "REL021+1", "sha256": "589261f6aae0dafe53b56bc6c0eda565379a88d804d5b45dd7be1e8e72482343"},
+      {"problem_id": "NUN058+2", "sha256": "2b8b99702e3c6c9aa0685599025b9a01a61882ffe9814cb03da5eca86114be5f"},
+      {"problem_id": "SEV562+1", "sha256": "fb0d48b3623102c924db99253ef66e7513b0c366cac3f187a25fb30abcbc8231"},
+      {"problem_id": "SWX060+1", "sha256": "c343082f66a42180ffe77efb31ca99db8264daf3a57cb09391d055bb7c8d2772"},
+      {"problem_id": "SEU299+2", "sha256": "1151646c902e8beb3c0193f1394d474ed997a691acc91cb0315b17bcceaff4d0"}
+    ],
+    "FNE": [
+      {"problem_id": "NUN087+1", "sha256": "62295ca996944c1dbc001e33bb8d049af2d180dd85dc52dd646167010c96e1e9"},
+      {"problem_id": "NUN060+1", "sha256": "412f6d9622a59ba8e12cc195455c24d9211a689cfa8fc96fd70153ff6b87eac9"},
+      {"problem_id": "NUN085+1", "sha256": "57b876c4a8e596aad2df67c0f6cc623261354599b2fd7f2001f4721e87186902"},
+      {"problem_id": "NUN056+1", "sha256": "ccbe00f670da1fe0a1d7b7a4957b316497b197a44b546cdde2f42c1f881dc286"},
+      {"problem_id": "NUN057+1", "sha256": "a9415da9d37d83d86774edcb99c4b82e9e20ba607b098031778b473d07d3ee17"},
+      {"problem_id": "NUN072+1", "sha256": "bdcf339cbe6b188d6dc91b3698b07ae2e5857e49df28d143e7d9c36d9b560deb"}
+    ],
+    "EPS": [
+      {"problem_id": "PLA045-1", "sha256": "3a9e689a02bb5dba383f2475bd2a31d77599293bfd04aee0bcda76faf0ddca9c"},
+      {"problem_id": "PLA038-1", "sha256": "b2f735cc51a4e4329730b0694f223d987382125528fef8ddd9ab2e136bdd9f8b"}
+    ],
+    "UEQ": [
+      {"problem_id": "NUN134-1", "sha256": "9a7b85ad1f1222579bdd136ef80752c77c120d93083842b18a01200c7359f576"},
+      {"problem_id": "REL005-1", "sha256": "f29dc8da13aba64a13300a43868e7d38f55c2fc1991de05543faacb049e4baf6"},
+      {"problem_id": "MVA008-1", "sha256": "b33c62f00cb22d3b235181ea4f2b8f0601002014ea2a31da04299319a1871e1a"},
+      {"problem_id": "PLA007-10", "sha256": "15d8a7ddcb76c6b6b939099ca3f96b28ee8a117c66f730ac3bc2215aeaa9683a"},
+      {"problem_id": "MVA003-1", "sha256": "90c8832ca7976948e9902eb0ffafc6c06e49b9e5e3f394f50b84950231f04385"},
+      {"problem_id": "REL040-10", "sha256": "ce3bec8d969a682230592e8759a4ad2d7813c6cc0846cfa165d210297d4f5eb6"}
+    ]
+  },
+  "rewrite_heavy": [
+    "eprover/EXAMPLE_PROBLEMS/TPTP/COL042-8.p",
+    "eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6.lop",
+    "eprover/EXAMPLE_PROBLEMS/SMOKETEST/LUSK6ext.lop",
+    "eprover/EXAMPLE_PROBLEMS/TPTP/SWC078-1.p",
+    "eprover/EXAMPLE_PROBLEMS/TPTP/HEN011-2.p"
+  ]
+}
