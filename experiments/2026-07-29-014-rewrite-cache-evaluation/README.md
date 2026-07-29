@@ -13,3 +13,15 @@ No benchmark result may be inspected before the preregistration commit.
 Generated raw evidence belongs under
 `.artifacts/experiments/2026-07-29-014-rewrite-cache-evaluation/`.
 
+The study is complete. The existing full cache passed proof, polarity,
+common-solve CPU, search-size, and larger-budget memory gates. Production
+remains unchanged. See [`FINDINGS.md`](FINDINGS.md),
+[`RESULTS.md`](RESULTS.md), and
+[`results-summary.json`](results-summary.json).
+
+`run.py` creates and resumes the two frozen execution contracts. `analyze.py`
+checks those contracts and applies the preregistered decision. `verify.py`
+selects one reproducible proof per solved category and build and runs the
+integrity-pinned ProofCheck 1.0 path. `test_scripts.py` covers selection,
+content-addressing, telemetry aggregation, paired ratios, and proof-category
+selection.

@@ -434,6 +434,17 @@ employment authority is also not attested, and `LGPL-3.0-only` versus
 `Cargo.toml`, `LICENSE`, notices, and package metadata remain unchanged pending
 a signed owner attestation and qualified review.
 
+## Shared Rewrite-Cache Evaluation
+
+The shared rewrite-link and normal-form-date audit, proof-preserving
+recomputation ablation, focused invalidation/proof tests, 180-run frozen
+evaluation, and integrity-pinned proof checks are recorded in
+[`experiments/2026-07-29-014-rewrite-cache-evaluation/`](experiments/2026-07-29-014-rewrite-cache-evaluation/).
+The existing full cache passed the preregistered retention gate: it preserved
+the same solve set, used about 89.1% of recomputation CPU on common
+larger-budget CASC solves, stayed within the memory guard, and verified all
+6/6 representative proof claims. Production cache policy remains unchanged.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
