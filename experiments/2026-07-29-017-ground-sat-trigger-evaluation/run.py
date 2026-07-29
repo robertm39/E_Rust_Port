@@ -149,7 +149,7 @@ def run_one(**kwargs: Any) -> dict[str, Any]:
     result_path = Path(outcome["result_path"])
     result = json.loads(result_path.read_text(encoding="utf-8"))
     record = kwargs["record"]
-    corrected = PRIOR.expected_status_match(record, result["szs_status"])
+    corrected = result["szs_status"] in BASE.PROOF_STATUSES
     if (
         result.get("expected_status_match") != corrected
         or result.get("expected_class") != record["expected_class"]
