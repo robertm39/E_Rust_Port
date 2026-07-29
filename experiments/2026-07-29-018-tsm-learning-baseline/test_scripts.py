@@ -29,6 +29,7 @@ def load_module(name: str, path: Path) -> ModuleType:
 SELECT = load_module("tsm_select_test", ROOT / "select_corpus.py")
 INPUTS = load_module("tsm_inputs_test", ROOT / "make_classifier_inputs.py")
 ANALYZE = load_module("tsm_analyze_test", ROOT / "analyze.py")
+CLASSIFY = load_module("tsm_classify_test", ROOT / "classify.py")
 
 
 class SelectionTests(unittest.TestCase):
@@ -171,6 +172,28 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(decision["verdict"], "uncertain")
         self.assertFalse(decision["sufficient_classifier_coverage"])
         self.assertFalse(decision["ranking_cost_pass"])
+
+
+class ClassifierCommandTests(unittest.TestCase):
+    def test_classifier_command_uses_frozen_identity_index_name(self) -> None:
+        binary = Path("umlaut-tsm-classify")
+        input_path = Path("input.tsm")
+        command = CLASSIFY.classifier_command(binary, input_path)
+        self.assertEqual(
+            command,
+            [
+                str(binary),
+                "-l",
+                "1",
+                "-i",
+                "IndexIdentity",
+                "-d",
+                "100000",
+                "-t",
+                "Flat",
+                str(input_path),
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-import resource
 import subprocess
 import sys
 import time
@@ -28,8 +27,25 @@ def sha256_file(path: Path) -> str:
 
 
 def child_cpu_seconds() -> float:
+    import resource
+
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     return usage.ru_utime + usage.ru_stime
+
+
+def classifier_command(binary: Path, input_path: Path) -> list[str]:
+    return [
+        str(binary),
+        "-l",
+        "1",
+        "-i",
+        "IndexIdentity",
+        "-d",
+        "100000",
+        "-t",
+        "Flat",
+        str(input_path),
+    ]
 
 
 def classify_once(
@@ -38,18 +54,7 @@ def classify_once(
     cpu_before = child_cpu_seconds()
     started = time.monotonic()
     completed = subprocess.run(
-        [
-            str(binary),
-            "-l",
-            "1",
-            "-i",
-            "Identity",
-            "-d",
-            "100000",
-            "-t",
-            "Flat",
-            str(input_path),
-        ],
+        classifier_command(binary, input_path),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=120,
@@ -115,10 +120,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue
             raise ExperimentError(f"missing classifier input: {input_path}")
         completed, _wall, _cpu = classify_once(binary, input_path)
-        if completed.returncode != 0:
-            raise ExperimentError(f"classifier warm-up failed: {name}")
         (output_root / f"{name}.stdout").write_bytes(completed.stdout)
         (output_root / f"{name}.stderr").write_bytes(completed.stderr)
+        if completed.returncode != 0:
+            raise ExperimentError(f"classifier warm-up failed: {name}")
 
         timings = []
         for repetition in range(1, arguments.repetitions + 1):

@@ -24,4 +24,6 @@ Classifier metadata records the label-extraction revision and binary hash, and
 new label traces are isolated below the fresh classifier-input root. A split
 with no successful repetition-1 control proof is recorded as unavailable
 instead of receiving fabricated labels; its classifier workload is skipped and
-the frozen insufficient-coverage rule yields an `uncertain` decision.
+the frozen insufficient-coverage rule yields an `uncertain` decision. Classifier
+commands use the executable's `IndexIdentity` spelling for the frozen identity
+index mode and retain warm-up diagnostics on failure.

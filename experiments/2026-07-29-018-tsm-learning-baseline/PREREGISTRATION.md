@@ -56,6 +56,14 @@ classifier coverage. Validation extraction and all search evidence are
 unchanged; the failed partial extraction root is preserved and the reporting
 rerun uses a fresh root.
 
+The first classifier warm-up then rejected the harness shorthand `Identity`
+before emitting any score or timing metric. The executable's accepted CLI token
+is `IndexIdentity`, the same frozen identity index specified above. The harness
+now serializes that exact token and preserves failed warm-up stdout/stderr; the
+failed classifier-output root remains immutable and a fresh output root is used.
+No classifier workload, TSM type, depth, repetition count, metric, threshold,
+or search evidence changes.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.
