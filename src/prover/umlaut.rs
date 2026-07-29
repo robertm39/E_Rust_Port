@@ -36,9 +36,7 @@ use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::{
     set_verbose_level, verbose2_enabled, verbose_enabled, verbout, verbout2,
 };
-use crate::clauses::bce::{
-    eliminate_blocked_clauses_with_output, BceEliminationResult,
-};
+use crate::clauses::bce::{eliminate_blocked_clauses_with_output, BceEliminationResult};
 use crate::clauses::clause::{
     clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
     clause_print_tptp_format_string_with_options, clause_starts_maybe,
@@ -86,8 +84,7 @@ use crate::clauses::inferencedoc::{
 use crate::clauses::picosat::PicoSat;
 use crate::clauses::pred_elim::{
     eliminate_predicates_singular, eliminate_predicates_singular_with_picosat,
-    PredicateEliminationConfig as ClausePredicateEliminationConfig,
-    PredicateEliminationResult,
+    PredicateEliminationConfig as ClausePredicateEliminationConfig, PredicateEliminationResult,
 };
 use crate::clauses::proofstate::{
     derived_dot_node_colour, derived_dot_node_colour_for_proof_member, derived_in_proof,
@@ -31320,12 +31317,8 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Initial clauses                      : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
-        assert!(telemetry.contains(
-            "\"blocked_clause_elimination\": {\"removed\": 2}"
-        ));
-        assert!(telemetry.contains(
-            "\"predicate_elimination\": {\"removed\": 0, \"generated\": 0}"
-        ));
+        assert!(telemetry.contains("\"blocked_clause_elimination\": {\"removed\": 2}"));
+        assert!(telemetry.contains("\"predicate_elimination\": {\"removed\": 0, \"generated\": 0}"));
         assert!(telemetry.contains("\"goal_definitions\": {\"added\": 0}"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -31549,9 +31542,7 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("% Initial clauses                      : 3\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
-        assert!(telemetry.contains(
-            "\"predicate_elimination\": {\"removed\": 1, \"generated\": 1}"
-        ));
+        assert!(telemetry.contains("\"predicate_elimination\": {\"removed\": 1, \"generated\": 1}"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(telemetry_path).unwrap();
