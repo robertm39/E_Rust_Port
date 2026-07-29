@@ -18,6 +18,7 @@ EVAL_BANDS = {"q1", "q2", "q3", "q4"}
 EXPECTED_CLASSES = {"theorem", "unsatisfiable"}
 MIN_BYTES = 200
 MAX_BYTES = 100_000
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def sha256_file(path: Path) -> str:
@@ -44,6 +45,11 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def select(
     manifest_path: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    manifest_path = manifest_path.resolve()
+    try:
+        source_manifest = manifest_path.relative_to(REPO_ROOT).as_posix()
+    except ValueError as error:
+        raise ValueError("source manifest must be inside the repository") from error
     rows = read_jsonl(manifest_path)
     if not rows or rows[0].get("record_type") != "manifest":
         raise ValueError("source manifest must start with a manifest record")
@@ -113,7 +119,7 @@ def select(
         **source_header,
         "schema_version": 1,
         "kind": "umlaut-tsm-learning-corpus",
-        "source_manifest": manifest_path.as_posix(),
+        "source_manifest": source_manifest,
         "source_manifest_sha256": sha256_file(manifest_path),
         "selection_salt": SELECTION_SALT,
         "selection_policy": {

@@ -44,6 +44,10 @@ class SelectionTests(unittest.TestCase):
             if line
         ]
         self.assertEqual(tracked, [header, *records])
+        self.assertEqual(
+            tracked[0]["source_manifest"],
+            "benchmarks/casc_2025_manifest.jsonl",
+        )
 
     def test_family_sets_are_pairwise_disjoint(self) -> None:
         header, _records = SELECT.select(
