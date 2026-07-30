@@ -161,6 +161,17 @@ normalization failure, and hypothesis-strengthening gap remain as evidence for
 a future arithmetic-aware induction design; structural induction remains
 unsafe until Umlaut enforces algebraic-datatype semantics.
 
+The conservative typed TPTP-to-LIRA frontend contract is retained in
+[`experiments/2026-07-29-023-typed-tptp-lira-adapter/`](experiments/2026-07-29-023-typed-tptp-lira-adapter/).
+Exact integer guards, real variables, ground rationals, linear arithmetic,
+floor/ceiling, and safe explicit coercions passed 12 frozen and 500 generated
+three-view equivalence checks; all 16 frozen unsupported cases and four
+semantic mutations failed as required. Vampire 5.0.1 independently accepted
+all 512 canonical TFF re-embeddings. The boundary is recommended for the later
+LIRA kernel, but general arithmetic remains disabled: quantified rationals,
+real rationality/coercion, nonlinear terms, partial division families, and
+mixed-theory terms fail closed.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

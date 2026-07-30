@@ -21,3 +21,5 @@ bounded equivalence oracle, and decision rule are preregistered in
 `PREREGISTRATION.md`. Raw results belong under
 `.artifacts/experiments/2026-07-29-023-typed-tptp-lira-adapter/`.
 
+The completed reusable boundary is in `CONTRACT.md`; the conformance and
+independent-parser results are in `FINDINGS.md`.
