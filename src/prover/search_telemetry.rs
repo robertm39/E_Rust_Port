@@ -7,6 +7,7 @@ use crate::heuristics::hcb::HcbSelectionTelemetry;
 use crate::heuristics::proofcontrol::{
     ProcessClauseReturnReason, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
+use crate::terms::acterms::{ac_telemetry_snapshot, AcTelemetrySnapshot};
 use crate::terms::fp_index::{
     fingerprint_index_telemetry_snapshot, FPIndexDistrib, FingerprintIndexTelemetrySnapshot,
 };
@@ -33,6 +34,7 @@ pub(crate) struct SearchTelemetryCounterSnapshot {
     backward_rewrite_match_successes: u64,
     condensation_attempts: u64,
     condensation_successes: u64,
+    ac: AcTelemetrySnapshot,
     fingerprint_index: FingerprintIndexTelemetrySnapshot,
 }
 
@@ -76,6 +78,7 @@ impl SearchTelemetryCounterSnapshot {
             condensation_successes: nonnegative_counter(
                 crate::clauses::condensation::condensation_successes(),
             ),
+            ac: ac_telemetry_snapshot(),
             fingerprint_index: fingerprint_index_telemetry_snapshot(),
         }
     }
@@ -127,6 +130,7 @@ impl SearchTelemetryCounterSnapshot {
             condensation_successes: self
                 .condensation_successes
                 .saturating_sub(baseline.condensation_successes),
+            ac: self.ac.since(baseline.ac),
             fingerprint_index: self.fingerprint_index.since(baseline.fingerprint_index),
         }
     }
@@ -305,6 +309,7 @@ fn write_search_activity(
     let state = record.state;
     let statistics = state.statistics();
     let counters = derived.counters;
+    let ac = counters.ac;
     let fingerprint = counters.fingerprint_index;
     writeln!(
         output,
@@ -333,6 +338,16 @@ fn write_search_activity(
         counters.rewrite_cache_link_edges,
         counters.rewrite_cache_nf_date_checks,
         counters.rewrite_cache_nf_date_hits
+    )?;
+    writeln!(
+        output,
+        "  \"ac\": {{\"equality_checks\": {}, \"equality_hits\": {}, \"normalizations\": {}, \"input_nodes\": {}, \"normalized_nodes\": {}, \"flattened_nodes\": {}}},",
+        ac.equality_checks,
+        ac.equality_hits,
+        ac.normalizations,
+        ac.input_nodes,
+        ac.normalized_nodes,
+        ac.flattened_nodes
     )?;
     write!(
         output,
@@ -597,6 +612,7 @@ mod tests {
     use crate::heuristics::proofcontrol::{
         ProcessClauseReturnReason, SaturateReturnReason, SaturateStopReason,
     };
+    use crate::terms::acterms::AcTelemetrySnapshot;
 
     #[test]
     fn json_string_escapes_control_and_path_characters() {
@@ -631,6 +647,11 @@ mod tests {
             condensation_successes: 5,
             rewrite_cache_link_lookups: 7,
             rewrite_cache_nf_date_hits: 9,
+            ac: AcTelemetrySnapshot {
+                equality_checks: 11,
+                flattened_nodes: 8,
+                ..AcTelemetrySnapshot::default()
+            },
             ..SearchTelemetryCounterSnapshot::default()
         };
         let current = SearchTelemetryCounterSnapshot {
@@ -638,6 +659,11 @@ mod tests {
             condensation_successes: 3,
             rewrite_cache_link_lookups: 12,
             rewrite_cache_nf_date_hits: 4,
+            ac: AcTelemetrySnapshot {
+                equality_checks: 14,
+                flattened_nodes: 6,
+                ..AcTelemetrySnapshot::default()
+            },
             ..SearchTelemetryCounterSnapshot::default()
         };
         let delta = current.since(baseline);
@@ -645,6 +671,8 @@ mod tests {
         assert_eq!(delta.condensation_successes, 0);
         assert_eq!(delta.rewrite_cache_link_lookups, 5);
         assert_eq!(delta.rewrite_cache_nf_date_hits, 0);
+        assert_eq!(delta.ac.equality_checks, 3);
+        assert_eq!(delta.ac.flattened_nodes, 0);
     }
 
     #[test]

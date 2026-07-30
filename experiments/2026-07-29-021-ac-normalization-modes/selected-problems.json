@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "selection_kind": "explicit_matching_associativity_and_commutativity",
+  "categories": [
+    "FEQ",
+    "UEQ"
+  ],
+  "calibration": [
+    "KLE084-10",
+    "KLE110-10",
+    "KLE145-10",
+    "KLE147-10",
+    "KLE169-10",
+    "LAT065-10",
+    "LAT190-10",
+    "LAT206-10",
+    "LAT223-10",
+    "LAT230-10",
+    "LAT241-10",
+    "LAT400-1",
+    "LAT400-3",
+    "LAT401-1"
+  ],
+  "validation": [
+    "NUM479+2",
+    "NUM481+1",
+    "NUM853+2",
+    "NUM856+1",
+    "NUM925+3",
+    "NUM926+2",
+    "RNG085+2",
+    "RNG098+2",
+    "SWV234+2",
+    "RNG009-5"
+  ],
+  "test": [
+    "REL029-10",
+    "REL040-10"
+  ]
+}

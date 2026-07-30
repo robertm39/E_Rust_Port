@@ -166,6 +166,7 @@ use crate::prover::search_telemetry::{
     SearchTelemetryRecord,
 };
 use crate::prover::version::{self, PROGRAM_NAME, VERSION, VERSION_QUALIFIER};
+use crate::terms::acterms::enable_ac_telemetry;
 use crate::terms::fp_index::enable_fingerprint_index_telemetry;
 use crate::terms::functypes::func_symb_token;
 use crate::terms::lambda::{
@@ -6118,6 +6119,7 @@ fn run_proof_search<W: Write + ?Sized>(
         search_telemetry_baseline.map(|_| enable_fingerprint_index_telemetry());
     let _rewrite_cache_telemetry_guard =
         search_telemetry_baseline.map(|_| enable_rewrite_cache_telemetry());
+    let _ac_telemetry_guard = search_telemetry_baseline.map(|_| enable_ac_telemetry());
     let mut state = alloc_executable_proof_state(config.free_symbol_properties)?;
     if search_telemetry_baseline.is_some() {
         state.enable_search_telemetry();
@@ -26852,6 +26854,9 @@ input_clause(c2,axiom,[++q(X)]).
             "\"search_funnel\"",
             "\"high_water_unprocessed\"",
             "\"inferences\"",
+            "\"ac\"",
+            "\"equality_checks\"",
+            "\"flattened_nodes\"",
             "\"simplification\"",
             "\"rewrite_uncached_links\"",
             "\"rewrite_cache\"",

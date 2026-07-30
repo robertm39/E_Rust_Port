@@ -2,6 +2,77 @@ use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IS_AC, SIG_DB_LAMBDA_CODE};
 use crate::terms::termfunc::{term_standard_weight, var_print_string};
 use crate::terms::termtypes::Term;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static AC_TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
+static AC_EQUALITY_CHECKS: AtomicU64 = AtomicU64::new(0);
+static AC_EQUALITY_HITS: AtomicU64 = AtomicU64::new(0);
+static AC_NORMALIZATIONS: AtomicU64 = AtomicU64::new(0);
+static AC_INPUT_NODES: AtomicU64 = AtomicU64::new(0);
+static AC_NORMALIZED_NODES: AtomicU64 = AtomicU64::new(0);
+static AC_FLATTENED_NODES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AcTelemetrySnapshot {
+    pub equality_checks: u64,
+    pub equality_hits: u64,
+    pub normalizations: u64,
+    pub input_nodes: u64,
+    pub normalized_nodes: u64,
+    pub flattened_nodes: u64,
+}
+
+impl AcTelemetrySnapshot {
+    #[must_use]
+    pub const fn since(self, baseline: Self) -> Self {
+        Self {
+            equality_checks: self
+                .equality_checks
+                .saturating_sub(baseline.equality_checks),
+            equality_hits: self.equality_hits.saturating_sub(baseline.equality_hits),
+            normalizations: self.normalizations.saturating_sub(baseline.normalizations),
+            input_nodes: self.input_nodes.saturating_sub(baseline.input_nodes),
+            normalized_nodes: self
+                .normalized_nodes
+                .saturating_sub(baseline.normalized_nodes),
+            flattened_nodes: self
+                .flattened_nodes
+                .saturating_sub(baseline.flattened_nodes),
+        }
+    }
+}
+
+#[must_use]
+pub(crate) fn ac_telemetry_snapshot() -> AcTelemetrySnapshot {
+    AcTelemetrySnapshot {
+        equality_checks: AC_EQUALITY_CHECKS.load(Ordering::Relaxed),
+        equality_hits: AC_EQUALITY_HITS.load(Ordering::Relaxed),
+        normalizations: AC_NORMALIZATIONS.load(Ordering::Relaxed),
+        input_nodes: AC_INPUT_NODES.load(Ordering::Relaxed),
+        normalized_nodes: AC_NORMALIZED_NODES.load(Ordering::Relaxed),
+        flattened_nodes: AC_FLATTENED_NODES.load(Ordering::Relaxed),
+    }
+}
+
+pub(crate) struct AcTelemetryGuard;
+
+impl Drop for AcTelemetryGuard {
+    fn drop(&mut self) {
+        AC_TELEMETRY_ENABLED.store(false, Ordering::Relaxed);
+    }
+}
+
+#[must_use]
+pub(crate) fn enable_ac_telemetry() -> AcTelemetryGuard {
+    AC_TELEMETRY_ENABLED.store(true, Ordering::Relaxed);
+    AcTelemetryGuard
+}
+
+#[derive(Default)]
+struct AcNormalizationMetrics {
+    input_nodes: u64,
+    normalized_nodes: u64,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcTerm {
@@ -64,11 +135,24 @@ pub fn ac_term_compare(left: &AcTerm, right: &AcTerm) -> i32 {
 
 #[must_use]
 pub fn ac_term_normalize(sig: &Signature, term: &Term) -> AcTerm {
+    let mut metrics = AcNormalizationMetrics::default();
+    let normalized = ac_term_normalize_with_metrics(sig, term, &mut metrics);
+    record_normalization(metrics);
+    normalized
+}
+
+fn ac_term_normalize_with_metrics(
+    sig: &Signature,
+    term: &Term,
+    metrics: &mut AcNormalizationMetrics,
+) -> AcTerm {
+    metrics.input_nodes = metrics.input_nodes.saturating_add(1);
+    metrics.normalized_nodes = metrics.normalized_nodes.saturating_add(1);
     let mut handle = ac_term_alloc(term.f_code());
 
     if !term.is_any_var() && !term.is_lambda() && term.arity() != 0 {
         if sig.query_prop(term.f_code(), FP_IS_AC) {
-            ac_collect_args(&mut handle.args, sig, term.f_code(), term);
+            ac_collect_args_with_metrics(&mut handle.args, sig, term.f_code(), term, metrics);
             handle.args.sort_by(|left, right| {
                 ac_term_compare(left, right)
                     .cmp(&0)
@@ -77,8 +161,8 @@ pub fn ac_term_normalize(sig: &Signature, term: &Term) -> AcTerm {
         } else if sig.query_prop(term.f_code(), FP_COMMUTATIVE) && term.arity() == 2 {
             let mut args = term.argument_clones().into_iter().flatten();
             if let (Some(left), Some(right)) = (args.next(), args.next()) {
-                let mut left = ac_term_normalize(sig, &left);
-                let mut right = ac_term_normalize(sig, &right);
+                let mut left = ac_term_normalize_with_metrics(sig, &left, metrics);
+                let mut right = ac_term_normalize_with_metrics(sig, &right, metrics);
                 if ac_term_compare(&left, &right) > 0 {
                     std::mem::swap(&mut left, &mut right);
                 }
@@ -86,12 +170,11 @@ pub fn ac_term_normalize(sig: &Signature, term: &Term) -> AcTerm {
                 handle.args.push(right);
             }
         } else {
-            handle.args.extend(
-                term.argument_clones()
-                    .into_iter()
-                    .flatten()
-                    .map(|arg| ac_term_normalize(sig, &arg)),
-            );
+            for arg in term.argument_clones().into_iter().flatten() {
+                handle
+                    .args
+                    .push(ac_term_normalize_with_metrics(sig, &arg, metrics));
+            }
         }
     }
 
@@ -121,6 +204,7 @@ pub fn ac_term_print_string(term: &AcTerm, sig: &Signature) -> String {
 
 #[must_use]
 pub fn term_ac_equal(sig: &Signature, left: &Term, right: &Term) -> bool {
+    record_ac_counter(&AC_EQUALITY_CHECKS, 1);
     if term_standard_weight(left) != term_standard_weight(right)
         || left.is_phony_app()
         || right.is_phony_app()
@@ -130,16 +214,50 @@ pub fn term_ac_equal(sig: &Signature, left: &Term, right: &Term) -> bool {
 
     let left = ac_term_normalize(sig, left);
     let right = ac_term_normalize(sig, right);
-    ac_term_compare(&left, &right) == 0
+    let equal = ac_term_compare(&left, &right) == 0;
+    if equal {
+        record_ac_counter(&AC_EQUALITY_HITS, 1);
+    }
+    equal
 }
 
-fn ac_collect_args(args: &mut Vec<AcTerm>, sig: &Signature, f_code: FunCode, term: &Term) {
-    if term.f_code() == f_code {
+fn ac_collect_args_with_metrics(
+    args: &mut Vec<AcTerm>,
+    sig: &Signature,
+    f_code: FunCode,
+    term: &Term,
+    metrics: &mut AcNormalizationMetrics,
+) {
+    if term.f_code() == f_code && !term.is_any_var() && !term.is_lambda() {
         for arg in term.argument_clones().into_iter().flatten() {
-            ac_collect_args(args, sig, f_code, &arg);
+            if arg.f_code() == f_code && !arg.is_any_var() && !arg.is_lambda() {
+                metrics.input_nodes = metrics.input_nodes.saturating_add(1);
+                ac_collect_args_with_metrics(args, sig, f_code, &arg, metrics);
+            } else {
+                args.push(ac_term_normalize_with_metrics(sig, &arg, metrics));
+            }
         }
     } else {
-        args.push(ac_term_normalize(sig, term));
+        args.push(ac_term_normalize_with_metrics(sig, term, metrics));
+    }
+}
+
+fn record_normalization(metrics: AcNormalizationMetrics) {
+    if !AC_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    AC_NORMALIZATIONS.fetch_add(1, Ordering::Relaxed);
+    AC_INPUT_NODES.fetch_add(metrics.input_nodes, Ordering::Relaxed);
+    AC_NORMALIZED_NODES.fetch_add(metrics.normalized_nodes, Ordering::Relaxed);
+    AC_FLATTENED_NODES.fetch_add(
+        metrics.input_nodes.saturating_sub(metrics.normalized_nodes),
+        Ordering::Relaxed,
+    );
+}
+
+fn record_ac_counter(counter: &AtomicU64, value: u64) {
+    if AC_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+        counter.fetch_add(value, Ordering::Relaxed);
     }
 }
 
@@ -150,7 +268,8 @@ fn cmp_fun_code(left: FunCode, right: FunCode) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ac_term_alloc, ac_term_compare, ac_term_normalize, ac_term_print_string, term_ac_equal,
+        ac_telemetry_snapshot, ac_term_alloc, ac_term_compare, ac_term_normalize,
+        ac_term_print_string, enable_ac_telemetry, term_ac_equal,
     };
     use crate::terms::signature::{
         Signature, FP_COMMUTATIVE, FP_IS_AC, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE,
@@ -247,5 +366,107 @@ mod tests {
 
         assert!(!term_ac_equal(&sig, &flat, &nested));
         assert!(!term_ac_equal(&sig, &phony, &phony));
+    }
+
+    #[test]
+    fn ac_normalization_canonicalizes_permutations_and_associations() {
+        let (mut sig, f, a_code, b_code) = signature_with_symbols();
+        let c_code = sig.insert_id("c", 0, false);
+        sig.set_func_prop(f, FP_IS_AC);
+        let constants = [
+            Term::const_cell_alloc(a_code),
+            Term::const_cell_alloc(b_code),
+            Term::const_cell_alloc(c_code),
+        ];
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let expected = binary(f, &binary(f, &constants[0], &constants[1]), &constants[2]);
+
+        for permutation in permutations {
+            let left_associated = binary(
+                f,
+                &binary(f, &constants[permutation[0]], &constants[permutation[1]]),
+                &constants[permutation[2]],
+            );
+            let right_associated = binary(
+                f,
+                &constants[permutation[0]],
+                &binary(f, &constants[permutation[1]], &constants[permutation[2]]),
+            );
+            assert!(term_ac_equal(&sig, &expected, &left_associated));
+            assert!(term_ac_equal(&sig, &expected, &right_associated));
+        }
+    }
+
+    #[test]
+    fn ac_normalization_preserves_multiplicity_and_variable_identity() {
+        let (mut sig, f, a_code, b_code) = signature_with_symbols();
+        sig.set_func_prop(f, FP_IS_AC);
+        let a = Term::const_cell_alloc(a_code);
+        let b = Term::const_cell_alloc(b_code);
+        let x = Term::const_cell_alloc(-2);
+        let y = Term::const_cell_alloc(-4);
+
+        assert!(!term_ac_equal(
+            &sig,
+            &binary(f, &a, &binary(f, &a, &b)),
+            &binary(f, &a, &binary(f, &b, &b))
+        ));
+        assert!(term_ac_equal(
+            &sig,
+            &binary(f, &x, &binary(f, &y, &x)),
+            &binary(f, &x, &binary(f, &x, &y))
+        ));
+        assert!(!term_ac_equal(
+            &sig,
+            &binary(f, &x, &binary(f, &y, &x)),
+            &binary(f, &x, &binary(f, &y, &y))
+        ));
+    }
+
+    #[test]
+    fn nested_commutative_terms_are_canonical_inside_ac_terms() {
+        let (mut sig, f, a_code, b_code) = signature_with_symbols();
+        let g = sig.insert_id("g", 2, false);
+        sig.set_func_prop(f, FP_IS_AC);
+        sig.set_func_prop(g, FP_COMMUTATIVE);
+        let a = Term::const_cell_alloc(a_code);
+        let b = Term::const_cell_alloc(b_code);
+
+        assert!(term_ac_equal(
+            &sig,
+            &binary(f, &binary(g, &b, &a), &a),
+            &binary(f, &a, &binary(g, &a, &b))
+        ));
+    }
+
+    #[test]
+    fn scoped_telemetry_counts_ac_checks_hits_and_flattening() {
+        let (mut sig, f, a_code, b_code) = signature_with_symbols();
+        sig.set_func_prop(f, FP_IS_AC);
+        let a = Term::const_cell_alloc(a_code);
+        let b = Term::const_cell_alloc(b_code);
+        let left = binary(f, &a, &binary(f, &b, &a));
+        let right = binary(f, &binary(f, &a, &b), &a);
+        let baseline = ac_telemetry_snapshot();
+
+        {
+            let _guard = enable_ac_telemetry();
+            assert!(term_ac_equal(&sig, &left, &right));
+        }
+
+        let delta = ac_telemetry_snapshot().since(baseline);
+        assert_eq!(delta.equality_checks, 1);
+        assert_eq!(delta.equality_hits, 1);
+        assert_eq!(delta.normalizations, 2);
+        assert_eq!(delta.input_nodes, 10);
+        assert_eq!(delta.normalized_nodes, 8);
+        assert_eq!(delta.flattened_nodes, 2);
     }
 }
