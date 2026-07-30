@@ -25,13 +25,24 @@ accepted by the audit. `selected-problems.json` records the 26 problems found.
 
 The repository's immutable family partition is retained:
 
-- calibration: 14 train problems from KLE and LAT;
-- validation: 10 validation problems from NUM, RNG, and SWV;
-- test: 2 test problems from REL.
+- calibration: 21 train problems from KLE, LAT, and SWW;
+- validation: 16 validation problems from LCL, NUM, RNG, and SWV;
+- test: 4 test problems from NUN and REL.
 
 The small test set is a preregistered limitation. No train or validation
 problem may be moved into test, and no problem may be added based on a run
 outcome.
+
+### Pre-outcome correction
+
+Commit `e2e32851` recorded an initial 26-problem list derived by a scanner that
+recognized only the left-to-right presentation of associativity. The frozen
+audit then failed before the candidate binary was built or any candidate run
+started: the preregistered promise to accept both equality orientations adds
+15 syntax-positive problems. This correction expands the population to all 41
+matching problems and changes only the counts above, `selected-problems.json`,
+and the mechanical run totals below. Treatments, measures, budgets, decision
+rules, and family assignments are unchanged.
 
 ## Treatments
 
@@ -54,7 +65,7 @@ causal baseline for all AC-specific contraction.
 - test short: two repetitions, 5-second soft / 7-second hard CPU limit;
 - test larger: two repetitions, 20-second soft / 23-second hard CPU limit.
 
-Every test run requests a TSTP proof object. The complete matrix contains 168
+Every test run requests a TSTP proof object. The complete matrix contains 276
 runs. Per-run memory is 1536 MiB. Coordinates are executed in a
 contract-derived shuffled order and may run in parallel.
 
@@ -88,6 +99,6 @@ held-out proofs verify and at least one non-`none` mode:
 2. loses no held-out solve, records nonzero AC hits and flattening, and reduces
    paired CPU or generated clauses by at least 10%.
 
-The two-problem test set makes this an exploratory rather than definitive
+The four-problem test set makes this an exploratory rather than definitive
 advance decision. A failure to meet the rule rejects production changes from
 this Bead and defers costlier AC matching/indexing/joinability.

@@ -68,7 +68,7 @@ BASE.UEQ_CATEGORY = "explicit-ac-ueq-feq"
 BASE.PHASE_CONFIGS = {
     "calibration": {
         "split": "train",
-        "target_problems": 14,
+        "target_problems": 21,
         "repetitions": 1,
         "budgets": {
             "calibration": {"soft_cpu_seconds": 4, "hard_cpu_seconds": 6}
@@ -77,7 +77,7 @@ BASE.PHASE_CONFIGS = {
     },
     "validation": {
         "split": "validation",
-        "target_problems": 10,
+        "target_problems": 16,
         "repetitions": 2,
         "budgets": {
             "validation": {"soft_cpu_seconds": 8, "hard_cpu_seconds": 10}
@@ -86,7 +86,7 @@ BASE.PHASE_CONFIGS = {
     },
     "test": {
         "split": "test",
-        "target_problems": 2,
+        "target_problems": 4,
         "repetitions": 2,
         "budgets": {
             "short": {"soft_cpu_seconds": 5, "hard_cpu_seconds": 7},
