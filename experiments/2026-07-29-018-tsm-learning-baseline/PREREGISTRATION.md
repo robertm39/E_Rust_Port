@@ -78,10 +78,28 @@ That revision is used only to execute the frozen classifier workloads. The
 measured search revision remains `812323618aaa42d0f5e24bba8a0ef146ff1757cd`
 and the label-extraction revision remains
 `477fa727355bace7de39d043d9b18734bd16adf4`; none of their evidence is rerun or
-replaced. The controller requires and records the classifier revision and
-binary hash. The parser-failure output root remains immutable and the next
-attempt uses a fresh root. No workload, index, TSM type, depth, repetition
-count, metric, threshold, gate, or search evidence changes.
+replaced. The parser-failure output root remains immutable and the next attempt
+uses a fresh root. No workload, index, TSM type, depth, repetition count,
+metric, threshold, gate, or search evidence changes.
+
+That next warm-up parsed the complete production input, then stopped before any
+score or timing metric with `Type error`. The classifier's lightweight
+signature had not reserved Umlaut's fixed higher-order helper codes. Once a
+real pattern introduced enough normalized symbols, an ordinary symbol received
+fixed code 17 and core term logic interpreted it as the reserved application
+symbol. Production fix `fc72bb24ee57fd796b19657621c0ff32c2afc4a5`
+initializes those internal codes before reading classifier symbols. It passed a
+regression reproducing the production symbol-pressure shape, the complete
+production training input in a debug build, and the full test and Clippy gates.
+
+The combined classifier execution revision is therefore
+`fc72bb24ee57fd796b19657621c0ff32c2afc4a5`, which includes the parser fix at
+`9e15487cc0ca873686bb3caf13e3d1264f33bad0`. The controller requires and
+records this combined revision and its binary hash. The fixed-code-failure
+output root remains immutable and the next attempt uses a fresh root. The
+measured search and label-extraction revisions remain frozen, and no workload,
+index, TSM type, depth, repetition count, metric, threshold, gate, or search
+evidence changes.
 
 The production audit found these reachable paths:
 

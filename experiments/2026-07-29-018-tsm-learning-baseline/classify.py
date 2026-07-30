@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-CLASSIFIER_REVISION = "9e15487cc0ca873686bb3caf13e3d1264f33bad0"
+CLASSIFIER_REVISION = "fc72bb24ee57fd796b19657621c0ff32c2afc4a5"
 
 
 class ExperimentError(RuntimeError):
