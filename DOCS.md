@@ -193,6 +193,19 @@ cancellation gates. Production remains unchanged: the corpus is synthetic and
 the measured backend artifacts are 37.2 to 41.7 MB. Real branch-stream and
 native-checker evidence is tracked by `E_Rust_Port-9jt.5.10`.
 
+The family-held-out real ground-theory branch-trace study is retained in
+[`experiments/2026-07-30-002-real-ground-theory-traces/`](experiments/2026-07-30-002-real-ground-theory-traces/).
+Its dependency-free native difference checker, pinned-Z3 process, and pinned
+Z3 C API control agreed on all 3,320 training and 90 held-out unique queries;
+all exact models and negative cycles replayed, the native held-out p95 was
+0.0044 ms, and its measured incremental package cost was 90,152 bytes with no
+new dynamic dependency. It did not advance: only 6 of 2,991 eligible held-out
+checker decisions pruned a branch, no abstraction closed, and only one
+workload reduced nodes by at least 10%, missing all three preregistered efficacy
+thresholds. Ten no-prune workloads retained identical control flow and
+outcomes. Production theory cooperation therefore remains disabled and the
+default package remains unchanged.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

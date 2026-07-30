@@ -1,0 +1,23 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -43,3 +43,19 @@
++[[bin]]
++name = "real-ground-native-driver"
++path = "experiments/2026-07-30-002-real-ground-theory-traces/native_difference_driver.rs"
++
++[[bin]]
++name = "real-ground-native-baseline"
++path = "experiments/2026-07-30-002-real-ground-theory-traces/native_baseline_driver.rs"
++
++[[bin]]
++name = "real-ground-replay"
++path = "experiments/2026-07-30-001-ground-theory-smt-cooperation/ground_theory_replay.rs"
++
++[[bin]]
++name = "real-ground-z3-ffi"
++path = "experiments/2026-07-30-001-ground-theory-smt-cooperation/ground_theory_z3_ffi.rs"
++
+ [[bin]]
+ name = "umlaut-stratpar"
+ path = "src/bin/umlaut-stratpar.rs"
