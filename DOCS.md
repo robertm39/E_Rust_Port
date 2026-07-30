@@ -206,6 +206,20 @@ thresholds. Ten no-prune workloads retained identical control flow and
 outcomes. Production theory cooperation therefore remains disabled and the
 default package remains unchanged.
 
+The exact rational/real Fourier-Motzkin calculus study is retained in
+[`experiments/2026-07-30-003-rational-fm-slice/`](experiments/2026-07-30-003-rational-fm-slice/).
+Its bounded native slice combines proof-replayed arithmetic inference with
+ordinary propositional resolution, rejects eight certificate mutations, and
+closes all 15 designed synthetic contradictions without neutral loss. It does
+not advance: held-out production extraction supplies only one eligible clause
+in one family, native FM closes no production-derived workload, and its
+`unknown` results do not equal Z3's held-out `sat` statuses. Full pinned
+Vampire ALASCA with VIRAS disabled does add three original-source solves over
+Vampire theory axioms, evidence that a future study would need a richer
+calculus boundary. The same source run exposes Umlaut's typed-arithmetic
+choice-symbol panic, tracked by `E_Rust_Port-kfy`; production arithmetic
+inference remains unchanged.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

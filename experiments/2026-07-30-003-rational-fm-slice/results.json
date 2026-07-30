@@ -1,0 +1,207 @@
+{
+  "artifact_sha256": {
+    "fm-controls/production-external.json": "a5574e0972695ac653aa4160937b518bb06ba76ae5999f8f036eb28057ce7046",
+    "fm-controls/source-controls.json": "484dbe53caf0687805389a8920235c39557e8ba49b201aa6ef89ba95d9dee756",
+    "fm-controls/synthetic-external.json": "2a873a0d523c9fef0dc2d0e5a9a6320dca5ba16528e7e2601be0c598c5471a7e",
+    "fm-native-ubuntu/production/native_report.json": "64fada6272ec8e9833cae2c26231cc0b8d3ac6ee1b61b71e503fd0019285cd38",
+    "fm-native-ubuntu/synthetic/native_report.json": "ab2c8315c29ace422039fd826a37de91316fbcacd9f40cb374894ada2d58d657",
+    "production-extraction.json": "255556cc0036c876fe0c892374e8109b8001e91e84c11569ca3c8fabb68b63b7",
+    "robustness.json": "5ce0c37c3b8b223e32471fd1ea4dd6f235d8448dd72da8f3a69fecbbbafb46f5"
+  },
+  "failed_gates": [
+    "3_heldout_native_z3_status_agreement",
+    "4_production_eligibility",
+    "5_unique_heldout_closures"
+  ],
+  "gates": {
+    "10_optional_removable_packaging": {
+      "new_runtime_dependencies": [],
+      "passed": true,
+      "production_code_changed": false,
+      "prototype_location": "experiments/2026-07-30-003-rational-fm-slice",
+      "release_binary_delta_bytes": 0
+    },
+    "11_comprehensive_ubuntu_clean": {
+      "passed": true,
+      "provided": true,
+      "run_id": "260730-183943-8400",
+      "summary": {
+        "benchmark_behavior_mismatch_count": 0,
+        "benchmark_case_count": 10,
+        "benchmark_rust_to_c_wall_ratio": 1.0798435023613433,
+        "main_case_count": 50,
+        "main_expected_difference_count": 29,
+        "main_mismatch_count": 0,
+        "schema_version": 1,
+        "tool_case_count": 216,
+        "tool_expected_difference_count": 16,
+        "tool_mismatch_count": 0,
+        "unexpected_compatibility_mismatch_count": 0
+      },
+      "summary_sha256": "eb14af701ec0a0c89217937ea53dfa318c9be258316d449b54cc66232c902113"
+    },
+    "1_all_trusted_steps_replay": {
+      "expected_certificates": 490,
+      "passed": true,
+      "replayed_certificates": 490
+    },
+    "2_fail_closed_robustness": {
+      "categories": {
+        "bounds": 3,
+        "cancellation": 2,
+        "malformed": 1,
+        "mutation_rejections": 8,
+        "production_extraction_and_rendering": 4,
+        "timeout": 1
+      },
+      "passed": true,
+      "tests_run": 27
+    },
+    "3_heldout_native_z3_status_agreement": {
+      "matches": 10,
+      "pairs": [
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unknown",
+          "sat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ],
+        [
+          "unsat",
+          "unsat"
+        ]
+      ],
+      "passed": false,
+      "total": 20
+    },
+    "4_production_eligibility": {
+      "heldout_clauses": 1,
+      "heldout_families": 1,
+      "passed": false,
+      "total_clauses": 133,
+      "total_families": 2
+    },
+    "5_unique_heldout_closures": {
+      "passed": false,
+      "production": 0,
+      "synthetic": 10
+    },
+    "6_no_baseline_or_neutral_loss": {
+      "baseline_losses": [],
+      "neutral_losses": [],
+      "passed": true
+    },
+    "7_bounded_clause_growth": {
+      "median_ratio": 1.0,
+      "p95_ratio": 1.0,
+      "passed": true
+    },
+    "8_native_p95_at_most_50ms": {
+      "p95_ms": 14.601212,
+      "passed": true
+    },
+    "9_coefficient_bounds_enforced": {
+      "crossed_bounds": [],
+      "max_coefficient_bits": 4,
+      "passed": true
+    }
+  },
+  "production": {
+    "eligible_clauses": 133,
+    "eligible_families": 2,
+    "eligible_sources": 4,
+    "heldout_native_z3_pairs": [
+      [
+        "unknown",
+        "unsat"
+      ]
+    ],
+    "native_unique_closures": 0,
+    "production_umlaut_panics": 13,
+    "selection_sources": 13,
+    "vampire_alasca_only_source_solves": [
+      "ANA135_1",
+      "ANA136_1",
+      "ARI721_1"
+    ]
+  },
+  "synthetic": {
+    "supported": 30,
+    "unique_native_closures": 15,
+    "vampire_arm_outcome_agreement": true,
+    "workloads": 45,
+    "z3_expected_matches": 30,
+    "z3_expected_total": 30
+  },
+  "verdict": "do_not_advance"
+}

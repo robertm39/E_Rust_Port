@@ -1,0 +1,3277 @@
+{
+  "generator": "generate_corpus.py",
+  "schema": "umlaut-rational-fm-corpus-v1",
+  "seed": 20270730,
+  "workloads": [
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_1",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_3",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "5"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_5",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "6"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "7"
+              },
+              "constant": "-8",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_7",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "8"
+              },
+              "constant": "-9",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_8",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "9"
+              },
+              "constant": "-10",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_9",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "10"
+              },
+              "constant": "-11",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_10",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "11"
+              },
+              "constant": "-12",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_test_1_11",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "12"
+              },
+              "constant": "-13",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_sat_01_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_test_1",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_test_growth_stress_sat_01",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_growth_stress_sat",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_growth_stress_unknown_02_c00",
+          "literals": [
+            {
+              "expression": "f_test_2_0(x) + f_test_2_1(x) + f_test_2_2(x) + f_test_2_3(x) + f_test_2_4(x) + f_test_2_5(x) + f_test_2_6(x) + f_test_2_7(x) + f_test_2_8(x) + f_test_2_9(x) + f_test_2_10(x) + f_test_2_11(x) + f_test_2_12(x) + f_test_2_13(x) + f_test_2_14(x) + f_test_2_15(x) + f_test_2_16(x) + f_test_2_17(x) + f_test_2_18(x) + f_test_2_19(x) + f_test_2_20(x) + f_test_2_21(x) + f_test_2_22(x) + f_test_2_23(x) + f_test_2_24(x) + f_test_2_25(x) + f_test_2_26(x) + f_test_2_27(x) + f_test_2_28(x) + f_test_2_29(x) + f_test_2_30(x) + f_test_2_31(x) + f_test_2_32(x) + f_test_2_33(x) + f_test_2_34(x) + f_test_2_35(x) + f_test_2_36(x) + f_test_2_37(x) + f_test_2_38(x) + f_test_2_39(x)",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_test_growth_stress_unknown_02",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "test_growth_stress_unknown",
+      "unsupported_reason": "uninterpreted_arithmetic_monomial",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_5",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_7",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_0",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_1",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_2",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_3",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_4",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c13",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_5",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c14",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_6",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_growth_stress_unsat_00_c15",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_test_0_7",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_test_growth_stress_unsat_00",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_growth_stress_unsat",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_0",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "spare_test_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "y": "-1"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_test_guarded_arithmetic_neutral_00",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_guarded_arithmetic_neutral",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_1",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "spare_test_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "y": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_test_guarded_arithmetic_neutral_01",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_guarded_arithmetic_neutral",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_02_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_02_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_2",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_02_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "spare_test_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "y": "-1"
+              },
+              "constant": "2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_test_guarded_arithmetic_neutral_02",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_guarded_arithmetic_neutral",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_03_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_03_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "always_test_3",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_guarded_arithmetic_neutral_03_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "spare_test_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "y": "-1"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_test_guarded_arithmetic_neutral_03",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_guarded_arithmetic_neutral",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_mixed_interaction_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "z": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_0",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_00_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_0",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_test_mixed_interaction_00",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_mixed_interaction",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_mixed_interaction_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "z": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_1",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_01_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_1",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_test_mixed_interaction_01",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_mixed_interaction",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_mixed_interaction_02_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_02_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "z": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_02_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_2",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_02_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_2",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_test_mixed_interaction_02",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_mixed_interaction",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_mixed_interaction_03_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-8",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_03_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "z": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_03_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_test_3",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_test_mixed_interaction_03_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_test_3",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_test_mixed_interaction_03",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "test_mixed_interaction",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_unsupported_division_00_c00",
+          "literals": [
+            {
+              "expression": "x_0 / y_0 >= 1",
+              "kind": "unsupported",
+              "sort": "Rat"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_test_unsupported_division_00",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "test_unsupported_division",
+      "unsupported_reason": "division_by_nonconstant",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_unsupported_division_01_c00",
+          "literals": [
+            {
+              "expression": "x_1 / y_1 >= 1",
+              "kind": "unsupported",
+              "sort": "Rat"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_test_unsupported_division_01",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "test_unsupported_division",
+      "unsupported_reason": "division_by_nonconstant",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_unsupported_division_02_c00",
+          "literals": [
+            {
+              "expression": "x_2 / y_2 >= 1",
+              "kind": "unsupported",
+              "sort": "Rat"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_test_unsupported_division_02",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "test_unsupported_division",
+      "unsupported_reason": "division_by_nonconstant",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_test_unsupported_division_03_c00",
+          "literals": [
+            {
+              "expression": "x_3 / y_3 >= 1",
+              "kind": "unsupported",
+              "sort": "Rat"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_test_unsupported_division_03",
+      "partition": "test",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "test_unsupported_division",
+      "unsupported_reason": "division_by_nonconstant",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_direct_conflict_00_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_direct_conflict_00_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "z": "-2"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_train_direct_conflict_00",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_direct_conflict",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_direct_conflict_01_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_direct_conflict_01_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "z": "-3"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_train_direct_conflict_01",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_direct_conflict",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_direct_conflict_02_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-12",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_direct_conflict_02_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "z": "-4"
+              },
+              "constant": "2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_train_direct_conflict_02",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_direct_conflict",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_direct_conflict_03_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-20",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_direct_conflict_03_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "z": "-5"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_train_direct_conflict_03",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_direct_conflict",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_1",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_3",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "5"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_5",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "6"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "7"
+              },
+              "constant": "-8",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_7",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "8"
+              },
+              "constant": "-9",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_8",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "9"
+              },
+              "constant": "-10",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_9",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "10"
+              },
+              "constant": "-11",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_10",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "11"
+              },
+              "constant": "-12",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_train_1_11",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "12"
+              },
+              "constant": "-13",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_sat_01_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_train_1",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_train_growth_stress_sat_01",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_growth_stress_sat",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_growth_stress_unknown_02_c00",
+          "literals": [
+            {
+              "expression": "f_train_2_0(x) + f_train_2_1(x) + f_train_2_2(x) + f_train_2_3(x) + f_train_2_4(x) + f_train_2_5(x) + f_train_2_6(x) + f_train_2_7(x) + f_train_2_8(x) + f_train_2_9(x) + f_train_2_10(x) + f_train_2_11(x) + f_train_2_12(x) + f_train_2_13(x) + f_train_2_14(x) + f_train_2_15(x) + f_train_2_16(x) + f_train_2_17(x) + f_train_2_18(x) + f_train_2_19(x) + f_train_2_20(x) + f_train_2_21(x) + f_train_2_22(x) + f_train_2_23(x) + f_train_2_24(x) + f_train_2_25(x) + f_train_2_26(x) + f_train_2_27(x) + f_train_2_28(x) + f_train_2_29(x) + f_train_2_30(x) + f_train_2_31(x) + f_train_2_32(x) + f_train_2_33(x) + f_train_2_34(x) + f_train_2_35(x) + f_train_2_36(x) + f_train_2_37(x) + f_train_2_38(x) + f_train_2_39(x)",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_train_growth_stress_unknown_02",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "train_growth_stress_unknown",
+      "unsupported_reason": "uninterpreted_arithmetic_monomial",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_5",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_7",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_0",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_1",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_2",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_3",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_4",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c13",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_5",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c14",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_6",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_growth_stress_unsat_00_c15",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_train_0_7",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_train_growth_stress_unsat_00",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_growth_stress_unsat",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_propositional_neutral_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_0",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_0",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_0",
+              "positive": false
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_0",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_train_0",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "r_train_0",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_train_propositional_neutral_00",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_propositional_neutral",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_propositional_neutral_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_1",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_1",
+              "positive": false
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_1",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_train_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "r_train_1",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_train_propositional_neutral_01",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_propositional_neutral",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_propositional_neutral_02_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_2",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_2",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_02_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_2",
+              "positive": false
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_2",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_02_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_train_2",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "r_train_2",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_train_propositional_neutral_02",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_propositional_neutral",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_propositional_neutral_03_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_3",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_3",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_03_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "p_train_3",
+              "positive": false
+            },
+            {
+              "kind": "prop",
+              "name": "q_train_3",
+              "positive": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_train_propositional_neutral_03_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "q_train_3",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "r_train_3",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_train_propositional_neutral_03",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "train_propositional_neutral",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_unsupported_integer_00_c00",
+          "literals": [
+            {
+              "expression": "$to_int(x_0) >= 0",
+              "kind": "unsupported",
+              "sort": "Int"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_train_unsupported_integer_00",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "train_unsupported_integer",
+      "unsupported_reason": "integer_or_floor_term",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_unsupported_integer_01_c00",
+          "literals": [
+            {
+              "expression": "$to_int(x_1) >= 0",
+              "kind": "unsupported",
+              "sort": "Int"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_train_unsupported_integer_01",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "train_unsupported_integer",
+      "unsupported_reason": "integer_or_floor_term",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_unsupported_integer_02_c00",
+          "literals": [
+            {
+              "expression": "$to_int(x_2) >= 0",
+              "kind": "unsupported",
+              "sort": "Int"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_train_unsupported_integer_02",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "train_unsupported_integer",
+      "unsupported_reason": "integer_or_floor_term",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_train_unsupported_integer_03_c00",
+          "literals": [
+            {
+              "expression": "$to_int(x_3) >= 0",
+              "kind": "unsupported",
+              "sort": "Int"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_train_unsupported_integer_03",
+      "partition": "train",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "train_unsupported_integer",
+      "unsupported_reason": "integer_or_floor_term",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_boundary_tautology_00_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            },
+            {
+              "coefficients": {
+                "x": "-2"
+              },
+              "constant": "2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_boundary_tautology_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "guard_validation_0",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_validation_boundary_tautology_00",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_boundary_tautology",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_boundary_tautology_01_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            },
+            {
+              "coefficients": {
+                "x": "-3"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_boundary_tautology_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "guard_validation_1",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_validation_boundary_tautology_01",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_boundary_tautology",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_boundary_tautology_02_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            },
+            {
+              "coefficients": {
+                "x": "-4"
+              },
+              "constant": "4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_boundary_tautology_02_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "guard_validation_2",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_validation_boundary_tautology_02",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_boundary_tautology",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_boundary_tautology_03_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            },
+            {
+              "coefficients": {
+                "x": "-5"
+              },
+              "constant": "5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_boundary_tautology_03_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "guard_validation_3",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_validation_boundary_tautology_03",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_boundary_tautology",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_1",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "2"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "3"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_3",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "4"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "5"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_5",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "6"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "7"
+              },
+              "constant": "-8",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_7",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "8"
+              },
+              "constant": "-9",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_8",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "9"
+              },
+              "constant": "-10",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_9",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "10"
+              },
+              "constant": "-11",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_10",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "11"
+              },
+              "constant": "-12",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            },
+            {
+              "kind": "prop",
+              "name": "branch_validation_1_11",
+              "positive": false
+            },
+            {
+              "coefficients": {
+                "x": "12"
+              },
+              "constant": "-13",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_sat_01_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "common_validation_1",
+              "positive": true
+            }
+          ]
+        }
+      ],
+      "expected": "sat",
+      "id": "synthetic_validation_growth_stress_sat_01",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_growth_stress_sat",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_growth_stress_unknown_02_c00",
+          "literals": [
+            {
+              "expression": "f_validation_2_0(x) + f_validation_2_1(x) + f_validation_2_2(x) + f_validation_2_3(x) + f_validation_2_4(x) + f_validation_2_5(x) + f_validation_2_6(x) + f_validation_2_7(x) + f_validation_2_8(x) + f_validation_2_9(x) + f_validation_2_10(x) + f_validation_2_11(x) + f_validation_2_12(x) + f_validation_2_13(x) + f_validation_2_14(x) + f_validation_2_15(x) + f_validation_2_16(x) + f_validation_2_17(x) + f_validation_2_18(x) + f_validation_2_19(x) + f_validation_2_20(x) + f_validation_2_21(x) + f_validation_2_22(x) + f_validation_2_23(x) + f_validation_2_24(x) + f_validation_2_25(x) + f_validation_2_26(x) + f_validation_2_27(x) + f_validation_2_28(x) + f_validation_2_29(x) + f_validation_2_30(x) + f_validation_2_31(x) + f_validation_2_32(x) + f_validation_2_33(x) + f_validation_2_34(x) + f_validation_2_35(x) + f_validation_2_36(x) + f_validation_2_37(x) + f_validation_2_38(x) + f_validation_2_39(x)",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_validation_growth_stress_unknown_02",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "validation_growth_stress_unknown",
+      "unsupported_reason": "uninterpreted_arithmetic_monomial",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c00",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_0",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c01",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_1",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "1",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c02",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_2",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c03",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_3",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c04",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_4",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c05",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_5",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c06",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_6",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "1"
+              },
+              "constant": "-7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c07",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_7",
+              "positive": true
+            },
+            {
+              "coefficients": {
+                "x": "-1"
+              },
+              "constant": "7",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c08",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_0",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c09",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_1",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c10",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_2",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c11",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_3",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c12",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_4",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c13",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_5",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c14",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_6",
+              "positive": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_growth_stress_unsat_00_c15",
+          "literals": [
+            {
+              "kind": "prop",
+              "name": "context_validation_0_7",
+              "positive": false
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_validation_growth_stress_unsat_00",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_growth_stress_unsat",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_two_hop_conflict_00_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1",
+                "y": "-1"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_00_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "u": "-1"
+              },
+              "constant": "2",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_00_c02",
+          "literals": [
+            {
+              "coefficients": {
+                "v": "1"
+              },
+              "constant": "-3",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_validation_two_hop_conflict_00",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_two_hop_conflict",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_two_hop_conflict_01_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1",
+                "y": "-1"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_01_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "u": "-1"
+              },
+              "constant": "3",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_01_c02",
+          "literals": [
+            {
+              "coefficients": {
+                "v": "1"
+              },
+              "constant": "-4",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": true
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_validation_two_hop_conflict_01",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_two_hop_conflict",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_two_hop_conflict_02_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1",
+                "y": "-1"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_02_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "u": "-1"
+              },
+              "constant": "4",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_02_c02",
+          "literals": [
+            {
+              "coefficients": {
+                "v": "1"
+              },
+              "constant": "-5",
+              "kind": "arith",
+              "sort": "Rat",
+              "strict": true
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_validation_two_hop_conflict_02",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_two_hop_conflict",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_two_hop_conflict_03_c00",
+          "literals": [
+            {
+              "coefficients": {
+                "x": "1",
+                "y": "-1"
+              },
+              "constant": "0",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_03_c01",
+          "literals": [
+            {
+              "coefficients": {
+                "u": "-1"
+              },
+              "constant": "5",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": false
+            }
+          ]
+        },
+        {
+          "id": "synthetic_validation_two_hop_conflict_03_c02",
+          "literals": [
+            {
+              "coefficients": {
+                "v": "1"
+              },
+              "constant": "-6",
+              "kind": "arith",
+              "sort": "Real",
+              "strict": true
+            }
+          ]
+        }
+      ],
+      "expected": "unsat",
+      "id": "synthetic_validation_two_hop_conflict_03",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": true,
+      "template_family": "validation_two_hop_conflict",
+      "variant": 3
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_unsupported_nonlinear_00_c00",
+          "literals": [
+            {
+              "expression": "x_0 * y_0 > 0",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_validation_unsupported_nonlinear_00",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "validation_unsupported_nonlinear",
+      "unsupported_reason": "nonlinear_product",
+      "variant": 0
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_unsupported_nonlinear_01_c00",
+          "literals": [
+            {
+              "expression": "x_1 * y_1 > 0",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_validation_unsupported_nonlinear_01",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "validation_unsupported_nonlinear",
+      "unsupported_reason": "nonlinear_product",
+      "variant": 1
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_unsupported_nonlinear_02_c00",
+          "literals": [
+            {
+              "expression": "x_2 * y_2 > 0",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_validation_unsupported_nonlinear_02",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "validation_unsupported_nonlinear",
+      "unsupported_reason": "nonlinear_product",
+      "variant": 2
+    },
+    {
+      "clauses": [
+        {
+          "id": "synthetic_validation_unsupported_nonlinear_03_c00",
+          "literals": [
+            {
+              "expression": "x_3 * y_3 > 0",
+              "kind": "unsupported",
+              "sort": "Real"
+            }
+          ]
+        }
+      ],
+      "expected": "unknown",
+      "id": "synthetic_validation_unsupported_nonlinear_03",
+      "partition": "validation",
+      "source": "synthetic",
+      "supported": false,
+      "template_family": "validation_unsupported_nonlinear",
+      "unsupported_reason": "nonlinear_product",
+      "variant": 3
+    }
+  ]
+}

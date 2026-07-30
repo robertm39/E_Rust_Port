@@ -1,0 +1,141 @@
+{
+  "exclusions": {
+    "no_linear_arithmetic_token": 3,
+    "no_rat_or_real_declaration": 100
+  },
+  "manifest": "benchmarks\\casc_2025_manifest.jsonl",
+  "schema": "umlaut-rational-fm-production-selection-v1",
+  "selected": [
+    {
+      "expected_class": "theorem",
+      "family": "ANA",
+      "partition": "test",
+      "path": "problems/casc_2025/TFE/ANA135_1.p",
+      "problem_id": "ANA135_1",
+      "rank_within_family": 1,
+      "sha256": "14915c37e1f88a11cefcdc1beca89044d0de32a5d7956cf502cb660a056f29ce",
+      "size_bytes": 1670
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ANA",
+      "partition": "test",
+      "path": "problems/casc_2025/TFE/ANA136_1.p",
+      "problem_id": "ANA136_1",
+      "rank_within_family": 2,
+      "sha256": "38e08414c447b67ec769e5b18760e8d8708f4298ed0fd3eb50088b87bad3dcce",
+      "size_bytes": 1734
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ANA",
+      "partition": "test",
+      "path": "problems/casc_2025/TFE/ANA143_1.002.016.p",
+      "problem_id": "ANA143_1.002.016",
+      "rank_within_family": 3,
+      "sha256": "fd82cfb9e825e0b938b0ad9d2ef4f85ededce354204a8505a1adb8efa4a0341b",
+      "size_bytes": 7693
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ANA",
+      "partition": "test",
+      "path": "problems/casc_2025/TFE/ANA143_1.004.016.p",
+      "problem_id": "ANA143_1.004.016",
+      "rank_within_family": 4,
+      "sha256": "a93161e4abb181dc0e7d09788a33771bb10e085aeebeef9b3c8be6190a62623b",
+      "size_bytes": 9435
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ANA",
+      "partition": "test",
+      "path": "problems/casc_2025/TFE/ANA143_1.002.032.p",
+      "problem_id": "ANA143_1.002.032",
+      "rank_within_family": 5,
+      "sha256": "e3a61878bf08ad42bbddf284dd71dc2178d4e49a15744d8c2df70f5ae278df5a",
+      "size_bytes": 13493
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ITP",
+      "partition": "train",
+      "path": "problems/casc_2025/TFE/ITP349_1.p",
+      "problem_id": "ITP349_1",
+      "rank_within_family": 1,
+      "sha256": "83e3ea1f09c3b8f2c0fac9578fc1e0238185cb728c1249ee293dafaab1321c5e",
+      "size_bytes": 117175
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ITP",
+      "partition": "train",
+      "path": "problems/casc_2025/TFE/ITP350_1.p",
+      "problem_id": "ITP350_1",
+      "rank_within_family": 2,
+      "sha256": "4d879d9e707e63332c86e4622a38a8e480b1b9767b3b0e0f0c5168678d68648f",
+      "size_bytes": 131227
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ITP",
+      "partition": "train",
+      "path": "problems/casc_2025/TFE/ITP348_1.p",
+      "problem_id": "ITP348_1",
+      "rank_within_family": 3,
+      "sha256": "5d8a4980a97197fcf3eaca4b5aac55571f9bad7ebe4aad7ea93f933423e26bbd",
+      "size_bytes": 242460
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ARI",
+      "partition": "validation",
+      "path": "problems/casc_2025/TFE/ARI536_1.p",
+      "problem_id": "ARI536_1",
+      "rank_within_family": 1,
+      "sha256": "cd4c9df1607debaea7dfbe4a5f83724777b89dee4b72f66b845127fda3c3cf18",
+      "size_bytes": 67
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ARI",
+      "partition": "validation",
+      "path": "problems/casc_2025/TFE/ARI718_1.p",
+      "problem_id": "ARI718_1",
+      "rank_within_family": 2,
+      "sha256": "f5b4ebb0215bf558f2bd48fe7b2fdc21c439d0dbac74bd5c9db2f40d5f8febe4",
+      "size_bytes": 74
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ARI",
+      "partition": "validation",
+      "path": "problems/casc_2025/TFE/ARI721_1.p",
+      "problem_id": "ARI721_1",
+      "rank_within_family": 3,
+      "sha256": "207fbc71c82a16c55ade0f4e829cd8a71325702eba50b8fe9efd85920fea00f3",
+      "size_bytes": 77
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ARI",
+      "partition": "validation",
+      "path": "problems/casc_2025/TFE/ARI716_1.p",
+      "problem_id": "ARI716_1",
+      "rank_within_family": 4,
+      "sha256": "906b13327defcd5ee6f2c42168393072fe9f8ca4439274fc025d111a9d225b26",
+      "size_bytes": 87
+    },
+    {
+      "expected_class": "theorem",
+      "family": "ARI",
+      "partition": "validation",
+      "path": "problems/casc_2025/TFE/ARI519_1.p",
+      "problem_id": "ARI519_1",
+      "rank_within_family": 5,
+      "sha256": "d9b067ac09f849a73a17ce44e0013003565d09789ba0e3cb888710b48c82965d",
+      "size_bytes": 88
+    }
+  ],
+  "selection_rule": "TFA; direct source contains $rat/$real and a linear arithmetic token; up to five per partition/family by size_bytes, problem_id"
+}
