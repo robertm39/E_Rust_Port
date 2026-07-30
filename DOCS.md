@@ -183,6 +183,16 @@ unchanged. This is a typing boundary only: it does not evaluate arithmetic or
 add theory reasoning, and arithmetic use in unsupported THF applications fails
 with a type diagnostic.
 
+The proof-aware ground-theory SMT cooperation study is retained in
+[`experiments/2026-07-30-001-ground-theory-smt-cooperation/`](experiments/2026-07-30-001-ground-theory-smt-cooperation/).
+A persistent pinned-Z3 process and an experiment-only Rust C API driver both
+replayed all 96 eligible integer/real difference-logic decisions, pruned 28
+held-out branches, closed four held-out synthetic workloads, rejected
+unsupported raw answers to `Unknown`, and met the preregistered latency and
+cancellation gates. Production remains unchanged: the corpus is synthetic and
+the measured backend artifacts are 37.2 to 41.7 MB. Real branch-stream and
+native-checker evidence is tracked by `E_Rust_Port-9jt.5.10`.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

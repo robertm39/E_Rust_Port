@@ -1,0 +1,3157 @@
+{
+  "date_frozen": "2026-07-30",
+  "description": "Typed ground difference-logic branches, unsupported controls, and neutral bypass workloads.",
+  "schema": "umlaut-ground-theory-corpus-v1",
+  "workloads": [
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "train-int-closed",
+      "partition": "train",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "train-int-mixed",
+      "partition": "train",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "train-int-sat",
+      "partition": "train",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "train-int-neutral",
+      "partition": "train",
+      "sort": "Int",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "train-int-unsupported",
+      "partition": "train",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "train-real-closed",
+      "partition": "train",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "train-real-mixed",
+      "partition": "train",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x3",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "train-real-sat",
+      "partition": "train",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "train-real-neutral",
+      "partition": "train",
+      "sort": "Real",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "3/2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "train-real-unsupported",
+      "partition": "train",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "validation-int-closed",
+      "partition": "validation",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "validation-int-mixed",
+      "partition": "validation",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "validation-int-sat",
+      "partition": "validation",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "validation-int-neutral",
+      "partition": "validation",
+      "sort": "Int",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "validation-int-unsupported",
+      "partition": "validation",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "validation-real-closed",
+      "partition": "validation",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "validation-real-mixed",
+      "partition": "validation",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x7",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "validation-real-sat",
+      "partition": "validation",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "validation-real-neutral",
+      "partition": "validation",
+      "sort": "Real",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "3/2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "validation-real-unsupported",
+      "partition": "validation",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "test-int-closed",
+      "partition": "test",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "test-int-mixed",
+      "partition": "test",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "test-int-sat",
+      "partition": "test",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "test-int-neutral",
+      "partition": "test",
+      "sort": "Int",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "test-int-unsupported",
+      "partition": "test",
+      "sort": "Int",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "close_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "difference",
+              "label": "close_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-3",
+              "kind": "difference",
+              "label": "close_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-4",
+              "kind": "difference",
+              "label": "close_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "close_3"
+        }
+      ],
+      "cohort": "theory_heavy_closed",
+      "eligible": true,
+      "expected_closed": true,
+      "id": "test-real-closed",
+      "partition": "test",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "mixed_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "mixed_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-1",
+              "kind": "difference",
+              "label": "mixed_4_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "unsat",
+          "id": "mixed_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "6",
+              "kind": "difference",
+              "label": "mixed_5_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "mixed_5"
+        }
+      ],
+      "cohort": "theory_heavy_mixed",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "test-real-mixed",
+      "partition": "test",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_0",
+          "lhs": "x0",
+          "rhs": "x1"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_1",
+          "lhs": "x1",
+          "rhs": "x2"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_2",
+          "lhs": "x2",
+          "rhs": "x3"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_3",
+          "lhs": "x3",
+          "rhs": "x4"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_4",
+          "lhs": "x4",
+          "rhs": "x5"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_5",
+          "lhs": "x5",
+          "rhs": "x6"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_6",
+          "lhs": "x6",
+          "rhs": "x7"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_7",
+          "lhs": "x7",
+          "rhs": "x8"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_8",
+          "lhs": "x8",
+          "rhs": "x9"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_9",
+          "lhs": "x9",
+          "rhs": "x10"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_10",
+          "lhs": "x10",
+          "rhs": "x11"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_11",
+          "lhs": "x11",
+          "rhs": "x12"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_12",
+          "lhs": "x12",
+          "rhs": "x13"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_13",
+          "lhs": "x13",
+          "rhs": "x14"
+        },
+        {
+          "bound": "0",
+          "kind": "difference",
+          "label": "base_14",
+          "lhs": "x14",
+          "rhs": "x15"
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "difference",
+              "label": "sat_0_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_0"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "1",
+              "kind": "difference",
+              "label": "sat_1_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_1"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "2",
+              "kind": "difference",
+              "label": "sat_2_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_2"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "3",
+              "kind": "difference",
+              "label": "sat_3_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_3"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "4",
+              "kind": "difference",
+              "label": "sat_4_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_4"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "5",
+              "kind": "difference",
+              "label": "sat_5_edge",
+              "lhs": "x15",
+              "rhs": "x0"
+            }
+          ],
+          "expected": "sat",
+          "id": "sat_5"
+        }
+      ],
+      "cohort": "theory_heavy_sat",
+      "eligible": true,
+      "expected_closed": false,
+      "id": "test-real-sat",
+      "partition": "test",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15"
+      ]
+    },
+    {
+      "base": [],
+      "branches": [
+        {
+          "constraints": [],
+          "expected": "unknown",
+          "id": "neutral_0"
+        }
+      ],
+      "cohort": "neutral",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "test-real-neutral",
+      "partition": "test",
+      "sort": "Real",
+      "variables": []
+    },
+    {
+      "base": [
+        {
+          "bound": "3/2",
+          "kind": "general_linear",
+          "label": "unsupported_base",
+          "terms": {
+            "x0": 2,
+            "x1": 3
+          }
+        }
+      ],
+      "branches": [
+        {
+          "constraints": [
+            {
+              "bound": "0",
+              "kind": "general_linear",
+              "label": "unsupported_sat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "sat",
+          "id": "unsupported_sat"
+        },
+        {
+          "constraints": [
+            {
+              "bound": "-2",
+              "kind": "general_linear",
+              "label": "unsupported_unsat_lower",
+              "terms": {
+                "x0": -2,
+                "x1": -3
+              }
+            }
+          ],
+          "expected": "unsat",
+          "id": "unsupported_unsat"
+        }
+      ],
+      "cohort": "unsupported_general_linear",
+      "eligible": false,
+      "expected_closed": false,
+      "id": "test-real-unsupported",
+      "partition": "test",
+      "sort": "Real",
+      "variables": [
+        "x0",
+        "x1"
+      ]
+    }
+  ]
+}
