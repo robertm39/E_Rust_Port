@@ -287,7 +287,9 @@ def unavailable_ranking_cost(reason: str) -> dict[str, Any]:
     }
 
 
-def result_records(search_root: Path, split: str) -> list[dict[str, Any]]:
+def result_records(
+    search_root: Path, split: str, expected_count: int = 32
+) -> list[dict[str, Any]]:
     records = []
     for result_path in sorted((search_root / split).rglob("result.json")):
         result = read_json(result_path)
@@ -298,11 +300,34 @@ def result_records(search_root: Path, split: str) -> list[dict[str, Any]]:
         result["_result_path"] = str(result_path)
         result["_telemetry"] = telemetry
         records.append(result)
-    if len(records) != 32:
+    if len(records) != expected_count:
         raise ExperimentError(
-            f"{split} has {len(records)} search results, expected 32"
+            f"{split} has {len(records)} search results, "
+            f"expected {expected_count}"
         )
     return records
+
+
+def combined_result_records(
+    control_root: Path, learned_root: Path, split: str
+) -> list[dict[str, Any]]:
+    if control_root == learned_root:
+        return result_records(control_root, split)
+    control = [
+        record
+        for record in result_records(control_root, split)
+        if record["strategy"] == "control"
+    ]
+    learned = [
+        record
+        for record in result_records(learned_root, split, expected_count=16)
+        if record["strategy"] == "learned"
+    ]
+    if len(control) != 16 or len(learned) != 16:
+        raise ExperimentError(
+            f"{split} combined search needs 16 control and 16 learned results"
+        )
+    return [*control, *learned]
 
 
 def median_or_none(values: Iterable[float]) -> float | None:
@@ -505,6 +530,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--classifier-input-root", type=Path, required=True)
     parser.add_argument("--classifier-output-root", type=Path, required=True)
     parser.add_argument("--search-root", type=Path, required=True)
+    parser.add_argument("--learned-search-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -514,6 +540,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     input_root = arguments.classifier_input_root.resolve()
     output_root = arguments.classifier_output_root.resolve()
     search_root = arguments.search_root.resolve()
+    learned_search_root = (
+        arguments.learned_search_root.resolve()
+        if arguments.learned_search_root
+        else search_root
+    )
     metadata = read_json(input_root / "metadata.json")
     timings = read_json(output_root / "summary.json")
 
@@ -547,8 +578,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "classification": classification,
         "ranking_cost": costs,
         "search": {
-            split: search_metrics(result_records(search_root, split))
+            split: search_metrics(
+                combined_result_records(
+                    search_root, learned_search_root, split
+                )
+            )
             for split in ("validation", "test")
+        },
+        "search_sources": {
+            "control_root": str(search_root),
+            "learned_root": str(learned_search_root),
         },
     }
     summary["decision"] = decide(summary)

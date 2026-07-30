@@ -34,3 +34,8 @@ This does not change the frozen measured search or label-extraction revisions.
 One-class held-out labels are reported explicitly with one-sided and
 calibration metrics; balanced accuracy remains unavailable and no missing
 class is fabricated.
+
+The original learned-search processes never passed option parsing because the
+harness quoted the KB path inside `TSMWeight(...)`. Corrected learned-only runs
+live under a fresh root; analysis combines them with the immutable original
+controls and records both roots.

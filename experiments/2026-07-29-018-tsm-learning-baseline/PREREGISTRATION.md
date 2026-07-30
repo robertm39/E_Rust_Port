@@ -113,6 +113,24 @@ unavailable. It does not synthesize negative examples. The decision rule and
 all thresholds are unchanged: absent test labels already force the frozen
 `uncertain` verdict regardless of validation reporting.
 
+The first complete analysis then showed that all 32 learned search results had
+null SZS status and no telemetry. Each process stopped in option parsing before
+loading a problem because the controller surrounded the absolute KB path with
+single quotes inside the `TSMWeight(...)` argument. Umlaut's `ParseFilename`
+grammar consumes an unquoted sequence of filename tokens and rejects a
+single-quoted string at that position. Thus no learned search, solve, timing,
+or resource result exists in the original search root; the 32 control results
+remain valid and immutable.
+
+The controller now serializes the same absolute KB path without quotes and
+accepts `--strategy=learned` so only the zero-evidence learned coordinates are
+rerun under a fresh search root. The analyzer combines the original root's 16
+control results per split with the fresh root's 16 learned results per split
+and records both source roots. A smoke run must first demonstrate KB loading
+and a valid SZS status. No problem, seed, repetition, budget, binary, KB,
+strategy parameter, queue ratio, metric, threshold, gate, control result,
+classifier result, or label changes.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.

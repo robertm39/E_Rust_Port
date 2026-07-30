@@ -30,6 +30,7 @@ SELECT = load_module("tsm_select_test", ROOT / "select_corpus.py")
 INPUTS = load_module("tsm_inputs_test", ROOT / "make_classifier_inputs.py")
 ANALYZE = load_module("tsm_analyze_test", ROOT / "analyze.py")
 CLASSIFY = load_module("tsm_classify_test", ROOT / "classify.py")
+RUN = load_module("tsm_run_test", ROOT / "run.py")
 
 
 class SelectionTests(unittest.TestCase):
@@ -112,6 +113,15 @@ class AnnotationTests(unittest.TestCase):
                 "/tmp/problem.p",
             ],
         )
+
+
+class SearchHarnessTests(unittest.TestCase):
+    def test_learning_kb_path_uses_filename_tokens_without_quotes(self) -> None:
+        RUN.configure_strategies(Path("/opt/e-rust-port/example-kb"))
+        argument = RUN.STRATEGIES["learned"]["args"][0]
+
+        self.assertIn("flat,/opt/e-rust-port/example-kb,100000", argument)
+        self.assertNotIn("'", argument)
 
 
 class AnalysisTests(unittest.TestCase):

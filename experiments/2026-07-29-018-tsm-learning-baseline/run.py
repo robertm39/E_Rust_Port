@@ -72,7 +72,7 @@ def sha256_tree(path: Path) -> str:
 
 
 def configure_strategies(kb: Path) -> None:
-    kb_literal = "'" + str(kb).replace("\\", "/") + "'"
+    kb_literal = str(kb).replace("\\", "/")
     learned_weight = (
         "TSMLearned=TSMWeight(ConstPrio,1,1,2,flat,"
         f"{kb_literal},100000,1.0,1.0,Flat,IndexIdentity,100000,"
@@ -178,7 +178,7 @@ def run_one(**kwargs: Any) -> dict[str, Any]:
 def configure_base() -> None:
     BASE.__file__ = __file__
     BASE.UEQ_CATEGORY = "+".join(CATEGORIES)
-    BASE.GENERAL_STRATEGIES = ("control", "learned")
+    BASE.GENERAL_STRATEGIES = tuple(STRATEGIES)
     BASE.SPECIALIST_STRATEGIES = ()
     BASE.STRATEGIES = STRATEGIES
     BASE.PHASE_CONFIGS = PHASE_CONFIGS
@@ -189,10 +189,11 @@ def configure_base() -> None:
 
 def parse_experiment_args(
     argv: Sequence[str],
-) -> tuple[Path, list[str]]:
+) -> tuple[Path, str | None, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--knowledge-base", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--strategy", choices=("control", "learned"))
     arguments, remaining = parser.parse_known_args(argv)
     if arguments.source_revision != SOURCE_REVISION:
         raise ExperimentError("source revision differs from preregistration")
@@ -203,7 +204,7 @@ def parse_experiment_args(
     missing = sorted(name for name in required if not (kb / name).is_file())
     if missing:
         raise ExperimentError(f"knowledge base is incomplete: {missing}")
-    return kb, remaining
+    return kb, arguments.strategy, remaining
 
 
 def contract_preview() -> dict[str, Any]:
@@ -227,8 +228,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if actual_argv == ["--contract-preview"]:
         print(json.dumps(contract_preview(), indent=2, sort_keys=True))
         return 0
-    kb, remaining = parse_experiment_args(actual_argv)
+    kb, strategy, remaining = parse_experiment_args(actual_argv)
     configure_strategies(kb)
+    if strategy is not None:
+        selected_strategy = STRATEGIES[strategy]
+        STRATEGIES.clear()
+        STRATEGIES[strategy] = selected_strategy
     configure_base()
     return BASE.main(remaining)
 
