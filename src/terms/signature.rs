@@ -6,8 +6,9 @@ use crate::clauses::derivation::ClauseDerivationRef;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_parse, func_symb_token, FunCode, FuncSymbType};
 use crate::terms::simpletypes::{
-    alloc_arrow_type, arrow_type_flattened, is_choice_type, type_app_encoded_name,
-    type_get_max_arity, type_is_predicate, type_is_type_constructor, Type,
+    alloc_arrow_type, arrow_type_flattened, is_choice_type, sort_is_interpreted,
+    type_app_encoded_name, type_get_max_arity, type_is_predicate, type_is_type_constructor, Type,
+    TypeConsCode, ST_BOOL, ST_INTEGER, ST_RATIONAL, ST_REAL,
 };
 use crate::terms::typebanks::TypeBank;
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,6 +28,204 @@ pub const SIG_NAMED_LAMBDA_CODE: FunCode = SIG_PHONY_APP_CODE + 1;
 pub const SIG_DB_LAMBDA_CODE: FunCode = SIG_NAMED_LAMBDA_CODE + 1;
 pub const SIG_ITE_CODE: FunCode = SIG_DB_LAMBDA_CODE + 1;
 pub const SIG_LET_CODE: FunCode = SIG_ITE_CODE + 1;
+
+/// One of TPTP's predefined, ad-hoc-polymorphic arithmetic symbols.
+///
+/// These symbols deliberately do not use [`FP_TYPE_POLY`]. That legacy flag
+/// also classifies a symbol as a predicate, which is wrong for arithmetic
+/// functions such as `$sum`. Instead, the symbol name selects an official
+/// typing rule and type inference instantiates that rule per occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PredefinedArithmeticSymbol {
+    Less,
+    LessEq,
+    Greater,
+    GreaterEq,
+    IsInt,
+    IsRat,
+    UMinus,
+    Sum,
+    Difference,
+    Product,
+    Quotient,
+    QuotientE,
+    QuotientT,
+    QuotientF,
+    RemainderE,
+    RemainderT,
+    RemainderF,
+    Floor,
+    Ceiling,
+    Truncate,
+    Round,
+    Abs,
+    ToInt,
+    ToRat,
+    ToReal,
+}
+
+impl PredefinedArithmeticSymbol {
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "$less" => Some(Self::Less),
+            "$lesseq" => Some(Self::LessEq),
+            "$greater" => Some(Self::Greater),
+            "$greatereq" => Some(Self::GreaterEq),
+            "$is_int" => Some(Self::IsInt),
+            "$is_rat" => Some(Self::IsRat),
+            "$uminus" => Some(Self::UMinus),
+            "$sum" => Some(Self::Sum),
+            "$difference" => Some(Self::Difference),
+            "$product" => Some(Self::Product),
+            "$quotient" => Some(Self::Quotient),
+            "$quotient_e" => Some(Self::QuotientE),
+            "$quotient_t" => Some(Self::QuotientT),
+            "$quotient_f" => Some(Self::QuotientF),
+            "$remainder_e" => Some(Self::RemainderE),
+            "$remainder_t" => Some(Self::RemainderT),
+            "$remainder_f" => Some(Self::RemainderF),
+            "$floor" => Some(Self::Floor),
+            "$ceiling" => Some(Self::Ceiling),
+            "$truncate" => Some(Self::Truncate),
+            "$round" => Some(Self::Round),
+            "$abs" => Some(Self::Abs),
+            "$to_int" => Some(Self::ToInt),
+            "$to_rat" => Some(Self::ToRat),
+            "$to_real" => Some(Self::ToReal),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Less => "$less",
+            Self::LessEq => "$lesseq",
+            Self::Greater => "$greater",
+            Self::GreaterEq => "$greatereq",
+            Self::IsInt => "$is_int",
+            Self::IsRat => "$is_rat",
+            Self::UMinus => "$uminus",
+            Self::Sum => "$sum",
+            Self::Difference => "$difference",
+            Self::Product => "$product",
+            Self::Quotient => "$quotient",
+            Self::QuotientE => "$quotient_e",
+            Self::QuotientT => "$quotient_t",
+            Self::QuotientF => "$quotient_f",
+            Self::RemainderE => "$remainder_e",
+            Self::RemainderT => "$remainder_t",
+            Self::RemainderF => "$remainder_f",
+            Self::Floor => "$floor",
+            Self::Ceiling => "$ceiling",
+            Self::Truncate => "$truncate",
+            Self::Round => "$round",
+            Self::Abs => "$abs",
+            Self::ToInt => "$to_int",
+            Self::ToRat => "$to_rat",
+            Self::ToReal => "$to_real",
+        }
+    }
+
+    #[must_use]
+    pub const fn arity(self) -> i32 {
+        match self {
+            Self::Less
+            | Self::LessEq
+            | Self::Greater
+            | Self::GreaterEq
+            | Self::Sum
+            | Self::Difference
+            | Self::Product
+            | Self::Quotient
+            | Self::QuotientE
+            | Self::QuotientT
+            | Self::QuotientF
+            | Self::RemainderE
+            | Self::RemainderT
+            | Self::RemainderF => 2,
+            Self::IsInt
+            | Self::IsRat
+            | Self::UMinus
+            | Self::Floor
+            | Self::Ceiling
+            | Self::Truncate
+            | Self::Round
+            | Self::Abs
+            | Self::ToInt
+            | Self::ToRat
+            | Self::ToReal => 1,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_predicate(self) -> bool {
+        matches!(
+            self,
+            Self::Less | Self::LessEq | Self::Greater | Self::GreaterEq | Self::IsInt | Self::IsRat
+        )
+    }
+
+    /// Returns the result sort required by the official TPTP arithmetic rule.
+    #[must_use]
+    pub fn result_sort(self, argument_sorts: &[TypeConsCode]) -> Option<TypeConsCode> {
+        if argument_sorts.len() != usize::try_from(self.arity()).ok()?
+            || !argument_sorts.iter().copied().all(sort_is_interpreted)
+        {
+            return None;
+        }
+
+        match self {
+            Self::Less | Self::LessEq | Self::Greater | Self::GreaterEq => {
+                (argument_sorts[0] == argument_sorts[1]).then_some(ST_BOOL)
+            }
+            Self::IsInt | Self::IsRat => Some(ST_BOOL),
+            Self::UMinus
+            | Self::Floor
+            | Self::Ceiling
+            | Self::Truncate
+            | Self::Round
+            | Self::Abs => Some(argument_sorts[0]),
+            Self::Sum
+            | Self::Difference
+            | Self::Product
+            | Self::QuotientE
+            | Self::QuotientT
+            | Self::QuotientF
+            | Self::RemainderE
+            | Self::RemainderT
+            | Self::RemainderF => {
+                (argument_sorts[0] == argument_sorts[1]).then_some(argument_sorts[0])
+            }
+            Self::Quotient => {
+                if argument_sorts[0] != argument_sorts[1] {
+                    None
+                } else if argument_sorts[0] == ST_INTEGER {
+                    Some(ST_RATIONAL)
+                } else {
+                    Some(argument_sorts[0])
+                }
+            }
+            Self::ToInt => Some(ST_INTEGER),
+            Self::ToRat => Some(ST_RATIONAL),
+            Self::ToReal => Some(ST_REAL),
+        }
+    }
+
+    #[must_use]
+    pub fn accepts_type(self, type_: &Type) -> bool {
+        if !type_.is_arrow() || type_.arity() != usize::try_from(self.arity()).unwrap_or(0) + 1 {
+            return false;
+        }
+        let argument_sorts = type_.args()[..type_.arity() - 1]
+            .iter()
+            .map(Type::f_code)
+            .collect::<Vec<_>>();
+        self.result_sort(&argument_sorts)
+            .is_some_and(|result| result == type_.args()[type_.arity() - 1].f_code())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FunctionProperties(u64);
@@ -481,7 +680,33 @@ impl Signature {
         self.func(f_code).type_.as_ref()
     }
 
+    #[must_use]
+    pub fn predefined_arithmetic_symbol(
+        &self,
+        f_code: FunCode,
+    ) -> Option<PredefinedArithmeticSymbol> {
+        self.find_name(f_code)
+            .and_then(PredefinedArithmeticSymbol::from_name)
+    }
+
     pub fn declare_type(&mut self, f_code: FunCode, type_: Type) -> Result<(), Diagnostic> {
+        if let Some(symbol) = self.predefined_arithmetic_symbol(f_code) {
+            if !symbol.accepts_type(&type_) {
+                return Err(Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    format!(
+                        "predefined arithmetic symbol {} has an invalid type",
+                        symbol.name()
+                    ),
+                ));
+            }
+            if self.type_bank.records_verbose_events() {
+                self.type_bank
+                    .record_type_declaration(symbol.name(), &type_, false);
+            }
+            return Ok(());
+        }
+
         let is_fixed = self.is_fixed_type(f_code);
         let redeclared = match self.get_type(f_code) {
             Some(existing) if existing == &type_ => return Ok(()),
@@ -516,6 +741,19 @@ impl Signature {
     /// precondition. It can also panic through `TypeBank::change_return_type`
     /// for the inherited `$o` ambiguity case documented in `DOCS.md`.
     pub fn declare_is_function(&mut self, f_code: FunCode) -> Result<(), Diagnostic> {
+        if let Some(symbol) = self.predefined_arithmetic_symbol(f_code) {
+            return if symbol.is_predicate() {
+                Err(Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    format!(
+                        "predefined arithmetic predicate {} used as a function",
+                        symbol.name()
+                    ),
+                ))
+            } else {
+                Ok(())
+            };
+        }
         if self.is_polymorphic(f_code) {
             return Ok(());
         }
@@ -541,6 +779,19 @@ impl Signature {
     /// Panics if the symbol has no declared type, matching the C assertion
     /// precondition.
     pub fn declare_is_predicate(&mut self, f_code: FunCode) -> Result<(), Diagnostic> {
+        if let Some(symbol) = self.predefined_arithmetic_symbol(f_code) {
+            return if symbol.is_predicate() {
+                Ok(())
+            } else {
+                Err(Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    format!(
+                        "predefined arithmetic function {} used as a predicate",
+                        symbol.name()
+                    ),
+                ))
+            };
+        }
         if self.is_polymorphic(f_code) {
             return Ok(());
         }
@@ -656,6 +907,9 @@ impl Signature {
 
     #[must_use]
     pub fn is_predicate(&self, f_code: FunCode) -> bool {
+        if let Some(symbol) = self.predefined_arithmetic_symbol(f_code) {
+            return symbol.is_predicate();
+        }
         if self.query_prop(f_code, FP_TYPE_POLY) {
             return true;
         }
@@ -664,6 +918,9 @@ impl Signature {
 
     #[must_use]
     pub fn is_function(&self, f_code: FunCode) -> bool {
+        if let Some(symbol) = self.predefined_arithmetic_symbol(f_code) {
+            return !symbol.is_predicate();
+        }
         if !self.query_prop(f_code, FP_TYPE_FIXED) {
             return false;
         }
@@ -788,12 +1045,18 @@ impl Signature {
         special_id: bool,
         problem_type: ProblemType,
     ) -> FunCode {
+        let arithmetic_symbol = PredefinedArithmeticSymbol::from_name(name);
+        let arity = arithmetic_symbol.map_or(arity, PredefinedArithmeticSymbol::arity);
+        let special_id = special_id || arithmetic_symbol.is_some();
         let known_pos = self.find_f_code(name);
         if known_pos != 0
             && (self.func(known_pos).arity == arity || problem_type != ProblemType::FirstOrder)
         {
             if special_id {
                 self.set_special(known_pos, true);
+            }
+            if arithmetic_symbol.is_some() {
+                self.set_func_prop(known_pos, FP_INTERPRETED);
             }
             return known_pos;
         }
@@ -812,6 +1075,9 @@ impl Signature {
             if special_id {
                 self.set_special(pos, true);
             }
+            if arithmetic_symbol.is_some() {
+                self.set_func_prop(pos, FP_INTERPRETED);
+            }
             return pos;
         }
 
@@ -825,6 +1091,9 @@ impl Signature {
             .push(FuncCell::new(&raw_name, &print_name, arity));
         self.f_index.insert(raw_name, code);
         self.set_special(code, special_id);
+        if arithmetic_symbol.is_some() {
+            self.set_func_prop(code, FP_INTERPRETED);
+        }
         self.alpha_ranks_valid = false;
         code
     }
@@ -1730,13 +1999,14 @@ fn split_signature_name(name: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FunctionProperties, Signature, DEFAULT_SIGNATURE_GROW, DEFAULT_SIGNATURE_SIZE,
-        FP_ASSOCIATIVE, FP_CL_SPLIT_DEF, FP_COMMUTATIVE, FP_DEF_FUN, FP_DEF_PRED, FP_DISTINCT_PROP,
-        FP_FOF_OP, FP_IGNORE_PROPS, FP_INTERPRETED, FP_IS_AC, FP_IS_FLOAT, FP_IS_INJ_DEF_SKOLEM,
-        FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, FP_OP_FLAG, FP_PSEUDO_PRED, FP_SKOLEM_SYMBOL,
-        FP_SPECIAL, FP_TYPED_APPLICATION, FP_TYPE_FIXED, FP_TYPE_POLY, SIG_CONS_CODE,
-        SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_FEATURE_ARITY_LIMIT, SIG_ITE_CODE, SIG_LET_CODE,
-        SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        FunctionProperties, PredefinedArithmeticSymbol, Signature, DEFAULT_SIGNATURE_GROW,
+        DEFAULT_SIGNATURE_SIZE, FP_ASSOCIATIVE, FP_CL_SPLIT_DEF, FP_COMMUTATIVE, FP_DEF_FUN,
+        FP_DEF_PRED, FP_DISTINCT_PROP, FP_FOF_OP, FP_IGNORE_PROPS, FP_INTERPRETED, FP_IS_AC,
+        FP_IS_FLOAT, FP_IS_INJ_DEF_SKOLEM, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, FP_OP_FLAG,
+        FP_PSEUDO_PRED, FP_SKOLEM_SYMBOL, FP_SPECIAL, FP_TYPED_APPLICATION, FP_TYPE_FIXED,
+        FP_TYPE_POLY, SIG_CONS_CODE, SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_FEATURE_ARITY_LIMIT,
+        SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE,
+        SIG_TRUE_CODE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
@@ -1884,6 +2154,116 @@ mod tests {
         assert_eq!(sig.find_f_code("'quoted name'"), quoted);
         assert_eq!(sig.func(quoted).name(), "quoted name");
         assert_eq!(sig.func(quoted).print_name(), "'quoted name'");
+    }
+
+    #[test]
+    fn predefined_arithmetic_symbols_keep_official_arity_and_role() {
+        let mut sig = signature();
+        let symbols = [
+            ("$less", 2, true),
+            ("$lesseq", 2, true),
+            ("$greater", 2, true),
+            ("$greatereq", 2, true),
+            ("$is_int", 1, true),
+            ("$is_rat", 1, true),
+            ("$uminus", 1, false),
+            ("$sum", 2, false),
+            ("$difference", 2, false),
+            ("$product", 2, false),
+            ("$quotient", 2, false),
+            ("$quotient_e", 2, false),
+            ("$quotient_t", 2, false),
+            ("$quotient_f", 2, false),
+            ("$remainder_e", 2, false),
+            ("$remainder_t", 2, false),
+            ("$remainder_f", 2, false),
+            ("$floor", 1, false),
+            ("$ceiling", 1, false),
+            ("$truncate", 1, false),
+            ("$round", 1, false),
+            ("$abs", 1, false),
+            ("$to_int", 1, false),
+            ("$to_rat", 1, false),
+            ("$to_real", 1, false),
+        ];
+
+        for (name, arity, predicate) in symbols {
+            let code = sig.insert_id_for_problem(name, arity + 7, false, ProblemType::FirstOrder);
+            assert_eq!(sig.find_arity(code), Some(arity), "{name}");
+            assert_eq!(
+                sig.predefined_arithmetic_symbol(code)
+                    .map(PredefinedArithmeticSymbol::name),
+                Some(name),
+                "{name}"
+            );
+            assert!(sig.query_prop(code, FP_INTERPRETED | FP_SPECIAL), "{name}");
+            assert_eq!(sig.is_predicate(code), predicate, "{name}");
+            assert_eq!(sig.is_function(code), !predicate, "{name}");
+            assert!(sig.get_type(code).is_none(), "{name}");
+            assert_eq!(
+                sig.insert_id_for_problem(name, arity, false, ProblemType::FirstOrder),
+                code,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn predefined_arithmetic_declarations_validate_each_instance() {
+        let mut sig = signature();
+        let sum = sig.insert_id_for_problem("$sum", 2, false, ProblemType::FirstOrder);
+        let quotient = sig.insert_id_for_problem("$quotient", 2, false, ProblemType::FirstOrder);
+        let integer = sig.type_bank().integer_type();
+        let rational = sig.type_bank().rational_type();
+        let real = sig.type_bank().real_type();
+
+        sig.declare_final_type(
+            sum,
+            alloc_arrow_type(vec![integer.clone(), integer.clone(), integer.clone()]),
+        )
+        .unwrap();
+        sig.declare_final_type(
+            sum,
+            alloc_arrow_type(vec![real.clone(), real.clone(), real]),
+        )
+        .unwrap();
+        assert!(sig.get_type(sum).is_none());
+
+        sig.declare_type(
+            quotient,
+            alloc_arrow_type(vec![integer.clone(), integer.clone(), rational.clone()]),
+        )
+        .unwrap();
+        assert_eq!(
+            sig.declare_type(
+                quotient,
+                alloc_arrow_type(vec![integer.clone(), integer.clone(), integer.clone(),]),
+            )
+            .unwrap_err()
+            .code(),
+            ErrorCode::TYPE_ERROR
+        );
+        assert_eq!(
+            sig.declare_type(
+                sum,
+                alloc_arrow_type(vec![rational.clone(), rational, integer]),
+            )
+            .unwrap_err()
+            .code(),
+            ErrorCode::TYPE_ERROR
+        );
+
+        assert!(sig.declare_is_function(sum).is_ok());
+        assert_eq!(
+            sig.declare_is_predicate(sum).unwrap_err().code(),
+            ErrorCode::TYPE_ERROR
+        );
+        let less = sig.insert_id_for_problem("$less", 2, false, ProblemType::FirstOrder);
+        assert!(sig.declare_is_predicate(less).is_ok());
+        assert_eq!(
+            sig.declare_is_function(less).unwrap_err().code(),
+            ErrorCode::TYPE_ERROR
+        );
     }
 
     #[test]

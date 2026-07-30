@@ -172,6 +172,17 @@ LIRA kernel, but general arithmetic remains disabled: quantified rationals,
 real rationality/coercion, nonlinear terms, partial division families, and
 mixed-theory terms fail closed.
 
+The typed TPTP frontend now recognizes all 25 predefined arithmetic
+predicates and functions from the TPTP ArithmeticSystem without user type
+declarations. Their ad-hoc-polymorphic types are instantiated per TFF
+occurrence over `$int`, `$rat`, or `$real`; implicit mixed-sort operations are
+rejected, integer `$quotient` returns `$rat`, and the three coercions return
+their named target sorts. The symbols retain their `$...` identity in TSTP
+output and are registered lazily, so unrelated signature numbering is
+unchanged. This is a typing boundary only: it does not evaluate arithmetic or
+add theory reasoning, and arithmetic use in unsupported THF applications fails
+with a type diagnostic.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

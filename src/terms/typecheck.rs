@@ -1,8 +1,13 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
-use crate::terms::signature::{Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_RATIONAL};
-use crate::terms::simpletypes::{alloc_arrow_type, type_is_predicate, Type};
+use crate::terms::signature::{
+    PredefinedArithmeticSymbol, Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_RATIONAL,
+};
+use crate::terms::simpletypes::{
+    alloc_arrow_type, type_is_predicate, Type, TypeConsCode, ST_BOOL, ST_INTEGER, ST_RATIONAL,
+    ST_REAL,
+};
 use crate::terms::termtypes::Term;
 use crate::terms::typebanks::TypeBank;
 use std::cmp::Ordering;
@@ -58,7 +63,19 @@ pub fn type_check_consistent(sig: &Signature, term: &Term) -> bool {
     let mut stack = vec![term.clone()];
 
     while let Some(current) = stack.pop() {
-        if current.is_free_var() || sig.is_polymorphic(current.f_code()) {
+        if current.is_free_var() {
+            continue;
+        }
+
+        if let Some(symbol) = sig.predefined_arithmetic_symbol(current.f_code()) {
+            if !predefined_arithmetic_occurrence_is_consistent(sig, &current, symbol) {
+                return false;
+            }
+            stack.extend(current.argument_clones().into_iter().flatten());
+            continue;
+        }
+
+        if sig.is_polymorphic(current.f_code()) {
             continue;
         }
 
@@ -107,7 +124,7 @@ pub fn type_infer_sort_with_options(
         return Ok(());
     }
 
-    let type_ = special_type_for_term(sig, term)?;
+    let type_ = special_type_for_term(sig, term, options)?;
     if let Some(type_) = type_ {
         apply_known_type(sig, term, &type_, options)
     } else if term.is_lambda() {
@@ -157,7 +174,11 @@ pub fn type_declare_is_not_predicate(
     Ok(())
 }
 
-fn special_type_for_term(sig: &mut Signature, term: &Term) -> Result<Option<Type>, Diagnostic> {
+fn special_type_for_term(
+    sig: &mut Signature,
+    term: &Term,
+    options: TypeInferOptions,
+) -> Result<Option<Type>, Diagnostic> {
     if term.is_phony_app() {
         return Ok(required_arg(term, 0)?.type_());
     }
@@ -179,6 +200,10 @@ fn special_type_for_term(sig: &mut Signature, term: &Term) -> Result<Option<Type
         );
         term.set_type(Some(type_));
         return Ok(None);
+    }
+
+    if let Some(symbol) = sig.predefined_arithmetic_symbol(term.f_code()) {
+        return predefined_arithmetic_occurrence_type(sig, term, symbol, options).map(Some);
     }
 
     if term.f_code() == sig.eqn_code() || term.f_code() == sig.neqn_code() {
@@ -254,7 +279,9 @@ fn apply_known_type(
                     return Err(type_error("Type error"));
                 }
             }
-        } else if sig.is_fixed_type(term.f_code()) {
+        } else if sig.is_fixed_type(term.f_code())
+            || sig.predefined_arithmetic_symbol(term.f_code()).is_some()
+        {
             for index in 0..term.arity() {
                 let Some(expected_type) = type_.args().get(index) else {
                     return Err(type_error("Type error"));
@@ -303,6 +330,90 @@ fn term_has_type(term: &Term, expected: &Type) -> bool {
     term.type_().is_some_and(|type_| &type_ == expected)
 }
 
+fn predefined_arithmetic_occurrence_type(
+    sig: &mut Signature,
+    term: &Term,
+    symbol: PredefinedArithmeticSymbol,
+    options: TypeInferOptions,
+) -> Result<Type, Diagnostic> {
+    if options.problem_type == ProblemType::HigherOrder {
+        return Err(arithmetic_type_error(format!(
+            "{} is not supported in THF terms",
+            symbol.name()
+        )));
+    }
+    if term.arity() != usize::try_from(symbol.arity()).unwrap_or(0) {
+        return Err(arithmetic_type_error(format!(
+            "{} expects {} argument(s), got {}",
+            symbol.name(),
+            symbol.arity(),
+            term.arity()
+        )));
+    }
+
+    let mut argument_types = Vec::with_capacity(term.arity());
+    let mut argument_sorts = Vec::with_capacity(term.arity());
+    for index in 0..term.arity() {
+        let argument_type = required_type(&required_arg(term, index)?)?;
+        argument_sorts.push(argument_type.f_code());
+        argument_types.push(argument_type);
+    }
+    let result_sort = symbol.result_sort(&argument_sorts).ok_or_else(|| {
+        arithmetic_type_error(format!(
+            "{} has incompatible arithmetic argument sorts",
+            symbol.name()
+        ))
+    })?;
+    let result_type = predefined_sort_type(sig, result_sort).ok_or_else(|| {
+        arithmetic_type_error(format!(
+            "{} produced an unsupported result sort",
+            symbol.name()
+        ))
+    })?;
+    argument_types.push(result_type);
+    Ok(sig
+        .type_bank_mut()
+        .insert_type_shared(alloc_arrow_type(argument_types)))
+}
+
+fn predefined_arithmetic_occurrence_is_consistent(
+    sig: &Signature,
+    term: &Term,
+    symbol: PredefinedArithmeticSymbol,
+) -> bool {
+    if term.arity() != usize::try_from(symbol.arity()).unwrap_or(0) {
+        return false;
+    }
+    let Some(argument_sorts) = term
+        .argument_clones()
+        .into_iter()
+        .map(|argument| {
+            argument
+                .and_then(|argument| argument.type_())
+                .map(|type_| type_.f_code())
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let Some(result_sort) = symbol.result_sort(&argument_sorts) else {
+        return false;
+    };
+    term.type_()
+        .is_some_and(|type_| type_.f_code() == result_sort)
+        && predefined_sort_type(sig, result_sort).is_some()
+}
+
+fn predefined_sort_type(sig: &Signature, sort: TypeConsCode) -> Option<Type> {
+    match sort {
+        ST_BOOL => Some(sig.type_bank().bool_type()),
+        ST_INTEGER => Some(sig.type_bank().integer_type()),
+        ST_RATIONAL => Some(sig.type_bank().rational_type()),
+        ST_REAL => Some(sig.type_bank().real_type()),
+        _ => None,
+    }
+}
+
 fn required_arg(term: &Term, index: usize) -> Result<Term, Diagnostic> {
     term.argument(index).ok_or_else(|| type_error("Type error"))
 }
@@ -315,6 +426,10 @@ fn type_error(message: &'static str) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
 }
 
+fn arithmetic_type_error(message: String) -> Diagnostic {
+    Diagnostic::new(ErrorCode::TYPE_ERROR, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -325,7 +440,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
     use crate::terms::signature::{Signature, FP_IS_INTEGER};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
 
@@ -340,6 +455,18 @@ mod tests {
             problem_type: ProblemType::FirstOrder,
             app_encode: false,
         }
+    }
+
+    fn arithmetic_term(sig: &mut Signature, name: &str, argument_types: &[Type]) -> Term {
+        let arity = i32::try_from(argument_types.len()).unwrap();
+        let f_code = sig.insert_id_for_problem(name, arity, false, ProblemType::FirstOrder);
+        let term = Term::top_alloc(f_code, argument_types.len());
+        for (index, type_) in argument_types.iter().enumerate() {
+            let argument = Term::const_cell_alloc(-2 - 2 * i64::try_from(index).unwrap());
+            argument.set_type(Some(type_.clone()));
+            term.set_argument(index, argument);
+        }
+        term
     }
 
     #[test]
@@ -498,5 +625,127 @@ mod tests {
 
         arg.set_type(Some(sig.type_bank().integer_type()));
         assert!(!type_check_consistent(&sig, &root));
+    }
+
+    #[test]
+    fn every_predefined_arithmetic_symbol_instantiates_for_numeric_sorts() {
+        let mut sig = signature_with_internal_codes();
+        let numeric_sorts = [
+            sig.type_bank().integer_type(),
+            sig.type_bank().rational_type(),
+            sig.type_bank().real_type(),
+        ];
+
+        for sort in &numeric_sorts {
+            for name in ["$less", "$lesseq", "$greater", "$greatereq"] {
+                let term = arithmetic_term(&mut sig, name, &[sort.clone(), sort.clone()]);
+                type_infer_sort_with_options(&mut sig, &term, first_order_options()).unwrap();
+                assert_eq!(term.type_(), Some(sig.type_bank().bool_type()), "{name}");
+                assert!(type_check_consistent(&sig, &term), "{name}");
+            }
+            for name in ["$is_int", "$is_rat"] {
+                let term = arithmetic_term(&mut sig, name, std::slice::from_ref(sort));
+                type_infer_sort_with_options(&mut sig, &term, first_order_options()).unwrap();
+                assert_eq!(term.type_(), Some(sig.type_bank().bool_type()), "{name}");
+                assert!(type_check_consistent(&sig, &term), "{name}");
+            }
+            for name in [
+                "$uminus",
+                "$floor",
+                "$ceiling",
+                "$truncate",
+                "$round",
+                "$abs",
+            ] {
+                let term = arithmetic_term(&mut sig, name, std::slice::from_ref(sort));
+                type_infer_sort_with_options(&mut sig, &term, first_order_options()).unwrap();
+                assert_eq!(term.type_(), Some(sort.clone()), "{name}");
+                assert!(type_check_consistent(&sig, &term), "{name}");
+            }
+            for name in [
+                "$sum",
+                "$difference",
+                "$product",
+                "$quotient_e",
+                "$quotient_t",
+                "$quotient_f",
+                "$remainder_e",
+                "$remainder_t",
+                "$remainder_f",
+            ] {
+                let term = arithmetic_term(&mut sig, name, &[sort.clone(), sort.clone()]);
+                type_infer_sort_with_options(&mut sig, &term, first_order_options()).unwrap();
+                assert_eq!(term.type_(), Some(sort.clone()), "{name}");
+                assert!(type_check_consistent(&sig, &term), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn quotient_and_coercions_use_their_exact_result_sorts() {
+        let mut sig = signature_with_internal_codes();
+        let integer = sig.type_bank().integer_type();
+        let rational = sig.type_bank().rational_type();
+        let real = sig.type_bank().real_type();
+
+        for (source, result) in [
+            (integer.clone(), rational.clone()),
+            (rational.clone(), rational.clone()),
+            (real.clone(), real.clone()),
+        ] {
+            let quotient =
+                arithmetic_term(&mut sig, "$quotient", &[source.clone(), source.clone()]);
+            type_infer_sort_with_options(&mut sig, &quotient, first_order_options()).unwrap();
+            assert_eq!(quotient.type_(), Some(result));
+        }
+
+        for source in [integer, rational, real] {
+            for (name, target) in [
+                ("$to_int", sig.type_bank().integer_type()),
+                ("$to_rat", sig.type_bank().rational_type()),
+                ("$to_real", sig.type_bank().real_type()),
+            ] {
+                let coercion = arithmetic_term(&mut sig, name, std::slice::from_ref(&source));
+                type_infer_sort_with_options(&mut sig, &coercion, first_order_options()).unwrap();
+                assert_eq!(coercion.type_(), Some(target), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn arithmetic_mismatches_partial_applications_and_thf_are_type_errors() {
+        let mut sig = signature_with_internal_codes();
+        let integer = sig.type_bank().integer_type();
+        let real = sig.type_bank().real_type();
+        let individual = sig.type_bank().i_type();
+
+        let cases = [
+            arithmetic_term(&mut sig, "$sum", &[integer.clone(), real]),
+            arithmetic_term(&mut sig, "$sum", &[integer.clone(), individual]),
+            arithmetic_term(&mut sig, "$sum", std::slice::from_ref(&integer)),
+            arithmetic_term(&mut sig, "$to_int", &[]),
+        ];
+        for term in cases {
+            let error =
+                type_infer_sort_with_options(&mut sig, &term, first_order_options()).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        }
+
+        let thf_sum = arithmetic_term(&mut sig, "$sum", &[integer.clone(), integer.clone()]);
+        let error = type_infer_sort_with_options(
+            &mut sig,
+            &thf_sum,
+            TypeInferOptions {
+                problem_type: ProblemType::HigherOrder,
+                app_encode: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+
+        let valid = arithmetic_term(&mut sig, "$sum", &[integer.clone(), integer]);
+        type_infer_sort_with_options(&mut sig, &valid, first_order_options()).unwrap();
+        valid.set_type(Some(sig.type_bank().real_type()));
+        assert!(!type_check_consistent(&sig, &valid));
     }
 }

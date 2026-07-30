@@ -39369,6 +39369,122 @@ cnf(c_0_12, negated_conjecture, ($false), inference(eval_answer_literal,[status(
     }
 
     #[test]
+    fn run_syntax_only_accepts_all_predefined_arithmetic_symbols_without_declarations() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tff-predefined-arithmetic");
+        std::fs::write(
+            &path,
+            "tff(all_arithmetic, axiom,\n\
+             ( $less(1,2)\n\
+             & $lesseq(1,2)\n\
+             & $greater(2,1)\n\
+             & $greatereq(2,1)\n\
+             & $is_int(1.0)\n\
+             & $is_rat(1.0)\n\
+             & ($uminus(1) = -1)\n\
+             & ($sum(1,2) = 3)\n\
+             & ($difference(3,2) = 1)\n\
+             & ($product(2,3) = 6)\n\
+             & ($quotient(1,2) = 1/2)\n\
+             & ($quotient_e(5,2) = 2)\n\
+             & ($quotient_t(5,2) = 2)\n\
+             & ($quotient_f(5,2) = 2)\n\
+             & ($remainder_e(5,2) = 1)\n\
+             & ($remainder_t(5,2) = 1)\n\
+             & ($remainder_f(5,2) = 1)\n\
+             & ($floor(1.5) = 1.0)\n\
+             & ($ceiling(1.5) = 2.0)\n\
+             & ($truncate(1.5) = 1.0)\n\
+             & ($round(1.5) = 2.0)\n\
+             & ($abs(-1) = 1)\n\
+             & ($to_int(1.0) = 1)\n\
+             & ($to_rat(1) = 1/1)\n\
+             & ($to_real(1) = 1.0) )).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["umlaut", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_invalid_predefined_arithmetic_uses() {
+        let _guard = global_state_lock();
+        for (name, source) in [
+            (
+                "mixed-sorts",
+                "tff(case,axiom,! [I:$int,R:$real] : ($sum(I,R) = R)).\n",
+            ),
+            ("invalid-arity", "tff(case,axiom,$sum(1) = 1).\n"),
+            ("partial-thf", "thf(case,axiom,$sum @ 1 @ 2 = 3).\n"),
+            ("unsupported-thf", "thf(case,axiom,$sum(1,2) = 3).\n"),
+        ] {
+            let path = temp_path(&format!("syntax-tff-predefined-arithmetic-{name}"));
+            std::fs::write(&path, source).unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let error = run(
+                ["umlaut", "--syntax-only", path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::TYPE_ERROR, "{name}");
+            assert!(stdout.is_empty(), "{name}");
+            assert!(stderr.is_empty(), "{name}");
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn run_print_formulas_preserves_predefined_arithmetic_symbol_identity() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-predefined-arithmetic");
+        std::fs::write(&path, "tff(case,axiom,$sum(1,2) = 3).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--print-formulas",
+                "--tstp-in",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.contains("$sum("), "{output}");
+        assert!(!output.contains("ARITYFIX"), "{output}");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_fof_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-distinct");
