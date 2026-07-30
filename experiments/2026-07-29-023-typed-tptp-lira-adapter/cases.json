@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "accepted": [
+    {
+      "name": "existential_integer_negative_floor",
+      "source": "tff(case,axiom,? [I:$int] : (I = $to_int(-1.5)))."
+    },
+    {
+      "name": "universal_integer_guard",
+      "source": "tff(case,axiom,! [I:$int] : ($floor($to_real(I)) = $to_real(I)))."
+    },
+    {
+      "name": "real_floor_shift",
+      "source": "tff(case,axiom,! [R:$real] : ($floor($sum(R,1.0)) = $sum($floor(R),1.0)))."
+    },
+    {
+      "name": "negative_ceiling",
+      "source": "tff(case,axiom,$ceiling(-1.5) = -1.0)."
+    },
+    {
+      "name": "ground_rational_comparison",
+      "source": "tff(case,axiom,$less(1/3,1/2))."
+    },
+    {
+      "name": "integer_quotient_embedding",
+      "source": "tff(case,axiom,! [I:$int] : ($to_real($quotient(I,2)) = $quotient($to_real(I),2.0)))."
+    },
+    {
+      "name": "explicit_mixed_sort_coercion",
+      "source": "tff(case,axiom,! [I:$int,R:$real] : (($to_real(I) = R) => ($sum($to_real(I),R) = $product(2.0,R))))."
+    },
+    {
+      "name": "real_is_integer",
+      "source": "tff(case,axiom,! [R:$real] : ($is_int(R) <=> ($floor(R) = R)))."
+    },
+    {
+      "name": "scalar_product",
+      "source": "tff(case,axiom,! [R:$real] : ($product(3.0,R) = $sum(R,$sum(R,R))))."
+    },
+    {
+      "name": "comparison_partition",
+      "source": "tff(case,axiom,! [R:$real] : ($less(R,0.0) | $greatereq(R,0.0)))."
+    },
+    {
+      "name": "integer_to_rat_to_real",
+      "source": "tff(case,axiom,! [I:$int] : ($to_real($to_rat(I)) = $to_real(I)))."
+    },
+    {
+      "name": "exponent_literal_difference",
+      "source": "tff(case,axiom,$difference(1.25E2,25.0) = 100.0)."
+    }
+  ],
+  "rejected": [
+    {
+      "name": "quantified_rational",
+      "code": "UNSUPPORTED_RAT_QUANTIFIER",
+      "source": "tff(case,axiom,! [Q:$rat] : (Q = Q))."
+    },
+    {
+      "name": "real_to_rational",
+      "code": "UNSUPPORTED_REAL_TO_RAT",
+      "source": "tff(case,axiom,! [R:$real] : ($to_rat(R) = $to_rat(R)))."
+    },
+    {
+      "name": "real_rationality",
+      "code": "UNSUPPORTED_REAL_RATIONALITY",
+      "source": "tff(case,axiom,! [R:$real] : $is_rat(R))."
+    },
+    {
+      "name": "nonlinear_product",
+      "code": "NONLINEAR_PRODUCT",
+      "source": "tff(case,axiom,! [R:$real,S:$real] : ($product(R,S) = 0.0))."
+    },
+    {
+      "name": "variable_divisor",
+      "code": "NONCONSTANT_DIVISOR",
+      "source": "tff(case,axiom,! [R:$real,S:$real] : ($quotient(R,S) = R))."
+    },
+    {
+      "name": "zero_divisor",
+      "code": "ZERO_DIVISOR",
+      "source": "tff(case,axiom,$quotient(1.0,0.0) = 1.0)."
+    },
+    {
+      "name": "truncate_real",
+      "code": "UNSUPPORTED_ROUNDING",
+      "source": "tff(case,axiom,$truncate(-1.5) = -1.0)."
+    },
+    {
+      "name": "round_real",
+      "code": "UNSUPPORTED_ROUNDING",
+      "source": "tff(case,axiom,$round(1.5) = 2.0)."
+    },
+    {
+      "name": "integral_quotient",
+      "code": "UNSUPPORTED_OPERATOR",
+      "source": "tff(case,axiom,$quotient_e(5,2) = 2)."
+    },
+    {
+      "name": "remainder",
+      "code": "UNSUPPORTED_OPERATOR",
+      "source": "tff(case,axiom,$remainder_f(5,2) = 1)."
+    },
+    {
+      "name": "uninterpreted_arithmetic_function",
+      "code": "UNINTERPRETED_ARITHMETIC",
+      "source": "tff(case,axiom,! [R:$real] : (f(R) = R))."
+    },
+    {
+      "name": "implicit_mixed_sum",
+      "code": "TYPE_MISMATCH",
+      "source": "tff(case,axiom,! [I:$int,R:$real] : ($sum(I,R) = R))."
+    },
+    {
+      "name": "cross_sort_equality",
+      "code": "TYPE_MISMATCH",
+      "source": "tff(case,axiom,! [I:$int,R:$real] : (I = R))."
+    },
+    {
+      "name": "free_variable",
+      "code": "UNBOUND_VARIABLE",
+      "source": "tff(case,axiom,$sum(X,1) = 2)."
+    },
+    {
+      "name": "untyped_dialect",
+      "code": "UNSUPPORTED_DIALECT",
+      "source": "fof(case,axiom,1 = 1)."
+    },
+    {
+      "name": "multiple_formulas",
+      "code": "UNSUPPORTED_DOCUMENT",
+      "source": "tff(first,axiom,1 = 1). tff(second,axiom,2 = 2)."
+    }
+  ]
+}
