@@ -1,0 +1,42 @@
+{
+  "audit_report_id": "2a2973588148d621252161c3db8c1c1f8df75ba9b4bc0ea99bdf395d52cfb172",
+  "problem_ids": [
+    "SWC434_1",
+    "SWC435_1",
+    "SWC448_1",
+    "SWC449_1",
+    "SWC462_1"
+  ],
+  "records": [
+    {
+      "path": "problems/casc_2025/TFI/SWC434_1.p",
+      "problem_id": "SWC434_1",
+      "schema_id": "148a11466b77c740acefeee34f1b4212ed729b9ceae599b90a39872450bd17a3",
+      "sha256": "246ad22785988660b24c5ef933b9007bbf41fcbb9ae7c5799308fdef351f4872"
+    },
+    {
+      "path": "problems/casc_2025/TFI/SWC435_1.p",
+      "problem_id": "SWC435_1",
+      "schema_id": "148a11466b77c740acefeee34f1b4212ed729b9ceae599b90a39872450bd17a3",
+      "sha256": "0dc063af6f85da1a255cd49cc6de09f8364a730448b952b0f2a7f16bef91b2c6"
+    },
+    {
+      "path": "problems/casc_2025/TFI/SWC448_1.p",
+      "problem_id": "SWC448_1",
+      "schema_id": "148a11466b77c740acefeee34f1b4212ed729b9ceae599b90a39872450bd17a3",
+      "sha256": "abf8fcb80e6aacd9b1ac2ef43fbee152bae3d35b369af1dcfd3a881f0e2276c1"
+    },
+    {
+      "path": "problems/casc_2025/TFI/SWC449_1.p",
+      "problem_id": "SWC449_1",
+      "schema_id": "148a11466b77c740acefeee34f1b4212ed729b9ceae599b90a39872450bd17a3",
+      "sha256": "6a110a1ab44707309e787bce47c0f0fb417725d95f7dfeaefaa195ac5c823ebe"
+    },
+    {
+      "path": "problems/casc_2025/TFI/SWC462_1.p",
+      "problem_id": "SWC462_1",
+      "schema_id": "148a11466b77c740acefeee34f1b4212ed729b9ceae599b90a39872450bd17a3",
+      "sha256": "c560f03ae4706841ca4e80cf9ddba3a7a5353e3bea09e3e3ffa6ae40cedfd28d"
+    }
+  ]
+}
