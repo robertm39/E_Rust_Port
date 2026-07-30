@@ -19,3 +19,11 @@ analysis belong under:
 The measured prover source revision is
 `ce75ea3b68c34ab1640e0f362438a656626a5b0e`.
 
+The final finding is negative for deployment: no explicit candidate passed the
+target-axiom safety gate, and watchlists added no solve, hit, proof shortening,
+or search-work reduction. See `FINDINGS.md`.
+
+The complete ignored raw archive is
+`.artifacts/experiments/2026-07-29-019-proof-lemma-watchlist-transfer/lemma-watchlist-019-complete.tar.gz`
+(41,959,858 bytes, SHA-256
+`fbae6d65079fb3677a89973f4453fff6044952102e865ae69ba167eb224b274a`).

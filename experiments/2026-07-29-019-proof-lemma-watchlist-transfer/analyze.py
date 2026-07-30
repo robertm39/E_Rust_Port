@@ -162,6 +162,142 @@ def load_phase(
     return contract, results
 
 
+def summarize_admissibility(
+    prepared_root: Path, records: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    all_attempts = 0
+    all_accepted = 0
+    all_cpu = 0.0
+    all_wall = 0.0
+    for record in records:
+        for mode in ("same", "cross"):
+            variant = record["variants"][f"lemma_{mode}"]
+            attempt_root = (
+                prepared_root
+                / "admissibility"
+                / record["experiment_split"]
+                / record["problem_id"]
+                / mode
+            )
+            paths = sorted(attempt_root.glob("attempt-*/result.json"))
+            expected_attempts = int(variant["admissibility_attempt_count"])
+            if len(paths) != expected_attempts:
+                raise ExperimentError(
+                    f"admissibility attempt count mismatch: {attempt_root}"
+                )
+            attempts: list[dict[str, Any]] = []
+            for path in paths:
+                result = json.loads(path.read_text(encoding="utf-8"))
+                stdout_path = path.parent / "stdout.pcl"
+                stderr_path = path.parent / "stderr.txt"
+                problem_path = path.parent / "problem.p"
+                if sha256_file(stdout_path) != result["stdout_sha256"]:
+                    raise ExperimentError(
+                        f"admissibility stdout hash mismatch: {stdout_path}"
+                    )
+                if sha256_file(stderr_path) != result["stderr_sha256"]:
+                    raise ExperimentError(
+                        f"admissibility stderr hash mismatch: {stderr_path}"
+                    )
+                if sha256_file(problem_path) != result["problem_sha256"]:
+                    raise ExperimentError(
+                        f"admissibility problem hash mismatch: {problem_path}"
+                    )
+                observed_steps = proof_step_count(
+                    stdout_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                )
+                if observed_steps != int(result["proof_steps"]):
+                    raise ExperimentError(
+                        f"admissibility proof-step mismatch: {stdout_path}"
+                    )
+                accepted = bool(result["accepted"])
+                if accepted and (
+                    result["szs_status"] not in PROOF_STATUSES
+                    or observed_steps == 0
+                ):
+                    raise ExperimentError(
+                        f"admitted candidate lacks a proof: {path}"
+                    )
+                attempts.append(result)
+            accepted_ids = [
+                result["candidate_id"]
+                for result in attempts
+                if result["accepted"]
+            ]
+            if accepted_ids != list(variant["candidate_ids"]):
+                raise ExperimentError(
+                    f"admitted candidate list mismatch: {attempt_root}"
+                )
+            rejected = sum(not bool(result["accepted"]) for result in attempts)
+            if rejected != int(variant["admissibility_rejected_count"]):
+                raise ExperimentError(
+                    f"admissibility rejection count mismatch: {attempt_root}"
+                )
+            key = f"{record['experiment_split']}_{mode}"
+            group = groups.setdefault(
+                key,
+                {
+                    "attempts": 0,
+                    "accepted": 0,
+                    "rejected": 0,
+                    "cpu_seconds": 0.0,
+                    "wall_seconds": 0.0,
+                    "status_counts": Counter(),
+                    "return_code_counts": Counter(),
+                },
+            )
+            group["attempts"] += len(attempts)
+            group["accepted"] += len(accepted_ids)
+            group["rejected"] += rejected
+            group["cpu_seconds"] += sum(
+                float(result["cpu_seconds"]) for result in attempts
+            )
+            group["wall_seconds"] += sum(
+                float(result["wall_seconds"]) for result in attempts
+            )
+            group["status_counts"].update(
+                str(result["szs_status"])
+                if result["szs_status"] is not None
+                else "None"
+                for result in attempts
+            )
+            group["return_code_counts"].update(
+                str(result["return_code"]) for result in attempts
+            )
+            all_attempts += len(attempts)
+            all_accepted += len(accepted_ids)
+            all_cpu += sum(float(result["cpu_seconds"]) for result in attempts)
+            all_wall += sum(
+                float(result["wall_seconds"]) for result in attempts
+            )
+    rendered_groups = {}
+    for key, group in sorted(groups.items()):
+        rendered_groups[key] = {
+            **{
+                name: value
+                for name, value in group.items()
+                if name not in {"status_counts", "return_code_counts"}
+            },
+            "cpu_seconds": rounded(float(group["cpu_seconds"])),
+            "wall_seconds": rounded(float(group["wall_seconds"])),
+            "status_counts": dict(sorted(group["status_counts"].items())),
+            "return_code_counts": dict(
+                sorted(group["return_code_counts"].items())
+            ),
+        }
+    return {
+        "attempts": all_attempts,
+        "accepted": all_accepted,
+        "rejected": all_attempts - all_accepted,
+        "cpu_seconds": rounded(all_cpu),
+        "wall_seconds": rounded(all_wall),
+        "groups": rendered_groups,
+    }
+
+
 def reproducible_solved(
     results: Sequence[dict[str, Any]], strategy: str
 ) -> set[str]:
@@ -482,6 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepared_root = arguments.prepared_root.resolve()
     results_root = arguments.results_root.resolve()
     header, all_records, selection = load_preparation(prepared_root)
+    admissibility = summarize_admissibility(prepared_root, all_records)
     phase_summaries: dict[str, Any] = {}
     contracts: dict[str, str] = {}
     binary_hashes: set[str] = set()
@@ -540,6 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "wall_seconds": rounded(float(selection["total_wall_seconds"])),
             "sources": selection["sources"],
         },
+        "admissibility": admissibility,
         "phases": phase_summaries,
         "decisions": decisions,
     }
@@ -557,4 +695,3 @@ if __name__ == "__main__":
     except ExperimentError as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-

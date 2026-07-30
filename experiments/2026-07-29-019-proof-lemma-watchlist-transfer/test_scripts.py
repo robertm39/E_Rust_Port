@@ -273,6 +273,65 @@ class AnalysisTests(unittest.TestCase):
         )
         self.assertEqual(decision["verdict"], "stop_no_value")
 
+    def test_admissibility_summary_verifies_raw_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            attempt = (
+                root
+                / "admissibility"
+                / "validation"
+                / "P"
+                / "same"
+                / "attempt-01"
+            )
+            attempt.mkdir(parents=True)
+            problem = attempt / "problem.p"
+            stdout = attempt / "stdout.pcl"
+            stderr = attempt / "stderr.txt"
+            problem.write_text("fof(c,conjecture,p(a)).\n", encoding="utf-8")
+            stdout.write_text("% SZS status ResourceOut\n", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            result = {
+                "candidate_id": "candidate",
+                "accepted": False,
+                "szs_status": "ResourceOut",
+                "return_code": 8,
+                "proof_steps": 0,
+                "cpu_seconds": 1.0,
+                "wall_seconds": 1.1,
+                "problem_sha256": COMMON.sha256_file(problem),
+                "stdout_sha256": COMMON.sha256_file(stdout),
+                "stderr_sha256": COMMON.sha256_file(stderr),
+            }
+            (attempt / "result.json").write_text(
+                json.dumps(result), encoding="utf-8"
+            )
+            records = [
+                {
+                    "experiment_split": "validation",
+                    "problem_id": "P",
+                    "variants": {
+                        "lemma_same": {
+                            "admissibility_attempt_count": 1,
+                            "admissibility_rejected_count": 1,
+                            "candidate_ids": [],
+                        },
+                        "lemma_cross": {
+                            "admissibility_attempt_count": 0,
+                            "admissibility_rejected_count": 0,
+                            "candidate_ids": [],
+                        },
+                    },
+                }
+            ]
+            summary = ANALYZE.summarize_admissibility(root, records)
+        self.assertEqual(summary["attempts"], 1)
+        self.assertEqual(summary["accepted"], 0)
+        self.assertEqual(
+            summary["groups"]["validation_same"]["status_counts"],
+            {"ResourceOut": 1},
+        )
+
 
 class CorpusTests(unittest.TestCase):
     def test_reused_corpus_hash_is_frozen(self) -> None:

@@ -123,6 +123,14 @@ independently re-solved by pinned CaDiCaL and verified by ProofCheck; captured
 call streams show 68.2% median exact-clause retention but require stable
 identities and selector retirement before persistent reuse can be sound.
 
+The family-held-out proof-clause transfer study is retained in
+[`experiments/2026-07-29-019-proof-lemma-watchlist-transfer/`](experiments/2026-07-29-019-proof-lemma-watchlist-transfer/).
+Flat PCL selection was cheap, but none of 296 explicit candidates passed the
+target-axiom safety gate. Same-category and cross-category watchlists added no
+solve, watchlist hit, proof shortening, or search-work reduction and regressed
+validation common-solve CPU by 9.5% and 12.8%. Raw proof-clause transfer
+therefore remains outside automatic schedules.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
