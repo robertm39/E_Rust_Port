@@ -285,7 +285,9 @@ fn execute_tsm_classify(
     let input = concat_inputs(&config.files, stdin)?;
     let mut scanner = Scanner::from_file_content("umlaut-tsm-classify-input", input, true)?;
 
-    let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut signature = Signature::new(TypeBank::new());
+    signature.insert_internal_codes()?;
+    let mut bank = TermBank::new(signature)?;
 
     scanner.accept_id("Training")?;
     scanner.accept_tok(TokenType::COLON)?;
@@ -560,6 +562,14 @@ $or(~f1_1(f0_1),$cnil) : 1:(1,-1).
 $or(f1_1(f0_1),$cnil) : 2:(1,1).
 .
 ";
+    const RESERVED_CODE_PRESSURE_INPUT: &str = "\
+Training:
+$or(f10_1(X1,X2,X3,X4,X5,X6,X7,X8,X9,X10),$or(~f9_1(X2,X3,X4,X5,X6,X7,X8,X9,X10),$or(~f2_1(X1,f3_1(f0_1,f0_2,X6)),$or(~f2_1(X1,f3_1(f0_3,f0_4,X5)),$or(~f2_1(X1,f3_1(f0_5,f0_6,X2)),$or(~f2_1(X1,f0_7),$cnil)))))) : 1:(1,1).
+.
+Test:
+$cnil : 1:(1,1).
+.
+";
     const CLASSIFICATION_TRACE: &str = "\
 Evaluation: -1.0000  Termeval: -1.0000 OKOK a
 Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
@@ -739,6 +749,23 @@ Evaluation:  1.0000  Termeval:  1.0000 OKOK f(a)
 
         assert_eq!(status, 0);
         assert!(output.contains("2 terms, 2 successes, 100.000 percent"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn stdin_run_reserves_fixed_helper_codes_before_pattern_symbols() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(
+            &[
+                PROGRAM_NAME,
+                "--index-type=IndexIdentity",
+                "--tsm-type=Flat",
+            ],
+            RESERVED_CODE_PRESSURE_INPUT,
+        );
+
+        assert_eq!(status, 0);
+        assert!(output.contains("1 terms, 1 successes, 100.000 percent"));
         assert!(stderr.is_empty());
     }
 
