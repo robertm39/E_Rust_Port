@@ -1847,17 +1847,26 @@ impl Signature {
 
     /// Checks for a declared choice-symbol type among external symbols.
     ///
+    /// TPTP's predefined arithmetic symbols are ad-hoc polymorphic: their
+    /// official type is validated per occurrence, so they intentionally have
+    /// no single type stored in the signature. They cannot be choice symbols
+    /// and are skipped here.
+    ///
     /// # Panics
     ///
-    /// Panics if an external symbol has no type, matching the C implementation's
-    /// direct `SigGetType` dereference in this path.
+    /// Panics if any other external symbol has no type. The C implementation
+    /// directly dereferences every external symbol type in this path.
     #[must_use]
     pub fn has_choice_sym(&self) -> bool {
         self.external_f_codes().any(|f_code| {
-            is_choice_type(
-                self.get_type(f_code)
-                    .expect("choice-symbol scan requires external symbol types"),
-            )
+            let Some(type_) = self.get_type(f_code) else {
+                assert!(
+                    self.predefined_arithmetic_symbol(f_code).is_some(),
+                    "choice-symbol scan requires non-arithmetic external symbol types"
+                );
+                return false;
+            };
+            is_choice_type(type_)
         })
     }
 
@@ -2992,6 +3001,14 @@ mod tests {
         let mut sig = signature();
         assert!(!sig.has_choice_sym());
 
+        let arithmetic = sig.insert_id_for_problem("$greatereq", 2, false, ProblemType::FirstOrder);
+        assert_eq!(
+            sig.predefined_arithmetic_symbol(arithmetic),
+            Some(PredefinedArithmeticSymbol::GreaterEq)
+        );
+        assert!(sig.get_type(arithmetic).is_none());
+        assert!(!sig.has_choice_sym());
+
         let individual = sig.type_bank().i_type();
         let bool_type = sig.type_bank().bool_type();
         let predicate = sig
@@ -3007,5 +3024,14 @@ mod tests {
         sig.declare_final_type(choice, choice_type).unwrap();
 
         assert!(sig.has_choice_sym());
+    }
+
+    #[test]
+    #[should_panic(expected = "choice-symbol scan requires non-arithmetic external symbol types")]
+    fn choice_symbol_scan_rejects_untyped_user_symbols() {
+        let mut sig = signature();
+        sig.insert_id_for_problem("untyped", 0, false, ProblemType::FirstOrder);
+
+        let _ = sig.has_choice_sym();
     }
 }

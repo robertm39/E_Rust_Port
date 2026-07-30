@@ -180,6 +180,34 @@ fn auto_mode_classifies_cnf_inputs_as_pre_cnf_formula_owners() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn auto_mode_scans_ad_hoc_polymorphic_arithmetic_without_panicking() {
+    let path = write_problem(
+        "auto-polymorphic-arithmetic-choice-scan",
+        "tff(arithmetic_fact, axiom, $greatereq($to_real(9), $to_real(9))).\n\
+         tff(arithmetic_goal, conjecture, $greatereq($to_real(9), $to_real(9))).\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_umlaut"))
+        .arg("--auto")
+        .arg("--silent")
+        .arg("--tstp-in")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("% SZS status Theorem") || stdout.contains("% SZS status Unsatisfiable"),
+        "{stdout}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+
+    std::fs::remove_file(path).unwrap();
+}
+
 fn write_false_problem(name: &str) -> std::path::PathBuf {
     write_problem(name, "cnf(a, axiom, ($false)).\n")
 }

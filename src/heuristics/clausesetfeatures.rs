@@ -1315,8 +1315,10 @@ pub fn clause_set_collect_arity_information(
 ///
 /// # Panics
 ///
-/// Panics if an external signature symbol or collected variable has no type, or
-/// if the computed type order cannot fit the C `int` result type.
+/// Panics if a non-arithmetic external signature symbol or collected variable
+/// has no type, or if the computed type order cannot fit the C `int` result
+/// type. Ad-hoc-polymorphic predefined arithmetic symbols have no fixed
+/// signature type; every valid instance has first-order order one.
 #[must_use]
 #[expect(
     clippy::cast_precision_loss,
@@ -1334,14 +1336,7 @@ where
     let mut quantifies_booleans = false;
     let mut has_defined_choice = false;
     let mut app_var_lit_count = 0;
-    let mut order = 0;
-
-    for symbol in (signature.internal_symbols() + 1)..=signature.f_count() {
-        let type_ = signature
-            .get_type(symbol)
-            .unwrap_or_else(|| panic!("external signature symbol {symbol} must have a type"));
-        order = order.max(type_get_order(type_));
-    }
+    let mut order = signature_external_order(signature);
 
     for clause in set.iter() {
         let mut variables = BTreeMap::new();
@@ -1413,15 +1408,7 @@ pub fn clause_set_compute_ho_features_with_choice_recognition(
     let mut quantifies_booleans = false;
     let mut has_defined_choice = false;
     let mut app_var_lit_count = 0;
-    let mut order = 0;
-
-    for symbol in (bank.signature().internal_symbols() + 1)..=bank.signature().f_count() {
-        let type_ = bank
-            .signature()
-            .get_type(symbol)
-            .unwrap_or_else(|| panic!("external signature symbol {symbol} must have a type"));
-        order = order.max(type_get_order(type_));
-    }
+    let mut order = signature_external_order(bank.signature());
 
     for clause in set.iter() {
         let mut variables = BTreeMap::new();
@@ -1460,6 +1447,24 @@ pub fn clause_set_compute_ho_features_with_choice_recognition(
             app_var_lit_count as f64 / set.members() as f64
         },
     })
+}
+
+fn signature_external_order(signature: &Signature) -> usize {
+    let mut order = 0;
+    for symbol in (signature.internal_symbols() + 1)..=signature.f_count() {
+        let Some(type_) = signature.get_type(symbol) else {
+            assert!(
+                signature.predefined_arithmetic_symbol(symbol).is_some(),
+                "external non-arithmetic signature symbol {symbol} must have a type"
+            );
+            // Official arithmetic instances have only base-sort arguments and
+            // results, so every possible arrow instantiation has order one.
+            order = order.max(1);
+            continue;
+        };
+        order = order.max(type_get_order(type_));
+    }
+    order
 }
 
 /// Computes the clause-set portion of C `SpecFeaturesCompute`.
@@ -2810,6 +2815,32 @@ mod tests {
         assert_eq!(
             clause_set_compute_ho_features_without_choice(&ClauseSet::new(), bank.signature()),
             ClauseSetHoFeatures::default()
+        );
+    }
+
+    #[test]
+    fn ho_feature_extraction_treats_predefined_arithmetic_as_first_order() {
+        let mut bank = term_bank();
+        let arithmetic = bank.signature_mut().insert_id_for_problem(
+            "$greatereq",
+            2,
+            false,
+            ProblemType::FirstOrder,
+        );
+        assert!(bank.signature().get_type(arithmetic).is_none());
+
+        let expected = ClauseSetHoFeatures {
+            order: 1,
+            ..ClauseSetHoFeatures::default()
+        };
+        assert_eq!(
+            clause_set_compute_ho_features_without_choice(&ClauseSet::new(), bank.signature()),
+            expected
+        );
+        assert_eq!(
+            clause_set_compute_ho_features_with_choice_recognition(&ClauseSet::new(), &mut bank)
+                .unwrap(),
+            expected
         );
     }
 
