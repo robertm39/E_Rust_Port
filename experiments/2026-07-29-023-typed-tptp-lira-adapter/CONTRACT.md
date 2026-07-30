@@ -109,4 +109,3 @@ not reparse TPTP text. It should return `Result<LiraFormula, Unsupported>` and
 keep the exact same failure taxonomy. The isolated LIRA kernel may assume
 linearity, exact rationals, normalized Boolean structure, and one real domain
 only after this adapter succeeds.
-
