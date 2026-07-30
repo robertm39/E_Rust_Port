@@ -137,7 +137,7 @@ pub fn ac_term_compare(left: &AcTerm, right: &AcTerm) -> i32 {
 pub fn ac_term_normalize(sig: &Signature, term: &Term) -> AcTerm {
     let mut metrics = AcNormalizationMetrics::default();
     let normalized = ac_term_normalize_with_metrics(sig, term, &mut metrics);
-    record_normalization(metrics);
+    record_normalization(&metrics);
     normalized
 }
 
@@ -242,7 +242,7 @@ fn ac_collect_args_with_metrics(
     }
 }
 
-fn record_normalization(metrics: AcNormalizationMetrics) {
+fn record_normalization(metrics: &AcNormalizationMetrics) {
     if !AC_TELEMETRY_ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -406,27 +406,51 @@ mod tests {
 
     #[test]
     fn ac_normalization_preserves_multiplicity_and_variable_identity() {
-        let (mut sig, f, a_code, b_code) = signature_with_symbols();
-        sig.set_func_prop(f, FP_IS_AC);
-        let a = Term::const_cell_alloc(a_code);
-        let b = Term::const_cell_alloc(b_code);
-        let x = Term::const_cell_alloc(-2);
-        let y = Term::const_cell_alloc(-4);
+        let (mut sig, operator, left_code, right_code) = signature_with_symbols();
+        sig.set_func_prop(operator, FP_IS_AC);
+        let left_constant = Term::const_cell_alloc(left_code);
+        let right_constant = Term::const_cell_alloc(right_code);
+        let first_variable = Term::const_cell_alloc(-2);
+        let second_variable = Term::const_cell_alloc(-4);
 
         assert!(!term_ac_equal(
             &sig,
-            &binary(f, &a, &binary(f, &a, &b)),
-            &binary(f, &a, &binary(f, &b, &b))
+            &binary(
+                operator,
+                &left_constant,
+                &binary(operator, &left_constant, &right_constant)
+            ),
+            &binary(
+                operator,
+                &left_constant,
+                &binary(operator, &right_constant, &right_constant)
+            )
         ));
         assert!(term_ac_equal(
             &sig,
-            &binary(f, &x, &binary(f, &y, &x)),
-            &binary(f, &x, &binary(f, &x, &y))
+            &binary(
+                operator,
+                &first_variable,
+                &binary(operator, &second_variable, &first_variable)
+            ),
+            &binary(
+                operator,
+                &first_variable,
+                &binary(operator, &first_variable, &second_variable)
+            )
         ));
         assert!(!term_ac_equal(
             &sig,
-            &binary(f, &x, &binary(f, &y, &x)),
-            &binary(f, &x, &binary(f, &y, &y))
+            &binary(
+                operator,
+                &first_variable,
+                &binary(operator, &second_variable, &first_variable)
+            ),
+            &binary(
+                operator,
+                &first_variable,
+                &binary(operator, &second_variable, &second_variable)
+            )
         ));
     }
 

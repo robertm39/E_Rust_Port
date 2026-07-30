@@ -141,6 +141,15 @@ telemetry output and collapsed to the fallback. The verdict is uncertain and
 the adaptive policy remains outside automatic schedules pending deterministic
 probe observability.
 
+The associative-commutative normalization-mode study is retained in
+[`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
+All existing AC modes passed strengthened semantic tests and four held-out
+proof claims verified independently. Canonicalization removed 4.8% to 10.0%
+of nodes reaching normalization, but the modes added no held-out solve and
+improved common-solve CPU or generation by at most 5.3%. AC-aware indexing,
+unification, and joinability are therefore deferred; additive opt-in AC
+telemetry remains available for future studies.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

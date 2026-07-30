@@ -52,6 +52,11 @@ impl KbParseExampleFileResult {
 /// otherwise intentionally sparse, so reserve those numeric slots before
 /// normalized `f$arity_index` symbols are added. The placeholders are private
 /// to the in-memory learning bank and are never serialized.
+///
+/// # Panics
+///
+/// Panics if signature insertion violates the dense function-code allocation
+/// required by the reserved built-in range.
 #[must_use]
 pub fn kb_pattern_signature() -> Signature {
     let mut signature = Signature::new(TypeBank::new());

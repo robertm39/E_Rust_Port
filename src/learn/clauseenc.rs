@@ -150,6 +150,11 @@ pub fn parse_recursive_clause_pattern(
 }
 
 /// Recodes a recursive `$or(..., $cnil)` clause representation as a flat one.
+///
+/// # Panics
+///
+/// Panics if signature registration violates its invariant that a requested
+/// flat clause-representation symbol has a nonzero code.
 pub fn flat_recode_rec_clause_rep(
     bank: &mut TermBank,
     clauserep: &Term,
