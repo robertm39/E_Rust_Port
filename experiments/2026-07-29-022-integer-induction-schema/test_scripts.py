@@ -25,6 +25,9 @@ class SchemaTests(unittest.TestCase):
                 self.assertEqual(len(generated.schema_id), 64)
                 report = verify_schema.verify_structure(text, augmented)
                 self.assertEqual(report["schema_id"], generated.schema_id)
+                prepared = schema.prepare_problem(text)
+                for symbol, _ in schema.ARITHMETIC_DECLARATIONS:
+                    self.assertIn(symbol, prepared)
 
     def test_negated_existential_normalizes_violation(self) -> None:
         text = """
@@ -92,6 +95,15 @@ tff(goal,conjecture,! [X:$int] : ($greatereq(X,b) => p(X))).
             verify_schema.VerificationError, r"not P\(N\+1\)"
         ):
             verify_schema.verify_structure(text, mutated)
+
+    def test_prepare_does_not_duplicate_explicit_arithmetic_type(self) -> None:
+        text = """
+tff(sum_type,type,$sum:($int*$int)>$int).
+tff(p_type,type,p:$int>$o).
+tff(goal,conjecture,! [N:$int] : ($greatereq(N,0) => p(N))).
+"""
+        prepared = schema.prepare_problem(text)
+        self.assertEqual(prepared.count("$sum:"), 1)
 
     def test_augment_cli_output_can_be_written_atomically_by_caller(self) -> None:
         source = (

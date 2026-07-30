@@ -23,6 +23,33 @@ QUANTIFIERS = {"!", "?", "^", "@"}
 INTEGER_RE = re.compile(r"^[0-9]+$")
 VARIABLE_RE = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
 SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_]")
+ARITHMETIC_DECLARATIONS = (
+    (
+        "$sum",
+        "tff(umlaut_arith_sum_type,type,"
+        "$sum:( $int * $int ) > $int).",
+    ),
+    (
+        "$difference",
+        "tff(umlaut_arith_difference_type,type,"
+        "$difference:( $int * $int ) > $int).",
+    ),
+    (
+        "$product",
+        "tff(umlaut_arith_product_type,type,"
+        "$product:( $int * $int ) > $int).",
+    ),
+    (
+        "$greatereq",
+        "tff(umlaut_arith_greatereq_type,type,"
+        "$greatereq:( $int * $int ) > $o).",
+    ),
+    (
+        "$lesseq",
+        "tff(umlaut_arith_lesseq_type,type,"
+        "$lesseq:( $int * $int ) > $o).",
+    ),
+)
 
 
 class SchemaError(RuntimeError):
@@ -389,10 +416,48 @@ def generate_schema(problem_text: str) -> GeneratedSchema:
     return GeneratedSchema(name, statement, schema_id, target)
 
 
+def explicitly_declared(problem_text: str) -> set[str]:
+    result = set()
+    for statement in ADAPTER.split_tptp_statements(problem_text):
+        formula = ADAPTER.parse_annotated(statement)
+        if formula is None or formula.kind != "tff" or formula.role != "type":
+            continue
+        body_tokens = ADAPTER.tokenize_formula(formula.body)
+        for symbol, _ in ARITHMETIC_DECLARATIONS:
+            if body_tokens[:2] == [symbol, ":"]:
+                result.add(symbol)
+    return result
+
+
+def prepare_problem(problem_text: str) -> str:
+    """Add redundant standard integer symbol types to either treatment."""
+
+    if "$rat" in problem_text or "$real" in problem_text:
+        raise SchemaError("mixed rational/real arithmetic is outside the prototype")
+    try:
+        declared = explicitly_declared(problem_text)
+    except ADAPTER.AdapterError as error:
+        raise SchemaError(f"cannot inspect arithmetic declarations: {error}") from error
+    declarations = [
+        declaration
+        for symbol, declaration in ARITHMETIC_DECLARATIONS
+        if symbol not in declared
+    ]
+    if not declarations:
+        return problem_text
+    return (
+        "% Redundant standard integer types added for Umlaut parsing.\n"
+        + "\n".join(declarations)
+        + "\n\n"
+        + problem_text
+    )
+
+
 def augment_problem(problem_text: str) -> tuple[str, GeneratedSchema]:
     schema = generate_schema(problem_text)
+    prepared = prepare_problem(problem_text)
     augmented = (
-        problem_text.rstrip()
+        prepared.rstrip()
         + "\n\n% Added by the restricted Umlaut integer-induction prototype.\n"
         + schema.statement
         + "\n"

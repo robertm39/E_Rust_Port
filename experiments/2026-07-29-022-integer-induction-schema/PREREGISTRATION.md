@@ -72,10 +72,25 @@ all five contain the recurrence proxy. The audit report ID is
 `selected-problems.json` pins their source hashes and generated schema
 identities. This count was recorded before candidate build or execution.
 
+### Pre-outcome parser correction
+
+The first syntax/clausification gate, before any proof search, found that
+Umlaut parses `$int` numerals but does not predeclare the types of `$sum`,
+`$difference`, `$product`, `$greatereq`, or `$lesseq`. Every accepted CASC
+problem and every original fixture therefore exited with a type error.
+
+The experiment now prepends the standard integer type declarations for those
+five interpreted symbols to both treatments. These are redundant under TPTP
+arithmetic semantics, generate no logical clause, and do not add arithmetic
+evaluation. The induction treatment still differs only by its one named
+schema. This correction was frozen before observing a baseline or induction
+search outcome.
+
 ## Treatments
 
-- `baseline`: the original problem;
-- `induction`: the same problem plus exactly one generated schema.
+- `baseline`: the original problem plus redundant standard arithmetic type
+  declarations;
+- `induction`: the same prepared problem plus exactly one generated schema.
 
 Both treatments use the same fixed completion-shaped heuristic, KBO6, no
 literal selection, full forward demodulation, and presaturation

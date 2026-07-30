@@ -14,4 +14,3 @@ tff(goal,conjecture,
     ! [N: $int] :
       ( $greatereq(N,0)
      => p(N) ) ).
-

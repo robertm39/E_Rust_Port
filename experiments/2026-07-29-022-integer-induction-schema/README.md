@@ -28,6 +28,11 @@ quantifier-free property. `schema.py` and `verify_schema.py` independently
 enforce that contract. Generated proof claims are checked against the
 augmented problem, so the induction axiom remains visible as a proof leaf.
 
+Umlaut does not predeclare the standard types of the arithmetic operators.
+`prepare.py` therefore adds redundant TPTP type declarations for the fixed
+integer symbols used by this experiment to both treatments. It adds no
+logical axiom. `augment.py` applies the same preparation before adding the
+single induction schema.
+
 Read `PREREGISTRATION.md` before running the experiment. Raw results belong
 under `.artifacts/experiments/2026-07-29-022-integer-induction-schema/`.
-
