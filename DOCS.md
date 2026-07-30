@@ -220,6 +220,18 @@ calculus boundary. The same source run exposes Umlaut's typed-arithmetic
 choice-symbol panic, tracked by `E_Rust_Port-kfy`; production arithmetic
 inference remains unchanged.
 
+The clean-room one-conjunction base VIRAS prototype is retained in
+[`experiments/2026-07-30-004-base-viras-qe-prototype/`](experiments/2026-07-30-004-base-viras-qe-prototype/).
+It implements exact profiles, discontinuity grids, all virtual-term shapes,
+V1/V2/V3 finite substitution, derivation records, and fail-closed limits using
+only the tracked paper packet. All 1,000 frozen generated conjunctions agreed
+with both the independent exact cell oracle and pinned Z3 (475 SAT, 525
+UNSAT), 1,000 grid-covering cases passed, four calculus mutations were
+rejected, and repeated reports were byte-identical. This is a trustworthy
+kernel milestone, not production support: arbitrary Boolean/quantifier
+wrapping, typed import/export, checkable proof publication, Rust integration,
+and schedule evaluation remain follow-up work.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
