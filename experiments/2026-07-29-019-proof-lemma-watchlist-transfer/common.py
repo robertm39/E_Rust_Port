@@ -195,6 +195,37 @@ def canonical_body(body: str) -> str:
     return " ".join(body.split())
 
 
+def free_variable_names(body: str) -> list[str]:
+    """Return unquoted TPTP variables in first-occurrence order."""
+    unquoted: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(body):
+        char = body[index]
+        if quote is not None:
+            if char == "\\" and index + 1 < len(body):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        unquoted.append(char)
+        index += 1
+    observed: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"\b[A-Z][A-Za-z0-9_]*\b", "".join(unquoted)):
+        variable = match.group(0)
+        if variable not in seen:
+            seen.add(variable)
+            observed.append(variable)
+    return observed
+
+
 def is_empty_clause(body: str) -> bool:
     normalized = canonical_body(body).replace(" ", "").lower()
     while normalized.startswith("(") and normalized.endswith(")"):
@@ -233,4 +264,3 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-

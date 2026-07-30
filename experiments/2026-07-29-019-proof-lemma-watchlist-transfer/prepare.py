@@ -24,6 +24,7 @@ from common import (
     canonical_body,
     canonical_json,
     final_status,
+    free_variable_names,
     is_empty_clause,
     proof_step_count,
     read_jsonl,
@@ -358,8 +359,15 @@ def pool_for_target(
 
 
 def candidate_conjecture(candidate: dict[str, Any], name: str) -> str:
-    formula_kind = "tff" if candidate["kind"] == "tcf" else "fof"
-    return f"{formula_kind}({name},conjecture,({candidate['body']}))."
+    body = str(candidate["body"])
+    variables = free_variable_names(body)
+    quantified = (
+        f"![{','.join(variables)}]:({body})" if variables else f"({body})"
+    )
+    # The frozen source corpus and selected PCL traces are first-order and
+    # untyped. Explicit quantification translates their clause convention to
+    # the FOF formula-owner convention without changing the candidate body.
+    return f"fof({name},conjecture,({quantified}))."
 
 
 def validate_candidates(
@@ -741,4 +749,3 @@ if __name__ == "__main__":
     except ExperimentError as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-

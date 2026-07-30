@@ -28,6 +28,17 @@ Their archived result records, proof status, problem hash, and trace hash must
 verify before selection. The preparation controller rejects any other source
 problem or archive.
 
+The first preparation attempt exposed a controller-only formula-serialization
+error before any held-out treatment search: clause variables were copied into
+FOF candidate conjectures without explicit quantifiers, so 280 checks stopped
+in parsing and 16 reached only ordinary resource limits. No candidate was
+admitted and no validation/test control, watchlist, or lemma treatment was
+run. That preparation root is invalid and retained separately. The corrected
+controller explicitly universally quantifies the untyped free variables from
+each PCL clause. It changes no trace, candidate order, pool, cap, budget,
+strategy, metric, threshold, or decision rule and must use a fresh preparation
+root.
+
 ## Falsifiable hypothesis
 
 Small, deterministic sets of intermediate clauses selected from successful

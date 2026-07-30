@@ -68,6 +68,14 @@ class TptpParsingTests(unittest.TestCase):
         self.assertTrue(COMMON.is_empty_clause("[]"))
         self.assertFalse(COMMON.is_empty_clause("(p(a))"))
 
+    def test_clause_variables_are_extracted_without_quoted_constants(self) -> None:
+        self.assertEqual(
+            COMMON.free_variable_names(
+                "(p(X1,f(Y))|q('UPPER',X1)|r(\"ALSO_UPPER\"))"
+            ),
+            ["X1", "Y"],
+        )
+
 
 class CandidatePreparationTests(unittest.TestCase):
     def candidate(
@@ -140,6 +148,16 @@ class CandidatePreparationTests(unittest.TestCase):
         self.assertIn("watchlist_nontermination_sentinel", watch_text)
         self.assertIn(",lemma,(p(X)|q(X))).", lemma_text)
         self.assertNotIn("watchlist", lemma_text)
+
+    def test_candidate_check_explicitly_quantifies_clause_variables(self) -> None:
+        rendered = PREPARE.candidate_conjecture(
+            self.candidate("a", "FNE", "(p(X)|q(Y,X))", "MGT001+1"),
+            "candidate_check",
+        )
+        self.assertEqual(
+            rendered,
+            "fof(candidate_check,conjecture,(![X,Y]:((p(X)|q(Y,X))))).",
+        )
 
     def test_source_revision_and_frozen_treatments(self) -> None:
         self.assertEqual(
@@ -288,4 +306,3 @@ class CorpusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
