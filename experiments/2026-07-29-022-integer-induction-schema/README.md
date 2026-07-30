@@ -36,3 +36,20 @@ single induction schema.
 
 Read `PREREGISTRATION.md` before running the experiment. Raw results belong
 under `.artifacts/experiments/2026-07-29-022-integer-induction-schema/`.
+
+Typical Linux execution after the verified CASC-30 corpus and release binary
+are present:
+
+```text
+python3 run.py --phase calibration \
+  --manifest ../../benchmarks/casc_2025_manifest.jsonl \
+  --problem-root /opt/e-rust-port/source \
+  --binary ../../target/release/umlaut \
+  --output-root /opt/e-rust-port/induction-runs \
+  --source-snapshot-sha256 <runner-snapshot-sha256>
+```
+
+Repeat for `validation`, `test`, and `transfer`. The harness derives every
+coordinate from the frozen fixture directories or `selected-problems.json`,
+validates and clausifies both inputs before search, and resumes only when the
+complete phase contract matches.

@@ -115,6 +115,15 @@ tff(goal,conjecture,! [N:$int] : ($greatereq(N,0) => p(N))).
             output.write_text(augmented, encoding="utf-8")
             self.assertEqual(schema.extract_target(output.read_text()).bound, "0")
 
+    def test_phase_fixture_counts_are_frozen(self) -> None:
+        import run
+
+        self.assertEqual(len(run.fixture_records("calibration")), 2)
+        self.assertEqual(len(run.fixture_records("validation")), 2)
+        self.assertEqual(len(run.fixture_records("test")), 2)
+        self.assertEqual(run.PHASES["test"]["repetitions"], 2)
+        self.assertEqual(run.PHASES["transfer"]["budget"]["hard_cpu_seconds"], 10)
+
 
 if __name__ == "__main__":
     unittest.main()
