@@ -31,3 +31,6 @@ index mode and retain warm-up diagnostics on failure. Classifier execution uses
 clause-pattern parser fix with fixed helper-code reservation for production
 symbol sets. The controller records that separate revision and its binary hash.
 This does not change the frozen measured search or label-extraction revisions.
+One-class held-out labels are reported explicitly with one-sided and
+calibration metrics; balanced accuracy remains unavailable and no missing
+class is fabricated.

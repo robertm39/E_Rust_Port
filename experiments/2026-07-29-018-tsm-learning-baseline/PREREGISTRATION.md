@@ -101,6 +101,18 @@ measured search and label-extraction revisions remain frozen, and no workload,
 index, TSM type, depth, repetition count, metric, threshold, gate, or search
 evidence changes.
 
+The combined classifier revision completed the frozen training and validation
+workloads, including all five timed repetitions, before the first analysis
+attempt. That attempt wrote no summary because all 126 validation patterns
+(150 weighted occurrences) had positive labels, so balanced accuracy was
+undefined. The classifier output and timing root remains immutable. The
+analyzer now reports this as the explicit failure class
+`heldout_labels_contain_one_class`, retains one-sided accuracy, recall, Brier,
+calibration, and ranking-cost measurements, and records balanced accuracy as
+unavailable. It does not synthesize negative examples. The decision rule and
+all thresholds are unchanged: absent test labels already force the frozen
+`uncertain` verdict regardless of validation reporting.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.

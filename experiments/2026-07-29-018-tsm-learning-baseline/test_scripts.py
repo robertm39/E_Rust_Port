@@ -140,6 +140,29 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(metrics["weighted_patterns"], 4.0)
         self.assertEqual(metrics["accuracy"], 1.0)
         self.assertEqual(metrics["balanced_accuracy"], 1.0)
+        self.assertEqual(metrics["status"], "completed")
+
+    def test_single_class_classifier_metrics_remain_explicit(self) -> None:
+        parsed = [(2.0, 1.0, True), (1.0, 1.0, True)]
+        entries = [
+            {"sources": 3.0, "label": 1.0},
+            {"sources": 1.0, "label": 1.0},
+        ]
+        model = ANALYZE.fit_logistic(
+            [-2.0, 2.0], [-1.0, 1.0], [1.0, 1.0]
+        )
+
+        metrics = ANALYZE.weighted_classifier_metrics(
+            parsed, entries, model
+        )
+
+        self.assertEqual(metrics["status"], "single_class")
+        self.assertEqual(
+            metrics["reason"], "heldout_labels_contain_one_class"
+        )
+        self.assertEqual(metrics["positive_recall"], 1.0)
+        self.assertIsNone(metrics["negative_recall"])
+        self.assertIsNone(metrics["balanced_accuracy"])
 
     def test_relative_range_uses_median_denominator(self) -> None:
         self.assertAlmostEqual(

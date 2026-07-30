@@ -140,8 +140,6 @@ def weighted_classifier_metrics(
         if float(entry["label"]) > 0.0
     )
     negative_weight = total - positive_weight
-    if positive_weight <= 0.0 or negative_weight <= 0.0:
-        raise ExperimentError("classifier split does not contain both labels")
 
     correct = 0.0
     true_positive = 0.0
@@ -194,14 +192,30 @@ def weighted_classifier_metrics(
         * (prior - (1.0 if float(entry["label"]) > 0.0 else 0.0)) ** 2
         for entry in entries
     ) / total
+    positive_recall = (
+        true_positive / positive_weight if positive_weight > 0.0 else None
+    )
+    negative_recall = (
+        true_negative / negative_weight if negative_weight > 0.0 else None
+    )
+    both_classes = (
+        positive_recall is not None and negative_recall is not None
+    )
     return {
+        "status": "completed" if both_classes else "single_class",
+        "reason": None if both_classes else "heldout_labels_contain_one_class",
         "unique_patterns": len(entries),
         "weighted_patterns": total,
         "positive_weight": positive_weight,
         "negative_weight": negative_weight,
         "accuracy": correct / total,
-        "balanced_accuracy": 0.5
-        * (true_positive / positive_weight + true_negative / negative_weight),
+        "positive_recall": positive_recall,
+        "negative_recall": negative_recall,
+        "balanced_accuracy": (
+            0.5 * (positive_recall + negative_recall)
+            if both_classes
+            else None
+        ),
         "brier_score": brier / total,
         "constant_prior_brier_score": prior_brier,
         "expected_calibration_error": ece,
@@ -250,6 +264,8 @@ def unavailable_classifier_metrics(reason: str) -> dict[str, Any]:
         "positive_weight": 0.0,
         "negative_weight": 0.0,
         "accuracy": None,
+        "positive_recall": None,
+        "negative_recall": None,
         "balanced_accuracy": None,
         "brier_score": None,
         "constant_prior_brier_score": None,
