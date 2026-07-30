@@ -4,7 +4,8 @@ This experiment evaluates Bead `E_Rust_Port-9jt.3.3`.
 
 `PREREGISTRATION.md` freezes the non-leaking family split, structure-matched
 control, budgets, calibration metrics, ranking-cost measurement, and decision
-rule. `select_corpus.py` creates the tracked `corpus.jsonl`.
+rule. `FINDINGS.md` records the final evidence and decision.
+`select_corpus.py` creates the tracked `corpus.jsonl`.
 
 Raw traces, knowledge bases, search outputs, telemetry, classifier output, and
 timing samples belong under
