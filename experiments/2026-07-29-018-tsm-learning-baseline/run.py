@@ -23,6 +23,9 @@ BASE_RUN_PATH = (
 CORPUS_PATH = EXPERIMENT_ROOT / "corpus.jsonl"
 CATEGORIES = ("FNE", "FEQ", "EPU", "UEQ")
 SOURCE_REVISION = "812323618aaa42d0f5e24bba8a0ef146ff1757cd"
+SOURCE_BINARY_SHA256 = (
+    "82db6c558f64d24b46e7b9eb5562b803874a3653d8a1ee99d0ec378d8449802d"
+)
 PROOF_STATUSES = {"Theorem", "Unsatisfiable", "ContradictoryAxioms"}
 
 
@@ -162,6 +165,8 @@ _base_run_one = BASE.run_one
 
 
 def run_one(**kwargs: Any) -> dict[str, Any]:
+    if kwargs["binary_sha256"] != SOURCE_BINARY_SHA256:
+        raise ExperimentError("binary hash differs from the frozen search binary")
     outcome = _base_run_one(**kwargs)
     result_path = Path(outcome["result_path"])
     result = json.loads(result_path.read_text(encoding="utf-8"))

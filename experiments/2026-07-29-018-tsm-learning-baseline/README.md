@@ -38,4 +38,6 @@ class is fabricated.
 The original learned-search processes never passed option parsing because the
 harness quoted the KB path inside `TSMWeight(...)`. Corrected learned-only runs
 live under a fresh root; analysis combines them with the immutable original
-controls and records both roots.
+controls and records both roots. The controller also requires the original
+search binary SHA-256 (`82db6c55…`), preventing later label-extraction builds
+from entering the rerun.

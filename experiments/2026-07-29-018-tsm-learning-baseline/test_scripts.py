@@ -116,6 +116,12 @@ class AnnotationTests(unittest.TestCase):
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_search_binary_hash_is_frozen(self) -> None:
+        self.assertEqual(
+            RUN.SOURCE_BINARY_SHA256,
+            "82db6c558f64d24b46e7b9eb5562b803874a3653d8a1ee99d0ec378d8449802d",
+        )
+
     def test_learning_kb_path_uses_filename_tokens_without_quotes(self) -> None:
         RUN.configure_strategies(Path("/opt/e-rust-port/example-kb"))
         argument = RUN.STRATEGIES["learned"]["args"][0]

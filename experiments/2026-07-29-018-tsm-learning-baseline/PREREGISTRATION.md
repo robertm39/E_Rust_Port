@@ -131,6 +131,20 @@ and a valid SZS status. No problem, seed, repetition, budget, binary, KB,
 strategy parameter, queue ratio, metric, threshold, gate, control result,
 classifier result, or label changes.
 
+The first diagnostic smoke after that controller change loaded the KB, but its
+binary audit showed that the mutable runner source tree now contained the later
+label-extraction prover (`22abd227...`), not the frozen search binary. No full
+learned rerun or analyzed coordinate used that smoke; its root remains
+preserved as invalid. A tracked `git archive` of
+`812323618aaa42d0f5e24bba8a0ef146ff1757cd` with SHA-256
+`c92dac44515014857ef5538d28b539dbf6a9fc4bf46fc38d3f90aaed6cf0226b`
+was extracted into a separate runner source directory and rebuilt with the
+same pinned CaDiCaL source. Its `umlaut` SHA-256 is
+`82db6c558f64d24b46e7b9eb5562b803874a3653d8a1ee99d0ec378d8449802d`,
+exactly matching every original search result. The controller now rejects any
+other binary hash before starting a coordinate. The learned-only rerun requires
+a fresh smoke and output root using that exact binary.
+
 The production audit found these reachable paths:
 
 1. `umlaut --record-gcs --pcl-out` emits proof and given-clause traces.
