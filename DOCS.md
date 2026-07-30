@@ -131,6 +131,16 @@ solve, watchlist hit, proof shortening, or search-work reduction and regressed
 validation common-solve CPU by 9.5% and 12.8%. Raw proof-clause transfer
 therefore remains outside automatic schedules.
 
+The bounded online-stagnation study is retained in
+[`experiments/2026-07-29-020-online-stagnation-adaptation/`](experiments/2026-07-29-020-online-stagnation-adaptation/).
+A one-second global probe chose a global or goal-priority restart under the
+same one-plus-four-second budget as static restart comparators. All arms
+reproduced the same held-out solves and no loss, with stable branches and
+microsecond decision overhead, but 14 of 16 test probes hard-stopped before
+telemetry output and collapsed to the fallback. The verdict is uncertain and
+the adaptive policy remains outside automatic schedules pending deterministic
+probe observability.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3

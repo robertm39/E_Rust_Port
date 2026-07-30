@@ -20,3 +20,14 @@ artifacts belong under:
 All prover execution must use `linode-runner.ps1` on Ubuntu. Local Python is
 used only for controller tests, candidate-blind corpus construction, and
 artifact analysis.
+
+The final verdict is `uncertain`: all policy arms reproduced the same one solve
+per held-out split, while 14 of 16 test adaptive probes hard-stopped before
+decision telemetry was written. The controller therefore took its deterministic
+fallback too often to judge the clause-growth signal. See `FINDINGS.md`,
+`CALIBRATION.md`, `VALIDATION.md`, and `results-summary.json`.
+
+The complete ignored raw archive is
+`.artifacts/experiments/2026-07-29-020-online-stagnation-adaptation/online-adaptation-020-complete.tar.gz`
+(29,733,382 bytes, SHA-256
+`5594302c52397cd5d3aaff29fd7efe90bdf60620e71dcac39d571a91c7f7a5cc`).

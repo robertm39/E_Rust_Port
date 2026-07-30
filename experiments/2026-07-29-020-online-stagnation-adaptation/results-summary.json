@@ -1,0 +1,115 @@
+{
+  "archive": {
+    "bytes": 29733382,
+    "path": ".artifacts/experiments/2026-07-29-020-online-stagnation-adaptation/online-adaptation-020-complete.tar.gz",
+    "sha256": "5594302c52397cd5d3aaff29fd7efe90bdf60620e71dcac39d571a91c7f7a5cc"
+  },
+  "binary_sha256": "22abd227725da25af6143ae4f3159a05ccd477bd0f00d0aa955c49f7392aecd8",
+  "contracts": {
+    "calibration": "70bba21867ab8615333ea75b3efc9eb52dc5924d9d231a2344b914d531975bb6",
+    "test": "3cf0d015412efdafc2c057342bcf191e66a2b8c509ed7c051b9162920f2f0637",
+    "validation": "603dccf2e5b15ee8b3cba907be4ca04cbb10ff109403cfe27b113a072a144468"
+  },
+  "corpus": {
+    "categories": [
+      "EPU",
+      "UEQ"
+    ],
+    "family_disjoint": true,
+    "problem_count": 24,
+    "sha256": "a4c67ef7bb3ecc5f00a7ef1d4e4d3dbf2ba022c0f522f2ee9a40fc1e698cfe4b"
+  },
+  "decision": {
+    "correctness_passed": true,
+    "outcome": "uncertain",
+    "production_effect": "Leave the adaptive policy out of automatic schedules.",
+    "reason": "No held-out solve delta or sufficiently covered efficiency effect; 14 of 16 test adaptive probes lacked decision telemetry and took the deterministic fallback."
+  },
+  "followup_bead": "E_Rust_Port-9jt.3.10",
+  "phases": {
+    "calibration": {
+      "branch_counts": {
+        "global": 6,
+        "goal": 10
+      },
+      "correctness_passed": true,
+      "missing_or_invalid_phase_telemetry": 48,
+      "reproducible_solves": [
+        "LAT260-2"
+      ],
+      "run_count": 80,
+      "selected_threshold": 64.0
+    },
+    "test": {
+      "adaptive_branch_counts": {
+        "global": 0,
+        "goal": 14,
+        "probe_solved": 2
+      },
+      "adaptive_only_vs_both_comparators": [],
+      "adaptive_reproducible_solves": [
+        "REL024-1"
+      ],
+      "branch_unstable_problems": [],
+      "correctness_passed": true,
+      "max_decision_cpu_seconds": 0.000105678,
+      "max_decision_wall_seconds": 0.000009314,
+      "median_cpu_ratio_vs_static_global_restart": 0.992956588,
+      "median_cpu_ratio_vs_static_goal": 0.997074634,
+      "missing_or_invalid_phase_telemetry": 112,
+      "run_count": 80,
+      "static_global_restart_reproducible_solves": [
+        "REL024-1"
+      ],
+      "static_goal_reproducible_solves": [
+        "REL024-1"
+      ]
+    },
+    "validation": {
+      "adaptive_branch_counts": {
+        "global": 8,
+        "goal": 6,
+        "probe_solved": 2
+      },
+      "adaptive_only_vs_both_comparators": [],
+      "adaptive_reproducible_solves": [
+        "PUZ008-2"
+      ],
+      "branch_unstable_problems": [],
+      "correctness_passed": true,
+      "max_decision_cpu_seconds": 0.000024687,
+      "max_decision_wall_seconds": 0.000024267,
+      "median_cpu_ratio_vs_static_global_restart": 0.998159116,
+      "median_cpu_ratio_vs_static_goal": 0.760391325,
+      "missing_or_invalid_phase_telemetry": 58,
+      "run_count": 80,
+      "static_global_restart_reproducible_solves": [
+        "PUZ008-2"
+      ],
+      "static_goal_reproducible_solves": [
+        "PUZ008-2"
+      ]
+    }
+  },
+  "reports": {
+    "calibration": {
+      "report_id": "8b35b51407c8d122b37c142a8e7f3fe5a1e28b21b88373a834648e2c9e70946c",
+      "sha256": "09ef852a4b0db5d8f4b5127fc8e94a3594bc24f0644144cb8a43dc1e4405ccfb"
+    },
+    "test": {
+      "report_id": "a3b1c28802b8545401d9667113e95f42f049da645c61554d2c86cf6062a23b3b",
+      "sha256": "6353c3b615552d557d416a581e3771aa8422df659c0a4e1495ee39a5b9192984"
+    },
+    "validation": {
+      "report_id": "2227cf02fdd5c10bca2ad84e24e3200893719880eb5ff849ddd6a36614bc57a2",
+      "sha256": "91ac9e14386f69d8eae64bc22b2625c7de7f5d54340845566ca2e0772072a158"
+    }
+  },
+  "schema_version": 1,
+  "selection": {
+    "selected_threshold": 64.0,
+    "selection_file_sha256": "0981e3f843a0754934675af03998622c0d3d41f0581ff61c44a2f8125ff39681",
+    "selection_id": "a53a56b93b549dd8258801e91535590e65a5e6e4394df16fe145bb0648c1d15c"
+  },
+  "source_revision": "42bfa440729dfe214042020898f7ba87fed7ab4f"
+}
