@@ -124,6 +124,29 @@ tff(goal,conjecture,! [N:$int] : ($greatereq(N,0) => p(N))).
         self.assertEqual(run.PHASES["test"]["repetitions"], 2)
         self.assertEqual(run.PHASES["transfer"]["budget"]["hard_cpu_seconds"], 10)
 
+    def test_proof_adapter_compares_parsed_typed_formula_structure(self) -> None:
+        import verify
+
+        source = (
+            "! [N:$int] : "
+            "(($greatereq(N,0) & left(N) & right(N)) "
+            "=> left($sum(N,1)))"
+        )
+        printed = (
+            "![X1:$int]:"
+            "(((($greatereq(X1,0)&left(X1))&right(X1))"
+            "=>left($sum(X1,1))))"
+        )
+        changed = printed.replace("$sum(X1,1)", "$sum(X1,2)")
+        self.assertEqual(
+            verify.formula_canonical(source),
+            verify.formula_canonical(printed),
+        )
+        self.assertNotEqual(
+            verify.formula_canonical(source),
+            verify.formula_canonical(changed),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

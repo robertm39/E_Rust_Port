@@ -36,6 +36,8 @@ single induction schema.
 
 Read `PREREGISTRATION.md` before running the experiment. Raw results belong
 under `.artifacts/experiments/2026-07-29-022-integer-induction-schema/`.
+The completed decision, exact outcome matrix, validation boundary, clause
+growth, and transfer telemetry are recorded in `FINDINGS.md`.
 
 Typical Linux execution after the verified CASC-30 corpus and release binary
 are present:

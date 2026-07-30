@@ -150,6 +150,17 @@ improved common-solve CPU or generation by at most 5.3%. AC-aware indexing,
 unification, and joinability are therefore deferred; additive opt-in AC
 telemetry remains available for future studies.
 
+The restricted integer-induction schema study is retained in
+[`experiments/2026-07-29-022-integer-induction-schema/`](experiments/2026-07-29-022-integer-induction-schema/).
+One of two untouched targeted tests advanced reproducibly, but none of five
+trigger-positive CASC-30 SWC problems did, transfer work was flat to slightly
+higher, and ProofCheck 1.0 could not parse the typed applied arithmetic
+symbols. Production schema generation is deferred. The source-transform
+prototype, independent schema reconstruction, exact 40-run matrix, guard
+normalization failure, and hypothesis-strengthening gap remain as evidence for
+a future arithmetic-aware induction design; structural induction remains
+unsafe until Umlaut enforces algebraic-datatype semantics.
+
 ## Third-Party Licenses
 
 The licenses for the bundled CaDiCaL, E, GMP, MiniSat, Vampire, VIRAS, and Z3
