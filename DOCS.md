@@ -124,6 +124,18 @@ independently re-solved by pinned CaDiCaL and verified by ProofCheck; captured
 call streams show 68.2% median exact-clause retention but require stable
 identities and selector retirement before persistent reuse can be sound.
 
+The exact propositional and extracted-clause SAT preprocessing study is
+retained in
+[`experiments/2026-07-30-007-propositional-sat-preprocessing/`](experiments/2026-07-30-007-propositional-sat-preprocessing/).
+All 38,100 equal-budget records agree and validate, all 70 required CaDiCaL
+DRAT traces verify, and default preprocessing materially reduces 84 of 127
+cold sessions. It is not adopted: it adds no solve, has a 1.043 median and
+1.764 p95 wall ratio versus CaDiCaL `plain`, reaches a 1.171 maximum paired
+RSS ratio, and the exact whole-problem classifier accepts none of 2,901
+CASC-30 inputs. Transformed-state reuse also remains unsound and ineffective:
+only 28 of 92 same-problem transitions are add-only, simplified-clause
+retention has zero median, and stable atom/source-clause identities are absent.
+
 The family-held-out proof-clause transfer study is retained in
 [`experiments/2026-07-29-019-proof-lemma-watchlist-transfer/`](experiments/2026-07-29-019-proof-lemma-watchlist-transfer/).
 Flat PCL selection was cheap, but none of 296 explicit candidates passed the
