@@ -9,3 +9,6 @@ pub mod viras;
 
 #[cfg(feature = "viras-qe")]
 pub mod typed_lira;
+
+#[cfg(feature = "viras-qe")]
+pub mod viras_preprocess;

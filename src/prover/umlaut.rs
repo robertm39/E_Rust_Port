@@ -12,6 +12,12 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+#[cfg(feature = "viras-qe")]
+use crate::arithmetic::viras::{Limits as VirasLimits, UnknownKind as VirasUnknownKind};
+#[cfg(feature = "viras-qe")]
+use crate::arithmetic::viras_preprocess::{
+    preprocess_formula as viras_preprocess_formula, VirasFormulaPreprocessOutcome,
+};
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{c_io_error_message, check_option_letter_string, Diagnostic, ErrorCode};
 #[cfg(not(test))]
@@ -56,6 +62,8 @@ use crate::clauses::clausefunc::{
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
+#[cfg(feature = "viras-qe")]
+use crate::clauses::derivation::DC_VIRAS_QE;
 use crate::clauses::derivation::{
     clause_dummy_quote_parent_ref, demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
     deriv_stack_tstp_string_with_formula_ids,
@@ -77,6 +85,8 @@ use crate::clauses::formulasets::{
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
+#[cfg(feature = "viras-qe")]
+use crate::clauses::inferencedoc::FormulaModificationInference;
 use crate::clauses::inferencedoc::{
     pcl_print_end, pcl_print_start, pcl_type_str, ClauseCreationInference, ClauseCreationParents,
     PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
@@ -780,6 +790,12 @@ struct PredicateEliminationPreprocessingConfig {
     clause_config: ClausePredicateEliminationConfig,
 }
 
+#[cfg(feature = "viras-qe")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VirasQePreprocessingConfig {
+    pub enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreprocessingConfig {
     pub no_preprocessing: bool,
@@ -796,6 +812,8 @@ pub struct PreprocessingConfig {
     pub presat_interreduction: bool,
     pub ac_handling: AcHandling,
     pub ac_res_aggressive: bool,
+    #[cfg(feature = "viras-qe")]
+    pub viras_qe: VirasQePreprocessingConfig,
 }
 
 impl Default for PreprocessingConfig {
@@ -815,6 +833,8 @@ impl Default for PreprocessingConfig {
             presat_interreduction: false,
             ac_handling: AcHandling::DiscardAll,
             ac_res_aggressive: true,
+            #[cfg(feature = "viras-qe")]
+            viras_qe: VirasQePreprocessingConfig::default(),
         }
     }
 }
@@ -3908,7 +3928,7 @@ const fn is_schedule_option(option: EProverOption) -> bool {
 }
 
 const fn is_preprocessing_option(option: EProverOption) -> bool {
-    matches!(
+    if matches!(
         option,
         EProverOption::NoPreprocessing
             | EProverOption::EqUnfoldLimit
@@ -3921,7 +3941,16 @@ const fn is_preprocessing_option(option: EProverOption) -> bool {
             | EProverOption::PresatSimplify
             | EProverOption::AcHandling
             | EProverOption::AcNonAggressive
-    )
+    ) {
+        return true;
+    }
+    #[cfg(feature = "viras-qe")]
+    {
+        if matches!(option, EProverOption::VirasQePreprocess) {
+            return true;
+        }
+    }
+    false
 }
 
 const fn is_finite_model_option(option: EProverOption) -> bool {
@@ -4463,6 +4492,8 @@ fn apply_preprocessing_option(
         }
         EProverOption::AcHandling => apply_ac_handling(config, parsed.arg().unwrap_or(""))?,
         EProverOption::AcNonAggressive => config.preprocessing.ac_res_aggressive = false,
+        #[cfg(feature = "viras-qe")]
+        EProverOption::VirasQePreprocess => config.preprocessing.viras_qe.enabled = true,
         _ => unreachable!("non-preprocessing option routed to preprocessing handler"),
     }
     Ok(())
@@ -6161,6 +6192,12 @@ fn run_proof_search<W: Write + ?Sized>(
     write_verbose_progress(hard_timeout_stderr, "Clausification started.\n")?;
     let formula_cnf_result =
         clausify_formula_axioms_with_docs(output, config, &mut state, &heuristic_params, 1)?;
+    #[cfg(feature = "viras-qe")]
+    if config.output_level > 0 {
+        if let Some(stats) = &formula_cnf_result.viras_qe {
+            write_comment_line(output, &stats.comment())?;
+        }
+    }
     write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
     for recovered in &formula_cnf_result.term_gc_recoveries {
         write_verbose_progress(hard_timeout_stderr, "Garbage collection started.\n")?;
@@ -8104,6 +8141,133 @@ struct FormulaCnfPreparationResult {
     clauses_generated: i64,
     next_doc_ident: i64,
     term_gc_recoveries: Vec<i64>,
+    #[cfg(feature = "viras-qe")]
+    viras_qe: Option<VirasQePreprocessStats>,
+}
+
+#[cfg(feature = "viras-qe")]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct VirasQePreprocessStats {
+    formulas: usize,
+    quantified: usize,
+    imported: usize,
+    checked: usize,
+    applied: usize,
+    unsupported: usize,
+    resource_unknown: usize,
+    fragment_unknown: usize,
+    source_nodes: usize,
+    result_nodes: usize,
+    branch_proofs: usize,
+}
+
+#[cfg(feature = "viras-qe")]
+impl VirasQePreprocessStats {
+    fn comment(&self) -> String {
+        format!(
+            "VIRAS QE preprocessing: formulas={} quantified={} imported={} checked={} \
+             applied={} unsupported={} resource_unknown={} fragment_unknown={} \
+             source_nodes={} result_nodes={} branch_proofs={}",
+            self.formulas,
+            self.quantified,
+            self.imported,
+            self.checked,
+            self.applied,
+            self.unsupported,
+            self.resource_unknown,
+            self.fragment_unknown,
+            self.source_nodes,
+            self.result_nodes,
+            self.branch_proofs
+        )
+    }
+}
+
+#[cfg(feature = "viras-qe")]
+fn preprocess_formula_set_with_viras(
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    mut document_applied: impl FnMut(&mut WrappedFormula, &mut TermBank) -> Result<(), Diagnostic>,
+) -> Result<VirasQePreprocessStats, EProverError> {
+    let limits = VirasLimits::default();
+    let (exists_code, forall_code) = {
+        let signature = bank.signature();
+        (signature.qex_code(), signature.qall_code())
+    };
+    let mut stats = VirasQePreprocessStats {
+        formulas: formulas.iter().count(),
+        ..VirasQePreprocessStats::default()
+    };
+
+    for formula in formulas.iter_mut() {
+        if !formula.contains_f_code(exists_code) && !formula.contains_f_code(forall_code) {
+            continue;
+        }
+        stats.quantified = stats.quantified.saturating_add(1);
+        let outcome =
+            viras_preprocess_formula(formula.formula(), bank, limits).map_err(|error| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    format!("refusing unchecked VIRAS formula publication: {error}"),
+                )
+            })?;
+        match outcome {
+            VirasFormulaPreprocessOutcome::Applied(applied) => {
+                stats.imported = stats.imported.saturating_add(1);
+                stats.checked = stats.checked.saturating_add(1);
+                stats.applied = stats.applied.saturating_add(1);
+                stats.source_nodes = stats.source_nodes.saturating_add(applied.source_nodes);
+                stats.result_nodes = stats.result_nodes.saturating_add(applied.result_nodes);
+                stats.branch_proofs = stats.branch_proofs.saturating_add(applied.branch_proofs);
+                formula.set_formula(applied.replacement);
+                formula.del_prop(CP_INPUT_FORMULA);
+                formula.push_formula_derivation(DC_VIRAS_QE, None, None);
+                document_applied(formula, bank)?;
+            }
+            VirasFormulaPreprocessOutcome::Unsupported { .. } => {
+                stats.unsupported = stats.unsupported.saturating_add(1);
+            }
+            VirasFormulaPreprocessOutcome::Unknown { kind, .. } => {
+                stats.imported = stats.imported.saturating_add(1);
+                match kind {
+                    VirasUnknownKind::ResourceLimit => {
+                        stats.resource_unknown = stats.resource_unknown.saturating_add(1);
+                    }
+                    VirasUnknownKind::UnsupportedFragment => {
+                        stats.fragment_unknown = stats.fragment_unknown.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+#[cfg(feature = "viras-qe")]
+fn preprocess_formula_set_with_viras_documented(
+    bank: &mut TermBank,
+    formulas: &mut FormulaSet,
+    rendered: &mut String,
+    session: &mut ProofDocSession,
+    render_options: FormulaProofDocRenderOptions,
+) -> Result<VirasQePreprocessStats, EProverError> {
+    preprocess_formula_set_with_viras(bank, formulas, |formula, bank| {
+        let renderings = formula.proof_doc_renderings(bank, render_options)?;
+        let (write_result, new_ident, new_properties) = {
+            let mut view = formula.proof_doc_view_from_renderings(&renderings);
+            let write_result = session.doc_formula_modification(
+                rendered,
+                &mut view,
+                FormulaModificationInference::VirasQe,
+                Some("native checked bounded VIRAS quantifier elimination"),
+            )?;
+            (write_result, view.ident(), view.properties())
+        };
+        formula.set_ident(new_ident);
+        formula.set_properties(new_properties);
+        let _ = write_result;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -8151,6 +8315,12 @@ fn clausify_formula_axioms_with_docs<W: Write + ?Sized>(
             clauses_generated: 0,
             next_doc_ident: start_ident,
             term_gc_recoveries: Vec::new(),
+            #[cfg(feature = "viras-qe")]
+            viras_qe: config
+                .preprocessing
+                .viras_qe
+                .enabled
+                .then(VirasQePreprocessStats::default),
         })
     } else {
         clausify_formula_axioms_silent(state, config, options, start_ident)
@@ -8192,10 +8362,18 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
             clauses_generated: 0,
             next_doc_ident: session.id_source.current_ident().saturating_add(1),
             term_gc_recoveries: Vec::new(),
+            #[cfg(feature = "viras-qe")]
+            viras_qe: config
+                .preprocessing
+                .viras_qe
+                .enabled
+                .then(VirasQePreprocessStats::default),
         });
     }
 
     rendered.clear();
+    #[cfg(feature = "viras-qe")]
+    let mut viras_qe = None;
     let (clauses_generated, term_gc_recoveries) = {
         let fresh_vars = state.fresh_vars().clone();
         let (bank, clauses, formulas, archive, gc_context) =
@@ -8204,6 +8382,16 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
             .with_eqn_output_format(config.output_format)
             .with_print_types(config.encoding.print_types);
         let _archived = formulas.archive_into(archive);
+        #[cfg(feature = "viras-qe")]
+        if config.preprocessing.viras_qe.enabled {
+            viras_qe = Some(preprocess_formula_set_with_viras_documented(
+                bank,
+                formulas,
+                &mut rendered,
+                &mut session,
+                render_options,
+            )?);
+        }
         let _preprocessed = if config.proof_object_level > 0 {
             formulas.preproc_conjectures_with_docs_and_proof_archive(
                 archive,
@@ -8242,6 +8430,8 @@ fn clausify_formula_axioms_documented<W: Write + ?Sized>(
         clauses_generated,
         next_doc_ident: session.id_source.current_ident().saturating_add(1),
         term_gc_recoveries,
+        #[cfg(feature = "viras-qe")]
+        viras_qe,
     })
 }
 
@@ -8252,10 +8442,20 @@ fn clausify_formula_axioms_silent(
     start_ident: i64,
 ) -> Result<FormulaCnfPreparationResult, EProverError> {
     let fresh_vars = state.fresh_vars().clone();
+    #[cfg(feature = "viras-qe")]
+    let mut viras_qe = None;
     let (clauses_generated, term_gc_recoveries) = {
         let (bank, clauses, formulas, archive, gc_context) =
             state.terms_axioms_formula_sets_cnf_with_gc_mut();
         let _archived = formulas.archive_into(archive);
+        #[cfg(feature = "viras-qe")]
+        if config.preprocessing.viras_qe.enabled {
+            viras_qe = Some(preprocess_formula_set_with_viras(
+                bank,
+                formulas,
+                |_formula, _bank| Ok(()),
+            )?);
+        }
         let _preprocessed = if config.proof_object_level > 0 {
             formulas.preproc_conjectures_with_proof_archive(
                 archive,
@@ -8284,6 +8484,8 @@ fn clausify_formula_axioms_silent(
         clauses_generated,
         next_doc_ident: start_ident,
         term_gc_recoveries,
+        #[cfg(feature = "viras-qe")]
+        viras_qe,
     })
 }
 
@@ -40849,5 +41051,65 @@ cnf(c_0_12, negated_conjecture, ($false), inference(eval_answer_literal,[status(
 
         std::fs::remove_file(&type_path).unwrap();
         std::fs::remove_file(&true_path).unwrap();
+    }
+
+    #[cfg(feature = "viras-qe")]
+    #[test]
+    fn run_viras_qe_preprocesses_one_mixed_formula_and_preserves_unsupported_input() {
+        let _guard = global_state_lock();
+        let path = temp_path("viras-qe-mixed-preprocessing");
+        std::fs::write(
+            &path,
+            "tff(arithmetic, axiom,\n\
+                 ! [X:$real] : $greater(X,$to_real(0))).\n\
+             tff(nonlinear, axiom,\n\
+                 ? [Y:$real] : ($product(Y,Y) = $to_real(1))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "umlaut",
+                "--viras-qe-preprocess",
+                "--tstp-format",
+                "--output-level=4",
+                "--proof-object=1",
+                "--processed-clauses-limit=100",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+        assert!(
+            output.contains("tff(nonlinear, axiom, ?[")
+                && output.contains("$product(X2,X2)=$to_real(1)"),
+            "{output}"
+        );
+        assert!(
+            output.contains(
+                "% VIRAS QE preprocessing: formulas=2 quantified=2 imported=1 checked=1 \
+                 applied=1 unsupported=1 resource_unknown=0 fragment_unknown=0"
+            ),
+            "{output}"
+        );
+        assert!(
+            output.contains("inference(viras_qe, [status(thm)],[c_0_1])"),
+            "{output}"
+        );
+        assert!(
+            output.contains("inference(viras_qe,[status(thm)],[arithmetic])"),
+            "{output}"
+        );
+        assert!(output.contains("% SZS status Unsatisfiable"), "{output}");
+
+        std::fs::remove_file(&path).unwrap();
     }
 }

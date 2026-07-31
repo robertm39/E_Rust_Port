@@ -236,10 +236,16 @@ and schedule evaluation remain follow-up work.
 The production port of that boundary is documented in
 [`docs/viras-qe.md`](docs/viras-qe.md). It adds a bounded Boolean/quantifier
 wrapper, the frozen typed TPTP importer, replay-validated derivations, and the
-feature-required `umlaut-viras-qe` executable. The path remains standalone and
-explicitly opt-in: it is not used by the primary prover or any automatic
-schedule, and omitting the `viras-qe` feature removes its exact-arithmetic
-crate graph and binary target.
+feature-required `umlaut-viras-qe` executable. The later native checked
+mixed-problem integration and held-out evidence are retained in
+[`experiments/2026-07-30-006-mixed-viras-preprocessing/`](experiments/2026-07-30-006-mixed-viras-preprocessing/).
+An all-feature primary prover now exposes explicit
+`--viras-qe-preprocess`: it preserves original formula ancestry, independently
+rechecks every inserted result, and passes unsupported formulas through. The
+100-file TFI study checked all 887 inserted results and corrected the
+`ARI056_1.p` arithmetic status, but added no raw one-second solve. No automatic
+schedule changed, and omitting `viras-qe` removes both the option and its
+exact-arithmetic crate graph.
 
 ## Third-Party Licenses
 

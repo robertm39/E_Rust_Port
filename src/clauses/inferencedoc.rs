@@ -147,6 +147,7 @@ pub enum FormulaModificationInference {
     Skolemize,
     Distribute,
     AnnotateQuestion,
+    VirasQe,
     Other,
 }
 
@@ -174,6 +175,7 @@ impl FormulaModificationInference {
             Self::Skolemize => Some(FormulaParentInference::Skolemize),
             Self::Distribute => Some(FormulaParentInference::Distribute),
             Self::AnnotateQuestion => Some(FormulaParentInference::AnnotateQuestion),
+            Self::VirasQe => Some(FormulaParentInference::VirasQe),
             Self::Other => None,
         }
     }
@@ -2184,6 +2186,7 @@ pub enum FormulaParentInference {
     Skolemize,
     Distribute,
     AnnotateQuestion,
+    VirasQe,
 }
 
 impl FormulaParentInference {
@@ -2199,6 +2202,7 @@ impl FormulaParentInference {
             Self::Skolemize => "skolemize",
             Self::Distribute => "distribute",
             Self::AnnotateQuestion => "add_answer_literal",
+            Self::VirasQe => "viras_qe",
         }
     }
 
@@ -2213,7 +2217,8 @@ impl FormulaParentInference {
             | Self::ShiftQuantors
             | Self::VarRename
             | Self::Distribute
-            | Self::AnnotateQuestion => "thm",
+            | Self::AnnotateQuestion
+            | Self::VirasQe => "thm",
         }
     }
 }
@@ -2288,7 +2293,8 @@ pub fn write_tstp_formula_parent_inference_with_evidence(
         | FormulaParentInference::Nnf
         | FormulaParentInference::ShiftQuantors
         | FormulaParentInference::VarRename
-        | FormulaParentInference::Distribute => {
+        | FormulaParentInference::Distribute
+        | FormulaParentInference::VirasQe => {
             write!(
                 output,
                 "inference({name}, [status({status})],[c_0_{parent_id}])"
@@ -3778,6 +3784,16 @@ mod tests {
             rendered,
             "inference(add_answer_literal, [status(thm)],[c_0_12,theory(answers)])"
         );
+
+        let mut rendered = String::new();
+        write_pcl_formula_parent_inference(&mut rendered, FormulaParentInference::VirasQe, 12)
+            .unwrap();
+        assert_eq!(rendered, "viras_qe(12)");
+
+        let mut rendered = String::new();
+        write_tstp_formula_parent_inference(&mut rendered, FormulaParentInference::VirasQe, 12)
+            .unwrap();
+        assert_eq!(rendered, "inference(viras_qe, [status(thm)],[c_0_12])");
     }
 
     #[test]

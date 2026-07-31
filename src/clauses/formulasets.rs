@@ -175,7 +175,7 @@ pub struct FormulaProofDocRenderOptions {
     pub print_types: bool,
 }
 
-struct FormulaProofDocRenderings {
+pub(crate) struct FormulaProofDocRenderings {
     formula: String,
     formula_pcl: String,
 }
@@ -2459,7 +2459,7 @@ impl WrappedFormula {
         )
     }
 
-    fn proof_doc_renderings(
+    pub(crate) fn proof_doc_renderings(
         &self,
         bank: &mut TermBank,
         options: FormulaProofDocRenderOptions,
@@ -2492,7 +2492,7 @@ impl WrappedFormula {
         })
     }
 
-    fn proof_doc_view_from_renderings<'a>(
+    pub(crate) fn proof_doc_view_from_renderings<'a>(
         &'a self,
         renderings: &'a FormulaProofDocRenderings,
     ) -> FormulaDocView<'a> {

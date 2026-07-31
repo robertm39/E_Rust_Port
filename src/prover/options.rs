@@ -213,6 +213,8 @@ pub enum EProverOption {
     FiniteModelMaxClauses,
     FiniteModelMaxVariables,
     FiniteModelSatTimeout,
+    #[cfg(feature = "viras-qe")]
+    VirasQePreprocess,
 }
 
 pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
@@ -1952,6 +1954,15 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         None,
         "Set the per-domain-vector SAT timeout in seconds.",
     ),
+    #[cfg(feature = "viras-qe")]
+    OptCell::new(
+        EProverOption::VirasQePreprocess,
+        None,
+        Some("viras-qe-preprocess"),
+        OptArgType::NoArg,
+        None,
+        "Apply native-checked VIRAS quantifier elimination to eligible typed formulas before clausification. This Umlaut extension is disabled by default.",
+    ),
 ];
 
 #[cfg(test)]
@@ -1962,7 +1973,7 @@ mod tests {
     const C_E_OPTIONS_H: &str = include_str!("../../tests/fixtures/eprover-17026b1/e_options.h");
 
     const fn is_umlaut_extension(option: EProverOption) -> bool {
-        matches!(
+        if matches!(
             option,
             EProverOption::SearchTelemetry
                 | EProverOption::FiniteModelSearch
@@ -1972,7 +1983,16 @@ mod tests {
                 | EProverOption::FiniteModelMaxClauses
                 | EProverOption::FiniteModelMaxVariables
                 | EProverOption::FiniteModelSatTimeout
-        )
+        ) {
+            return true;
+        }
+        #[cfg(feature = "viras-qe")]
+        {
+            if matches!(option, EProverOption::VirasQePreprocess) {
+                return true;
+            }
+        }
+        false
     }
 
     #[test]
@@ -2057,7 +2077,10 @@ mod tests {
             .rev()
             .take_while(|option| is_umlaut_extension(option.option_code))
             .collect::<Vec<_>>();
-        assert_eq!(extensions.len(), 8);
+        assert_eq!(
+            extensions.len(),
+            if cfg!(feature = "viras-qe") { 9 } else { 8 }
+        );
         assert!(extensions.iter().all(|option| option.shortopt.is_none()));
         let telemetry = extensions
             .iter()

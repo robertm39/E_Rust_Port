@@ -129,6 +129,8 @@ pub const DO_PRIM_ENUM: i64 = 51;
 pub const DO_CHOICE_INST: i64 = 52;
 pub const DO_TRIGGER: i64 = 53;
 pub const DO_PRUNE_ARG: i64 = 54;
+/// Umlaut-native checked VIRAS formula quantifier elimination.
+pub const DO_VIRAS_QE: i64 = 55;
 
 pub const DC_NOP: i64 = DO_NOP;
 pub const DC_CNF_QUOTE: i64 = DO_QUOTE | ARG1_CNF;
@@ -186,6 +188,7 @@ pub const DC_PRIM_ENUM: i64 = DO_PRIM_ENUM | ARG1_CNF | ARG_IS_HO;
 pub const DC_CHOICE_INST: i64 = DO_CHOICE_INST | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
 pub const DC_TRIGGER: i64 = DO_TRIGGER | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
 pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
+pub const DC_VIRAS_QE: i64 = DO_VIRAS_QE;
 
 /// Stable process-local identity for a clause proof node.
 ///
@@ -1345,6 +1348,7 @@ const fn derivation_op_id(op: i64) -> &'static str {
         DO_CHOICE_INST => "choice_inst",
         DO_TRIGGER => "trigger",
         DO_PRUNE_ARG => "prune_arg",
+        DO_VIRAS_QE => "viras_qe",
         _ => "unknown",
     }
 }
@@ -1358,7 +1362,7 @@ const fn derivation_op_status(op: i64) -> Option<&'static str> {
         DO_EVAL_GC..=DO_EVAL_ANSWERS
         | DO_FOF_SIMPLIFY..=DO_VAR_RENAME
         | DO_DIST_DISJUNCTIONS..=DO_SPLIT_EQUIV
-        | DO_SPLIT_CONJUNCT..=DO_PRUNE_ARG => Some("thm"),
+        | DO_SPLIT_CONJUNCT..=DO_VIRAS_QE => Some("thm"),
         _ => Some("unknown"),
     }
 }
@@ -1577,17 +1581,17 @@ mod tests {
         DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE, DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP,
         DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM,
         DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN, DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE,
-        DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR, DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES,
-        DO_ADD_CNF_ARG, DO_ANNO_QUESTION, DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST,
-        DO_CONDENSE, DO_CONTEXT_SR, DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE,
-        DO_DYNAMIC_CNF, DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS,
-        DO_EVAL_GC, DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE,
-        DO_FNNF, DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM,
-        DO_LIFT_ITE, DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP,
-        DO_NORMALIZE, DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM,
-        DO_PRUNE_ARG, DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD,
-        DO_SKOLEMIZE, DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD,
-        DO_VAR_RENAME,
+        DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR, DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME,
+        DC_VIRAS_QE, DO_AC_RES, DO_ADD_CNF_ARG, DO_ANNO_QUESTION, DO_APPLY_DEF, DO_ARG_CONG,
+        DO_CHOICE_AX, DO_CHOICE_INST, DO_CONDENSE, DO_CONTEXT_SR, DO_DES_EQ_RES,
+        DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE, DO_DYNAMIC_CNF, DO_ELIMINATE_BVAR, DO_EQ_FACTOR,
+        DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS, DO_EVAL_GC, DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT,
+        DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE, DO_FNNF, DO_FOF_SIMPLIFY, DO_FOOL_UNROLL,
+        DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM, DO_LIFT_ITE, DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE,
+        DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP, DO_NORMALIZE, DO_ORDERED_FACTOR, DO_PARAMOD,
+        DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM, DO_PRUNE_ARG, DO_QUOTE, DO_REWRITE, DO_SAT_GEN,
+        DO_SHIFT_QUANTORS, DO_SIM_PARAMOD, DO_SKOLEMIZE, DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR,
+        DO_TRIGGER, DO_UNFOLD, DO_VAR_RENAME, DO_VIRAS_QE,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1729,6 +1733,10 @@ mod tests {
         for (actual, expected) in opcode_values {
             assert_eq!(actual, expected);
         }
+        assert_eq!(
+            DO_VIRAS_QE, 55,
+            "Umlaut extension follows the C opcode range"
+        );
     }
 
     #[test]
@@ -1790,6 +1798,7 @@ mod tests {
             (DC_CHOICE_INST, 21044),
             (DC_TRIGGER, 21045),
             (DC_PRUNE_ARG, 16438),
+            (DC_VIRAS_QE, 55),
         ];
         for (actual, expected) in derivation_code_values {
             assert_eq!(actual, expected);
@@ -1875,9 +1884,10 @@ mod tests {
             (DC_CHOICE_INST, "choice_inst", Some("thm"), None),
             (DC_TRIGGER, "trigger", Some("thm"), None),
             (DC_PRUNE_ARG, "prune_arg", Some("thm"), None),
+            (DC_VIRAS_QE, "viras_qe", Some("thm"), None),
         ];
 
-        assert_eq!(cases.len(), 56);
+        assert_eq!(cases.len(), 57);
         for (code, id, status, theory) in cases {
             assert_eq!(derivation_op_id(code), id, "operation id for {code}");
             assert_eq!(

@@ -2168,7 +2168,9 @@ impl FormulaBudget {
     }
 }
 
-fn formula_node_count(formula: &Formula) -> usize {
+/// Counts canonical formula nodes for resource accounting and telemetry.
+#[must_use]
+pub fn formula_node_count(formula: &Formula) -> usize {
     let mut count = 0_usize;
     let mut pending = vec![formula];
     while let Some(current) = pending.pop() {
@@ -2413,6 +2415,59 @@ pub fn eliminate_formula(formula: Formula, limits: Limits) -> FormulaQeOutcome {
             derivation,
         },
     }
+}
+
+/// Independently validates a successful formula-level quantifier-elimination
+/// publication against its typed-source import.
+///
+/// The checker re-runs the bounded wrapper in a fresh kernel. That run
+/// regenerates and replays every branch proof before this outer comparison
+/// checks the complete result and derivation record. Callers must complete
+/// this check before inserting a transformed formula into proof search.
+///
+/// # Errors
+///
+/// Returns a fail-closed kernel failure if either record is unsuccessful, the
+/// publication claims validation it did not receive, or any result,
+/// resource-use, candidate, grid, or branch-derivation field differs.
+pub fn validate_formula_derivation(
+    source: &Formula,
+    published: &FormulaQeOutcome,
+    limits: Limits,
+) -> Result<(), KernelFailure> {
+    if published.status != QeStatus::Success {
+        return Err(KernelFailure::unsupported(
+            "only successful formula outcomes can be published",
+        ));
+    }
+    if !published.derivation.replay_validated {
+        return Err(KernelFailure::unsupported(
+            "published formula derivation is not replay-validated",
+        ));
+    }
+    if published.formula.is_none() {
+        return Err(KernelFailure::unsupported(
+            "successful published formula has no result",
+        ));
+    }
+
+    let checked = eliminate_formula(source.clone(), limits);
+    if checked.status != QeStatus::Success || !checked.derivation.replay_validated {
+        return Err(KernelFailure::unsupported(
+            "fresh formula-level validation did not produce a checked result",
+        ));
+    }
+    if checked.formula != published.formula {
+        return Err(KernelFailure::unsupported(
+            "published formula differs from fresh checked elimination",
+        ));
+    }
+    if checked.derivation != published.derivation {
+        return Err(KernelFailure::unsupported(
+            "published formula derivation differs from fresh checked elimination",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3312,5 +3367,47 @@ mod tests {
         assert_eq!(outcome.unknown_kind, Some(UnknownKind::ResourceLimit));
         assert!(outcome.formula.is_none());
         assert!(!outcome.derivation.replay_validated);
+    }
+
+    #[test]
+    fn formula_derivation_validator_rejects_source_result_flag_and_branch_corruption() {
+        let source = Formula::Exists(
+            "x".to_owned(),
+            Box::new(atom(Literal::new(
+                subtract(variable("x"), int_constant(1)),
+                Relation::Eq,
+            ))),
+        );
+        let limits = Limits::default();
+        let authentic = eliminate_formula(source.clone(), limits);
+        validate_formula_derivation(&source, &authentic, limits)
+            .expect("authentic formula derivation validates");
+
+        let different_source = Formula::Exists(
+            "x".to_owned(),
+            Box::new(atom(Literal::new(
+                subtract(variable("x"), int_constant(2)),
+                Relation::Gt,
+            ))),
+        );
+        assert!(validate_formula_derivation(&different_source, &authentic, limits).is_err());
+
+        let mut corrupt_result = authentic.clone();
+        corrupt_result.formula = Some(boolean(false));
+        assert!(validate_formula_derivation(&source, &corrupt_result, limits).is_err());
+
+        let mut corrupt_flag = authentic.clone();
+        corrupt_flag.derivation.replay_validated = false;
+        assert!(validate_formula_derivation(&source, &corrupt_flag, limits).is_err());
+
+        let mut corrupt_branch = authentic;
+        corrupt_branch
+            .derivation
+            .eliminations
+            .first_mut()
+            .expect("test formula has one elimination")
+            .candidates
+            .clear();
+        assert!(validate_formula_derivation(&source, &corrupt_branch, limits).is_err());
     }
 }
