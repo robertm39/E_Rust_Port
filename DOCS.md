@@ -228,6 +228,17 @@ checker had already proved global UNSAT. Epsilon, infinity, periodic, grid,
 and general context-lifting contracts remain unimplemented, so production
 behavior and automatic schedules are unchanged.
 
+The IPASIR-UP-style theory-propagation simulation is retained in
+[`experiments/2026-07-30-015-ipasir-up-propagation/`](experiments/2026-07-30-015-ipasir-up-propagation/).
+All 3,651 external reasons and root backtracks replayed, all four treatments
+agreed twice on 103 pigeonhole cases, and every mutation failed closed.
+Propagation nevertheless used 91.6% of partial-conflict decisions and 88.0%
+of lazy decisions on generated UNSAT cases while taking 1.351 times
+conflict-only elapsed time; fully encoding the compact theory used only 265
+decisions. The verdict is `defer`: live callbacks need a real non-encodable
+theory trace, stable atom identities, and proof integration before production
+work is justified.
+
 The associative-commutative normalization-mode study is retained in
 [`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
 All existing AC modes passed strengthened semantic tests and four held-out
