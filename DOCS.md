@@ -217,6 +217,17 @@ non-comment lines. The whole-problem candidate is rejected, nonlinear
 model-based projection is deferred pending real branch-demand traces, and
 production remains unchanged.
 
+The conflict-driven VIRAS feasibility study is retained in
+[`experiments/2026-07-30-014-conflict-driven-viras/`](experiments/2026-07-30-014-conflict-driven-viras/).
+All 8,758 unique learned-clause implications passed both exact affine
+validation and pinned-Z3 checking, and focused search used only 10.4% of
+basic's substitutions on 200 generated UNSAT cases. The result does not
+advance to production: basic learning was slower than eager enumeration, while
+every focused conflict became an empty clause because its complete affine
+checker had already proved global UNSAT. Epsilon, infinity, periodic, grid,
+and general context-lifting contracts remain unimplemented, so production
+behavior and automatic schedules are unchanged.
+
 The associative-commutative normalization-mode study is retained in
 [`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
 All existing AC modes passed strengthened semantic tests and four held-out
