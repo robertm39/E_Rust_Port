@@ -4,6 +4,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod arithmetic;
 pub mod basics;
 pub mod clauses;
 pub mod control;

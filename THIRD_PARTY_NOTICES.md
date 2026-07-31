@@ -31,6 +31,17 @@ the independent shim and notice, but not upstream CaDiCaL source; a feature
 build must supply the pinned source explicitly. A proof checker is also an
 external, user-supplied executable and is never shipped implicitly.
 
+The `viras-qe` Cargo feature and feature-required `umlaut-viras-qe` executable
+use the pure-Rust `num-bigint` 0.4.8, `num-integer` 0.1.46, `num-rational`
+0.4.2, and `num-traits` 0.2.19 crates. Their build graph also contains
+`autocfg` 1.5.1. The four `num` crates are copyright the Rust Project
+Developers; `autocfg` is copyright Josh Stone. All five are offered under
+Apache-2.0 or MIT. Their verbatim notices are retained in
+`licenses/rust-num-MIT.txt`, `licenses/autocfg-MIT.txt`, and
+`licenses/rust-num-and-autocfg-Apache-2.0.txt`. The feature is disabled by
+default, the standalone binary is omitted from default builds, and the
+default CASC runtime contains none of this crate code.
+
 The ignored E, Vampire, CaDiCaL reference, MiniSat, Z3, GMP, and local artifact
 trees are reference or experiment inputs. They are not part of Umlaut's
 distributable package. In particular, the pinned local Vampire executable

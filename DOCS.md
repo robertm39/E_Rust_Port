@@ -58,9 +58,10 @@ The exact integer/rational substrate matrix, independent
 `fractions.Fraction` conformance run, performance evidence, preferred Dashu
 candidate, and backend-private interface boundary are retained in
 [`experiments/2026-07-29-006-exact-numerics-substrate/`](experiments/2026-07-29-006-exact-numerics-substrate/).
-This is a selection study rather than dependency adoption: the root package
-remains dependency-free until a production theory consumer passes the
-documented adoption gates.
+The study itself remains selection evidence. The later `viras-qe` feature
+adopted the audited pure-Rust `num` graph for a concrete exact-arithmetic
+consumer; the default feature closure and default runtime remain
+dependency-free.
 
 The clean-room SAT ordinary-subsumption and prospective
 subsumption-resolution crossover study, independent oracle, family-separated
@@ -231,6 +232,14 @@ rejected, and repeated reports were byte-identical. This is a trustworthy
 kernel milestone, not production support: arbitrary Boolean/quantifier
 wrapping, typed import/export, checkable proof publication, Rust integration,
 and schedule evaluation remain follow-up work.
+
+The production port of that boundary is documented in
+[`docs/viras-qe.md`](docs/viras-qe.md). It adds a bounded Boolean/quantifier
+wrapper, the frozen typed TPTP importer, replay-validated derivations, and the
+feature-required `umlaut-viras-qe` executable. The path remains standalone and
+explicitly opt-in: it is not used by the primary prover or any automatic
+schedule, and omitting the `viras-qe` feature removes its exact-arithmetic
+crate graph and binary target.
 
 ## Third-Party Licenses
 

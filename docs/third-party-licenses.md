@@ -16,6 +16,8 @@ family.
 | [GMP](https://gmplib.org/) | 6.3.0 | The retained library, including Mini-GMP, is dual-licensed under LGPL-3.0-or-later or GPL-2.0-or-later. The upstream demo and test trees have been removed. Some retained distribution build helpers use GPL-3.0-or-later with special exceptions. | [`gmp-LGPL-3.0-or-later.txt`](../licenses/gmp-LGPL-3.0-or-later.txt), [`gmp-GPL-2.0-or-later.txt`](../licenses/gmp-GPL-2.0-or-later.txt), and [`gmp-GPL-3.0-or-later.txt`](../licenses/gmp-GPL-3.0-or-later.txt) |
 | [MiniSat](https://github.com/niklasso/minisat) | `37dc6c67e2af26379d88ce349eb9c4c6160e8543` | MIT | [`minisat-MIT.txt`](../licenses/minisat-MIT.txt) |
 | [PicoSAT](https://fmv.jku.at/picosat/) | 965, as retained under E revision `17026b1bfe61aaf223cfaae54947c8d2679c31a0` | MIT | [`picosat-MIT.txt`](../licenses/picosat-MIT.txt) |
+| [Rust `num` crates](https://github.com/rust-num/num) | `num-bigint` 0.4.8, `num-integer` 0.1.46, `num-rational` 0.4.2, `num-traits` 0.2.19 | MIT OR Apache-2.0 | [`rust-num-MIT.txt`](../licenses/rust-num-MIT.txt), [`rust-num-and-autocfg-Apache-2.0.txt`](../licenses/rust-num-and-autocfg-Apache-2.0.txt) |
+| [`autocfg`](https://github.com/cuviper/autocfg) | 1.5.1 | MIT OR Apache-2.0 | [`autocfg-MIT.txt`](../licenses/autocfg-MIT.txt), [`rust-num-and-autocfg-Apache-2.0.txt`](../licenses/rust-num-and-autocfg-Apache-2.0.txt) |
 | [Vampire](https://github.com/vprover/vampire) | `3677326861181f990ce3ef461e90471ba9749225` | Modified BSD 3-Clause | [`vampire-BSD-3-Clause.txt`](../licenses/vampire-BSD-3-Clause.txt) |
 | [VIRAS](https://github.com/joe-hauns/viras) | `8b8928f57f8d6415662cf43289de2c0d36443240` | No license declaration is present in this revision | No license text is available to copy |
 | [Z3](https://github.com/Z3Prover/z3) | `2d48fd119ce5074b880944c2b1c59e537c99cd46` | MIT | [`z3-MIT.txt`](../licenses/z3-MIT.txt) |
@@ -29,6 +31,11 @@ at its recorded revision. The GMP copies come from the 6.3.0 distribution's
 `COPYING.LESSERv3`, `COPYINGv2`, and `COPYINGv3`; the
 [GMP copying conditions](https://gmplib.org/manual/Copying) describe which
 parts use each license.
+
+The four Rust `num` crates and `autocfg` carry identical Apache-2.0 texts.
+The `num` crates also carry the Rust Project Developers' MIT notice, while
+`autocfg` carries Josh Stone's MIT notice. The retained files are byte-for-byte
+copies from the exact crate versions resolved by `Cargo.lock`.
 
 The local `gmp-6.3.0/` reference tree intentionally omits `demos/`, `tests/`,
 and `mini-gmp/tests/` so those GPL-only programs are not available as

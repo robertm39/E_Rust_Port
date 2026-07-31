@@ -36,7 +36,7 @@ const EXECUTABLE_RENAMES: &[(&str, &str)] = &[
 fn every_upstream_entry_point_maps_to_exactly_one_umlaut_binary() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let upstream = upstream_programs(root);
-    let rust = rust_programs(root);
+    let rust = rust_programs(root, false);
     let expected_upstream = EXECUTABLE_RENAMES
         .iter()
         .map(|(old, _)| (*old).to_owned())
@@ -64,7 +64,7 @@ fn cargo_package_and_library_identity_is_umlaut() {
 #[test]
 fn old_executable_names_are_not_cargo_targets() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let rust = rust_programs(root);
+    let rust = rust_programs(root, false);
 
     for (old, new) in EXECUTABLE_RENAMES {
         assert!(!rust.contains(*old), "legacy Cargo target {old} remains");
@@ -73,6 +73,30 @@ fn old_executable_names_are_not_cargo_targets() {
             "canonical Cargo target {new} is missing"
         );
     }
+}
+
+#[test]
+fn opt_in_executable_is_additive_and_feature_required() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let default_programs = rust_programs(root, false);
+    let all_programs = rust_programs(root, true);
+    let additive = all_programs
+        .difference(&default_programs)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(additive, ["umlaut-viras-qe"]);
+
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", manifest_path.display()));
+    let viras_block = manifest
+        .split("[[bin]]")
+        .find(|block| block.contains("name = \"umlaut-viras-qe\""))
+        .expect("VIRAS binary block");
+    assert!(
+        viras_block.contains("required-features = [\"viras-qe\"]"),
+        "the additive arithmetic executable must remain feature-required"
+    );
 }
 
 fn upstream_programs(root: &Path) -> BTreeSet<String> {
@@ -116,7 +140,7 @@ fn upstream_programs(root: &Path) -> BTreeSet<String> {
     programs
 }
 
-fn rust_programs(root: &Path) -> BTreeSet<String> {
+fn rust_programs(root: &Path, include_feature_required: bool) -> BTreeSet<String> {
     let manifest_path = root.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", manifest_path.display()));
@@ -146,6 +170,12 @@ fn rust_programs(root: &Path) -> BTreeSet<String> {
             "Cargo binary {name} has no main entry point in {}",
             source_path.display()
         );
+        let feature_required = fields
+            .iter()
+            .any(|(key, _value)| *key == "required-features");
+        if feature_required && !include_feature_required {
+            continue;
+        }
         assert!(
             programs.insert(name.to_owned()),
             "duplicate Cargo binary name: {name}"

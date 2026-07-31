@@ -45,6 +45,26 @@ FORBIDDEN_LIBRARY_NAMES = (
     "viras",
     "z3",
 )
+VIRAS_OPTIONAL_PACKAGES = {
+    "autocfg": ("1.5.1", "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"),
+    "num-bigint": ("0.4.8", "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"),
+    "num-integer": ("0.1.46", "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"),
+    "num-rational": ("0.4.2", "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"),
+    "num-traits": ("0.2.19", "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"),
+}
+VIRAS_DIRECT_DEPENDENCIES = {
+    "num-bigint",
+    "num-integer",
+    "num-rational",
+    "num-traits",
+}
+VIRAS_LOCK_DEPENDENCIES = {
+    "autocfg": set(),
+    "num-bigint": {"num-integer", "num-traits"},
+    "num-integer": {"num-traits"},
+    "num-rational": {"num-bigint", "num-integer", "num-traits"},
+    "num-traits": {"autocfg"},
+}
 REQUIRED_SOURCE_PATHS = {
     "Cargo.lock",
     "Cargo.toml",
@@ -54,9 +74,18 @@ REQUIRED_SOURCE_PATHS = {
     "build.rs",
     "docs/dependency-packaging-matrix.md",
     "docs/search-telemetry.md",
+    "docs/third-party-licenses.md",
+    "docs/viras-qe.md",
+    "licenses/autocfg-MIT.txt",
+    "licenses/rust-num-MIT.txt",
+    "licenses/rust-num-and-autocfg-Apache-2.0.txt",
     "native/cadical_ffi/umlaut_cadical.cpp",
     "native/cadical_ffi/umlaut_cadical.h",
+    "src/arithmetic/typed_lira.rs",
+    "src/arithmetic/viras.rs",
+    "src/bin/umlaut-viras-qe.rs",
     "src/heuristics/schedule.vars",
+    "src/simple_apps/viras_qe.rs",
     "tools/packaging/README-CASC.md",
     "tools/packaging/starexec_run_default",
     "tools/packaging/verify_casc_package.py",
@@ -186,28 +215,83 @@ def package_names(manifest_path: Path) -> tuple[str, str, list[str]]:
     bin_names = [
         entry["name"]
         for entry in binaries
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and not entry.get("required-features")
+        )
     ]
     if "umlaut" not in bin_names:
         raise AuditError("Cargo.toml does not declare the primary umlaut binary")
     return name, version, bin_names
 
 
-def assert_dependency_free(lock_path: Path) -> None:
-    """Require the baseline package to contain only the Umlaut lock entry."""
+def assert_default_dependency_boundary(
+    manifest_path: Path,
+    lock_path: Path,
+) -> None:
+    """Require an empty default graph and the exact opt-in VIRAS crate graph."""
 
+    with manifest_path.open("rb") as source:
+        manifest = tomllib.load(source)
     with lock_path.open("rb") as source:
         lock = tomllib.load(source)
     packages = lock.get("package")
-    if (
-        not isinstance(packages, list)
-        or len(packages) != 1
-        or packages[0].get("name") != "umlaut"
-        or "dependencies" in packages[0]
-    ):
+    if not isinstance(packages, list):
+        raise AuditError("Cargo.lock has no package list")
+    by_name = {
+        package.get("name"): package
+        for package in packages
+        if isinstance(package, dict) and isinstance(package.get("name"), str)
+    }
+    expected_names = {"umlaut", *VIRAS_OPTIONAL_PACKAGES}
+    if set(by_name) != expected_names:
         raise AuditError(
-            "baseline Cargo.lock must contain only dependency-free Umlaut"
+            "Cargo.lock must contain only Umlaut and the exact opt-in VIRAS graph"
         )
+    root_dependencies = set(by_name["umlaut"].get("dependencies", []))
+    if root_dependencies != VIRAS_DIRECT_DEPENDENCIES:
+        raise AuditError("Umlaut lock dependencies differ from the VIRAS direct graph")
+    for name, (version, checksum) in VIRAS_OPTIONAL_PACKAGES.items():
+        package = by_name[name]
+        if (
+            package.get("version") != version
+            or package.get("checksum") != checksum
+            or package.get("source")
+            != "registry+https://github.com/rust-lang/crates.io-index"
+            or set(package.get("dependencies", []))
+            != VIRAS_LOCK_DEPENDENCIES[name]
+        ):
+            raise AuditError(f"locked {name} identity or dependency edges are not audited")
+
+    dependencies = manifest.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != VIRAS_DIRECT_DEPENDENCIES:
+        raise AuditError("Cargo.toml direct dependencies differ from the VIRAS graph")
+    for name, dependency in dependencies.items():
+        expected_version = f"={VIRAS_OPTIONAL_PACKAGES[name][0]}"
+        if (
+            not isinstance(dependency, dict)
+            or dependency.get("optional") is not True
+            or dependency.get("version") != expected_version
+            or set(dependency) != {"version", "optional"}
+        ):
+            raise AuditError(f"{name} must remain optional and exactly versioned")
+    features = manifest.get("features")
+    expected_feature = {f"dep:{name}" for name in VIRAS_DIRECT_DEPENDENCIES}
+    if (
+        not isinstance(features, dict)
+        or set(features.get("default", []))
+        or set(features.get("viras-qe", [])) != expected_feature
+    ):
+        raise AuditError("default or viras-qe feature dependency boundary changed")
+    binaries = manifest.get("bin", [])
+    viras_bins = [
+        binary
+        for binary in binaries
+        if isinstance(binary, dict) and binary.get("name") == "umlaut-viras-qe"
+    ]
+    if len(viras_bins) != 1 or viras_bins[0].get("required-features") != ["viras-qe"]:
+        raise AuditError("umlaut-viras-qe must require only the viras-qe feature")
 
 
 def add_deterministic_file(
@@ -710,7 +794,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     name, version, _declared_bins = package_names(REPO_ROOT / "Cargo.toml")
-    assert_dependency_free(REPO_ROOT / "Cargo.lock")
+    assert_default_dependency_boundary(
+        REPO_ROOT / "Cargo.toml",
+        REPO_ROOT / "Cargo.lock",
+    )
 
     with tempfile.TemporaryDirectory(prefix="umlaut-package-audit-") as temporary:
         temporary_root = Path(temporary)
@@ -737,7 +824,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         _source_root_name, members = source_members(crate_path)
 
         extracted_root = extract_source(crate_path, temporary_root / "extracted")
-        assert_dependency_free(extracted_root / "Cargo.lock")
+        assert_default_dependency_boundary(
+            extracted_root / "Cargo.toml",
+            extracted_root / "Cargo.lock",
+        )
         _name, _version, binary_names = package_names(
             extracted_root / "Cargo.toml"
         )
@@ -840,7 +930,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "internal_sat_fallback": True,
             },
             "checks": {
-                "cargo_lock_dependency_free": True,
+                "cargo_default_dependency_boundary": True,
                 "source_archive_forbidden_components_absent": True,
                 "source_archive_pdfs_absent": True,
                 "source_archive_cadical_shim_present": True,

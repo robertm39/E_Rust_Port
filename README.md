@@ -58,6 +58,11 @@ namespace:
 
 Automation that invokes a previous target name must be updated.
 
+The additional `umlaut-viras-qe` executable is feature-required and has no
+legacy E analogue. It provides standalone, bounded typed arithmetic
+quantifier elimination only when built with `--features viras-qe`; see
+[docs/viras-qe.md](docs/viras-qe.md).
+
 ## Search telemetry
 
 Pass `--search-telemetry=run.json` to the primary executable to write one
@@ -77,6 +82,15 @@ supplied `UMLAUT_CADICAL_SOURCE` tree. Runtime mode
 `off` remains the default. Build provenance, proof-checker controls, packaging,
 and disablement are documented in [DOCS.md](DOCS.md) and
 [docs/dependency-packaging-matrix.md](docs/dependency-packaging-matrix.md).
+
+## Optional arithmetic quantifier elimination
+
+The `viras-qe` feature adds a clean-room, paper-derived exact LIRA
+quantifier-elimination kernel and the standalone `umlaut-viras-qe` tool. It is
+not used by the primary prover or any automatic schedule. Its supported typed
+fragment, fail-closed limits, derivation replay, output schema, dependencies,
+and complete disablement boundary are documented in
+[docs/viras-qe.md](docs/viras-qe.md).
 
 ## Development and validation
 

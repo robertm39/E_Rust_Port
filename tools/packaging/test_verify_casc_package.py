@@ -189,8 +189,36 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("eprover/HEURISTICS/schedule.vars", combined)
         self.assertNotIn("eprover/PROVER/e_options.h", combined)
 
-    def test_lock_file_has_no_external_dependencies(self):
-        audit.assert_dependency_free(audit.REPO_ROOT / "Cargo.lock")
+    def test_default_graph_and_optional_viras_graph_are_exact(self):
+        audit.assert_default_dependency_boundary(
+            audit.REPO_ROOT / "Cargo.toml",
+            audit.REPO_ROOT / "Cargo.lock",
+        )
+
+    def test_optional_graph_rejects_checksum_and_edge_corruption(self):
+        manifest_text = (audit.REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        lock_text = (audit.REPO_ROOT / "Cargo.lock").read_text(encoding="utf-8")
+        corruptions = [
+            lock_text.replace(
+                audit.VIRAS_OPTIONAL_PACKAGES["num-bigint"][1],
+                "0" * 64,
+                1,
+            ),
+            lock_text.replace(
+                'dependencies = [\n "num-integer",\n "num-traits",\n]',
+                'dependencies = [\n "num-traits",\n]',
+                1,
+            ),
+        ]
+        for index, corrupted_lock in enumerate(corruptions):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = root / "Cargo.toml"
+                lock = root / "Cargo.lock"
+                manifest.write_text(manifest_text, encoding="utf-8")
+                lock.write_text(corrupted_lock, encoding="utf-8")
+                with self.assertRaises(audit.AuditError):
+                    audit.assert_default_dependency_boundary(manifest, lock)
 
     def test_cargo_package_allowlist_is_root_anchored(self):
         with (audit.REPO_ROOT / "Cargo.toml").open("rb") as source:
