@@ -136,6 +136,15 @@ CASC-30 inputs. Transformed-state reuse also remains unsound and ineffective:
 only 28 of 92 same-problem transitions are add-only, simplified-clause
 retention has zero median, and stable atom/source-clause identities are absent.
 
+The bounded model-guided EPR instantiation study is retained in
+[`experiments/2026-07-30-008-instgen-epr-prototype/`](experiments/2026-07-30-008-instgen-epr-prototype/).
+Its equality-free, function-free CNF worker independently replayed every
+source-clause instance and all 22 complete models. On held-out validation/test,
+saturation, equal-budget portfolio, and cooperation solved the same seven
+problems; standalone instantiation solved four and added none. Exchanging 4,353
+instances added no solve and used 18.30 times saturation's median user CPU on
+common measured solves, so production remains unchanged.
+
 The family-held-out proof-clause transfer study is retained in
 [`experiments/2026-07-29-019-proof-lemma-watchlist-transfer/`](experiments/2026-07-29-019-proof-lemma-watchlist-transfer/).
 Flat PCL selection was cheap, but none of 296 explicit candidates passed the
