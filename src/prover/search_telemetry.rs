@@ -145,6 +145,7 @@ pub(crate) struct PreprocessingTransformStats {
 }
 
 pub(crate) struct SearchTelemetryRecord<'a> {
+    pub record_kind: &'static str,
     pub files: &'a [String],
     pub problem_type: ProblemType,
     pub heuristic: &'a str,
@@ -237,6 +238,11 @@ fn write_identity_and_outcome(
     writeln!(
         output,
         "  \"schema_version\": {SEARCH_TELEMETRY_SCHEMA_VERSION},"
+    )?;
+    writeln!(
+        output,
+        "  \"record_kind\": {},",
+        json_string(record.record_kind)
     )?;
     write!(output, "  \"problem\": {{\"files\": [")?;
     write_json_string_array(output, record.files)?;

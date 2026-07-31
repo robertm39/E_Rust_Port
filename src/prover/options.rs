@@ -1896,7 +1896,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         Some("search-telemetry"),
         OptArgType::ReqArg,
         None,
-        "Write one stable JSON search-telemetry record to the named file. This Umlaut extension is disabled by default.",
+        "Atomically maintain one stable JSON search-telemetry record at the named file, beginning before input processing. This Umlaut extension is disabled by default.",
     ),
     OptCell::new(
         EProverOption::FiniteModelSearch,

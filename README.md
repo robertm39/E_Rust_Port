@@ -65,11 +65,12 @@ quantifier elimination only when built with `--features viras-qe`; see
 
 ## Search telemetry
 
-Pass `--search-telemetry=run.json` to the primary executable to write one
-versioned, aggregate JSON record for a saturation search. The record covers
-the input and search funnels, inferences, simplification and index activity,
-SAT calls, term storage, proof depth, clause-set high-water counts, and
-resource usage. See
+Pass `--search-telemetry=run.json` to the primary executable to atomically
+maintain one versioned, aggregate JSON record for a saturation search. An
+initial checkpoint survives hard stops before ordinary finalization; a final
+record covers the input and search funnels, inferences, simplification and
+index activity, SAT calls, term storage, proof depth, clause-set high-water
+counts, and resource usage. See
 [docs/search-telemetry.md](docs/search-telemetry.md) for the schema and
 schedule-worker naming contract.
 

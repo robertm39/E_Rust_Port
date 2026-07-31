@@ -6155,6 +6155,9 @@ fn run_proof_search<W: Write + ?Sized>(
     if search_telemetry_baseline.is_some() {
         state.enable_search_telemetry();
     }
+    if let Some(counter_baseline) = search_telemetry_baseline {
+        write_search_telemetry_checkpoint(config, &state, counter_baseline)?;
+    }
     write_pending_type_verbose_events(hard_timeout_stderr, state.terms_mut())?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state, hard_timeout_stderr)?;
     let mut heuristic_params = heuristic_parms_from_config(config)?;
@@ -11035,6 +11038,7 @@ fn write_search_telemetry(
         return Ok(());
     };
     let record = SearchTelemetryRecord {
+        record_kind: "final",
         files: &config.files,
         problem_type: problem_type(),
         heuristic: control.heuristic_parms().heuristic_name.as_str(),
@@ -11050,19 +11054,75 @@ fn write_search_telemetry(
         counter_baseline,
         resource_usage: current_resource_usage(),
     };
-    let rendered = render_search_telemetry(&record).map_err(|_error| {
+    write_search_telemetry_record(&path, &record)
+}
+
+fn write_search_telemetry_checkpoint(
+    config: &EProverConfig,
+    state: &ProofState,
+    counter_baseline: SearchTelemetryCounterSnapshot,
+) -> Result<(), EProverError> {
+    let Some(path) = search_telemetry_output_path(config) else {
+        return Ok(());
+    };
+    let outcome = SaturateOutcome::Stopped {
+        reason: SaturateStopReason::TimeLimit,
+        processed_steps: 0,
+    };
+    let record = SearchTelemetryRecord {
+        record_kind: "checkpoint",
+        files: &config.files,
+        problem_type: problem_type(),
+        heuristic: config.search.heuristic.name.as_str(),
+        outcome: &outcome,
+        exit_status: ErrorCode::CPU_LIMIT_ERROR.exit_status(),
+        parsed_axioms: 0,
+        relevancy_pruned: 0,
+        raw_clauses: 0,
+        preprocessing_removed: 0,
+        preprocessing_transformations: PreprocessingTransformStats::default(),
+        state,
+        selection_telemetry: None,
+        counter_baseline,
+        resource_usage: current_resource_usage(),
+    };
+    write_search_telemetry_record(&path, &record)
+}
+
+fn write_search_telemetry_record(
+    path: &Path,
+    record: &SearchTelemetryRecord<'_>,
+) -> Result<(), EProverError> {
+    let rendered = render_search_telemetry(record).map_err(|_error| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "Cannot format the search telemetry JSON record",
         )
     })?;
-    std::fs::write(&path, rendered).map_err(|error| {
+    atomic_write_search_telemetry(path, rendered.as_bytes()).map_err(|error| {
         eprover_sys_error_diagnostic(
             format!("Cannot write search telemetry file {}", path.display()),
             &error,
         )
     })?;
     Ok(())
+}
+
+fn atomic_write_search_telemetry(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut temporary = path.as_os_str().to_os_string();
+    temporary.push(format!(".pid-{}.tmp", std::process::id()));
+    let temporary = PathBuf::from(temporary);
+    let result = (|| {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
 }
 
 fn search_telemetry_output_path(config: &EProverConfig) -> Option<PathBuf> {
@@ -27049,6 +27109,7 @@ input_clause(c2,axiom,[++q(X)]).
         let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
         assert!(telemetry.starts_with("{\n"));
         assert!(telemetry.ends_with("}\n"));
+        assert!(telemetry.contains("\"record_kind\": \"final\""));
         for required in [
             "\"schema\": \"umlaut.search-telemetry\"",
             "\"schema_version\": 1",
@@ -27078,6 +27139,53 @@ input_clause(c2,axiom,[++q(X)]).
         }
         assert!(telemetry.contains("\"kind\": \"returned\""));
         assert!(telemetry.contains("\"reason\": \"empty_clause\""));
+        let temporary_path =
+            PathBuf::from(format!("{telemetry_arg}.pid-{}.tmp", std::process::id()));
+        assert!(!temporary_path.exists());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(problem_path).unwrap();
+        std::fs::remove_file(telemetry_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_leaves_valid_checkpoint_on_early_input_failure() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("proof-search-telemetry-invalid-problem");
+        let telemetry_path = temp_path("proof-search-telemetry-checkpoint");
+        std::fs::write(&problem_path, "p(\n").unwrap();
+        let problem_arg = problem_path.to_string_lossy().into_owned();
+        let telemetry_arg = telemetry_path.to_string_lossy().into_owned();
+        let telemetry_option = format!("--search-telemetry={telemetry_arg}");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "umlaut",
+                "--lop-in",
+                telemetry_option.as_str(),
+                problem_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        let telemetry = std::fs::read_to_string(&telemetry_path).unwrap();
+        assert!(telemetry.starts_with("{\n"));
+        assert!(telemetry.ends_with("}\n"));
+        assert!(telemetry.contains("\"schema\": \"umlaut.search-telemetry\""));
+        assert!(telemetry.contains("\"schema_version\": 1"));
+        assert!(telemetry.contains("\"record_kind\": \"checkpoint\""));
+        assert!(telemetry.contains("\"processed_non_trivial\": 0"));
+        assert!(telemetry.contains("\"generated_non_trivial\": 0"));
+        assert!(telemetry.contains("\"kind\": \"stopped\""));
+        assert!(telemetry.contains("\"reason\": \"time_limit\""));
+        let temporary_path =
+            PathBuf::from(format!("{telemetry_arg}.pid-{}.tmp", std::process::id()));
+        assert!(!temporary_path.exists());
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(problem_path).unwrap();
         std::fs::remove_file(telemetry_path).unwrap();

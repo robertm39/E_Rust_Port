@@ -1,6 +1,6 @@
 # Search telemetry
 
-Umlaut can write one stable, aggregate JSON record for each completed
+Umlaut can atomically maintain one stable, aggregate JSON record for a
 saturation search:
 
 ```text
@@ -14,10 +14,14 @@ Syntax checking, applicative encoding, pruning, CNF-only conversion, and
 strategy-printing modes reject the option because they do not run saturation.
 
 The disabled path does not allocate a record or inspect proof-state or HCB
-queues. There are two predictable conditional checkpoints per given-clause
-iteration. When enabled, those checkpoints update constant-time clause-set
-high-water counts and inspect only the best entry of each active HCB evaluation
-queue. Formatting and file I/O happen once, after the search outcome is known.
+queues. When enabled, Umlaut writes a `checkpoint` record before input
+processing and atomically replaces it with a `final` record after an ordinary
+search outcome. A temporary file is flushed before each rename, so a
+termination during replacement leaves either the previous complete record or
+the new complete record at the configured path. There are two predictable
+conditional checkpoints per given-clause iteration. Those checkpoints update
+constant-time clause-set high-water counts and inspect only the best entry of
+each active HCB evaluation queue.
 
 Within `clause_selection`, `max_schedule_gap` counts selections of other queues
 between visits to one queue. `preferred_bypass_steps` counts selections made
@@ -34,6 +38,7 @@ The top-level `schema` is `umlaut.search-telemetry` and `schema_version` is
 
 | Group | Diagnostic purpose |
 | --- | --- |
+| `record_kind` | `checkpoint` before input processing or `final` after an ordinary outcome |
 | `problem` | Input file names and first-order/higher-order classification |
 | `configuration` | Effective heuristic name |
 | `outcome` | Returned/stopped classification, stable snake-case reason, processed steps, and exit status |
@@ -99,13 +104,15 @@ additive fields.
 ## Limits and schedules
 
 Step, clause, and cooperatively observed soft-time limits produce normal
-stopped records. Linux's kernel-enforced hard CPU limit terminates from its
-asynchronous `SIGXCPU` handler and cannot safely format JSON; it is not
-guaranteed to produce a record. Termination before search initialization, an
-uncatchable kill, an operating-system OOM kill, or a filesystem error can also
-prevent a record from being written. Memory pressure that does complete is
-visible through resident-page and term-storage evidence; hard-killed processes
-require external resource telemetry.
+`final` stopped records. Linux's kernel-enforced hard CPU limit terminates from
+its asynchronous `SIGXCPU` handler and cannot safely format JSON. The
+pre-input `checkpoint` nevertheless remains available when the hard limit
+arrives before finalization; its zero search counters intentionally distinguish
+that state from a completed probe. Termination before the checkpoint rename,
+an uncatchable kill during the first write, an operating-system OOM kill, or a
+filesystem error can still prevent a record from being written. Memory
+pressure that does complete is visible through resident-page and term-storage
+evidence.
 
 In a direct run, the configured path is used exactly. Schedule workers append
 a collision-free suffix:
