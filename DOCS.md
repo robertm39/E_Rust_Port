@@ -156,6 +156,15 @@ problems; standalone instantiation solved four and added none. Exchanging 4,353
 instances added no solve and used 18.30 times saturation's median user CPU on
 common measured solves, so production remains unchanged.
 
+The trigger-matching and model-counterexample follow-up is retained in
+[`experiments/2026-07-30-016-ematching-mbqi-feasibility/`](experiments/2026-07-30-016-ematching-mbqi-feasibility/).
+All 3,528,665 retained source instances, 37 finite models, and nine hand-case
+DRAT proofs validated. E-matching solved three reproducible held-out problems
+versus four each for bounded clausification and MBQI, lost `PUZ028-2`, and
+used 2.055 times MBQI's instances on common solves. Nine paired time-limited
+traces also differed despite stable statuses. The verdict is `stop`: a generic
+EPR trigger worker is not supported, and production remains unchanged.
+
 The deterministic cooperative-multicore study is retained in
 [`experiments/2026-07-30-009-cooperative-multicore-search/`](experiments/2026-07-30-009-cooperative-multicore-search/).
 Across 288 valid coordinates and 50 independently replayed winner proofs,
