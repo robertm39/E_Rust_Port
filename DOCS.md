@@ -173,6 +173,16 @@ telemetry output and collapsed to the fallback. The verdict is uncertain and
 the adaptive policy remains outside automatic schedules pending deterministic
 probe observability.
 
+The deterministic adaptive-probe follow-up is retained in
+[`experiments/2026-07-30-010-deterministic-adaptive-probes/`](experiments/2026-07-30-010-deterministic-adaptive-probes/).
+An atomic schema-v1 checkpoint now survives preprocessing hard stops, and all
+128 held-out non-proof decision probes were hash-valid and repeat-stable.
+However, telemetry wall overhead was 1.053 times disabled search on validation
+and 1.076 times on test, above the frozen 1.05 gate. Adaptive search added no
+solve versus both controls and lost `NUN081+1` versus the static goal
+continuation. The policy verdict is `stop`; the opt-in telemetry checkpoint is
+retained, while automatic schedules and defaults remain unchanged.
+
 The associative-commutative normalization-mode study is retained in
 [`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
 All existing AC modes passed strengthened semantic tests and four held-out
