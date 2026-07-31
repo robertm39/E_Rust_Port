@@ -205,6 +205,18 @@ gate. The verdict is `reject`: conditional two-class label collection was not
 run, and TSM remains outside automatic schedules; the safe optimization is
 retained for the existing opt-in path.
 
+The nonlinear-real arithmetic and model-based-projection feasibility study is
+retained in
+[`experiments/2026-07-30-013-nonlinear-arithmetic-feasibility/`](experiments/2026-07-30-013-nonlinear-arithmetic-feasibility/).
+Only three of 2,901 CASC-30 problems are whole-problem QF-NRA under the frozen
+pure-real boundary, although pinned Z3 deterministically returns the expected
+result for all three and for one separate quantified case. Trusted coverage
+is zero because NLSAT does not produce replayable proofs, while the audited
+NLSAT/QE/polynomial/real-closure surface contains 51,686 nonblank,
+non-comment lines. The whole-problem candidate is rejected, nonlinear
+model-based projection is deferred pending real branch-demand traces, and
+production remains unchanged.
+
 The associative-commutative normalization-mode study is retained in
 [`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
 All existing AC modes passed strengthened semantic tests and four held-out
