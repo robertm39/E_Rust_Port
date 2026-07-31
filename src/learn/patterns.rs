@@ -236,12 +236,12 @@ impl PatternSubst {
         0
     }
 
-    fn comparison_value(&mut self, f_code: FunCode) -> FunCode {
+    fn comparison_value(&self, f_code: FunCode) -> FunCode {
         assert_ne!(f_code, 0, "pattern symbols must be non-zero");
         if f_code > 0 {
             let value = subst_array_value(&self.fun_subst, pd_index(f_code));
             if value == f_code {
-                i64::from(self.sig.get_alpha_rank(f_code))
+                i64::from(self.sig.alpha_rank(f_code))
             } else {
                 value
             }
@@ -318,9 +318,9 @@ pub fn pattern_term_compute(subst: &mut PatternSubst, term: &Term) -> bool {
 /// Panics if the structural size comparison returns an impossible state, or if
 /// same-size terms expose mismatched arities or missing arguments.
 pub fn pattern_term_compare(
-    subst1: &mut PatternSubst,
+    subst1: &PatternSubst,
     left: &Term,
-    subst2: &mut PatternSubst,
+    subst2: &PatternSubst,
     right: &Term,
 ) -> CompareResult {
     let size_result = pat_term_size_compare(left, right);
@@ -512,10 +512,10 @@ pub fn pattern_term_pair_compute(
 
 #[must_use]
 pub fn pattern_term_pair_compare(
-    subst1: &mut PatternSubst,
+    subst1: &PatternSubst,
     eqn1: &Eqn,
     dir1: PatEqnDirection,
-    subst2: &mut PatternSubst,
+    subst2: &PatternSubst,
     eqn2: &Eqn,
     dir2: PatEqnDirection,
 ) -> CompareResult {
@@ -563,9 +563,9 @@ pub fn pattern_lit_list_compute(
 
 #[must_use]
 pub fn pattern_lit_list_compare(
-    subst1: &mut PatternSubst,
+    subst1: &PatternSubst,
     listrep1: &[(&Eqn, PatEqnDirection)],
-    subst2: &mut PatternSubst,
+    subst2: &PatternSubst,
     listrep2: &[(&Eqn, PatEqnDirection)],
 ) -> CompareResult {
     let len_cmp = i64::try_from(listrep1.len()).unwrap_or(i64::MAX)
@@ -584,9 +584,9 @@ pub fn pattern_lit_list_compare(
 }
 
 fn pat_symbol_compare(
-    subst1: &mut PatternSubst,
+    subst1: &PatternSubst,
     f1: FunCode,
-    subst2: &mut PatternSubst,
+    subst2: &PatternSubst,
     f2: FunCode,
 ) -> CompareResult {
     if subst1.symbol_is_bound(f1) && subst2.symbol_is_bound(f2) {
@@ -601,11 +601,7 @@ fn pat_symbol_compare(
     }
 }
 
-fn pat_symbol_compare_same_subst(
-    subst: &mut PatternSubst,
-    f1: FunCode,
-    f2: FunCode,
-) -> CompareResult {
+fn pat_symbol_compare_same_subst(subst: &PatternSubst, f1: FunCode, f2: FunCode) -> CompareResult {
     let f1_bound = subst.symbol_is_bound(f1);
     let f2_bound = subst.symbol_is_bound(f2);
     if f1_bound && f2_bound {
@@ -668,7 +664,7 @@ fn pat_term_size_compare(left: &Term, right: &Term) -> CompareResult {
 }
 
 fn pattern_term_compare_same_subst(
-    subst: &mut PatternSubst,
+    subst: &PatternSubst,
     left: &Term,
     right: &Term,
 ) -> CompareResult {
@@ -697,7 +693,7 @@ fn pattern_term_compare_same_subst(
 }
 
 fn pattern_term_pair_compare_same_subst(
-    subst: &mut PatternSubst,
+    subst: &PatternSubst,
     eqn1: &Eqn,
     dir1: PatEqnDirection,
     eqn2: &Eqn,
@@ -943,16 +939,11 @@ fn lit_list_rep_pattern(
             affordable = complete_state(&mut subst, literals, &mut used, &mut order, &mut state);
 
             if affordable
-                && pattern_lit_order_compare(
-                    &mut subst,
-                    literals,
-                    &order,
-                    &mut best_subst,
-                    &best_order,
-                ) == CompareResult::Lesser
+                && pattern_lit_order_compare(&subst, literals, &order, &best_subst, &best_order)
+                    == CompareResult::Lesser
             {
                 best_subst = subst.clone();
-                best_order = order.clone();
+                best_order.clone_from(&order);
             }
         } else {
             state.pop();
@@ -963,10 +954,10 @@ fn lit_list_rep_pattern(
 }
 
 fn pattern_lit_order_compare(
-    subst1: &mut PatternSubst,
+    subst1: &PatternSubst,
     literals: &[Eqn],
     order1: &[(usize, PatEqnDirection)],
-    subst2: &mut PatternSubst,
+    subst2: &PatternSubst,
     order2: &[(usize, PatEqnDirection)],
 ) -> CompareResult {
     let len_cmp = i64::try_from(order1.len()).unwrap_or(i64::MAX)
@@ -1246,13 +1237,13 @@ mod tests {
         pattern_term_compute(&mut right_subst, &right);
 
         assert_eq!(
-            pattern_term_compare(&mut left_subst, &left, &mut right_subst, &right),
+            pattern_term_compare(&left_subst, &left, &right_subst, &right),
             CompareResult::Equal
         );
 
         let larger = fun(f, &[fun(g, &[constant(a)])]);
         assert_eq!(
-            pattern_term_compare(&mut left_subst, &left, &mut right_subst, &larger),
+            pattern_term_compare(&left_subst, &left, &right_subst, &larger),
             CompareResult::Greater
         );
     }
@@ -1316,10 +1307,10 @@ mod tests {
 
         assert_eq!(
             pattern_term_pair_compare(
-                &mut left_subst,
+                &left_subst,
                 &positive,
                 PatEqnDirection::Normal,
-                &mut right_subst,
+                &right_subst,
                 &negative,
                 PatEqnDirection::Normal,
             ),
@@ -1327,9 +1318,9 @@ mod tests {
         );
         assert_eq!(
             pattern_lit_list_compare(
-                &mut left_subst,
+                &left_subst,
                 &[(&positive, PatEqnDirection::Normal)],
-                &mut right_subst,
+                &right_subst,
                 &[
                     (&positive, PatEqnDirection::Normal),
                     (&negative, PatEqnDirection::Normal),

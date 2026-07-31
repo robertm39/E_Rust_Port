@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
@@ -74,7 +74,7 @@ pub struct TSMIndex {
     count: i64,
     subst: Rc<PatternSubst>,
     symbol_index: BTreeMap<FunCode, i64>,
-    term_index: BTreeSet<IndexTerm>,
+    term_index: Vec<IndexTerm>,
 }
 
 impl IndexTerm {
@@ -147,7 +147,7 @@ impl TSMIndex {
             count: 0,
             subst,
             symbol_index: BTreeMap::new(),
-            term_index: BTreeSet::new(),
+            term_index: Vec::new(),
         }
     }
 
@@ -196,13 +196,9 @@ impl TSMIndex {
             }
             IndexType::TOP | IndexType::ALT_TOP | IndexType::CS_TOP | IndexType::ES_TOP => {
                 let top = any_term_top(self.index_type, term, self.depth, bank);
-                let query = IndexTerm::new(top, subst.clone(), -1);
-                self.term_index.get(&query).map_or(-1, |entry| entry.key)
+                self.find_term_index(&top, subst)
             }
-            IndexType::IDENTITY => {
-                let query = IndexTerm::new(term.clone(), subst.clone(), -1);
-                self.term_index.get(&query).map_or(-1, |entry| entry.key)
-            }
+            IndexType::IDENTITY => self.find_term_index(term, subst),
             IndexType::EMPTY => -1,
             _ => panic!("unknown or composite TSM index type"),
         }
@@ -270,17 +266,27 @@ impl TSMIndex {
     }
 
     fn insert_term_index(&mut self, term: &Term, bank: &mut TermBank) -> Result<i64, Diagnostic> {
-        let query = IndexTerm::new_shared(term.clone(), Rc::clone(&self.subst), -1);
-        if let Some(entry) = self.term_index.get(&query) {
-            return Ok(entry.key);
-        }
+        let position = match self.term_index.binary_search_by(|entry| {
+            index_term_order_parts(&entry.term, entry.subst.as_ref(), term, self.subst.as_ref())
+        }) {
+            Ok(position) => return Ok(self.term_index[position].key),
+            Err(position) => position,
+        };
 
         let shared = bank.insert(term, DerefType::Never)?;
         let result = self.count;
         let entry = IndexTerm::new_shared(shared, Rc::clone(&self.subst), result);
-        assert!(self.term_index.insert(entry));
+        self.term_index.insert(position, entry);
         self.count += 1;
         Ok(result)
+    }
+
+    fn find_term_index(&self, term: &Term, subst: &PatternSubst) -> i64 {
+        self.term_index
+            .binary_search_by(|entry| {
+                index_term_order_parts(&entry.term, entry.subst.as_ref(), term, subst)
+            })
+            .map_or(-1, |position| self.term_index[position].key)
     }
 
     fn print_symbol_index(&self, bank: &TermBank, indent: &str) -> String {
@@ -431,14 +437,21 @@ pub fn tsm_index_print_string(index: &TSMIndex, bank: &TermBank, depth: i32) -> 
 }
 
 fn index_term_order(left: &IndexTerm, right: &IndexTerm) -> Ordering {
-    let mut left_subst = left.subst.as_ref().clone();
-    let mut right_subst = right.subst.as_ref().clone();
-    compare_result_to_ordering(pattern_term_compare(
-        &mut left_subst,
+    index_term_order_parts(
         &left.term,
-        &mut right_subst,
+        left.subst.as_ref(),
         &right.term,
-    ))
+        right.subst.as_ref(),
+    )
+}
+
+fn index_term_order_parts(
+    left: &Term,
+    left_subst: &PatternSubst,
+    right: &Term,
+    right_subst: &PatternSubst,
+) -> Ordering {
+    compare_result_to_ordering(pattern_term_compare(left_subst, left, right_subst, right))
 }
 
 fn compare_result_to_ordering(result: CompareResult) -> Ordering {
@@ -627,6 +640,37 @@ mod tests {
         assert_eq!(tsm_index_insert(&mut index, &second, &mut bank).unwrap(), 1);
         assert_eq!(tsm_index_insert(&mut index, &first, &mut bank).unwrap(), 0);
         assert_eq!(tsm_index_find(&mut index, &second, &subst, &bank), 1);
+    }
+
+    #[test]
+    fn identity_index_preserves_dense_keys_when_sorted_positions_move() {
+        let mut bank = test_bank();
+        let terms = [
+            parse_in_bank(&mut bank, "g(c)"),
+            parse_in_bank(&mut bank, "a"),
+            parse_in_bank(&mut bank, "f(b)"),
+            parse_in_bank(&mut bank, "f(a)"),
+        ];
+        let subst = bound_subst(&bank, &terms.iter().collect::<Vec<_>>());
+        let mut index = tsm_index_alloc(IndexType::IDENTITY, 0, subst.clone());
+
+        for (expected, term) in terms.iter().enumerate() {
+            assert_eq!(
+                tsm_index_insert(&mut index, term, &mut bank).unwrap(),
+                i64::try_from(expected).unwrap()
+            );
+        }
+
+        assert!(index
+            .term_index
+            .windows(2)
+            .all(|window| window[0] < window[1]));
+        for (expected, term) in terms.iter().enumerate() {
+            assert_eq!(
+                tsm_index_find(&mut index, term, &subst, &bank),
+                i64::try_from(expected).unwrap()
+            );
+        }
     }
 
     #[test]

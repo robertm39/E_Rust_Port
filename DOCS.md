@@ -183,6 +183,17 @@ solve versus both controls and lost `NUN081+1` versus the static goal
 continuation. The policy verdict is `stop`; the opt-in telemetry checkpoint is
 retained, while automatic schedules and defaults remain unchanged.
 
+The TSM ranking-cost follow-up is retained in
+[`experiments/2026-07-30-011-tsm-ranking-feasibility/`](experiments/2026-07-30-011-tsm-ranking-feasibility/).
+Borrowed normalized-term comparison and a sorted dense-key index reduce
+validation scoring from 103.027 to 10.773 CPU microseconds per weighted
+occurrence and remove 89.3% of learned-only diagnostic instructions while
+preserving byte-exact outputs and every search-work counter. The live
+learned/control CPU ratio nevertheless remains 1.620, above the frozen 1.10
+gate. The verdict is `reject`: conditional two-class label collection was not
+run, and TSM remains outside automatic schedules; the safe optimization is
+retained for the existing opt-in path.
+
 The associative-commutative normalization-mode study is retained in
 [`experiments/2026-07-29-021-ac-normalization-modes/`](experiments/2026-07-29-021-ac-normalization-modes/).
 All existing AC modes passed strengthened semantic tests and four held-out
