@@ -145,6 +145,16 @@ problems; standalone instantiation solved four and added none. Exchanging 4,353
 instances added no solve and used 18.30 times saturation's median user CPU on
 common measured solves, so production remains unchanged.
 
+The deterministic cooperative-multicore study is retained in
+[`experiments/2026-07-30-009-cooperative-multicore-search/`](experiments/2026-07-30-009-cooperative-multicore-search/).
+Across 288 valid coordinates and 50 independently replayed winner proofs,
+bounded same-problem watchlist exchange was correct and active. The 64-clause
+cap reproducibly solved validation problem `LCL365+1` while all independent and
+restart controls gave up, but it added no test solve. Validation had zero and
+test only two common solved coordinates versus restart, below the frozen
+four-coordinate efficiency minimum. The verdict is uncertain, no arm is
+selected, and the process-isolated production portfolio remains unchanged.
+
 The family-held-out proof-clause transfer study is retained in
 [`experiments/2026-07-29-019-proof-lemma-watchlist-transfer/`](experiments/2026-07-29-019-proof-lemma-watchlist-transfer/).
 Flat PCL selection was cheap, but none of 296 explicit candidates passed the
