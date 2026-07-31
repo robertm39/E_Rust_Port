@@ -1,0 +1,28 @@
+{
+  "environment": {
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "inputs": {
+    "model_sha256": "c982ac5efcb78b2bb4c650f6454124e47e271fde51ea57a697809313ceff835f",
+    "preregistration_sha256": "7dea509c42b9f1acb3df5d9181fd11558399adc94bfe452a480adc83e9e13e15",
+    "test_sha256": "ab841aad18ac99ad0cb054c52c3cc83e1660de6482741ff6351f7835c6f3254a"
+  },
+  "kind": "umlaut-persistent-satcheck-model-campaign",
+  "metrics": {
+    "incremental_transitions": 5058,
+    "maximum_permanent_clauses": 14,
+    "maximum_retired_clauses": 9,
+    "oracle_checks": 6000,
+    "rebuilds": 942,
+    "sat_snapshots": 1111,
+    "source_core_checks": 4889,
+    "steps_per_trace": 60,
+    "traces": 100,
+    "transitions": 6000,
+    "unsat_snapshots": 4889
+  },
+  "result_id": "3e49c19f780fad8b67e34627eb812c1d64f83442d2240af61015fc2ff3937f98",
+  "schema_version": 1,
+  "status": "pass"
+}

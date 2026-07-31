@@ -124,6 +124,17 @@ independently re-solved by pinned CaDiCaL and verified by ProofCheck; captured
 call streams show 68.2% median exact-clause retention but require stable
 identities and selector retirement before persistent reuse can be sound.
 
+The resulting persistent SATCheck identity and selector-retirement architecture
+is documented in
+[`docs/persistent-satcheck-design.md`](docs/persistent-satcheck-design.md),
+with its executable model in
+[`experiments/2026-07-30-012-persistent-satcheck-design/`](experiments/2026-07-30-012-persistent-satcheck-design/).
+Structural atom keys, generation-plus-content clause keys, omission-based
+retirement, bounded epoch rebuilds, fail-closed recovery, and active-only core
+mapping passed 6,000 cross-platform fresh-oracle transitions and 4,889 mapped
+UNSAT-core checks. The design is ready for a staged opt-in Rust prototype;
+production SATCheck reuse, triggers, and defaults remain unchanged.
+
 The exact propositional and extracted-clause SAT preprocessing study is
 retained in
 [`experiments/2026-07-30-007-propositional-sat-preprocessing/`](experiments/2026-07-30-007-propositional-sat-preprocessing/).
