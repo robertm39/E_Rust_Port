@@ -179,6 +179,19 @@ replication is clean and reaches the same `stop` decision. Open tableau
 branches are not sound exchange lemmas, so clause exchange was rejected and
 production remains unchanged.
 
+The family-held-out recursive neural clause-ranking feasibility study is
+retained in
+[`experiments/2026-07-30-018-recursive-neural-guidance/`](experiments/2026-07-30-018-recursive-neural-guidance/).
+Its dependency-free frozen recursive encoder and eight-unit learned head
+ranked 1,298 LCL validation clauses across five exact seeds. The selected
+model's 0.2217 AP was below the linear structural baseline's 0.2247 and far
+below chronological order's 0.4182; top-10% recall merely tied linear, the
+simulated proof-prefix effect missed its gate, and in-process inference used
+141 microseconds per clause. Two runs reproduced every decision field and
+model hash exactly, but the preregistered validation gate stopped the study
+before PUZ/ROB test extraction/evaluation or end-to-end search. No neural
+runtime, dependency, schedule, or production path was adopted.
+
 The deterministic cooperative-multicore study is retained in
 [`experiments/2026-07-30-009-cooperative-multicore-search/`](experiments/2026-07-30-009-cooperative-multicore-search/).
 Across 288 valid coordinates and 50 independently replayed winner proofs,
