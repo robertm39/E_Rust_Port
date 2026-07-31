@@ -165,6 +165,20 @@ used 2.055 times MBQI's instances on common solves. Nine paired time-limited
 traces also differed despite stable statuses. The verdict is `stop`: a generic
 EPR trigger worker is not supported, and production remains unchanged.
 
+The bounded complementary connection-tableau study is retained in
+[`experiments/2026-07-30-017-complementary-connection-worker/`](experiments/2026-07-30-017-complementary-connection-worker/).
+Its equality-free FOF worker shares Umlaut clausification but emits a small
+rule-choice certificate whose substitutions and branch closure are rebuilt by
+an independent verifier. It reproducibly proves test problem `NUN081+1` with
+six rule nodes versus 20 annotated formulas in the goal-priority saturation
+proof, but adds no solve over that stronger control or their independent
+portfolio, is 2.083 times slower on the lone common solve, and has no
+validation signal. An initial test execution also exposes a preserved
+goal-priority theorem/resource repetition disagreement; the complete unchanged
+replication is clean and reaches the same `stop` decision. Open tableau
+branches are not sound exchange lemmas, so clause exchange was rejected and
+production remains unchanged.
+
 The deterministic cooperative-multicore study is retained in
 [`experiments/2026-07-30-009-cooperative-multicore-search/`](experiments/2026-07-30-009-cooperative-multicore-search/).
 Across 288 valid coordinates and 50 independently replayed winner proofs,

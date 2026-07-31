@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "bead": "E_Rust_Port-9jt.6.7",
+  "verdict": "stop",
+  "production_change": false,
+  "primary_coordinates": 60,
+  "diagnostic_coordinates": 24,
+  "primary_verified_theorem_runs": 9,
+  "artifact_files_checked": 279,
+  "splits": {
+    "train": {
+      "connection": [],
+      "global_aw": [],
+      "goal_hard_priority": ["CSR115+98"],
+      "independent_portfolio": ["CSR115+98"]
+    },
+    "validation": {
+      "connection": [],
+      "global_aw": ["LCL982+1"],
+      "goal_hard_priority": ["LCL982+1"],
+      "independent_portfolio": ["LCL982+1"]
+    },
+    "test": {
+      "connection": ["NUN081+1"],
+      "global_aw": [],
+      "goal_hard_priority": ["NUN081+1"],
+      "independent_portfolio": ["NUN081+1"]
+    }
+  },
+  "test_common_cost": {
+    "problems": ["NUN081+1"],
+    "connection_rule_nodes": 12,
+    "goal_saturation_proof_formulas": 40,
+    "rule_node_ratio": 0.3,
+    "median_wall_ratio": 2.08335021864595,
+    "accepted": false
+  },
+  "first_test_execution": {
+    "valid": false,
+    "disagreement": {
+      "problem_id": "NUN085+1",
+      "method": "goal_hard_priority",
+      "statuses": ["Theorem", "ResourceOut"]
+    }
+  },
+  "replicated_test_execution": {
+    "valid": true,
+    "connection_unique_vs_goal": [],
+    "connection_losses_vs_goal": [],
+    "portfolio_adds_over_goal": []
+  },
+  "sha256": {
+    "corpus": "7a58785f6f65e57c469ac406d188aa744ba24e94ce10dd57074ccfeed097a5f4",
+    "preregistration": "af9262b780d8336a9c1f43407bfd11b749e5e2012f092b8164a05e2f6807796d",
+    "binary": "8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda",
+    "final_decision": "e5d8b33cf5417d891648c5267db5ad7dde79c292ac16f418eb3482c244aa1d39",
+    "evidence_archive": "095fd55e349f037d8c296c16b9055d858f364dcfaf5c8615bae9cec26f60b743"
+  }
+}
+
