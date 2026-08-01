@@ -176,8 +176,22 @@ capture while the service, a prover, or benchmark cgroup is active and retains
 both systemd invocations, apt logs, the frozen binary, interrupted output, the
 deterministic run archive, and verified inner hashes. The immutable matrix
 remains resumable from those 185 records under `E_Rust_Port-9jt.2.7`.
-`E_Rust_Port-9jt.2.12` tracks runner-side quiescing and recording of unattended
-package maintenance before the matrix resumes.
+Runner follow-up `E_Rust_Port-9jt.2.12` now waits for cloud-init, stops and
+masks both `apt-daily` timers and services before the first `apt-get`, verifies
+their inactive/masked state, and records the atomic JSON plus SHA-256 in
+controller state. Comprehensive run `.artifacts/linode/260801-084455-5875/`
+forced a real systemd manager reexec while a transient benchmark probe was
+active: PID `3531` and invocation `e578752eab964d44a9f365c9914774ec`
+survived unchanged, then SIGINT left an empty cgroup, no worker or temporary
+result, and a single hash-valid coordinate that resume skipped. The lifecycle
+record SHA-256 is
+`0ac422ef3a8ae68b5066d4ff6d85d86ccadcb9c908635b10289fa685e9836fe8`;
+the quiescence record SHA-256 is
+`60e49562d214a94accb031f6b52ea25bbbc641f77a10c93b9622634fdd1c827b`.
+The same clean-room run passed 4,562 library tests, every build/compatibility
+gate, and all ten behavior-exact benchmarks at `1.0733692750x`, then deleted
+the Linode and firewall. The checkpoint is therefore ready to resume under the
+quiesced runner lifecycle.
 
 ## J13 THF direct-lambda operand boundary
 

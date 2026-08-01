@@ -77,6 +77,29 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def package_maintenance_record() -> dict:
+    return {
+        "schema_version": 1,
+        "captured_at": "2026-08-01T08:00:00+00:00",
+        "cloud_init_wait_completed": True,
+        "units": {
+            unit: {
+                "active_state": "inactive",
+                "unit_file_state": "masked",
+            }
+            for unit in runner.PACKAGE_MAINTENANCE_UNITS
+        },
+    }
+
+
+def package_maintenance_state() -> dict:
+    return {
+        "path": str(runner.PACKAGE_MAINTENANCE_RECORD),
+        "sha256": "a" * 64,
+        "record": package_maintenance_record(),
+    }
+
+
 class PayloadTests(unittest.TestCase):
     def test_generated_resource_label_fits_firewall_limit(self):
         label = runner.resource_label(runner.run_id())
@@ -237,8 +260,71 @@ class ExplicitTransferTests(unittest.TestCase):
         self.assertIn("x86_64-w64-mingw32-gcc --version", script)
         self.assertIn("x86_64-w64-mingw32-g++-posix --version", script)
 
+    def test_bootstrap_quiesces_package_maintenance_before_apt(self):
+        script = runner.bootstrap_script()
+
+        self.assertLess(script.index("cloud-init status --wait"), script.index("apt-get update"))
+        self.assertLess(
+            script.index('systemctl stop "${maintenance_units[@]}"'),
+            script.index("apt-get update"),
+        )
+        self.assertLess(
+            script.index('systemctl mask "${maintenance_units[@]}"'),
+            script.index("apt-get update"),
+        )
+        self.assertLess(
+            script.index('systemctl reset-failed "$unit"'),
+            script.index("apt-get update"),
+        )
+        for unit in runner.PACKAGE_MAINTENANCE_UNITS:
+            self.assertIn(unit, script)
+        self.assertIn("package-maintenance-quiescence.json", script)
+        self.assertIn('property_value(unit, "ActiveState")', script)
+        self.assertIn('property_value(unit, "UnitFileState")', script)
+
+    def test_package_maintenance_record_requires_every_unit_quiesced(self):
+        record = package_maintenance_record()
+        self.assertIs(runner.validate_package_maintenance_record(record), record)
+
+        for property_name, invalid_value, message in [
+            ("active_state", "active", "not inactive"),
+            ("unit_file_state", "enabled", "not masked"),
+        ]:
+            with self.subTest(property_name=property_name):
+                invalid = package_maintenance_record()
+                invalid["units"][runner.PACKAGE_MAINTENANCE_UNITS[0]][
+                    property_name
+                ] = invalid_value
+                with self.assertRaisesRegex(runner.RunnerError, message):
+                    runner.validate_package_maintenance_record(invalid)
+
+        missing = package_maintenance_record()
+        del missing["units"][runner.PACKAGE_MAINTENANCE_UNITS[-1]]
+        with self.assertRaisesRegex(runner.RunnerError, "unexpected unit set"):
+            runner.validate_package_maintenance_record(missing)
+
+    def test_bootstrap_records_remote_quiescence_hash(self):
+        serialized = json.dumps(package_maintenance_record(), sort_keys=True) + "\n"
+        with mock.patch.object(
+            runner,
+            "ssh_command",
+            side_effect=[mock.Mock(), mock.Mock(stdout=serialized)],
+        ) as ssh:
+            state = runner.bootstrap({"ipv4": "192.0.2.8"})
+
+        self.assertEqual(ssh.call_count, 2)
+        self.assertEqual(state["path"], str(runner.PACKAGE_MAINTENANCE_RECORD))
+        self.assertEqual(
+            state["sha256"],
+            runner.hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(state["record"], package_maintenance_record())
+
     def test_remote_workload_contains_comprehensive_remote_only_gates(self):
         script = MODULE_PATH.with_name("remote_run.sh").read_text(encoding="utf-8")
+        lifecycle = MODULE_PATH.with_name("maintenance_lifecycle_test.sh").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("cargo test --locked --all-targets --all-features", script)
         self.assertIn("cargo clippy --locked --all-targets --all-features", script)
@@ -253,6 +339,15 @@ class ExplicitTransferTests(unittest.TestCase):
         self.assertIn("VALIDATION_COMPLETE", script)
         self.assertIn("SUCCESS", script)
         self.assertIn("no Windows binary was executed", script)
+        self.assertIn("maintenance_lifecycle_test.sh", script)
+        self.assertIn("systemctl daemon-reexec", lifecycle)
+        self.assertIn("pid_after", lifecycle)
+        self.assertIn("invocation_after", lifecycle)
+        self.assertIn("cgroup.procs", lifecycle)
+        self.assertIn("pgrep -f", lifecycle)
+        self.assertIn("sha256sum -c results.sha256", lifecycle)
+        self.assertIn("resume-verified", lifecycle)
+        self.assertIn("PACKAGE_MAINTENANCE_LIFECYCLE_COMPLETE", lifecycle)
 
 
 class PlanSelectionTests(unittest.TestCase):
@@ -677,7 +772,11 @@ class ProvisionGuardTests(unittest.TestCase):
             mock.patch.object(runner, "read_public_key", return_value="ssh-ed25519 test"),
             mock.patch.object(runner, "wait_for_linode"),
             mock.patch.object(runner, "wait_for_ssh"),
-            mock.patch.object(runner, "bootstrap"),
+            mock.patch.object(
+                runner,
+                "bootstrap",
+                return_value=package_maintenance_state(),
+            ),
         )
 
     def test_exhausted_high_memory_guard_precedes_resource_creation(self):
@@ -783,6 +882,9 @@ class ProvisionGuardTests(unittest.TestCase):
                 )
             self.assertEqual(state["type"], runner.DEFAULT_TYPE)
             self.assertEqual(
+                state["package_maintenance"], package_maintenance_state()
+            )
+            self.assertEqual(
                 [path for path, _payload in api.posts],
                 ["/networking/firewalls", "/linode/instances"],
             )
@@ -841,6 +943,10 @@ class DocumentationTests(unittest.TestCase):
             "next balance = min(4 hours, starting balance + 4 hours - actual usage)",
             runbook,
         )
+        self.assertIn("cloud-init", runbook)
+        self.assertIn("apt-daily-upgrade.timer", runbook)
+        self.assertIn("package-maintenance-lifecycle.json", runbook)
+        self.assertIn("daemon-reexec", runbook)
 
 
 class SafetyTests(unittest.TestCase):

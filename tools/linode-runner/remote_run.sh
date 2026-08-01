@@ -54,6 +54,10 @@ x86_64-w64-mingw32-g++-posix --version | head -n 1
 valgrind --version
 df -h /opt/e-rust-port
 
+echo "== Package-maintenance and transient-service lifecycle =="
+bash "$source_root/tools/linode-runner/maintenance_lifecycle_test.sh" \
+    "$artifact_root"
+
 echo "== Native Linux Rust quality gates =="
 cd "$source_root"
 /usr/bin/time -v -o "$artifact_root/rust-fmt-time.txt" \

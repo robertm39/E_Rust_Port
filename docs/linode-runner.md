@@ -79,6 +79,16 @@ complete Linux and Windows-cross toolchain, uploads a fresh snapshot of the
 current worktree, performs every required validation phase, downloads the
 artifacts, and deletes the paid resources in a `finally` cleanup.
 
+Before the first `apt-get`, bootstrap waits for `cloud-init` to finish, then
+masks and stops `apt-daily.timer`, `apt-daily-upgrade.timer`,
+`apt-daily.service`, and `apt-daily-upgrade.service`. Provisioning fails closed
+unless every unit is inactive and masked. The controller records the atomic
+remote JSON path, its SHA-256, and the verified unit states under
+`package_maintenance` in the saved runner state, which `status` exposes. The
+units stay quiesced for the disposable host's lifetime; `down` deletes that host
+instead of trying to restore package maintenance on a worker that must never be
+reused.
+
 ## One-time account preparation
 
 Create a Personal Access Token in Cloud Manager with only these permissions:
@@ -150,16 +160,20 @@ No other inbound traffic is accepted.
 
 All project code runs on native Ubuntu 24.04. The workload:
 
-1. runs Rustfmt, all-target/all-feature tests, pedantic Clippy, and release
+1. verifies the package-maintenance record, forces a systemd manager reexec
+   across a transient benchmark probe, confirms the same PID and invocation
+   survive, then proves SIGINT cleanup leaves no process, cgroup member, or
+   incomplete result and that a hash-valid coordinate resumes without rerun;
+2. runs Rustfmt, all-target/all-feature tests, pedantic Clippy, and release
    builds for every Rust binary;
-2. cross-compiles every Rust binary and test target for
+3. cross-compiles every Rust binary and test target for
    `x86_64-pc-windows-gnu`, records PE metadata and hashes, and never executes
    a Windows binary;
-3. builds disposable FOL and HO copies of the upstream C reference plus all
+4. builds disposable FOL and HO copies of the upstream C reference plus all
    support tools without modifying `eprover/`;
-4. runs the maintained main-prover and support-tool C/Rust compatibility
+5. runs the maintained main-prover and support-tool C/Rust compatibility
    matrices natively on Linux;
-5. runs the seeded five-trial native timing benchmark, smoke tests, and
+6. runs the seeded five-trial native timing benchmark, smoke tests, and
    Callgrind profiles for Rust and C.
 
 Linux is the runtime, behavioral-compatibility, and performance authority.
@@ -186,7 +200,10 @@ The retained results are written to:
 They include Linux Rust quality-gate logs, FOL/HO C build metadata, Windows GNU
 cross-compile logs and PE hashes, main and tool compatibility reports, timing
 benchmark samples, native smoke output, raw and annotated Callgrind data, Linux
-binary hashes, and instruction summaries.
+binary hashes, and instruction summaries. They also retain the immutable
+`package-maintenance-quiescence.json` and its hash plus
+`package-maintenance-lifecycle.json`, the transient-unit journal, and
+`PACKAGE_MAINTENANCE_LIFECYCLE_COMPLETE`.
 
 `VALIDATION_COMPLETE` means every phase ran and its reports were collected.
 `SUCCESS` additionally means no unexpected main or support-tool compatibility
@@ -346,10 +363,12 @@ Python tests may run locally:
 
 The tests pin both supported Linode profiles, CLI selection, trusted API time,
 fixed-EST high-memory bank/debt accounting and blocking, firewall settings,
-remote-only quality gates, Windows cross-toolchain bootstrap, source-archive
-exclusions, safe artifact extraction, stale-resource selection, label-matching
-deletion guards, compatibility matrices, report normalization, and disposable
-C-source preparation. They do not compile or execute Rust or C.
+cloud-init/package-maintenance ordering and fail-closed records, remote-only
+quality gates, the daemon-reexec/resume lifecycle contract, Windows
+cross-toolchain bootstrap, source-archive exclusions, safe artifact extraction,
+stale-resource selection, label-matching deletion guards, compatibility
+matrices, report normalization, and disposable C-source preparation. They do
+not compile or execute Rust or C.
 
 The bootstrap also installs the POSIX-thread MinGW C++ compiler and downloads
 the pinned CaDiCaL 3.0.1 source archive for `--all-features` validation. It

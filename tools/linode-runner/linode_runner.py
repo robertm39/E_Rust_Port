@@ -43,6 +43,13 @@ CURRENT_STATE = LOCAL_ROOT / "current.json"
 RUN_HISTORY = LOCAL_ROOT / "runs"
 SSH_KEY = LOCAL_ROOT / "linode-runner-ed25519"
 ARTIFACT_ROOT = REPO_ROOT / ".artifacts" / "linode"
+PACKAGE_MAINTENANCE_RECORD = REMOTE_ROOT / "package-maintenance-quiescence.json"
+PACKAGE_MAINTENANCE_UNITS = (
+    "apt-daily.timer",
+    "apt-daily-upgrade.timer",
+    "apt-daily.service",
+    "apt-daily-upgrade.service",
+)
 
 
 class PlanSpec(NamedTuple):
@@ -1059,11 +1066,29 @@ def bootstrap_script() -> str:
     return r"""
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
+command -v cloud-init >/dev/null
+cloud-init status --wait
+install -d -m 0755 /opt/e-rust-port
+maintenance_units=(
+    apt-daily.timer
+    apt-daily-upgrade.timer
+    apt-daily.service
+    apt-daily-upgrade.service
+)
+systemctl stop "${maintenance_units[@]}"
+systemctl mask "${maintenance_units[@]}"
+for unit in "${maintenance_units[@]}"; do
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    active_state="$(systemctl show --property=ActiveState --value "$unit")"
+    unit_file_state="$(systemctl show --property=UnitFileState --value "$unit")"
+    printf '%s active=%s unit-file=%s\n' "$unit" "$active_state" "$unit_file_state"
+    test "$active_state" = inactive
+    test "$unit_file_state" = masked
+done
 apt-get update
 apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl file gawk gcc-mingw-w64-x86-64 \
     g++-mingw-w64-x86-64 git pkg-config python3 time valgrind
-install -d -m 0755 /opt/e-rust-port
 cadical_source=/opt/e-rust-port/cadical-3.0.1
 cadical_commit=c60730422e758ef1cebe7aeddf2dda31c996bf04
 git clone --quiet --depth=1 --branch rel-3.0.1 \
@@ -1085,11 +1110,91 @@ gcc --version | head -n 1
 x86_64-w64-mingw32-gcc --version | head -n 1
 x86_64-w64-mingw32-g++-posix --version | head -n 1
 valgrind --version
+python3 - /opt/e-rust-port/package-maintenance-quiescence.json \
+    "${maintenance_units[@]}" <<'PY'
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def property_value(unit: str, name: str) -> str:
+    result = subprocess.run(
+        ["systemctl", "show", f"--property={name}", "--value", unit],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+record_path = Path(sys.argv[1])
+units = sys.argv[2:]
+record = {
+    "schema_version": 1,
+    "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "cloud_init_wait_completed": True,
+    "units": {
+        unit: {
+            "active_state": property_value(unit, "ActiveState"),
+            "unit_file_state": property_value(unit, "UnitFileState"),
+        }
+        for unit in units
+    },
+}
+temporary = record_path.with_suffix(".json.tmp")
+temporary.write_text(
+    json.dumps(record, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+os.replace(temporary, record_path)
+PY
 """
 
 
-def bootstrap(state: dict[str, Any]) -> None:
+def validate_package_maintenance_record(value: object) -> dict[str, Any]:
+    """Validate the fail-closed package-maintenance quiescence record."""
+
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise RunnerError("Invalid package-maintenance quiescence record schema")
+    if value.get("cloud_init_wait_completed") is not True:
+        raise RunnerError("Package-maintenance record did not confirm cloud-init wait")
+    units = value.get("units")
+    if not isinstance(units, dict) or set(units) != set(PACKAGE_MAINTENANCE_UNITS):
+        raise RunnerError("Package-maintenance record has an unexpected unit set")
+    for unit in PACKAGE_MAINTENANCE_UNITS:
+        status = units.get(unit)
+        if not isinstance(status, dict):
+            raise RunnerError(f"Package-maintenance record is missing {unit} state")
+        if status.get("active_state") != "inactive":
+            raise RunnerError(f"Package-maintenance unit {unit} is not inactive")
+        if status.get("unit_file_state") != "masked":
+            raise RunnerError(f"Package-maintenance unit {unit} is not masked")
+    return value
+
+
+def bootstrap(state: dict[str, Any]) -> dict[str, Any]:
     ssh_command(state, bootstrap_script(), timeout=1800)
+    result = ssh_command(
+        state,
+        f"cat {shlex.quote(str(PACKAGE_MAINTENANCE_RECORD))}",
+        timeout=30,
+        capture=True,
+    )
+    try:
+        record = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RunnerError(
+            "Could not parse package-maintenance quiescence record"
+        ) from error
+    validated = validate_package_maintenance_record(record)
+    return {
+        "path": str(PACKAGE_MAINTENANCE_RECORD),
+        "sha256": hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
+        "record": validated,
+    }
 
 
 def provision(
@@ -1178,7 +1283,7 @@ def provision(
         state["phase"] = "bootstrapping"
         save_current(state)
         print("Installing the Linux build and Callgrind toolchain", flush=True)
-        bootstrap(state)
+        state["package_maintenance"] = bootstrap(state)
         state["phase"] = "ready"
         save_current(state)
         return state
