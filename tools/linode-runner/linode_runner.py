@@ -63,6 +63,10 @@ PACKAGE_MAINTENANCE_UNITS = (
     "apt-daily.service",
     "apt-daily-upgrade.service",
 )
+CADICAL_SOURCE_URL = "https://github.com/arminbiere/cadical.git"
+CADICAL_REVISION = "c60730422e758ef1cebe7aeddf2dda31c996bf04"
+CADICAL_VERSION = "3.0.1"
+CADICAL_BRANCH = "rel-3.0.1"
 
 
 class PlanSpec(NamedTuple):
@@ -1567,8 +1571,182 @@ def wait_for_ssh(state: dict[str, Any], timeout: int = 600) -> None:
     raise RunnerError(f"Timed out waiting for SSH: {last_error}")
 
 
+def cadical_checkout_script(
+    *,
+    root: PurePosixPath = REMOTE_ROOT,
+    source_url: str = CADICAL_SOURCE_URL,
+    revision: str = CADICAL_REVISION,
+    version: str = CADICAL_VERSION,
+    branch: str = CADICAL_BRANCH,
+) -> str:
+    """Build a fail-closed, retry-safe remote CaDiCaL checkout script."""
+
+    root = PurePosixPath(root)
+    if not root.is_absolute():
+        raise RunnerError("CaDiCaL bootstrap root must be absolute")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RunnerError("CaDiCaL revision must be a full lowercase Git hash")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version):
+        raise RunnerError("CaDiCaL version contains unsafe characters")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch):
+        raise RunnerError("CaDiCaL branch contains unsafe characters")
+    if not source_url or any(character in source_url for character in "\r\n"):
+        raise RunnerError("CaDiCaL source URL is invalid")
+
+    script = r"""
+cadical_root=__CADICAL_ROOT__
+cadical_url=__CADICAL_URL__
+cadical_commit=__CADICAL_REVISION__
+cadical_version=__CADICAL_VERSION__
+cadical_branch=__CADICAL_BRANCH__
+cadical_marker_name=.umlaut-linode-runner-cadical
+cadical_source="$cadical_root/cadical-$cadical_version"
+cadical_staging="$cadical_root/.cadical-$cadical_version.incoming"
+cadical_claim="$cadical_root/.cadical-$cadical_version.bootstrap-claim"
+cadical_root_resolved="$(realpath -m -- "$cadical_root")"
+cadical_source_expected="$cadical_root_resolved/cadical-$cadical_version"
+cadical_staging_expected="$cadical_root_resolved/.cadical-$cadical_version.incoming"
+
+cadical_marker_payload() {
+    printf 'schema=1\nsource=%s\nrevision=%s\nversion=%s\n' \
+        "$cadical_url" "$cadical_commit" "$cadical_version"
+}
+
+cadical_path_present() {
+    test -e "$1" || test -L "$1"
+}
+
+cadical_marker_matches() {
+    local marker="$1"
+    test ! -L "$marker" || return 1
+    test -f "$marker" || return 1
+    cmp -s -- "$marker" <(cadical_marker_payload)
+}
+
+cadical_write_marker() {
+    local marker="$1"
+    local temporary="$marker.tmp.$$"
+    cadical_marker_payload >"$temporary"
+    chmod 0444 "$temporary"
+    mv -f -- "$temporary" "$marker"
+}
+
+cadical_checkout_managed() {
+    local candidate="$1"
+    test ! -L "$candidate" || return 1
+    if cadical_marker_matches "$candidate/$cadical_marker_name"; then
+        return 0
+    fi
+    test -d "$candidate/.git" || return 1
+    test "$(git -C "$candidate" config --get remote.origin.url 2>/dev/null)" \
+        = "$cadical_url"
+}
+
+cadical_validate_checkout() {
+    local candidate="$1"
+    test ! -L "$candidate" || return 1
+    test -d "$candidate/.git" || return 1
+    test "$(git -C "$candidate" config --get remote.origin.url 2>/dev/null)" \
+        = "$cadical_url" || return 1
+    test "$(git -C "$candidate" rev-parse HEAD 2>/dev/null)" \
+        = "$cadical_commit" || return 1
+    test "$(cat "$candidate/VERSION" 2>/dev/null)" \
+        = "$cadical_version" || return 1
+    git -C "$candidate" diff --quiet HEAD -- || return 1
+    git -C "$candidate" fsck --strict >/dev/null 2>&1
+}
+
+cadical_remove_managed_tree() {
+    local candidate="$1"
+    local expected="$2"
+    test ! -L "$candidate"
+    test "$(realpath -m -- "$candidate")" = "$expected"
+    test "$(dirname -- "$expected")" = "$cadical_root_resolved"
+    rm -rf -- "$candidate"
+}
+
+ensure_cadical_checkout() {
+    local claim_valid=false
+
+    if cadical_path_present "$cadical_claim"; then
+        if ! cadical_marker_matches "$cadical_claim"; then
+            printf 'Refusing invalid CaDiCaL bootstrap claim: %s\n' \
+                "$cadical_claim" >&2
+            return 1
+        fi
+        claim_valid=true
+    fi
+
+    if cadical_validate_checkout "$cadical_source"; then
+        if cadical_path_present "$cadical_staging"; then
+            if test "$claim_valid" != true && \
+                ! cadical_checkout_managed "$cadical_staging"; then
+                printf 'Refusing to remove unmanaged CaDiCaL staging path: %s\n' \
+                    "$cadical_staging" >&2
+                return 1
+            fi
+            cadical_remove_managed_tree \
+                "$cadical_staging" "$cadical_staging_expected"
+        fi
+        if test "$claim_valid" = true; then
+            rm -f -- "$cadical_claim"
+        fi
+        printf 'Reusing validated CaDiCaL %s checkout\n' "$cadical_version"
+        return 0
+    fi
+
+    if cadical_path_present "$cadical_source" && \
+        ! cadical_checkout_managed "$cadical_source"; then
+        printf 'Refusing to replace unmanaged CaDiCaL path: %s\n' \
+            "$cadical_source" >&2
+        return 1
+    fi
+
+    if cadical_path_present "$cadical_staging"; then
+        if test "$claim_valid" != true && \
+            ! cadical_checkout_managed "$cadical_staging"; then
+            printf 'Refusing to remove unmanaged CaDiCaL staging path: %s\n' \
+                "$cadical_staging" >&2
+            return 1
+        fi
+        cadical_remove_managed_tree "$cadical_staging" "$cadical_staging_expected"
+    fi
+
+    if test "$claim_valid" != true; then
+        cadical_write_marker "$cadical_claim"
+    fi
+    git clone --quiet --depth=1 --branch "$cadical_branch" \
+        "$cadical_url" "$cadical_staging"
+    cadical_write_marker "$cadical_staging/$cadical_marker_name"
+    cadical_validate_checkout "$cadical_staging"
+
+    if cadical_path_present "$cadical_source"; then
+        cadical_checkout_managed "$cadical_source"
+        cadical_remove_managed_tree "$cadical_source" "$cadical_source_expected"
+    fi
+    mv -- "$cadical_staging" "$cadical_source"
+    cadical_validate_checkout "$cadical_source"
+    rm -f -- "$cadical_claim"
+    printf 'Installed validated CaDiCaL %s checkout\n' "$cadical_version"
+}
+
+ensure_cadical_checkout
+"""
+    replacements = {
+        "__CADICAL_ROOT__": shlex.quote(str(root)),
+        "__CADICAL_URL__": shlex.quote(source_url),
+        "__CADICAL_REVISION__": shlex.quote(revision),
+        "__CADICAL_VERSION__": shlex.quote(version),
+        "__CADICAL_BRANCH__": shlex.quote(branch),
+    }
+    for placeholder, value in replacements.items():
+        script = script.replace(placeholder, value)
+    return script
+
+
 def bootstrap_script() -> str:
-    return r"""
+    return (
+        r"""
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 command -v cloud-init >/dev/null
@@ -1594,13 +1772,9 @@ apt-get update
 apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl file gawk gcc-mingw-w64-x86-64 \
     g++-mingw-w64-x86-64 git pkg-config python3 time valgrind
-cadical_source=/opt/e-rust-port/cadical-3.0.1
-cadical_commit=c60730422e758ef1cebe7aeddf2dda31c996bf04
-git clone --quiet --depth=1 --branch rel-3.0.1 \
-    https://github.com/arminbiere/cadical.git "$cadical_source"
-test "$(git -C "$cadical_source" rev-parse HEAD)" = "$cadical_commit"
-git -C "$cadical_source" fsck --strict
-test "$(cat "$cadical_source/VERSION")" = 3.0.1
+"""
+        + cadical_checkout_script()
+        + r"""
 if ! command -v cargo >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
         sh -s -- -y --profile minimal --default-toolchain stable
@@ -1657,6 +1831,7 @@ temporary.write_text(
 os.replace(temporary, record_path)
 PY
 """
+    )
 
 
 def validate_package_maintenance_record(value: object) -> dict[str, Any]:
@@ -2457,6 +2632,20 @@ def preflight(
     validate_reaper_setup(api)
 
 
+class RunnerArgumentParser(argparse.ArgumentParser):
+    """Normalize the default plan only after mutual-exclusion checks."""
+
+    def parse_args(
+        self,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> argparse.Namespace:
+        parsed = super().parse_args(args, namespace)
+        if hasattr(parsed, "linode_type") and parsed.linode_type is None:
+            parsed.linode_type = DEFAULT_TYPE
+        return parsed
+
+
 def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--allow-ip",
@@ -2466,7 +2655,6 @@ def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
     plan.add_argument(
         "--type",
         choices=tuple(PLAN_SPECS),
-        default=DEFAULT_TYPE,
         dest="linode_type",
         help="supported Linode type (advanced compatibility option)",
     )
@@ -2482,7 +2670,7 @@ def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description=__doc__)
+    root = RunnerArgumentParser(description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="create the dedicated local SSH key")
     check = commands.add_parser(

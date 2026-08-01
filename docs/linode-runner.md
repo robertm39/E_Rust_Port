@@ -93,6 +93,17 @@ units stay quiesced for the worker's lifetime, including reuse cycles. They
 need not be restored before parking because the runner remains dedicated to
 this controller and is eventually deleted.
 
+Bootstrap installs pinned CaDiCaL through an owned incoming directory and an
+exact-content claim file. A retry reuses the final checkout only after checking
+the upstream origin, full revision, `VERSION`, clean tracked worktree, and
+`git fsck --strict`. It may replace an incomplete or wrong-revision checkout
+only when the claim, ownership marker, or exact upstream origin proves that the
+runner created it. An
+unrecognized target or staging path is preserved and makes provisioning fail
+closed. This makes controller interruption safe at both the clone and final
+rename boundaries without granting bootstrap permission to remove unrelated
+content under `/opt/e-rust-port`.
+
 ## Billing-aware parking and cleanup
 
 Linode bills each instance for elapsed use rounded up to an hour. Deleting

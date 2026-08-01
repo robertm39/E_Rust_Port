@@ -552,6 +552,11 @@ downloads revision `c60730422e758ef1cebe7aeddf2dda31c996bf04`, verifies the
 upstream archive SHA-256
 `ad639a302b7c4cb4a24f37b7cd0cf7533674e6069c20a561505bccef1c2b4444`,
 and supplies both Linux and Windows-GNU C++17 toolchains.
+The runner stages this checkout behind an exact ownership claim, validates the
+origin, revision, `VERSION`, clean tracked worktree, and `git fsck --strict`
+before reuse or atomic installation, and refuses to replace unrecognized
+content. Interrupted bootstrap retries therefore recover incomplete
+runner-owned clones without removing unrelated paths.
 
 Runtime selection is explicit through `UMLAUT_CADICAL_MODE`:
 

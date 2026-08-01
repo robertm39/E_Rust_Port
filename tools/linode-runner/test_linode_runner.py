@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -271,8 +274,14 @@ class ExplicitTransferTests(unittest.TestCase):
             "cadical_commit=c60730422e758ef1cebe7aeddf2dda31c996bf04",
             script,
         )
-        self.assertIn('git -C "$cadical_source" rev-parse HEAD', script)
-        self.assertIn('git -C "$cadical_source" fsck --strict', script)
+        self.assertIn('git -C "$candidate" rev-parse HEAD', script)
+        self.assertIn('git -C "$candidate" diff --quiet HEAD --', script)
+        self.assertIn('git -C "$candidate" fsck --strict', script)
+        self.assertIn(
+            'cadical_staging="$cadical_root/.cadical-$cadical_version.incoming"',
+            script,
+        )
+        self.assertIn("Refusing to replace unmanaged CaDiCaL path", script)
         self.assertNotIn("cadical-3.0.1.tar.gz", script)
         self.assertIn("rustup component add rustfmt clippy", script)
         self.assertIn("rustup target add x86_64-pc-windows-gnu", script)
@@ -369,6 +378,193 @@ class ExplicitTransferTests(unittest.TestCase):
         self.assertIn("PACKAGE_MAINTENANCE_LIFECYCLE_COMPLETE", lifecycle)
 
 
+@unittest.skipUnless(
+    os.name == "posix" and shutil.which("bash") and shutil.which("git"),
+    "requires POSIX bash and Git",
+)
+class CadicalBootstrapRetryTests(unittest.TestCase):
+    def command(
+        self, arguments: list[str], *, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            arguments,
+            check=check,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def create_source(self, root: Path) -> tuple[Path, str, str]:
+        source = root / "cadical-source"
+        source.mkdir()
+        self.command(
+            ["git", "init", "--quiet", "--initial-branch=rel-3.0.1", str(source)]
+        )
+        self.command(["git", "-C", str(source), "config", "user.name", "Test"])
+        self.command(
+            ["git", "-C", str(source), "config", "user.email", "test@example.com"]
+        )
+        (source / "VERSION").write_text("3.0.1\n", encoding="utf-8")
+        (source / "tracked.txt").write_text("pinned\n", encoding="utf-8")
+        self.command(["git", "-C", str(source), "add", "."])
+        self.command(["git", "-C", str(source), "commit", "--quiet", "-m", "pinned"])
+        pinned = self.command(
+            ["git", "-C", str(source), "rev-parse", "HEAD"]
+        ).stdout.strip()
+
+        self.command(["git", "-C", str(source), "switch", "--quiet", "-c", "wrong"])
+        (source / "tracked.txt").write_text("wrong\n", encoding="utf-8")
+        self.command(["git", "-C", str(source), "commit", "--quiet", "-am", "wrong"])
+        wrong = self.command(
+            ["git", "-C", str(source), "rev-parse", "HEAD"]
+        ).stdout.strip()
+        self.command(
+            ["git", "-C", str(source), "switch", "--quiet", "rel-3.0.1"]
+        )
+        return source, pinned, wrong
+
+    def clone(self, source: Path, target: Path) -> None:
+        self.command(["git", "clone", "--quiet", str(source), str(target)])
+
+    def run_checkout(
+        self,
+        install_root: Path,
+        source: Path,
+        pinned: str,
+        *,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        script = runner.cadical_checkout_script(
+            root=runner.PurePosixPath(install_root.as_posix()),
+            source_url=source.as_posix(),
+            revision=pinned,
+        )
+        return self.command(
+            ["bash", "-E", "-e", "-u", "-o", "pipefail", "-c", script],
+            check=check,
+        )
+
+    def test_complete_exact_checkout_is_validated_and_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, pinned, _ = self.create_source(root)
+            install_root = root / "install"
+            install_root.mkdir()
+            target = install_root / "cadical-3.0.1"
+            self.clone(source, target)
+            sentinel = target / "reuse-sentinel"
+            sentinel.write_text("preserve\n", encoding="utf-8")
+
+            result = self.run_checkout(install_root, source, pinned)
+
+            self.assertIn("Reusing validated CaDiCaL", result.stdout)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve\n")
+            self.assertEqual(
+                self.command(["git", "-C", str(target), "rev-parse", "HEAD"])
+                .stdout.strip(),
+                pinned,
+            )
+
+    def test_incomplete_managed_checkout_is_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, pinned, _ = self.create_source(root)
+            install_root = root / "install"
+            install_root.mkdir()
+            target = install_root / "cadical-3.0.1"
+            self.clone(source, target)
+            (target / "tracked.txt").unlink()
+            sentinel = target / "incomplete-sentinel"
+            sentinel.write_text("remove\n", encoding="utf-8")
+
+            result = self.run_checkout(install_root, source, pinned)
+
+            self.assertIn("Installed validated CaDiCaL", result.stdout)
+            self.assertFalse(sentinel.exists())
+            self.assertEqual(
+                (target / "VERSION").read_text(encoding="utf-8"), "3.0.1\n"
+            )
+            self.assertEqual(
+                (target / "tracked.txt").read_text(encoding="utf-8"), "pinned\n"
+            )
+
+    def test_wrong_revision_managed_checkout_is_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, pinned, wrong = self.create_source(root)
+            install_root = root / "install"
+            install_root.mkdir()
+            target = install_root / "cadical-3.0.1"
+            self.clone(source, target)
+            self.command(["git", "-C", str(target), "checkout", "--quiet", wrong])
+
+            self.run_checkout(install_root, source, pinned)
+
+            self.assertEqual(
+                self.command(["git", "-C", str(target), "rev-parse", "HEAD"])
+                .stdout.strip(),
+                pinned,
+            )
+            self.assertEqual(
+                (target / "tracked.txt").read_text(encoding="utf-8"), "pinned\n"
+            )
+
+    def test_interrupted_staging_checkout_is_rebuilt_from_owned_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, pinned, _ = self.create_source(root)
+            install_root = root / "install"
+            install_root.mkdir()
+            staging = install_root / ".cadical-3.0.1.incoming"
+            self.clone(source, staging)
+            (staging / "VERSION").unlink()
+            claim = install_root / ".cadical-3.0.1.bootstrap-claim"
+            claim.write_text(
+                "schema=1\n"
+                f"source={source.as_posix()}\n"
+                f"revision={pinned}\n"
+                "version=3.0.1\n",
+                encoding="utf-8",
+            )
+
+            self.run_checkout(install_root, source, pinned)
+
+            target = install_root / "cadical-3.0.1"
+            self.assertEqual(
+                self.command(["git", "-C", str(target), "rev-parse", "HEAD"])
+                .stdout.strip(),
+                pinned,
+            )
+            self.assertFalse(staging.exists())
+            self.assertFalse(claim.exists())
+
+    def test_unmanaged_target_is_preserved_and_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, pinned, _ = self.create_source(root)
+            install_root = root / "install"
+            install_root.mkdir()
+            target = install_root / "cadical-3.0.1"
+            target.mkdir()
+            sentinel = target / "unrelated.txt"
+            sentinel.write_text("preserve\n", encoding="utf-8")
+
+            result = self.run_checkout(
+                install_root,
+                source,
+                pinned,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Refusing to replace unmanaged", result.stderr)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve\n")
+            self.assertFalse((install_root / ".cadical-3.0.1.incoming").exists())
+            self.assertFalse(
+                (install_root / ".cadical-3.0.1.bootstrap-claim").exists()
+            )
+
+
 class PlanSelectionTests(unittest.TestCase):
     def test_default_and_high_memory_cli_selection(self):
         self.assertEqual(
@@ -387,13 +583,18 @@ class PlanSelectionTests(unittest.TestCase):
         self.assertEqual(arguments.linode_type, runner.HIGH_MEMORY_TYPE)
 
     def test_high_memory_and_raw_type_are_mutually_exclusive(self):
-        with (
-            mock.patch("sys.stderr"),
-            self.assertRaises(SystemExit),
-        ):
-            runner.parser().parse_args(
-                ["check", "--high-memory", "--type", runner.DEFAULT_TYPE]
-            )
+        conflicting_arguments = [
+            ["check", "--high-memory", "--type", runner.DEFAULT_TYPE],
+            ["check", "--type", runner.DEFAULT_TYPE, "--high-memory"],
+            ["check", "--high-memory", "--type", runner.HIGH_MEMORY_TYPE],
+        ]
+        for arguments in conflicting_arguments:
+            with (
+                self.subTest(arguments=arguments),
+                mock.patch("sys.stderr"),
+                self.assertRaises(SystemExit),
+            ):
+                runner.parser().parse_args(arguments)
 
 
 class TrustedTimeTests(unittest.TestCase):
