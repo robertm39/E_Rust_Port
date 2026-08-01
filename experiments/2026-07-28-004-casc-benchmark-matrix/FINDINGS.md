@@ -134,6 +134,24 @@ the tracked machine-readable digest is
 
 The runner and firewall were deleted.
 
+## J13 canonical-contract pilot
+
+The active high-memory runner first verified the complete J13 contract
+`cad062513bf08aef403550faef8e4021ea9b4528ae86a1d5b392f594f442a803`
+against all 1,350 problems, then executed a session-capped 20-result pilot.
+The pilot checkpointed ten results per solver and generated a valid partial
+report. It also exposed a reporting defect before the long run: Vampire's
+portfolio writes terminal lines such as `% (7937)SZS status Timeout`, while
+the original parser accepted only an unprefixed `% SZS status ...` line.
+Consequently the 179.987-second `SEV254^5` Vampire timeout was initially
+recorded as an error even though its output ended with `SZS status Timeout`.
+
+The parser now accepts the numeric portfolio prefix and classifies an explicit
+`Timeout` separately from `ResourceOut` and `MemoryOut`. A regression test uses
+the exact observed output shape. The pilot contract and results are retained
+as diagnostic evidence only; the corrected canonical matrix starts in a fresh
+output root and source-snapshot contract rather than mixing parser versions.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

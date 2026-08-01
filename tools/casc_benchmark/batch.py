@@ -41,13 +41,15 @@ VAMPIRE_SHA256 = (
 )
 MIB = 1024 * 1024
 SZS_RE = re.compile(
-    r"(?im)^[%#]+\s*SZS\s+status\s+(?P<status>[A-Za-z][A-Za-z0-9_]*)"
+    r"(?im)^[%#]+[ \t]*(?:\(\d+\)[ \t]*)?"
+    r"SZS[ \t]+status[ \t]+(?P<status>[A-Za-z][A-Za-z0-9_]*)"
 )
 PROOF_STATUSES = frozenset(
     {"Theorem", "Unsatisfiable", "ContradictoryAxioms", "TautologousConclusion"}
 )
 MODEL_STATUSES = frozenset({"CounterSatisfiable", "Satisfiable"})
-RESOURCE_STATUSES = frozenset({"ResourceOut", "Timeout", "MemoryOut"})
+TIMEOUT_STATUSES = frozenset({"Timeout"})
+RESOURCE_STATUSES = frozenset({"ResourceOut", "MemoryOut"})
 GAVE_UP_STATUSES = frozenset({"GaveUp", "Unknown", "Inappropriate"})
 
 
@@ -125,6 +127,8 @@ def classify_result(
         return "timeout"
     if status in PROOF_STATUSES or status in MODEL_STATUSES:
         return "solved"
+    if status in TIMEOUT_STATUSES:
+        return "timeout"
     if status in RESOURCE_STATUSES:
         return "resource_out"
     if status in GAVE_UP_STATUSES:

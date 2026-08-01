@@ -268,6 +268,22 @@ class BatchContractTests(unittest.TestCase):
             "timeout",
         )
 
+    def test_vampire_portfolio_prefix_preserves_timeout_status(self):
+        stdout = (
+            "% (7937)Proof not found in time 179.942 s\n"
+            "% (7937)SZS status Timeout for SEV254^5\n"
+        )
+        self.assertEqual(batch.szs_statuses(stdout), ["Timeout"])
+        self.assertEqual(
+            batch.classify_result(
+                status=batch.szs_statuses(stdout)[-1],
+                return_code=1,
+                termination_reason=None,
+                oom_kills=0,
+            ),
+            "timeout",
+        )
+
     def test_existing_contract_must_match_exactly(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
