@@ -28,6 +28,7 @@ PROOF_BLOCK = re.compile(
     r"% SZS output start CNFRefutation.*?% SZS output end CNFRefutation",
     re.DOTALL,
 )
+RESOURCE_OUT_EXIT = 9
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -138,6 +139,32 @@ def resource_totals(stdout: str) -> list[float]:
         except ValueError:
             continue
     return values
+
+
+def worker_crash_contained(case: dict[str, Any]) -> bool:
+    """Return whether the scheduler survived and finalized a killed worker.
+
+    A surviving strategy may prove the problem, but recovery does not promise
+    that the remaining heuristic slices retain the killed strategy's coverage.
+    Clean schedule exhaustion at the configured resource limit is therefore a
+    valid terminal outcome; a signal-terminated or provenance-free parent is
+    not.
+    """
+    stdout = case.get("stdout")
+    action_pid = case.get("action_pid")
+    exit_code = case.get("exit_code")
+    if not isinstance(stdout, str) or not isinstance(action_pid, int):
+        return False
+    killed_worker_recorded = (
+        f" with pid {action_pid} completed with status -1\n" in stdout
+    )
+    proof_terminal = exit_code == 0 and PROOF_BLOCK.search(stdout) is not None
+    exhausted_terminal = (
+        exit_code == RESOURCE_OUT_EXIT
+        and "% Schedule exhausted\n" in stdout
+        and "% SZS status GaveUp\n" in stdout
+    )
+    return killed_worker_recorded and (proof_terminal or exhausted_terminal)
 
 
 def write_interrupt_problem(path: Path, comment_mebibytes: int) -> None:
@@ -417,7 +444,9 @@ def main() -> int:
             "cancellation_no_orphans": not lifecycle["cancellation"][
                 "surviving_process_ids"
             ],
-            "worker_crash_recovered": lifecycle["worker_crash"]["exit_code"] == 0,
+            "worker_crash_contained": worker_crash_contained(
+                lifecycle["worker_crash"]
+            ),
             "worker_crash_no_orphans": not lifecycle["worker_crash"][
                 "surviving_process_ids"
             ],
@@ -438,7 +467,8 @@ def main() -> int:
             "seeded_temp_cleanup": reproducibility["no_temp_files"],
         }
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "controller_sha256": sha256_bytes(Path(__file__).read_bytes()),
             "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "executable": str(executable),
             "executable_sha256": sha256_bytes(executable.read_bytes()),
