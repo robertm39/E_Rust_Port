@@ -1,6 +1,7 @@
 # CASC-2025 and CASC-J13 benchmark matrix and resumable batch harness
 
-Beads: `E_Rust_Port-9jt.2.1`, `E_Rust_Port-9jt.2.7`
+Beads: `E_Rust_Port-9jt.2.1`, `E_Rust_Port-9jt.2.7`,
+`E_Rust_Port-9jt.2.11`
 
 ## Decision
 
@@ -151,6 +152,95 @@ The parser now accepts the numeric portfolio prefix and classifies an explicit
 the exact observed output shape. The pilot contract and results are retained
 as diagnostic evidence only; the corrected canonical matrix starts in a fresh
 output root and source-snapshot contract rather than mixing parser versions.
+
+## J13 canonical checkpoint and host interruption
+
+The corrected canonical run reached 185 of 2,700 J13 solver/problem results
+before Ubuntu's `apt-daily-upgrade` requested a systemd manager reexecution on
+2026-08-01. Systemd stopped transient service invocation
+`88497424106049f9989fa26461cb298e` and immediately restarted the same service
+as `7eeb7794425849a19fca91b6d28fea12`. The old cgroup became empty and no
+duplicate prover workload survived, but the service restart reset the
+session-wall guard and left Vampire's in-progress `SYO326^5` result without an
+atomic JSON record.
+
+The restarted service was interrupted through `SIGINT` so the batch harness's
+normal `finally` cleanup emptied its cgroups. The incomplete stdout was
+preserved separately, the two result-less run-root streams were removed, and
+the report deterministically regenerated 185/2,700 coverage. The
+hash-verified checkpoint is
+`.artifacts/casc-benchmark/j13-checkpoint-260801.tar.gz` (5.9 MiB, SHA-256
+`a1e84660d3b0ae1b87c9af256a58c23374f1b19b106ac11129ad80d14583ce8b`);
+[`capture_260801_j13_checkpoint.sh`](capture_260801_j13_checkpoint.sh) refuses
+capture while the service, a prover, or benchmark cgroup is active and retains
+both systemd invocations, apt logs, the frozen binary, interrupted output, the
+deterministic run archive, and verified inner hashes. The immutable matrix
+remains resumable from those 185 records under `E_Rust_Port-9jt.2.7`.
+`E_Rust_Port-9jt.2.12` tracks runner-side quiescing and recording of unattended
+package maintenance before the matrix resumes.
+
+## J13 THF direct-lambda operand boundary
+
+The corrected-contract slice exposed a separate release-Umlaut parser defect.
+Twelve completed J13 THF cases first returned exit 3 in about 0.06 seconds with
+the same `Too many arguments applied to the term` diagnostic. A complete
+syntax audit then established the real boundary: the frozen release accepted
+324 of 400 THF problems, falsely rejected 73 with that diagnostic, and
+returned three other errors.
+
+The common source shape applies a curried head to a direct lambda and then to
+another argument. E's `applied_tform_tstp_parse` parses each `@` operand as one
+literal, and `quantified_tform_tstp_parse` likewise gives an unparenthesized
+lambda body one literal. Rust instead let direct lambda arguments and
+quantified bodies consume a following `@` tail after their current head was
+already saturated, so outer operands disappeared into the binder and the
+remaining token looked like a genuine overapplication. Negated Boolean
+operands had the same ambiguity in `if @ ~condition @ then @ else`. The repair
+gives direct typed lambda operands a bounded right-associative path, lets
+general quantified bodies consume applications only while their current head
+has argument capacity, and bounds negated Boolean operands at one unit. It
+also shares parenthesized logical heads such as `(&)` when they are themselves
+higher-order arguments. Canonical lambda inference and expected-sort checks
+remain in force; parenthesized inner applications, comma binders, explicitly
+nested lambdas, conventional `![X]: p @ X` bodies, and genuine
+overapplication rejection have separate regressions.
+
+[`audit_j13_thf_syntax.py`](audit_j13_thf_syntax.py) hash-checks the immutable
+manifest, all 400 THF problem files, the selected Umlaut binary, its own source,
+and the source snapshot while recording every syntax-only command, return code,
+wall time, and complete stdout/stderr in canonical JSON. The release-before and
+corrected-after counts are recorded below only after the untouched Ubuntu corpus
+runs complete. [`probe_j13_thf_proving.py`](probe_j13_thf_proving.py) then
+derives its complete selection from the before-audit diagnostic class and runs
+the production one-core schedule under a one-second CPU limit, failing unless
+every selected input reaches a terminal proving status rather than exit 3.
+
+The immutable Ubuntu evidence is:
+
+- frozen release binary SHA-256
+  `8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda`;
+- before audit 324 accepted / 73 overapplication / 3 other errors, SHA-256
+  `5dffb57022087f875795d3ed4c486762939bc440ffa6ba488273c1a5795bbc88`;
+- corrected source snapshot
+  `15e5ee74ea598d5ae0ff85ff4164ad1423c1d5395f24d5fd327ea1cfa690ecff`
+  and release binary SHA-256
+  `dfd5def3af2c7b5633f43f4e980fcd4a84e91e2de0d127d65a54321ca5dd7fc3`;
+- after audit 398 accepted / 2 other errors / 0 overapplications, SHA-256
+  `8457b397f123fef0bb8149acc9fbcceb1a4d8568f57bbcd6eeb64a6e1477beb7`;
+  the only remaining errors are the same `SYO544^1` and `SYO545^1` Boolean
+  equality diagnostics, while the former unrelated `ITP185^1` error also
+  becomes accepted; and
+- proving probe 73/73 `entered_proving`, SHA-256
+  `14a4c40c8488b48d5484be15913b53c383ba2d437b48e101bdfd7efb0d122693`.
+
+The four files and corrected binary are retained under
+`.artifacts/casc-benchmark/`. All 142 term-bank tests, the focused executable
+regressions, and release formatting passed on the corrected snapshot before
+these corpus gates. Clean-room comprehensive run
+`.artifacts/linode/260801-075604-b2cf/` then passed 4,562 library tests, strict
+Clippy, native and Windows GNU x64 builds, clean FOL/HO C builds, 50 main and
+216 tool comparisons with zero unexpected mismatches, and ten behavior-exact
+benchmarks at a `1.0821091514x` aggregate Rust/C wall-time ratio.
 
 ## Remaining acceptance boundary
 

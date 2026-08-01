@@ -2443,13 +2443,6 @@ impl TermBank {
         Ok(formula)
     }
 
-    fn parse_literal_tformula_tstp_with_applications(
-        &mut self,
-        scanner: &mut Scanner,
-    ) -> Result<Term, Diagnostic> {
-        self.parse_literal_tformula_tstp_with_applications_with_options(scanner, false, true)
-    }
-
     fn parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
         &mut self,
         scanner: &mut Scanner,
@@ -2631,6 +2624,15 @@ impl TermBank {
         scanner: &mut Scanner,
         head: &Term,
     ) -> Result<Term, Diagnostic> {
+        self.parse_applied_tformula_tstp_subset_with_saturation(scanner, head, false)
+    }
+
+    fn parse_applied_tformula_tstp_subset_with_saturation(
+        &mut self,
+        scanner: &mut Scanner,
+        head: &Term,
+        stop_at_saturation: bool,
+    ) -> Result<Term, Diagnostic> {
         let head_type = self.tformula_head_type(head)?;
         let max_args = type_get_max_arity(&head_type);
         let head_is_logical = !head.is_free_var() && self.sig.query_prop(head.f_code(), FP_FOF_OP);
@@ -2638,6 +2640,9 @@ impl TermBank {
 
         while scanner.test_tok(TokenType::APPLICATION) {
             if args.len() >= max_args {
+                if stop_at_saturation {
+                    break;
+                }
                 return Err(Diagnostic::new(
                     ErrorCode::SYNTAX_ERROR,
                     "Too many arguments applied to the term",
@@ -2659,6 +2664,9 @@ impl TermBank {
             args.push(arg);
         }
 
+        if args.is_empty() {
+            return Ok(head.clone());
+        }
         let applied = lambda_apply_terms(self, head, &args)?;
         self.encode_predicate_as_eqn(applied)
     }
@@ -2687,13 +2695,105 @@ impl TermBank {
 
         let arg = if expected_type.is_bool() {
             self.parse_tformula_application_bool_arg(scanner)?
+        } else if allow_application_tail
+            && scanner.test_tok(TokenType::FOF_BIN_OP)
+            && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+        {
+            let op = self.tptp_operator_parse(scanner)?;
+            let head = self.make_logical_tformula_head(op);
+            self.term_top_insert(head)?
+        } else if allow_application_tail
+            && scanner.test_tok(TokenType::TILDE_SIGN)
+            && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+        {
+            scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            let op = Self::require_formula_op_code(self.sig.not_code())?;
+            let head = self.make_logical_tformula_head(op);
+            self.term_top_insert(head)?
         } else if scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
-            self.parse_literal_tformula_tstp_with_applications(scanner)?
+            let mut lambda =
+                self.parse_tformula_lambda_application_arg(scanner, !allow_application_tail)?;
+            if allow_application_tail && scanner.test_tok(TokenType::APPLICATION) {
+                lambda = self.parse_applied_tformula_term_tstp_subset(scanner, &lambda)?;
+            }
+            lambda
         } else {
             self.parse_tformula_application_term_arg(scanner, allow_application_tail)?
         };
         Self::require_term_sort(&arg, expected_type, "formula application argument")?;
         Ok(arg)
+    }
+
+    fn parse_tformula_lambda_application_arg(
+        &mut self,
+        scanner: &mut Scanner,
+        bounded_body: bool,
+    ) -> Result<Term, Diagnostic> {
+        let quantor = self.tptp_quantor_parse(scanner)?;
+        if quantor != SIG_NAMED_LAMBDA_CODE {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "lambda application argument expected",
+            ));
+        }
+        scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        if bounded_body {
+            self.parse_quantified_tformula_unit_without_application_tail(scanner, quantor)
+        } else {
+            self.parse_quantified_tformula_tstp_subset(scanner, quantor)
+        }
+    }
+
+    fn parse_tformula_unit_without_application_tail(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        // TPTP makes `@` left-associative and lambda right-associative. Parse
+        // one unit here so a following application stays with the outer head;
+        // an application intended inside the unit must be parenthesized.
+        let formula = if scanner.test_tok(
+            TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
+        ) {
+            let quantor = self.tptp_quantor_parse(scanner)?;
+            scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+            self.parse_quantified_tformula_unit_without_application_tail(scanner, quantor)?
+        } else if scanner.test_tok(TokenType::TILDE_SIGN) {
+            scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            if scanner.test_tok(TokenType::APPLICATION) {
+                scanner.accept_tok(TokenType::APPLICATION)?;
+            }
+            let child = self.parse_tformula_unit_without_application_tail(scanner)?;
+            self.tformula_fcode_alloc(
+                Self::require_formula_op_code(self.sig.not_code())?,
+                child,
+                None,
+            )?
+        } else {
+            self.parse_literal_tformula_tstp_subset(scanner, true, true)?
+        };
+        self.encode_predicate_as_eqn(formula)
+    }
+
+    fn parse_quantified_tformula_unit_without_application_tail(
+        &mut self,
+        scanner: &mut Scanner,
+        quantor: FunCode,
+    ) -> Result<Term, Diagnostic> {
+        self.vars.push_env();
+        let parsed = (|| {
+            let variable = self.parse_tstp_quantified_variable(scanner)?;
+            let rest = if scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                self.parse_quantified_tformula_unit_without_application_tail(scanner, quantor)?
+            } else {
+                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+                scanner.accept_tok(TokenType::COLON)?;
+                self.parse_tformula_unit_without_application_tail(scanner)?
+            };
+            self.tformula_fcode_alloc(quantor, variable, Some(rest))
+        })();
+        self.vars.pop_env();
+        parsed
     }
 
     fn parse_tformula_application_bool_arg(
@@ -2705,6 +2805,8 @@ impl TermBank {
             let arg = self.parse_tformula_tstp_subset(scanner)?;
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             Ok(arg)
+        } else if scanner.test_tok(TokenType::TILDE_SIGN) {
+            self.parse_tformula_unit_without_application_tail(scanner)
         } else {
             self.parse_literal_tformula_tstp_subset(scanner, false, true)
         }
@@ -2799,18 +2901,32 @@ impl TermBank {
             } else {
                 scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
                 scanner.accept_tok(TokenType::COLON)?;
-                if quantor == SIG_NAMED_LAMBDA_CODE {
-                    self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
-                        scanner, true,
-                    )?
-                } else {
-                    self.parse_literal_tformula_tstp_with_applications(scanner)?
-                }
+                self.parse_quantified_tformula_body(scanner, quantor)?
             };
             self.tformula_fcode_alloc(quantor, variable, Some(rest))
         })();
         self.vars.pop_env();
         parsed
+    }
+
+    fn parse_quantified_tformula_body(
+        &mut self,
+        scanner: &mut Scanner,
+        quantor: FunCode,
+    ) -> Result<Term, Diagnostic> {
+        let mut body = self.parse_literal_tformula_tstp_subset(
+            scanner,
+            quantor == SIG_NAMED_LAMBDA_CODE,
+            true,
+        )?;
+        if scanner.test_tok(TokenType::APPLICATION) {
+            // A quantified body accepts applications while its current head
+            // has arguments left. Once saturated, the next `@` applies to
+            // the completed quantified term. This preserves E-compatible
+            // boundaries without rejecting conventional `![X]: p @ X`.
+            body = self.parse_applied_tformula_tstp_subset_with_saturation(scanner, &body, true)?;
+        }
+        Ok(body)
     }
 
     fn parse_tstp_quantified_variable(
@@ -6251,6 +6367,321 @@ mod tests {
     }
 
     #[test]
+    fn tstp_lambda_argument_keeps_following_outer_application() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $o) > $i > $o, X: $i]: (K @ ^[Y: $i]: $true @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().qall_code());
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 3);
+        assert_eq!(
+            application.argument(1).unwrap().f_code(),
+            SIG_NAMED_LAMBDA_CODE
+        );
+    }
+
+    #[test]
+    fn tstp_lambda_argument_nested_quantifier_keeps_outer_application() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $o) > $i > $o, X: $i]: \
+             (K @ ^[Y: $i]: ?[S: $i > $o]: \
+                ((S @ Y) & ![Z: $i]: (S @ Z)) @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 3);
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(
+            lambda.argument(1).unwrap().f_code(),
+            bank.signature().qex_code()
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_lambda_argument_accepts_parenthesized_application_body() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $o) > $i > $o, P: $i > $o, X: $i]: \
+             (K @ ^[Y: $i]: (P @ Y) @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let p_quantifier = formula.argument(1).unwrap();
+        let x_quantifier = p_quantifier.argument(1).unwrap();
+        let body = x_quantifier.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        let application = body.argument(0).unwrap();
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        let lambda_body = lambda.argument(1).unwrap();
+        assert_eq!(lambda_body.f_code(), bank.signature().eqn_code());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_parenthesized_lambda_argument_applies_after_lambda_body() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![R: ($i > $o) > $o, X: $i]: \
+             (R @ (^[Y: $i, Z: $i]: (Y = Z) @ X))",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        let lambda_application = application.argument(1).unwrap();
+        assert!(lambda_application.is_phony_app());
+        assert_eq!(lambda_application.arity(), 2);
+        assert_eq!(
+            lambda_application.argument(0).unwrap().f_code(),
+            SIG_NAMED_LAMBDA_CODE
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_parenthesized_lambda_argument_consumes_unsaturated_body_application() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![Q: ($i > $o) > $o, P: $i > $o]: \
+             (Q @ (^[X: $i]: P @ X))",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let outer_application = body.argument(0).unwrap();
+        let lambda = outer_application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        let lambda_body = lambda.argument(1).unwrap();
+        assert_eq!(lambda_body.f_code(), bank.signature().eqn_code());
+        assert!(lambda_body.argument(0).unwrap().is_applied_free_var());
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_parenthesized_applied_lambda_can_be_equality_rhs() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![F: $i > $o, X: $i]: \
+             (F = (^[Y: $i, Z: $i]: (Y = Z) @ X))",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let equality = nested.argument(1).unwrap();
+        assert_eq!(equality.f_code(), bank.signature().eqn_code());
+        let lambda_application = equality.argument(1).unwrap();
+        assert!(lambda_application.is_phony_app());
+        assert_eq!(
+            lambda_application.argument(0).unwrap().f_code(),
+            SIG_NAMED_LAMBDA_CODE
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_quantifier_argument_keeps_following_outer_applications() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![I: $o > $i > $o, A: $i]: \
+             (I @ ?[X: $i]: (X = A) @ A)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 3);
+        assert_eq!(
+            application.argument(1).unwrap().f_code(),
+            bank.signature().qex_code()
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_term_lambda_argument_keeps_following_outer_application() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![R: ($i > $i) > $i > $o, X: $i]: (R @ ^[Y: $i]: Y @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(lambda.argument(1), lambda.argument(0));
+        assert_eq!(application.arity(), 3);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_term_lambda_argument_accepts_parenthesized_application_body() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![R: ($i > $i) > $i > $o, G: $i > $i, H: $i > $i, X: $i]: \
+             (R @ ^[Y: $i]: (G @ (H @ Y)) @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let g_quantifier = formula.argument(1).unwrap();
+        let h_quantifier = g_quantifier.argument(1).unwrap();
+        let x_quantifier = h_quantifier.argument(1).unwrap();
+        let body = x_quantifier.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert!(lambda.argument(1).unwrap().is_phony_app());
+        assert_eq!(application.arity(), 3);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_lambda_arguments_preserve_multiple_outer_application_slots() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![R: ($i > $o) > ($i > $o) > $i > $o, X: $i]: \
+             (R @ ^[Y: $i]: $true @ ^[Z: $i]: $false @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 4);
+        assert_eq!(
+            application.argument(1).unwrap().f_code(),
+            SIG_NAMED_LAMBDA_CODE
+        );
+        assert_eq!(
+            application.argument(2).unwrap().f_code(),
+            SIG_NAMED_LAMBDA_CODE
+        );
+    }
+
+    #[test]
+    fn tstp_lambda_argument_accepts_multiple_typed_binders() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $i > $o) > $i > $o, X: $i]: \
+             (K @ ^[Y: $i, Z: $i]: $true @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(lambda.argument(1).unwrap().f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(application.arity(), 3);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_lambda_argument_accepts_right_associated_nested_lambda() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $i > $o) > $i > $o, X: $i]: \
+             (K @ ^[Y: $i]: ^[Z: $i]: $true @ X)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let nested = formula.argument(1).unwrap();
+        let body = nested.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        let lambda = application.argument(1).unwrap();
+        assert_eq!(lambda.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(lambda.argument(1).unwrap().f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(application.arity(), 3);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_formula_application_still_rejects_genuine_overapplication() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![K: ($i > $o) > $i > $o, P: $i > $o, X: $i]: K @ P @ X @ X",
+            false,
+        )
+        .unwrap();
+
+        let error = bank.parse_tformula_tstp(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(error.message(), "Too many arguments applied to the term");
+    }
+
+    #[test]
     fn tstp_formula_application_can_be_equality_operand_under_first_order_global_state() {
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = formula_bank();
@@ -6493,6 +6924,32 @@ mod tests {
         );
         let child = formula.argument(0).unwrap();
         assert_eq!(child.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn tstp_negated_boolean_argument_keeps_following_outer_application() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string(
+            "![I: $o > $i > $o, P: $i > $o, A: $i]: \
+             (I @ ~ (P @ A) @ A)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let p_quantifier = formula.argument(1).unwrap();
+        let a_quantifier = p_quantifier.argument(1).unwrap();
+        let body = a_quantifier.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 3);
+        assert_eq!(
+            application.argument(1).unwrap().f_code(),
+            bank.signature().not_code()
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]
@@ -6817,6 +7274,26 @@ mod tests {
         assert_eq!(right.f_code(), bank.signature().eqn_code());
         let applied_q = right.argument(0).unwrap();
         assert_eq!(bank.signature().find_name(applied_q.f_code()), Some("q"));
+    }
+
+    #[test]
+    fn tstp_formula_application_accepts_logical_head_as_typed_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut scanner =
+            Scanner::from_user_string("![M: ($o > $o > $o) > $o]: (M @ (&))", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let body = formula.argument(1).unwrap();
+        let application = body.argument(0).unwrap();
+        assert!(application.is_applied_free_var());
+        assert_eq!(application.arity(), 2);
+        assert_eq!(
+            application.argument(1).unwrap().f_code(),
+            bank.signature().and_code()
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]
