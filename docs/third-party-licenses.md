@@ -47,10 +47,12 @@ those helpers are not GMP library implementation sources.
 VIRAS requires special attention: its complete Git tree at the bundled
 revision has no license file, and its source headers and README contain no
 licensing statement. Consequently this repository cannot include a license
-copy for VIRAS or use that implementation as source guidance. Treat its
-license status as unresolved and obtain an explicit license from the upstream
-maintainer before redistributing it. Umlaut's VIRAS design work uses only the
-paper-derived clean-room packet under `viras_docs/`.
+copy for VIRAS or use that implementation as source guidance. Its license
+status remains unresolved, and the owner decided on 2026-07-31 that the VIRAS
+sources and affected Vampire binaries will never be distributed. Any future
+reconsideration must first obtain explicit licensing terms from the upstream
+maintainer. Umlaut's VIRAS design work uses only the paper-derived clean-room
+packet under `viras_docs/`.
 
 This inventory records the top-level license of each named project. Individual
 source distributions can contain separately licensed third-party or

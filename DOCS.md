@@ -447,7 +447,9 @@ execution policy below.
 
 The pinned VIRAS revision does not declare a license. Consequently, these
 Vampire executables are ignored, local-only reference artifacts and must not
-be committed, published, or redistributed.
+be committed, published, or redistributed. On 2026-07-31, the owner made that
+exclusion permanent; the decision does not claim that VIRAS's license was
+resolved.
 
 ## Execution And Platform Policy
 
