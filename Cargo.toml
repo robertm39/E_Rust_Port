@@ -15,6 +15,7 @@ include = [
     "/build.rs",
     "/docs/dependency-packaging-matrix.md",
     "/docs/finite-model-search.md",
+    "/docs/project-direction.md",
     "/docs/search-telemetry.md",
     "/docs/third-party-licenses.md",
     "/docs/viras-qe.md",

@@ -1,120 +1,128 @@
 # Umlaut
 
+> This README was written by GPT-5.6 Sol.
+
 Umlaut is an independent automated theorem prover written in Rust. It began as
-a port of the E theorem prover, but its design is no longer constrained to
-E's architecture, implementation choices, bugs, performance, branding, or
-executable names.
+a port of the [E theorem prover](https://www.eprover.org/),
+retains broad compatibility with E's proving interfaces and feature surface,
+and now follows its own architecture and research direction.
 
-The project intends to become the leading automated theorem prover and to
-compete for first place at [CASC 2027](https://tptp.org/CASC/). Soundness,
+The project's ambition is to become the leading automated theorem prover and
+to compete for first place at [CASC 2027](https://tptp.org/CASC/). Soundness,
 proof integrity, standards compliance, licensing, and reproducible performance
-evidence take precedence over short-term benchmark gains.
+evidence take priority over short-term benchmark gains.
 
-## Compatibility and direction
+> **Research preview:** Umlaut is under active development. The current Cargo
+> package is version 0.1.0 and is not published to crates.io. Interfaces,
+> strategies, and performance characteristics may change before a stable
+> release.
 
-Umlaut must retain the substantive feature coverage of E and broadly compatible
-command-line, TPTP-family input, SZS status, proof-output, and resource-limit
-behavior. E remains a valuable read-only compatibility, regression, provenance,
-and algorithmic reference. It is not Umlaut's universal design or performance
-authority, and new Umlaut features do not need an E analogue.
+## What Umlaut supports
 
-Name-level compatibility is intentionally unsupported. The Cargo package,
-library crate, and executable suite use Umlaut names exclusively; no legacy E
-binary aliases are provided.
+- First-order and higher-order TPTP-family problems, including CNF, FOF, TFF,
+  TCF, and THF input.
+- Automatic strategy selection with `--auto`, along with explicit CPU and
+  memory limits.
+- Standard SZS statuses and TSTP-compatible proof output.
+- Broadly E-compatible command-line behavior without legacy E executable
+  names.
+- A dependency-free default build with an internal SAT service, plus optional
+  feature-gated research components.
+- Search telemetry, proof validation, reproducible packaging, and extensive
+  compatibility and performance evidence.
 
-## Executables
+The primary executable is `umlaut`. The repository also contains companion
+analysis, proof, classification, filtering, server, and knowledge-base tools.
+See the [project direction and technical overview](docs/project-direction.md)
+for the complete executable map and advanced feature boundaries.
 
-The primary executable is `umlaut`. Companion tools share the `umlaut-`
-namespace:
+## Quick start
 
-| Previous target | Umlaut target |
-| --- | --- |
-| `eprover` | `umlaut` |
-| `CSSCPA_filter` | `umlaut-csscpa-filter` |
-| `e_stratpar` | `umlaut-stratpar` |
-| `e_ltb_runner` | `umlaut-ltb-runner` |
-| `termprops` | `umlaut-termprops` |
-| `term2dag` | `umlaut-term2dag` |
-| `ex_commandline` | `umlaut-commandline-example` |
-| `epclextract` | `umlaut-pcl-extract` |
-| `epclanalyse` | `umlaut-pcl-analyse` |
-| `checkproof` | `umlaut-checkproof` |
-| `epcllemma` | `umlaut-pcl-lemma` |
-| `edpll` | `umlaut-dpll` |
-| `eground` | `umlaut-ground` |
-| `classify_problem` | `umlaut-classify-problem` |
-| `tsm_classify` | `umlaut-tsm-classify` |
-| `direct_examples` | `umlaut-direct-examples` |
-| `e_client` | `umlaut-client` |
-| `e_deduction_server` | `umlaut-deduction-server` |
-| `e_server` | `umlaut-server` |
-| `e_axfilter` | `umlaut-axiom-filter` |
-| `enormalizer` | `umlaut-normalizer` |
-| `epatternize` | `umlaut-patternize` |
-| `ekb_create` | `umlaut-kb-create` |
-| `ekb_delete` | `umlaut-kb-delete` |
-| `ekb_insert` | `umlaut-kb-insert` |
-| `ekb_ginsert` | `umlaut-kb-ginsert` |
+Umlaut's authoritative runtime and validation platform is x86-64 Linux; the
+project currently validates on Ubuntu 24.04. Install Git and a recent stable
+Rust toolchain, then build the primary prover from source:
 
-Automation that invokes a previous target name must be updated.
-
-The additional `umlaut-viras-qe` executable is feature-required and has no
-legacy E analogue. It provides standalone, bounded typed arithmetic
-quantifier elimination only when built with `--features viras-qe`; see
-[docs/viras-qe.md](docs/viras-qe.md).
-
-## Search telemetry
-
-Pass `--search-telemetry=run.json` to the primary executable to atomically
-maintain one versioned, aggregate JSON record for a saturation search. An
-initial checkpoint survives hard stops before ordinary finalization; a final
-record covers the input and search funnels, inferences, simplification and
-index activity, SAT calls, term storage, proof depth, clause-set high-water
-counts, and resource usage. See
-[docs/search-telemetry.md](docs/search-telemetry.md) for the schema and
-schedule-worker naming contract.
-
-## Optional incremental SAT backend
-
-The default build uses Umlaut's dependency-free internal SAT service. The
-`cadical-static` feature can compile pinned CaDiCaL 3.0.1 from an explicitly
-supplied `UMLAUT_CADICAL_SOURCE` tree. Runtime mode
-`UMLAUT_CADICAL_MODE=always`, `auto-128`, or `auto-256` is opt-in; unset or
-`off` remains the default. Build provenance, proof-checker controls, packaging,
-and disablement are documented in [DOCS.md](DOCS.md) and
-[docs/dependency-packaging-matrix.md](docs/dependency-packaging-matrix.md).
-
-## Optional arithmetic quantifier elimination
-
-The `viras-qe` feature adds a clean-room, paper-derived exact LIRA
-quantifier-elimination kernel and the standalone `umlaut-viras-qe` tool. It is
-not used by the primary prover or any automatic schedule. Its supported typed
-fragment, fail-closed limits, derivation replay, output schema, dependencies,
-and complete disablement boundary are documented in
-[docs/viras-qe.md](docs/viras-qe.md).
-
-## Development and validation
-
-Start with [DOCS.md](DOCS.md) for the documentation index and
-[docs/rust-code-standards.md](docs/rust-code-standards.md) for mandatory Rust
-standards. Rust and C formatting, compilation, tests, execution, comparisons,
-benchmarks, and profiling run only through the ephemeral-Linode workflow:
-
-```powershell
-.\linode-runner.ps1 run
+```bash
+git clone https://github.com/robertm39/E_Rust_Port.git umlaut
+cd umlaut
+cargo build --locked --release --bin umlaut
 ```
 
-The `eprover/` directory and the other bundled theorem-proving projects are
-read-only references. Their presence does not make them part of Umlaut or
-authorize copying code without a compatible license and recorded provenance.
-The independent VIRAS research packet is under
-[viras_docs/](viras_docs/README.md).
+Create a small TPTP problem:
 
-## Licensing
+```bash
+cat > socrates.p <<'TPTP'
+fof(socrates_is_human, axiom, human(socrates)).
+fof(all_humans_are_mortal, axiom, ![X]: (human(X) => mortal(X))).
+fof(socrates_is_mortal, conjecture, mortal(socrates)).
+TPTP
+```
 
-The current Cargo package declares `GPL-2.0-or-later`. Moving Umlaut to
-LGPL-3.0 is a project objective, not a current license claim. Third-party
-license and provenance details are recorded in
-[docs/third-party-licenses.md](docs/third-party-licenses.md). The enforced
-dependency and distribution boundary is in
-[docs/dependency-packaging-matrix.md](docs/dependency-packaging-matrix.md).
+Ask Umlaut to prove the conjecture and emit a TSTP proof object:
+
+```bash
+./target/release/umlaut \
+  --auto \
+  --tstp-out \
+  --proof-object=1 \
+  --cpu-limit=10 \
+  socrates.p
+```
+
+The output should include:
+
+```text
+% SZS status Theorem
+```
+
+Run `./target/release/umlaut --help` for the full command-line surface. TPTP
+`include(...)` directives resolve relative to the input file or through the
+standard `TPTP` environment variable.
+
+## Project status and direction
+
+Umlaut preserves substantive E feature coverage and broadly compatible input,
+output, proof, scheduling, and resource-limit behavior, but it is not intended
+to remain a line-for-line port or a name-level drop-in replacement. New
+algorithms and capabilities do not need an E analogue.
+
+Current development includes saturation search, higher-order reasoning,
+proof-producing preprocessing, finite-model search, optional incremental SAT,
+and clean-room arithmetic quantifier elimination. Experimental features remain
+off automatic schedules until their soundness and held-out utility gates pass.
+The detailed policies and opt-in controls are documented in the
+[technical overview](docs/project-direction.md).
+
+## Documentation
+
+- [Project direction and technical overview](docs/project-direction.md) —
+  compatibility policy, executable names, telemetry, optional features,
+  validation platforms, and licensing.
+- [Documentation index](DOCS.md) — the complete technical and agent-facing
+  documentation map.
+- [Soundness validation](docs/soundness-validation.md) — proof, model, and
+  differential validation gates.
+- [Rust code standards](docs/rust-code-standards.md) — mandatory implementation
+  and review standards.
+- [Dependency and packaging matrix](docs/dependency-packaging-matrix.md) —
+  reproducible source/runtime boundaries and optional dependencies.
+- [Third-party licenses](docs/third-party-licenses.md) — provenance and license
+  records for upstream references and adopted components.
+
+Project-controlled builds, tests, compatibility comparisons, benchmarks, and
+profiling use the documented
+[ephemeral Ubuntu 24.04 Linode workflow](docs/linode-runner.md). Windows GNU
+x64 is compile-only; Windows runtime behavior and MSVC are not supported
+validation targets.
+
+## License and provenance
+
+Umlaut is licensed under
+[GNU GPL version 2 or later](LICENSE). The current and intended distribution
+license is GPL-2.0-or-later.
+
+Umlaut contains independently maintained Rust implementations informed by E,
+plus the specifically identified E-derived data recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Ignored local checkouts of E,
+CaDiCaL, MiniSat, Vampire, Z3, GMP, and other research inputs are not tracked by
+the public repository and are excluded from Umlaut's distributable packages.

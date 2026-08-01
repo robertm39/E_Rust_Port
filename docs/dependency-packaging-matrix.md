@@ -7,10 +7,10 @@ reference artifacts considered for Umlaut. It is an engineering and provenance
 record, not legal advice. Adding a component to an ignored checkout or using it
 in an experiment does not adopt it as a product dependency.
 
-Umlaut currently declares `GPL-2.0-or-later`. LGPL-3.0 remains the intended
-future license, not a current package claim. A license change requires a
-separate provenance and contributor-rights audit; this matrix must not be used
-to imply that the change has already happened.
+Umlaut declares `GPL-2.0-or-later`. The owner decided on 2026-07-31 to retain
+that license, so LGPL-3.0 is no longer a project objective. Any future license
+change would require a separate provenance and contributor-rights audit; this
+matrix must not be used to imply that such a change has happened.
 
 ## Package sets
 

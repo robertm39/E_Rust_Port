@@ -2,6 +2,14 @@
 
 Agent-made documentation belongs in this file and in the documentation locations linked from this file. Do not modify `AGENTS.md`; add or update agent-facing documentation here instead.
 
+## Project Overview
+
+The public-facing introduction and source-build quick start are in
+[`README.md`](README.md). Detailed product direction, E compatibility policy,
+the executable map, optional-feature boundaries, supported validation targets,
+and current licensing are in
+[`docs/project-direction.md`](docs/project-direction.md).
+
 ## Umlaut Rust Standards
 
 Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks. Unsafe Rust is permitted for a concrete interoperability, compatibility, correctness, or measured performance reason when safe Rust cannot adequately meet the requirement; convenience alone is not sufficient. Keep unsafe implementation details narrowly scoped and behind safe APIs. Unsafe traits and their implementations are permitted, but every unsafe operation, function, trait, and implementation must document the applicable safety invariants and explain why Undefined Behavior cannot occur.
@@ -690,19 +698,20 @@ timeouts across three abstraction sessions fail the gate despite strong
 descriptive CaDiCaL timings on complete pairs. Therefore `off` remains the
 default and both thresholds remain explicit opt-ins.
 
-## Relicensing Readiness Audit
+## Relicensing Audit and Decision
 
 The complete file-level source/runtime package inventory, pinned E header scan,
 Git-contributor evidence, owner-attestation template, authoritative references,
-and decision for the intended LGPL-3.0 move are recorded in
+and decision from the considered LGPL-3.0 move are recorded in
 [`experiments/2026-07-29-002-lgpl-relicensing-audit/`](experiments/2026-07-29-002-lgpl-relicensing-audit/).
 All 314 source and five runtime members are classified with zero gaps. The
 technical E `LGPL-2.1-or-later` route is plausible, but 45 relevant upstream
 headers mention only GPL and two have no GNU-license phrase. Umlaut owner and
 employment authority is also not attested, and `LGPL-3.0-only` versus
 `LGPL-3.0-or-later` is undecided. Relicensing is therefore not authorized;
-`Cargo.toml`, `LICENSE`, notices, and package metadata remain unchanged pending
-a signed owner attestation and qualified review.
+`Cargo.toml`, `LICENSE`, notices, and package metadata remain unchanged. The
+owner subsequently decided in `E_Rust_Port-9jt.8.9` to keep Umlaut under
+`GPL-2.0-or-later`, so an LGPL-3.0 change is no longer a project objective.
 
 ## Shared Rewrite-Cache Evaluation
 

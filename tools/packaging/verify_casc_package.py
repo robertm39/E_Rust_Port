@@ -73,6 +73,7 @@ REQUIRED_SOURCE_PATHS = {
     "THIRD_PARTY_NOTICES.md",
     "build.rs",
     "docs/dependency-packaging-matrix.md",
+    "docs/project-direction.md",
     "docs/search-telemetry.md",
     "docs/third-party-licenses.md",
     "docs/viras-qe.md",
