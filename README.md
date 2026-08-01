@@ -8,9 +8,7 @@ retains broad compatibility with E's proving interfaces and feature surface,
 and now follows its own architecture and research direction.
 
 The project's ambition is to become the leading automated theorem prover and
-to compete for first place at [CASC 2027](https://tptp.org/CASC/). Soundness,
-proof integrity, standards compliance, licensing, and reproducible performance
-evidence take priority over short-term benchmark gains.
+to compete for first place at [CASC 2027](https://tptp.org/CASC/).
 
 > **Research preview:** Umlaut is under active development. The current Cargo
 > package is version 0.1.0 and is not published to crates.io. Interfaces,
