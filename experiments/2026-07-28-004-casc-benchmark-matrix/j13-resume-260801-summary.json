@@ -1,0 +1,96 @@
+{
+  "archive": {
+    "bytes": 14427660,
+    "path": ".artifacts/casc-benchmark/j13-checkpoint-260801-092150-91c1.tar.gz",
+    "sha256": "1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b"
+  },
+  "contract": {
+    "contract_file_sha256": "4a66c48124cdfb89da5c17ac87229e599ae2dffd92976c0ff89804d362bc6075",
+    "contract_id": "9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676",
+    "manifest_sha256": "939f8d03f0ceb0cbccd6377a01b605d84adeaa46e892a630513cccb82c825941",
+    "selected_problem_ids_sha256": "f6c764dde417edfbbcd703252202dfb6e4bd1c1c125226cea5390d54ff924a52",
+    "source_snapshot_sha256": "88bd4fb2010ede33d8f2dd4e6f60957751a0b3183375c57516a6fe06810efa10"
+  },
+  "host": {
+    "effective_cpuset": "0-7",
+    "kernel": "6.8.0-134-generic",
+    "logical_cpus": 8,
+    "memory_total_mib": 150895,
+    "os": "Ubuntu 24.04.4 LTS",
+    "processor": "AMD EPYC 7713 64-Core Processor"
+  },
+  "inner_run_archive": {
+    "bytes": 14500604,
+    "sha256": "4778ec8bb21187beb9c1e4c1774a6572251ea861a53c79cb45d7f6baa2e98dda"
+  },
+  "kind": "umlaut-casc-j13-resume-checkpoint-summary",
+  "lifecycle": {
+    "cgroup_residue_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "firewall_deleted": true,
+    "initial_invocation_id": "1ef7992eb49c459fb73d0caf3fba5333",
+    "initial_main_pid": 5141,
+    "linode_deleted": true,
+    "maintenance_record_sha256": "39311a0669cc9cd5b6b075fc2ce41aa1ad4ab7e46573ddda9196ec86686b81fa",
+    "maintenance_units_inactive_and_masked": true,
+    "process_residue": false,
+    "restarts": 0,
+    "service_result": "success",
+    "unit": "casc-j13-v2-resume-260801-092150-91c1.service",
+    "watchdog_log_sha256": "3cbf19a9dd8ba167a2f6ce8f4fe2566975adefa4f6c49f9cd42d191e3547a0fc",
+    "watchdog_sha256": "517260872b25cedb82658b7cb45642c8fcfe5469eee7ed7f793a9c82eb6855e0"
+  },
+  "report": {
+    "complete": false,
+    "completed_results": 965,
+    "expected_results": 2700,
+    "missing_results": 1735,
+    "overlap": {
+      "both_solved": 294,
+      "incomplete": 868,
+      "neither_solved": 53,
+      "polarity_disagreements": 0,
+      "umlaut_only": 8,
+      "vampire_only": 127
+    },
+    "sha256": "17862cf3c6a51103c7259c39f14204055550d95041c4035bc64569a9507bbb89",
+    "solvers": {
+      "umlaut": {
+        "classification_counts": {
+          "error": 76,
+          "gave_up": 58,
+          "solved": 302,
+          "timeout": 47
+        },
+        "completed_results": 483
+      },
+      "vampire": {
+        "classification_counts": {
+          "solved": 421,
+          "timeout": 61
+        },
+        "completed_results": 482
+      }
+    }
+  },
+  "schema_version": 1,
+  "session": {
+    "completed_at": "2026-08-01T14:25:06Z",
+    "max_session_wall_seconds": 17400,
+    "new_results": 780,
+    "resumed_results": 185,
+    "runner_label": "e-rust-codex-260801-092150-91c1",
+    "runner_run_id": "260801-092150-91c1",
+    "session_file_sha256": "8c84d78aadc068286d154552633e389baf17cce63a665902af4175134c413ad7",
+    "session_id": "j13-resume-260801-092150-91c1",
+    "started_at": "2026-08-01T09:33:54Z",
+    "stopped_after_session_limit": true
+  },
+  "verification": {
+    "all_result_artifact_hashes_valid": true,
+    "all_result_contract_ids_valid": true,
+    "outer_hash_entries": 8,
+    "outer_hash_mismatches": 0,
+    "partial_report_byte_reproducible": true,
+    "result_json_files": 965
+  }
+}

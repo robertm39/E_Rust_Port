@@ -193,6 +193,49 @@ gate, and all ten behavior-exact benchmarks at `1.0733692750x`, then deleted
 the Linode and firewall. The checkpoint is therefore ready to resume under the
 quiesced runner lifecycle.
 
+## J13 guarded resume slice
+
+The first quiesced-runner resume used high-memory runner
+`e-rust-codex-260801-092150-91c1` (Linode `101988657`) and restored the exact
+canonical J13 contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`.
+Verification-only accepted all 185 retained atomic results before the new
+service started. The run continued to use frozen Umlaut
+`8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda`
+and pinned Vampire
+`3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665`;
+the later parser repair is intentionally not mixed into this immutable
+comparison.
+
+Transient service `casc-j13-v2-resume-260801-092150-91c1.service` ran with
+`Restart=no`, initial PID `5141`, and invocation
+`1ef7992eb49c459fb73d0caf3fba5333`. A local watchdog checked that PID,
+invocation, and zero-restart invariant every two minutes. The batch reached
+its 17,400-second session guard normally and recorded `new=780, resumed=185`,
+advancing the matrix to 965/2,700 J13 results: 483 Umlaut and 482 Vampire. The
+one-result difference is the expected atomic boundary after Umlaut completed
+the final coordinate and the session limit stopped before Vampire began.
+
+The regenerated partial report is byte-reproducible at SHA-256
+`17862cf3c6a51103c7259c39f14204055550d95041c4035bc64569a9507bbb89`.
+It currently records 302 accepted Umlaut solves and 421 accepted Vampire
+solves, with 294 shared, eight Umlaut-only, 127 Vampire-only, and zero polarity
+disagreements among complete pairs. Umlaut's 76 errors are expected from the
+frozen pre-repair executable and agree with the separate complete THF audit;
+they are preserved rather than retroactively rerun under a different binary.
+
+After service exit, no solver process or benchmark cgroup remained. All four
+package-maintenance units were still inactive and masked, the service result
+was `success` with zero restarts, and the watchdog downloaded the checkpoint
+before deleting both the Linode and firewall. All eight outer hashes, all 965
+result contract IDs, and every referenced stdout/stderr hash passed locally.
+The ignored checkpoint
+`.artifacts/casc-benchmark/j13-checkpoint-260801-092150-91c1.tar.gz` is
+14,427,660 bytes with SHA-256
+`1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b`.
+The compact tracked record is
+[`j13-resume-260801-summary.json`](j13-resume-260801-summary.json).
+
 ## J13 THF direct-lambda operand boundary
 
 The corrected-contract slice exposed a separate release-Umlaut parser defect.
