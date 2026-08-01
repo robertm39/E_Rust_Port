@@ -258,14 +258,28 @@ class LinodeApi:
             )
         self.base_url = base_url.rstrip("/")
         self.last_response_at: datetime | None = None
+        self.last_oauth_scopes: set[str] | None = None
 
-    def _capture_response_time(self, headers: Any) -> None:
-        """Retain a server-controlled timestamp without breaking cleanup."""
+    def _capture_response_metadata(self, headers: Any) -> None:
+        """Retain server-controlled time and token scopes when available."""
 
         try:
             self.last_response_at = parse_http_date(headers.get("Date"))
         except (AttributeError, RunnerError):
             self.last_response_at = None
+        try:
+            value = headers.get("X-OAuth-Scopes")
+            self.last_oauth_scopes = (
+                {
+                    scope
+                    for scope in re.split(r"[\s,]+", value.strip())
+                    if scope
+                }
+                if isinstance(value, str) and value.strip()
+                else None
+            )
+        except AttributeError:
+            self.last_oauth_scopes = None
 
     def request(
         self,
@@ -293,10 +307,10 @@ class LinodeApi:
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 response_body = response.read()
-                self._capture_response_time(response.headers)
+                self._capture_response_metadata(response.headers)
         except urllib.error.HTTPError as error:
             response_body = error.read()
-            self._capture_response_time(error.headers)
+            self._capture_response_metadata(error.headers)
             if allow_404 and error.code == 404:
                 return None
             detail = response_body.decode("utf-8", errors="replace")
@@ -757,6 +771,15 @@ SAFE_REAPER_ACCOUNT_ROLES = {
     "account_notification_viewer",
     "account_oauth_client_admin",
 }
+MAIN_REAPER_SCOPES = {
+    "account:read_write",
+    "firewall:read_write",
+    "linodes:read_write",
+}
+RESTRICTED_REAPER_SCOPES = {
+    "firewall:read_write",
+    "linodes:read_write",
+}
 
 
 def billing_delete_at(created_at: datetime, now: datetime) -> datetime:
@@ -917,9 +940,22 @@ def validate_reaper_setup(api: LinodeApi) -> None:
         )
     parked = [state for _path, state in list_parked_states()]
     current = api.get(reaper_access_path())
+    if api.last_oauth_scopes != MAIN_REAPER_SCOPES:
+        actual = sorted(api.last_oauth_scopes or set())
+        raise RunnerError(
+            "Main controller PAT must have exactly account:read_write, "
+            "firewall:read_write, and linodes:read_write scopes; got "
+            f"{actual}"
+        )
     validate_reaper_access(current, allowed_states=parked)
     restricted = LinodeApi(token=token)
-    restricted.get("/profile")
+    restricted.request("HEAD", "/regions")
+    if restricted.last_oauth_scopes != RESTRICTED_REAPER_SCOPES:
+        actual = sorted(restricted.last_oauth_scopes or set())
+        raise RunnerError(
+            "Restricted reaper PAT must have exactly firewall:read_write "
+            f"and linodes:read_write scopes; got {actual}"
+        )
     for state in parked:
         for resource_path in (
             f"/linode/instances/{int(state['linode_id'])}",

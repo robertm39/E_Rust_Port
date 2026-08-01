@@ -425,6 +425,21 @@ class TrustedTimeTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.RunnerError, "trusted UTC time"):
                 api.trusted_now()
 
+    def test_response_metadata_captures_exact_oauth_scopes(self):
+        response = mock.MagicMock()
+        response.read.return_value = b"{}"
+        response.headers = {
+            "Date": "Mon, 27 Jul 2026 22:22:15 GMT",
+            "X-OAuth-Scopes": (
+                "account:read_write, firewall:read_write linodes:read_write"
+            ),
+        }
+        response.__enter__.return_value = response
+        with mock.patch.object(runner.urllib.request, "urlopen", return_value=response):
+            api = runner.LinodeApi(token="test")
+            api.get("/test")
+        self.assertEqual(api.last_oauth_scopes, runner.MAIN_REAPER_SCOPES)
+
 
 class HighMemoryUsageTests(unittest.TestCase):
     NOW = datetime(2026, 7, 27, 15, tzinfo=timezone.utc)
@@ -1273,6 +1288,73 @@ class BillingLifecycleTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(runner.RunnerError, "unexpected entity access"):
             runner.validate_reaper_access(current, allowed_states=[state])
+
+    def test_reaper_setup_validates_scope_headers_without_profile_access(self):
+        class MainApi:
+            last_oauth_scopes = runner.MAIN_REAPER_SCOPES
+
+            def get(self, _path):
+                return {
+                    "account_access": ["account_event_viewer"],
+                    "entity_access": [],
+                }
+
+        class RestrictedApi:
+            def __init__(self):
+                self.last_oauth_scopes = None
+                self.requests = []
+
+            def request(self, method, path):
+                self.requests.append((method, path))
+                self.last_oauth_scopes = runner.RESTRICTED_REAPER_SCOPES
+
+            def get(self, path):
+                raise AssertionError(f"unexpected restricted GET {path}")
+
+        restricted = RestrictedApi()
+        with (
+            mock.patch.object(
+                runner,
+                "load_reaper_config",
+                return_value={"username": "umlaut-reaper"},
+            ),
+            mock.patch.object(runner, "reaper_token", return_value="secret"),
+            mock.patch.object(runner, "list_parked_states", return_value=[]),
+            mock.patch.object(runner, "LinodeApi", return_value=restricted),
+            mock.patch("sys.stdout", new_callable=StringIO),
+        ):
+            runner.validate_reaper_setup(MainApi())
+        self.assertEqual(restricted.requests, [("HEAD", "/regions")])
+
+    def test_reaper_setup_rejects_extra_restricted_scope(self):
+        class MainApi:
+            last_oauth_scopes = runner.MAIN_REAPER_SCOPES
+
+            def get(self, _path):
+                return {"account_access": [], "entity_access": []}
+
+        restricted = mock.Mock()
+        restricted.last_oauth_scopes = None
+
+        def capture_scopes(_method, _path):
+            restricted.last_oauth_scopes = {
+                *runner.RESTRICTED_REAPER_SCOPES,
+                "account:read_only",
+            }
+
+        restricted.request.side_effect = capture_scopes
+        with (
+            mock.patch.object(
+                runner,
+                "load_reaper_config",
+                return_value={"username": "umlaut-reaper"},
+            ),
+            mock.patch.object(runner, "reaper_token", return_value="secret"),
+            mock.patch.object(runner, "list_parked_states", return_value=[]),
+            mock.patch.object(runner, "LinodeApi", return_value=restricted),
+            self.assertRaisesRegex(runner.RunnerError, "exactly firewall"),
+        ):
+            runner.validate_reaper_setup(MainApi())
 
     def test_begin_workload_uses_a_new_artifact_identity_each_time(self):
         state = {}
