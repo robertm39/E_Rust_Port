@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "beads": [
+    "E_Rust_Port-9jt.8.7",
+    "E_Rust_Port-9jt.8.4"
+  ],
+  "acceptance_status": "passed",
+  "runner": {
+    "run_id": "260801-024609-61a5",
+    "label": "e-rust-codex-260801-024609-61a5",
+    "linode_id": 101953078,
+    "firewall_id": 98864782,
+    "linode_type": "g7-highmem-8",
+    "region": "us-ord",
+    "image": "linode/ubuntu24.04",
+    "created_utc": "2026-08-01T02:46:29Z",
+    "source_snapshot_sha256": "71de3ebb25e1bdf56922a9a5e83c3861e1282a1d9b1d41570f643495ddf91609",
+    "source_root_commit": "1b014a78658e213667def139ebaebb51d3e18d7e",
+    "eprover_commit": "17026b1bfe61aaf223cfaae54947c8d2679c31a0"
+  },
+  "host": {
+    "ubuntu": "24.04.4 LTS",
+    "kernel": "6.8.0-134-generic",
+    "logical_cpus": 8,
+    "cpus_allowed_list": "0-7",
+    "cpu_model": "AMD EPYC 7713 64-Core Processor",
+    "sockets": 1,
+    "cores_per_socket": 8,
+    "threads_per_core": 1,
+    "mem_total_kib": 154517244
+  },
+  "workload": {
+    "requested_schedule_cores": 8,
+    "memory_limit_mb": 131072,
+    "expected_address_limit_bytes": 137438953472,
+    "iterations_per_replication": 4,
+    "explicit_random_weight_seeds": [
+      11,
+      13,
+      17
+    ],
+    "umlaut_source_commit": "4e87dac3",
+    "umlaut_sha256": "8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda",
+    "controller_source_commit": "1b014a78658e213667def139ebaebb51d3e18d7e",
+    "controller_sha256": "3b64503fe73101d0247d124b03e6c543265775296c3daff8300f945610ec69b9"
+  },
+  "controller_correction": {
+    "initial_result_sha256": "e38114dea07c149c03ec0c79e63234cb14278ba8c8551f62e0a0e857e0d27fa4",
+    "initial_checks_passed": 11,
+    "initial_checks_total": 12,
+    "initial_worker_crash_exit_code": 9,
+    "reason": "The original check required a surviving worker to prove the theorem after one worker was killed. Clean schedule exhaustion with recorded killed-worker provenance, SZS GaveUp, ResourceOut exit 9, zero descendants, and zero temporary files is also successful crash containment.",
+    "focused_tests_passed": 5
+  },
+  "replications": [
+    {
+      "name": "v2",
+      "created_utc": "2026-08-01T02:58:04Z",
+      "raw_json_sha256": "54f2a7bb35e033a9fc62020c6a684351957c1696d5af45bda78afca8f9bb8c5e",
+      "all_12_checks_passed": true,
+      "timeout": {
+        "exit_code": 8,
+        "elapsed_seconds": 17.98730870199995,
+        "observed_processes": 5,
+        "aggregate_observed_rss_kib": 44192,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "cancellation": {
+        "exit_code": 14,
+        "elapsed_seconds": 18.43191428500006,
+        "observed_processes": 5,
+        "aggregate_observed_rss_kib": 44220,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "worker_crash": {
+        "exit_code": 9,
+        "elapsed_seconds": 30.872190251999996,
+        "observed_processes": 5,
+        "aggregate_observed_rss_kib": 44372,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "seeded_runs": 4,
+      "all_seeded_runs_exit_zero": true,
+      "within_replication_proof_sha256": "40c00f6437293e96698ad65cf9964c092f139c2c846bea2efc88bfce5fba18c9",
+      "resource_totals_monotonic": true
+    },
+    {
+      "name": "v3",
+      "created_utc": "2026-08-01T02:59:33Z",
+      "raw_json_sha256": "f459493609eba94a8225ffbd7dc4a06bf9809e69b9edf26189f37d231bf4f7c0",
+      "all_12_checks_passed": true,
+      "timeout": {
+        "exit_code": 8,
+        "elapsed_seconds": 17.788664169999947,
+        "observed_processes": 5,
+        "aggregate_observed_rss_kib": 44344,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "cancellation": {
+        "exit_code": 14,
+        "elapsed_seconds": 18.52821711599995,
+        "observed_processes": 4,
+        "aggregate_observed_rss_kib": 35924,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "worker_crash": {
+        "exit_code": 9,
+        "elapsed_seconds": 30.942908804000012,
+        "observed_processes": 3,
+        "aggregate_observed_rss_kib": 27012,
+        "surviving_processes": 0,
+        "temp_files_after": 0
+      },
+      "seeded_runs": 4,
+      "all_seeded_runs_exit_zero": true,
+      "within_replication_proof_sha256": "bba527ac7c63babb1f9e638d2cc480aade69cc3f4af9f0dd30e2966f17ee12eb",
+      "resource_totals_monotonic": true
+    }
+  ],
+  "proof_reproducibility_scope": "All four explicitly seeded proofs are byte-identical within each controller invocation. Hashes differ between invocations because the generated proof contains the controller's randomized temporary source path; logical proof stability across paths is not claimed by this check.",
+  "raw_evidence": {
+    "path": ".artifacts/experiments/2026-07-28-003-multicore-scheduling/multicore-high-memory-003-evidence.tar.gz",
+    "bytes": 7083,
+    "sha256": "ba3500d1d8d62fc0d6704085b85d68a941f6aa66b833767e0cdc2d7f72bee1f2",
+    "runner_state_sha256": "ccab4949d2b2f417a98bdfcc8e31f1b9c676f8054eb8c4b09a416ef7e0ebbd11",
+    "runner_live_status_sha256": "d8d8a0d6e7d2de957b82886ec008e92badab6c942f4ab6717cdd619d24a9ced9"
+  }
+}

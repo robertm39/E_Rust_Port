@@ -11,24 +11,52 @@ This experiment addresses Bead `E_Rust_Port-9jt.8.4`.
 
 ## Required-host result
 
-The required high-memory start was attempted first on 2026-07-28. The
-fixed-EST guard reported a four-hour base allowance, a four-hour bank, no
-usage, and eight hours available. It then requested `g7-highmem-8` in
-`us-ord`, created firewall `92115053`, and tried to create runner
-`e-rust-codex-260728-085118-61c0`.
+The first required high-memory start on 2026-07-28 was rejected by Linode's
+account plan limit before instance creation. The controller deleted firewall
+`92115053`; no Linode existed and no high-memory usage accrued. That historical
+failure established provider gate `E_Rust_Port-9jt.8.7` and motivated the
+normal fallback retained below.
 
-Linode rejected the instance before creation:
+The guarded retry succeeded on 2026-08-01. It created
+`g7-highmem-8` runner `e-rust-codex-260801-024609-61a5` (Linode `101953078`,
+firewall `98864782`) in `us-ord`. The source snapshot SHA-256 was
+`71de3ebb25e1bdf56922a9a5e83c3861e1282a1d9b1d41570f643495ddf91609`
+at root commit `1b014a78658e213667def139ebaebb51d3e18d7e`. The host reported
+Ubuntu 24.04.4 LTS, kernel `6.8.0-134-generic`, eight logical CPUs `0-7`, one
+eight-core/one-thread-per-core socket, AMD EPYC 7713, and 154,517,244 KiB of
+memory.
 
-```text
-A limit on your account is preventing the deployment of the selected Linode
-plan. To request access to the plan, please contact Support and provide the
-Linode plan name.
-```
+The release binary was preserved from source commit `4e87dac3` with SHA-256
+`8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda`.
+Every observed process inherited the exact requested 128 GiB address-space
+limit of 137,438,953,472 bytes. Two independent corrected controller runs
+passed all 12 checks:
 
-The controller deleted the firewall. No high-memory Linode existed and no
-high-memory usage accrued. Human/provider gate `E_Rust_Port-9jt.8.7` now
-blocks final acceptance. The results below are deliberately labeled a normal
-fallback, not the required 8-CPU, 150 GiB proxy.
+| Replication | Timeout | Cancellation | Killed worker | Seeded proofs | Survivors/files |
+| --- | --- | --- | --- | --- | --- |
+| `v2` | exit 8; 17.987 s; 5 processes | exit 14; 18.432 s; 5 processes | exit 9; 30.872 s; 5 processes | 4/4 exit 0 and byte-identical within the run | 0/0 in every case |
+| `v3` | exit 8; 17.789 s; 5 processes | exit 14; 18.528 s; 4 processes | exit 9; 30.943 s; 3 processes | 4/4 exit 0 and byte-identical within the run | 0/0 in every case |
+
+The first high-memory controller result passed 11 of 12 checks. Killing one
+worker left no descendants or files, all remaining workers reached their CPU
+limits, and the parent cleanly reported schedule exhaustion, SZS `GaveUp`, and
+`ResourceOut` exit 9. The old `worker_crash_recovered` check nevertheless
+required another worker to prove the theorem. The corrected
+`worker_crash_contained` check accepts either a proof or that terminal clean
+exhaustion, but only when it also finds the killed worker's recorded `-1`
+status. Five focused tests cover both accepted outcomes and three rejection
+boundaries. The corrected controller SHA-256 is
+`3b64503fe73101d0247d124b03e6c543265775296c3daff8300f945610ec69b9`.
+
+Within each controller invocation, the four explicitly seeded proof objects
+are byte-identical. The `v2` and `v3` proof hashes differ because the proof
+contains the randomized temporary source path chosen for that invocation;
+cross-path byte identity is not claimed. Resource footers were present and
+monotonic in both runs. The compact tracked evidence is
+`high-memory-summary.json`. The ignored raw bundle is
+`.artifacts/experiments/2026-07-28-003-multicore-scheduling/multicore-high-memory-003-evidence.tar.gz`
+(7,083 bytes, SHA-256
+`ba3500d1d8d62fc0d6704085b85d68a941f6aa66b833767e0cdc2d7f72bee1f2`).
 
 ## Audit and implementation
 
@@ -84,7 +112,7 @@ without Rust's abort/backtrace path.
 - parses nested resource footers; and
 - repeats a `RandomWeight` proof with explicit seeds `11`, `13`, and `17`.
 
-Reproduce the required final gate only after the provider gate is resolved:
+Reproduce the accepted gate on a guarded high-memory runner with:
 
 ```text
 python3 experiments/2026-07-28-003-multicore-scheduling/stress_multicore_schedule.py \
@@ -96,7 +124,7 @@ python3 experiments/2026-07-28-003-multicore-scheduling/stress_multicore_schedul
   --iterations 4
 ```
 
-## Normal fallback evidence
+## Historical normal fallback evidence
 
 The retained fallback used runner `e-rust-codex-260728-085138-57e5`
 (Linode `101595238`), source snapshot
@@ -153,13 +181,14 @@ CASC-2027. The code and controller match its public Ubuntu/process-portfolio
 shape, eight-core request, 128 GiB configured limit, SZS/proof output,
 `SIGALRM`/`SIGXCPU` handling, and no-file-residue requirement.
 
-The fallback does **not** match the competition host: it has four CPUs and
-8 GiB physical memory, uses Ubuntu 24.04.4 rather than the published J13
-24.04.3 image, and runs no StarExec job wrapper or external aggregate cgroup.
-Even the eventual `g7-highmem-8` run will remain a proxy with a different
-kernel, hypervisor, exact CPU, job wrapper, signal timing, and accounting
-implementation. A real StarExec job and the future CASC-2027 contract remain
-separate gates.
+The accepted `g7-highmem-8` run matches the documented proxy's eight dedicated
+CPU allocation, approximately 150 GiB host-memory class, Ubuntu process model,
+eight-core request, and per-process 128 GiB limit. It still is **not** an exact
+competition reproduction: its Ubuntu patch level, kernel, hypervisor, exact
+CPU, job wrapper, signal timing, and accounting differ, and it has no external
+StarExec aggregate cgroup. A real StarExec job and the future CASC-2027
+contract remain separate gates. The historical normal fallback differs
+further by having only four CPUs and 8 GiB physical memory.
 
 ## Validation and conclusion
 
@@ -188,6 +217,8 @@ downloaded artifact is
 `62af7a5eec1ba6eb0f8879a063ac7588234093b8090c3ed54c8a6a9165f6958f`.
 
 The implementation is accepted and removes concrete orphan, hang, and memory
-limit defects. Bead `E_Rust_Port-9jt.8.4` remains open solely because its
-acceptance criteria explicitly require the currently provider-blocked
-8-CPU/150 GiB run. Do not substitute this fallback for that gate.
+limit defects. The successful guarded provisioning resolves
+`E_Rust_Port-9jt.8.7`; two passing corrected replications on the required
+8-CPU/150 GiB proxy satisfy `E_Rust_Port-9jt.8.4`. No production Rust change
+was needed during the final retry; only the experiment controller's crash
+classification and focused tests changed.

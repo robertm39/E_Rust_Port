@@ -112,6 +112,7 @@ This smoke validates program construction, separate ignored inputs, binary and
 corpus hashes, cgroup accounting, SZS extraction, atomic results, resume, full
 report generation, artifact transfer, and cleanup. It does not validate the
 required eight-core/128 GiB environment or execute all 2,901 problems for both
-solvers. Linode currently rejects `g7-highmem-8` for this account before
-instance creation. Gate `E_Rust_Port-9jt.2.7` preserves the exact full-run
-acceptance work after that provider restriction is resolved.
+solvers. The earlier `g7-highmem-8` provider restriction was resolved on
+2026-08-01 when the guarded lifecycle gate passed. Gate
+`E_Rust_Port-9jt.2.7` now preserves the full-run acceptance work itself,
+expanded to the 2,901 CASC-2025 and 1,350 CASC-J13/2026 ATP problems.

@@ -608,8 +608,10 @@ explicit CASC-2027 organizer-controlled gates are recorded in
 The process-group, parent-death, cancellation-escalation, Linux address-limit,
 worker-crash, aggregate-accounting, and seeded-proof evidence is recorded in
 [`experiments/2026-07-28-003-multicore-scheduling/`](experiments/2026-07-28-003-multicore-scheduling/).
-The normal-host fallback is complete, while the required 8-CPU/150 GiB run
-remains explicitly blocked on provider plan access.
+The normal-host fallback and two independent required 8-CPU/150 GiB
+high-memory replications are complete; the latter pass all timeout,
+cancellation, worker-crash, accounting, cleanup, limit, and seeded-proof
+checks.
 
 ## Clause Selection Research
 

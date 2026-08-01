@@ -139,10 +139,10 @@ archive before invoking the same batch command. Resume succeeds only when the
 rebuilt Umlaut hash and every other contract input remain identical. Create
 the archive before each teardown so partial work is not lost.
 
-The `g7-highmem-8` plan is currently rejected by the Linode account before
-instance creation. The canonical 128 GiB run therefore remains an explicit
-external gate under `E_Rust_Port-9jt.2.7`; a normal 8 GiB runner cannot satisfy
-it.
+The Linode account successfully provisioned `g7-highmem-8` on 2026-08-01 and
+the independent eight-core lifecycle gate passed. The canonical matrix itself
+remains outstanding under `E_Rust_Port-9jt.2.7`; a normal 8 GiB runner still
+cannot satisfy it.
 
 ## Noncanonical smoke validation
 
