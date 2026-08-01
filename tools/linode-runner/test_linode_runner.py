@@ -145,17 +145,36 @@ class ExplicitTransferTests(unittest.TestCase):
                 with self.assertRaises(runner.RunnerError):
                     runner.validate_remote_file_path(invalid)
 
+    def test_upload_destination_must_be_disposable_root_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.bin"
+            source.write_bytes(b"reference")
+            for destination in ("/etc/reference.bin", "/root/.ssh/key", "/root"):
+                with self.subTest(destination=destination), self.assertRaisesRegex(
+                    runner.RunnerError,
+                    "beneath /root",
+                ):
+                    runner.upload_file(
+                        {"ipv4": "192.0.2.1"},
+                        source,
+                        destination,
+                    )
+
     def test_upload_requires_file_and_uses_scp_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "reference.bin"
             source.write_bytes(b"reference")
-            with mock.patch.object(runner, "scp_to") as scp:
-                runner.upload_file(
-                    {"ipv4": "192.0.2.1"}, source, "/root/reference.bin"
-                )
-            scp.assert_called_once_with(
-                {"ipv4": "192.0.2.1"}, source.resolve(), "/root/reference.bin"
+            with mock.patch.object(runner, "scp_to") as scp, mock.patch.object(
+                runner,
+                "save_current",
+            ):
+                state = {"ipv4": "192.0.2.1"}
+                runner.upload_file(state, source, "/root/reference.bin")
+            self.assertEqual(
+                scp.call_args.args,
+                (state, source.resolve(), "/root/reference.bin"),
             )
+            self.assertEqual(state["uploaded_files"], ["/root/reference.bin"])
 
     def test_download_refuses_implicit_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -433,6 +452,7 @@ class HighMemoryUsageTests(unittest.TestCase):
             self.NOW,
             history_root=history,
             current_state_path=current or history.parent / "current.json",
+            parked_root=history.parent / "parked",
             active_linodes=active,
         )
 
@@ -749,6 +769,27 @@ class HighMemoryUsageTests(unittest.TestCase):
             self.assertEqual(usage.banked_at_start, timedelta(hours=4))
             self.assertEqual(usage.capacity, timedelta(hours=8))
 
+    def test_parked_high_memory_state_remains_billable_usage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parked = root / "parked"
+            write_json(
+                parked / "7.json",
+                {
+                    "type": runner.HIGH_MEMORY_TYPE,
+                    "linode_id": 7,
+                    "linode_created_at": "2026-07-27T14:00:00+00:00",
+                    "lifecycle": "parked",
+                },
+            )
+            usage = runner.high_memory_usage(
+                self.NOW,
+                history_root=root / "runs",
+                current_state_path=root / "current.json",
+                parked_root=parked,
+            )
+            self.assertEqual(usage.actual, timedelta(hours=1))
+
     def test_malformed_history_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             history = Path(temporary) / "runs"
@@ -918,6 +959,335 @@ class ProvisionGuardTests(unittest.TestCase):
             )
 
 
+class BillingLifecycleTests(unittest.TestCase):
+    NOW = datetime(2026, 8, 1, 12, 10, tzinfo=timezone.utc)
+
+    @staticmethod
+    def state(
+        linode_id: int,
+        *,
+        delete_at: datetime,
+        linode_type: str = runner.DEFAULT_TYPE,
+    ) -> dict:
+        return {
+            "run_id": f"260801-120000-{linode_id:04x}",
+            "label": f"e-rust-codex-260801-{linode_id:04x}",
+            "linode_id": linode_id,
+            "firewall_id": linode_id + 100,
+            "linode_created_at": "2026-08-01T12:00:00+00:00",
+            "type": linode_type,
+            "region": runner.DEFAULT_REGION,
+            "image": runner.DEFAULT_IMAGE,
+            "ipv4": f"192.0.2.{linode_id}",
+            "lifecycle": "parked",
+            "phase": "parked",
+            "lease_id": f"{linode_id:032x}",
+            "delete_at": runner.format_utc(delete_at),
+        }
+
+    @staticmethod
+    def path_patches(root: Path):
+        return (
+            mock.patch.object(runner, "CURRENT_STATE", root / "current.json"),
+            mock.patch.object(runner, "PARKED_ROOT", root / "parked"),
+            mock.patch.object(runner, "RUN_HISTORY", root / "runs"),
+            mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lifecycle.lock"),
+            mock.patch.object(
+                runner,
+                "PROVISION_CLAIM",
+                root / "provision-claim.json",
+            ),
+        )
+
+    def test_billing_deadline_uses_current_hour_and_two_minute_margin(self):
+        created = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        self.assertEqual(
+            runner.billing_delete_at(created, created + timedelta(minutes=10)),
+            created + timedelta(minutes=58),
+        )
+        self.assertEqual(
+            runner.billing_delete_at(created, created + timedelta(hours=1)),
+            created + timedelta(hours=1, minutes=58),
+        )
+        self.assertEqual(
+            runner.billing_delete_at(
+                created,
+                created + timedelta(hours=2, minutes=45),
+            ),
+            created + timedelta(hours=2, minutes=58),
+        )
+
+    def test_cli_exposes_default_park_and_explicit_immediate_teardown(self):
+        default = runner.parser().parse_args(["down"])
+        self.assertFalse(default.now)
+        self.assertFalse(default.all)
+        self.assertTrue(runner.parser().parse_args(["down", "--now"]).now)
+        self.assertTrue(runner.parser().parse_args(["down", "--all"]).all)
+
+    def test_exact_configuration_match_is_required(self):
+        state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        self.assertTrue(
+            runner.compatible_runner(
+                state,
+                linode_type=runner.DEFAULT_TYPE,
+                region=runner.DEFAULT_REGION,
+                image=runner.DEFAULT_IMAGE,
+            )
+        )
+        self.assertFalse(
+            runner.compatible_runner(
+                state,
+                linode_type=runner.HIGH_MEMORY_TYPE,
+                region=runner.DEFAULT_REGION,
+                image=runner.DEFAULT_IMAGE,
+            )
+        )
+
+    def test_acquire_selects_earliest_compatible_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            early = self.state(7, delete_at=self.NOW + timedelta(minutes=10))
+            late = self.state(8, delete_at=self.NOW + timedelta(minutes=20))
+            patches = self.path_patches(root)
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(runner, "validate_catalog"),
+                mock.patch.object(
+                    runner,
+                    "activate_parked_runner",
+                    side_effect=lambda _api, _path, value, **_kwargs: value,
+                ) as activate,
+            ):
+                write_json(runner.parked_state_path(8), late)
+                write_json(runner.parked_state_path(7), early)
+                api = mock.Mock()
+                api.trusted_now.return_value = self.NOW
+                acquired, reused = runner.acquire_runner(api)
+            self.assertTrue(reused)
+            self.assertEqual(acquired["linode_id"], 7)
+            self.assertEqual(activate.call_args.args[2]["linode_id"], 7)
+
+    def test_mismatched_parked_runner_stays_parked_while_new_one_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parked = self.state(
+                7,
+                delete_at=self.NOW + timedelta(minutes=20),
+                linode_type=runner.HIGH_MEMORY_TYPE,
+            )
+            fresh = {"linode_id": 9, "label": "e-rust-codex-fresh"}
+            patches = self.path_patches(root)
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(runner, "validate_catalog"),
+                mock.patch.object(runner, "provision", return_value=fresh) as provision,
+            ):
+                parked_path = runner.parked_state_path(7)
+                write_json(parked_path, parked)
+                api = mock.Mock()
+                api.trusted_now.return_value = self.NOW
+                acquired, reused = runner.acquire_runner(api)
+                self.assertTrue(parked_path.is_file())
+            self.assertFalse(reused)
+            self.assertIs(acquired, fresh)
+            self.assertTrue(provision.call_args.kwargs["prevalidated"])
+
+    def test_activation_opens_current_firewall_before_disarming_remote_timer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parked = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            patches = self.path_patches(root)
+            events = []
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    runner,
+                    "replace_firewall_rules",
+                    side_effect=lambda *_args: events.append("firewall")
+                    or "198.51.100.4/32",
+                ),
+                mock.patch.object(
+                    runner,
+                    "wait_for_ssh",
+                    side_effect=lambda *_args: events.append("ssh"),
+                ),
+                mock.patch.object(
+                    runner,
+                    "disarm_remote_reaper",
+                    side_effect=lambda *_args: events.append("disarm"),
+                ),
+                mock.patch.object(
+                    runner,
+                    "sync_reaper_access",
+                    side_effect=lambda *_args, **_kwargs: events.append("access"),
+                ),
+            ):
+                path = runner.parked_state_path(7)
+                write_json(path, parked)
+                api = mock.Mock()
+                api.get.side_effect = [
+                    {
+                        "id": 7,
+                        "label": parked["label"],
+                        "status": "running",
+                        "ipv4": ["192.0.2.7"],
+                    },
+                    {
+                        "id": 107,
+                        "label": parked["label"],
+                        "status": "enabled",
+                    },
+                ]
+                activated = runner.activate_parked_runner(
+                    api,
+                    path,
+                    parked,
+                    allow_ip="198.51.100.4",
+                )
+            self.assertIsNotNone(activated)
+            self.assertEqual(events, ["firewall", "ssh", "disarm", "access"])
+            self.assertEqual(activated["allow_cidr"], "198.51.100.4/32")
+
+    def test_park_moves_active_state_only_after_both_reapers_are_armed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            patches = self.path_patches(root)
+            active = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            active["lifecycle"] = "active"
+            active["phase"] = "ready"
+            active.pop("lease_id")
+            active.pop("delete_at")
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(runner, "cleanup_remote_workspace"),
+                mock.patch.object(runner, "load_reaper_config", return_value={"username": "reaper-user"}),
+                mock.patch.object(runner, "reaper_token", return_value="secret"),
+                mock.patch.object(runner, "sync_reaper_access") as sync_access,
+                mock.patch.object(runner, "arm_remote_reaper") as arm,
+            ):
+                write_json(runner.CURRENT_STATE, active)
+                api = mock.Mock()
+                api.get.return_value = {
+                    "id": 7,
+                    "label": active["label"],
+                    "created": "2026-08-01T12:00:00+00:00",
+                }
+                api.trusted_now.return_value = self.NOW
+                self.assertTrue(runner.park_runner(api, active))
+                parked_path = runner.parked_state_path(7)
+                saved = runner.read_state_file(parked_path)
+                self.assertFalse(runner.CURRENT_STATE.exists())
+            self.assertEqual(saved["lifecycle"], "parked")
+            self.assertEqual(saved["delete_at"], "2026-08-01T12:58:00+00:00")
+            sync_access.assert_called_once()
+            arm.assert_called_once()
+
+    def test_missing_reaper_setup_falls_back_to_immediate_deletion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            patches = self.path_patches(root)
+            active = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            active["lifecycle"] = "active"
+            active.pop("lease_id")
+            active.pop("delete_at")
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(runner, "cleanup_remote_workspace"),
+                mock.patch.object(runner, "load_reaper_config", return_value=None),
+                mock.patch.object(runner, "delete_state_resources") as delete,
+            ):
+                write_json(runner.CURRENT_STATE, active)
+                api = mock.Mock()
+                api.get.return_value = {
+                    "id": 7,
+                    "label": active["label"],
+                    "created": "2026-08-01T12:00:00+00:00",
+                }
+                api.trusted_now.return_value = self.NOW
+                self.assertFalse(runner.park_runner(api, active))
+            delete.assert_called_once()
+
+    def test_remote_timer_is_persistent_and_uses_exact_runner_state(self):
+        state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        service, timer = runner.remote_reaper_unit_files(state)
+        self.assertIn("remote_reaper.py --state", service)
+        self.assertIn("/7/state.json", service)
+        self.assertIn("Restart=on-failure", service)
+        self.assertIn("OnCalendar=2026-08-01 12:30:00 UTC", timer)
+        self.assertIn("Persistent=true", timer)
+        self.assertIn("AccuracySec=1s", timer)
+
+    def test_status_reports_active_and_parked_resources_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parked = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            patches = self.path_patches(root)
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch("sys.stdout", new_callable=StringIO) as stdout,
+            ):
+                write_json(runner.parked_state_path(7), parked)
+                api = FakeApi(
+                    {
+                        "/linode/instances/7": {"status": "running"},
+                        "/networking/firewalls/107": {"status": "enabled"},
+                    }
+                )
+                runner.status(api)
+            value = json.loads(stdout.getvalue())
+            self.assertIsNone(value["active"])
+            self.assertEqual(value["parked"][0]["linode_id"], 7)
+            self.assertEqual(value["parked"][0]["live_linode_status"], "running")
+
+    def test_reaper_access_rejects_every_unexpected_entity(self):
+        state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        current = {
+            "account_access": ["account_event_viewer"],
+            "entity_access": [
+                {"id": 999, "type": "linode", "roles": ["linode_admin"]}
+            ],
+        }
+        with self.assertRaisesRegex(runner.RunnerError, "unexpected entity access"):
+            runner.validate_reaper_access(current, allowed_states=[state])
+
+    def test_begin_workload_uses_a_new_artifact_identity_each_time(self):
+        state = {}
+        with mock.patch.object(runner, "save_current"), mock.patch.object(
+            runner,
+            "run_id",
+            side_effect=["260801-120000-a001", "260801-120100-a002"],
+        ):
+            first = runner.begin_workload(state)
+            state["remote_artifact_path"] = "/old"
+            second = runner.begin_workload(state)
+        self.assertNotEqual(first, second)
+        self.assertNotIn("remote_artifact_path", state)
+
+
 class DocumentationTests(unittest.TestCase):
     def test_runbook_contains_high_memory_cost_and_casc_policy(self):
         repo_root = MODULE_PATH.parents[2]
@@ -947,6 +1317,30 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("apt-daily-upgrade.timer", runbook)
         self.assertIn("package-maintenance-lifecycle.json", runbook)
         self.assertIn("daemon-reexec", runbook)
+        for required in (
+            "init-reaper",
+            "two minutes",
+            "Windows Scheduled Task",
+            "persistent systemd timer",
+            "down --now",
+            "down --all",
+            "linode_admin",
+            "firewall_admin",
+        ):
+            self.assertIn(required, runbook)
+
+    def test_wrapper_keeps_tokens_out_of_scheduled_task_arguments(self):
+        repo_root = MODULE_PATH.parents[2]
+        wrapper = (repo_root / "linode-runner.ps1").read_text(encoding="utf-8")
+        self.assertIn('"init-reaper"', wrapper)
+        self.assertIn("Register-ScheduledTask", wrapper)
+        self.assertIn("-WakeToRun", wrapper)
+        self.assertIn("-StartWhenAvailable", wrapper)
+        self.assertIn("-RestartCount 10", wrapper)
+        action_start = wrapper.index("$actionArguments")
+        action_end = wrapper.index("$action =", action_start)
+        self.assertNotIn("TOKEN", wrapper[action_start:action_end].upper())
+        self.assertIn("ZeroFreeBSTR($reaperTokenPointer)", wrapper)
 
 
 class SafetyTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-# Ephemeral Linode compute runner
+# Billing-aware Linode compute runner
 
 The repository includes a controller for short-lived Linux build and profiling
 workers. It supports two Akamai Cloud plans in Chicago (`us-ord`) using the
@@ -74,10 +74,14 @@ machines are not supported substitutes. Any command that formats, compiles,
 links, tests, starts, compares, benchmarks, or profiles Umlaut or the C
 reference must execute on the Linode.
 
-The normal `run` workflow creates a Cloud Firewall and Linode, installs the
-complete Linux and Windows-cross toolchain, uploads a fresh snapshot of the
-current worktree, performs every required validation phase, downloads the
-artifacts, and deletes the paid resources in a `finally` cleanup.
+The normal `run` workflow acquires a compatible runner, reusing a parked one
+when possible. If none exists, it creates a Cloud Firewall and Linode and
+installs the complete Linux and Windows-cross toolchain. It then uploads a
+fresh snapshot of the current worktree, performs every required validation
+phase, downloads the artifacts, removes project source and workload residue
+from the host, and parks the runner until the current paid billing hour's
+guarded cutoff. A later `up` or `run` with the exact same type, region, and
+image reactivates that runner instead of provisioning another one.
 
 Before the first `apt-get`, bootstrap waits for `cloud-init` to finish, then
 masks and stops `apt-daily.timer`, `apt-daily-upgrade.timer`,
@@ -85,16 +89,60 @@ masks and stops `apt-daily.timer`, `apt-daily-upgrade.timer`,
 unless every unit is inactive and masked. The controller records the atomic
 remote JSON path, its SHA-256, and the verified unit states under
 `package_maintenance` in the saved runner state, which `status` exposes. The
-units stay quiesced for the disposable host's lifetime; `down` deletes that host
-instead of trying to restore package maintenance on a worker that must never be
-reused.
+units stay quiesced for the worker's lifetime, including reuse cycles. They
+need not be restored before parking because the runner remains dedicated to
+this controller and is eventually deleted.
+
+## Billing-aware parking and cleanup
+
+Linode bills each instance for elapsed use rounded up to an hour. Deleting
+several instances during one wall-clock hour can therefore cost several billed
+hours. `down` and successful `run` cleanup now park a runner instead of
+immediately deleting it. A parked runner stays powered on and has no project
+source tree, workload processes, explicit uploads, or uncollected artifacts.
+The firewall continues to accept SSH only from the controller's current `/32`.
+
+The deletion deadline is two minutes before the end of the currently paid
+hour measured from the Linode-provided creation time. If a worker has already
+crossed another exact hourly boundary, the controller may reuse it through
+that newly paid hour. If its current two-minute cutoff has already passed,
+parking deletes it immediately. Acquisition also deletes a candidate when
+less than 30 seconds remain before its armed deadline rather than racing its
+reaper.
+
+Two independent cleanup paths are armed before local state is changed from
+active to parked:
+
+- a Windows Scheduled Task named `Umlaut-Linode-Reaper-<linode-id>` invokes
+  the wrapper with the exact Linode ID and a random lease ID; the token never
+  appears in task arguments;
+- a persistent systemd timer on the Linode invokes a small standard-library
+  reaper using a root-readable token and state file. It verifies both live
+  resource labels, marks the free firewall with the lease outcome, and deletes
+  only its own Linode. This path still stops billing if Windows is asleep,
+  powered off, or disconnected.
+
+The local reaper later reconciles an already-deleted Linode, removes its free
+firewall, archives the state, and removes the Scheduled Task. Reaper commands
+are idempotent and lease-checked. A reused runner has both timers disarmed and
+its temporary reaper access removed before new source is uploaded.
+
+Parking is deliberately fail-closed. If restricted reaper setup is missing,
+incomplete, unexpectedly privileged, or cannot be armed, `down`/`run` delete
+the active Linode and firewall instead of leaving an unguarded paid resource.
+An incompatible parked runner remains parked until its own deadline while a
+new compatible type is acquired. Local lifecycle locking and a provision
+claim prevent concurrent commands from provisioning two active runners.
 
 ## One-time account preparation
 
-Create a Personal Access Token in Cloud Manager with only these permissions:
+Create the main controller Personal Access Token in Cloud Manager with these
+permissions:
 
 - Linodes: read/write
 - Firewalls: read/write
+- Account: read/write, so the controller can assign and remove exact IAM
+  entity roles for the restricted reaper user
 - all other products: no access
 
 Keep Backup Auto Enrollment disabled under **Administration > Account
@@ -113,9 +161,28 @@ Read-Host "Paste the Linode token" -AsSecureString |
     Set-Content -LiteralPath (Join-Path $linodeSecretDir "linode-token.dpapi")
 ```
 
-The token is decrypted only into the environment of the controller process. It
-is not passed on a command line, stored in the repository, or uploaded to the
-Linode.
+The main token is decrypted only into the environment of the controller
+process. It is not passed on a command line, stored in the repository, or
+uploaded to the Linode.
+
+Create a separate restricted Linode user dedicated to reaping. Do not give it
+account administrator, billing, user-management, or unrelated entity roles.
+While signed in as that user, create a PAT with only `linodes:read_write` and
+`firewall:read_write` scopes. Return to the controller account and store that
+PAT plus the restricted username using a secure prompt:
+
+```powershell
+.\linode-runner.ps1 init-reaper --username umlaut-reaper
+```
+
+The wrapper encrypts this PAT with user-scoped Windows DPAPI at
+`$env:LOCALAPPDATA\E-Rust-Port\linode-reaper-token.dpapi`; the JSON reaper
+configuration contains only the username. On each park/reuse/reap transition,
+the main controller replaces the restricted user's entity access with the
+exact `linode_admin` and `firewall_admin` roles for the currently parked
+resources. Before doing so, it refuses unexpected account roles, entity IDs,
+or role names. Only the restricted PAT is copied to a parked Linode, in a
+root-only file, and deleting the Linode destroys that copy.
 
 Generate the dedicated, passwordless Ed25519 key used only for disposable
 runners:
@@ -128,9 +195,11 @@ runners:
 
 The key and controller state are stored under
 `$env:LOCALAPPDATA\E-Rust-Port\linode-runner`, outside the repository.
-The `check` command is read-only: it validates the token scopes, selected plan,
-Chicago capacity, Ubuntu image, public source IP, and local OpenSSH tools
-without creating a billable resource.
+The `check` command is read-only: it validates the token, selected plan,
+Chicago capacity, Ubuntu image, public source IP, local OpenSSH tools, and—when
+configured—the restricted reaper user, PAT, and exact current entity roles,
+without creating a billable resource. If reaper setup is absent, it clearly
+reports that parking is disabled and immediate deletion will be used.
 
 ## Comprehensive remote validation
 
@@ -194,10 +263,12 @@ being pushed first.
 The retained results are written to:
 
 ```text
-.artifacts/linode/<run-id>/
+.artifacts/linode/<workload-id>/
 ```
 
-They include Linux Rust quality-gate logs, FOL/HO C build metadata, Windows GNU
+Each reuse cycle receives a fresh workload ID, so artifact directories never
+collide with results from an earlier workload on the same Linode. They include
+Linux Rust quality-gate logs, FOL/HO C build metadata, Windows GNU
 cross-compile logs and PE hashes, main and tool compatibility reports, timing
 benchmark samples, native smoke output, raw and annotated Callgrind data, Linux
 binary hashes, and instruction summaries. They also retain the immutable
@@ -209,7 +280,7 @@ binary hashes, and instruction summaries. They also retain the immutable
 `SUCCESS` additionally means no unexpected main or support-tool compatibility
 difference was found. If real compatibility gaps remain, the command returns
 nonzero after writing `COMPATIBILITY_MISMATCHES`; partial and complete artifacts
-are still downloaded and the paid resources are still deleted. Benchmark
+are still downloaded and the runner is still parked or safely deleted. Benchmark
 ratios above the documented threshold remain warnings rather than lifecycle
 failures.
 
@@ -267,9 +338,10 @@ by `sync`. Transfer one only when the task authorizes that exact artifact:
 .\linode-runner.ps1 upload .artifacts\reference.bin /root/reference.bin
 ```
 
-The source must be a local file. Remote paths must be absolute and use only a
-conservative filename character set. Download a single result archive without
-silently overwriting an existing local artifact:
+The source must be a local file. Upload destinations must be non-hidden paths
+beneath `/root` and use only a conservative filename character set, which lets
+parking terminate consumers and remove the uploaded file safely. Download a
+single result archive without silently overwriting an existing local artifact:
 
 ```powershell
 .\linode-runner.ps1 download /root/results.tar.gz .artifacts\results.tar.gz
@@ -312,19 +384,26 @@ Use `status` to compare saved state with the live API:
 .\linode-runner.ps1 status
 ```
 
-`down` reads the exact saved resource IDs, fetches each live resource, and
-refuses deletion unless its live label exactly matches the saved
-`e-rust-codex-` label. It deletes the Linode first, waits for it to disappear,
-and then deletes the firewall.
+`status` returns separate `active` and `parked` entries, including live Linode
+and firewall status and each parked deletion deadline.
+
+`down` parks the active runner by default. It reads the exact saved resource
+IDs, fetches each live resource, and refuses any lifecycle operation unless
+the live label exactly matches the saved `e-rust-codex-` label. Use
+`down --now` to delete only the active Linode and firewall immediately. Use
+`down --all` for an intentional emergency teardown of the active runner and
+every parked runner. Immediate deletion always removes the Linode first, waits
+for it to disappear, and then removes the firewall.
 
 ## Failure recovery and stale-resource cleanup
 
-The default `run` behavior deletes resources after success, command failure, or
-interruption. If cleanup itself fails, the local state is retained and the
-controller prints an urgent instruction to run:
+The default `run` behavior parks resources after success, command failure, or
+interruption. If parking cannot be guarded, it falls back to deletion. If
+cleanup itself fails, the local state is retained and the controller prints an
+urgent instruction to run:
 
 ```powershell
-.\linode-runner.ps1 down
+.\linode-runner.ps1 down --now
 ```
 
 Keeping a failed paid worker requires explicit opt-in:
@@ -332,6 +411,9 @@ Keeping a failed paid worker requires explicit opt-in:
 ```powershell
 .\linode-runner.ps1 run --keep-on-failure
 ```
+
+That option leaves the failed runner active for debugging; finish with `down`
+to sanitize and park it, or `down --now` to delete it immediately.
 
 Inspect managed resources older than six hours without changing them:
 
@@ -346,9 +428,9 @@ After reviewing that dry-run list, delete it with:
 ```
 
 Garbage collection considers only resources whose labels start with
-`e-rust-codex-`, excludes the active saved IDs, and requires resources to be at
-least one hour old. It should be a recovery mechanism, not the normal cleanup
-path.
+`e-rust-codex-`, excludes every active or parked saved ID, and requires
+resources to be at least one hour old. It should be a recovery mechanism, not
+the normal cleanup path.
 
 ## Controller-only local validation
 
@@ -363,6 +445,8 @@ Python tests may run locally:
 
 The tests pin both supported Linode profiles, CLI selection, trusted API time,
 fixed-EST high-memory bank/debt accounting and blocking, firewall settings,
+hour-bucket deletion deadlines, exact configuration reuse, local lifecycle
+locking, restricted IAM entity access, lease-checked local and remote reapers,
 cloud-init/package-maintenance ordering and fail-closed records, remote-only
 quality gates, the daemon-reexec/resume lifecycle contract, Windows
 cross-toolchain bootstrap, source-archive exclusions, safe artifact extraction,

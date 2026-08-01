@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -18,7 +20,9 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
@@ -40,9 +44,18 @@ LOCAL_APP_DATA = Path(
 )
 LOCAL_ROOT = LOCAL_APP_DATA / "E-Rust-Port" / "linode-runner"
 CURRENT_STATE = LOCAL_ROOT / "current.json"
+PARKED_ROOT = LOCAL_ROOT / "parked"
 RUN_HISTORY = LOCAL_ROOT / "runs"
 SSH_KEY = LOCAL_ROOT / "linode-runner-ed25519"
+LIFECYCLE_LOCK = LOCAL_ROOT / "lifecycle.lock"
+PROVISION_CLAIM = LOCAL_ROOT / "provision-claim.json"
+REAPER_CONFIG = LOCAL_ROOT / "reaper.json"
 ARTIFACT_ROOT = REPO_ROOT / ".artifacts" / "linode"
+BILLING_HOUR = timedelta(hours=1)
+REAPER_MARGIN = timedelta(minutes=2)
+REMOTE_REAPER_ROOT = PurePosixPath("/root/.local/share/umlaut-linode-reaper")
+REMOTE_REAPER_SOURCE = REPO_ROOT / "tools" / "linode-runner" / "remote_reaper.py"
+REUSE_DISARM_GUARD = timedelta(seconds=30)
 PACKAGE_MAINTENANCE_RECORD = REMOTE_ROOT / "package-maintenance-quiescence.json"
 PACKAGE_MAINTENANCE_UNITS = (
     "apt-daily.timer",
@@ -394,6 +407,37 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+@contextlib.contextmanager
+def lifecycle_lock(path: Path | None = None) -> Iterable[None]:
+    """Serialize active/parked state transitions and local deletion."""
+
+    lock_path = LIFECYCLE_LOCK if path is None else path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock:
+        lock.seek(0, os.SEEK_END)
+        if lock.tell() == 0:
+            lock.write(b"\0")
+            lock.flush()
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def save_current(state: dict[str, Any]) -> None:
     state["updated_at"] = iso_now()
     atomic_write_json(CURRENT_STATE, state)
@@ -437,6 +481,42 @@ def read_state_file(path: Path) -> dict[str, Any]:
             f"Could not verify high-memory usage from {path}: expected an object"
         )
     return value
+
+
+def parked_state_path(linode_id: object) -> Path:
+    try:
+        identifier = int(linode_id)
+    except (TypeError, ValueError) as error:
+        raise RunnerError(f"Invalid parked Linode ID: {linode_id!r}") from error
+    if identifier <= 0:
+        raise RunnerError(f"Invalid parked Linode ID: {linode_id!r}")
+    return PARKED_ROOT / f"{identifier}.json"
+
+
+def list_parked_states() -> list[tuple[Path, dict[str, Any]]]:
+    if not PARKED_ROOT.exists():
+        return []
+    if not PARKED_ROOT.is_dir():
+        raise RunnerError(f"Could not inspect parked runners: {PARKED_ROOT} is not a directory")
+    result: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted(PARKED_ROOT.glob("*.json")):
+        state = read_state_file(path)
+        expected = parked_state_path(state.get("linode_id"))
+        if path != expected:
+            raise RunnerError(
+                f"Parked state filename does not match its Linode ID: {path}"
+            )
+        if state.get("lifecycle") != "parked":
+            raise RunnerError(f"Parked state has invalid lifecycle: {path}")
+        result.append((path, state))
+    return result
+
+
+def save_parked(state: dict[str, Any]) -> Path:
+    state["updated_at"] = iso_now()
+    path = parked_state_path(state.get("linode_id"))
+    atomic_write_json(path, state)
+    return path
 
 
 def high_memory_state_interval(
@@ -489,11 +569,13 @@ def high_memory_usage(
     active_linodes: Iterable[dict[str, Any]] = (),
     history_root: Path | None = None,
     current_state_path: Path | None = None,
+    parked_root: Path | None = None,
 ) -> HighMemoryUsage:
     """Replay trusted history and return current bank-adjusted usage."""
 
     history = RUN_HISTORY if history_root is None else history_root
     current = CURRENT_STATE if current_state_path is None else current_state_path
+    parked = PARKED_ROOT if parked_root is None else parked_root
     intervals: dict[object, tuple[datetime, datetime]] = {}
     if history.exists():
         if not history.is_dir():
@@ -532,6 +614,22 @@ def high_memory_usage(
         if interval is not None:
             key, started_at, ended_at = interval
             intervals[key] = (started_at, ended_at)
+    if parked.exists():
+        if not parked.is_dir():
+            raise RunnerError(
+                f"Could not verify high-memory usage from {parked}: "
+                "expected a directory"
+            )
+        for path in sorted(parked.glob("*.json")):
+            interval = high_memory_state_interval(
+                read_state_file(path),
+                now=now,
+                active=True,
+                source=str(path),
+            )
+            if interval is not None:
+                key, started_at, ended_at = interval
+                intervals[key] = (started_at, ended_at)
     for linode in active_linodes:
         if (
             linode.get("type") != HIGH_MEMORY_TYPE
@@ -651,6 +749,355 @@ def inspect_high_memory_allowance(
     usage = high_memory_usage(trusted_now, active_linodes=live)
     report_high_memory_usage(usage)
     return usage
+
+
+SAFE_REAPER_ACCOUNT_ROLES = {
+    "account_event_viewer",
+    "account_maintenance_viewer",
+    "account_notification_viewer",
+    "account_oauth_client_admin",
+}
+
+
+def billing_delete_at(created_at: datetime, now: datetime) -> datetime:
+    """Return the guarded end of the current rounded billing hour."""
+
+    created = created_at.astimezone(timezone.utc)
+    trusted_now = now.astimezone(timezone.utc)
+    elapsed = max(0.0, (trusted_now - created).total_seconds())
+    bucket = math.floor(elapsed / BILLING_HOUR.total_seconds()) + 1
+    return created + bucket * BILLING_HOUR - REAPER_MARGIN
+
+
+def load_reaper_config(*, required: bool = True) -> dict[str, Any] | None:
+    if not REAPER_CONFIG.is_file():
+        if required:
+            raise RunnerError(
+                "Restricted reaper configuration is missing. Run "
+                "'linode-runner.ps1 init-reaper --username NAME'."
+            )
+        return None
+    config = read_state_file(REAPER_CONFIG)
+    username = config.get("username")
+    valid_username = (
+        isinstance(username, str)
+        and re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_-]{1,30}[A-Za-z0-9]",
+            username,
+        )
+        is not None
+    )
+    if not valid_username:
+        raise RunnerError(f"Invalid restricted reaper username in {REAPER_CONFIG}")
+    return config
+
+
+def reaper_token(*, required: bool = True) -> str | None:
+    token = os.environ.get("LINODE_REAPER_TOKEN", "")
+    if not token:
+        if required:
+            raise RunnerError(
+                "Restricted reaper token is unavailable. Run "
+                "'linode-runner.ps1 init-reaper --username NAME'."
+            )
+        return None
+    return token
+
+
+def desired_reaper_access(states: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    access: list[dict[str, Any]] = []
+    for state in states:
+        access.extend(
+            [
+                {
+                    "id": int(state["firewall_id"]),
+                    "type": "firewall",
+                    "roles": ["firewall_admin"],
+                },
+                {
+                    "id": int(state["linode_id"]),
+                    "type": "linode",
+                    "roles": ["linode_admin"],
+                },
+            ]
+        )
+    return sorted(access, key=lambda item: (str(item["type"]), int(item["id"])))
+
+
+def validate_reaper_access(
+    current: dict[str, Any],
+    *,
+    allowed_states: Iterable[dict[str, Any]],
+) -> list[str]:
+    account_access = current.get("account_access", [])
+    entity_access = current.get("entity_access", [])
+    if not isinstance(account_access, list) or not all(
+        isinstance(value, str) for value in account_access
+    ):
+        raise RunnerError("Restricted reaper user returned invalid account roles")
+    unexpected_accounts = sorted(set(account_access) - SAFE_REAPER_ACCOUNT_ROLES)
+    if unexpected_accounts:
+        raise RunnerError(
+            "Restricted reaper user has unsafe account roles: "
+            + ", ".join(unexpected_accounts)
+        )
+    allowed = {
+        (str(item["type"]), int(item["id"])): tuple(item["roles"])
+        for item in desired_reaper_access(allowed_states)
+    }
+    if not isinstance(entity_access, list):
+        raise RunnerError("Restricted reaper user returned invalid entity roles")
+    for item in entity_access:
+        if not isinstance(item, dict):
+            raise RunnerError("Restricted reaper user returned invalid entity role")
+        try:
+            key = (str(item["type"]), int(item["id"]))
+            roles = tuple(sorted(str(value) for value in item["roles"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise RunnerError(
+                "Restricted reaper user returned malformed entity access"
+            ) from error
+        expected = allowed.get(key)
+        if expected is None or roles != tuple(sorted(expected)):
+            raise RunnerError(
+                "Restricted reaper user has unexpected entity access: "
+                f"{key[0]} {key[1]} roles={list(roles)}"
+            )
+    return account_access
+
+
+def reaper_access_path() -> str:
+    config = load_reaper_config()
+    assert config is not None
+    username = urllib.parse.quote(str(config["username"]), safe="")
+    return f"/iam/users/{username}/role-permissions"
+
+
+def sync_reaper_access(
+    api: LinodeApi,
+    desired_states: Iterable[dict[str, Any]],
+    *,
+    allowed_existing_states: Iterable[dict[str, Any]] = (),
+) -> None:
+    desired = list(desired_states)
+    allowed = [*desired, *allowed_existing_states]
+    path = reaper_access_path()
+    current = api.get(path)
+    account_access = validate_reaper_access(current, allowed_states=allowed)
+    payload = {
+        "account_access": account_access,
+        "entity_access": desired_reaper_access(desired),
+    }
+    api.put(path, payload)
+    restricted = LinodeApi(token=reaper_token())
+    for state in desired:
+        label = str(state["label"])
+        for kind, resource_path in (
+            ("Linode", f"/linode/instances/{int(state['linode_id'])}"),
+            (
+                "firewall",
+                f"/networking/firewalls/{int(state['firewall_id'])}",
+            ),
+        ):
+            live = restricted.get(resource_path)
+            require_managed_label(live.get("label"), label, kind)
+
+
+def validate_reaper_setup(api: LinodeApi) -> None:
+    """Validate, without changing, the optional restricted reaper setup."""
+
+    config = load_reaper_config(required=False)
+    token = reaper_token(required=False)
+    if config is None and token is None:
+        print("Restricted reaper: not configured; down/run will delete immediately")
+        return
+    if config is None or token is None:
+        raise RunnerError(
+            "Restricted reaper setup is incomplete; rerun 'init-reaper'"
+        )
+    parked = [state for _path, state in list_parked_states()]
+    current = api.get(reaper_access_path())
+    validate_reaper_access(current, allowed_states=parked)
+    restricted = LinodeApi(token=token)
+    restricted.get("/profile")
+    for state in parked:
+        for resource_path in (
+            f"/linode/instances/{int(state['linode_id'])}",
+            f"/networking/firewalls/{int(state['firewall_id'])}",
+        ):
+            restricted.get(resource_path)
+    print(
+        f"Restricted reaper: OK ({config['username']}; "
+        f"{len(parked)} parked runner(s))"
+    )
+
+
+def remote_reaper_names(state: dict[str, Any]) -> tuple[str, str, PurePosixPath]:
+    linode_id = int(state["linode_id"])
+    base = f"umlaut-linode-reaper-{linode_id}"
+    return f"{base}.service", f"{base}.timer", REMOTE_REAPER_ROOT / str(linode_id)
+
+
+def remote_reaper_unit_files(state: dict[str, Any]) -> tuple[str, str]:
+    service, timer, root = remote_reaper_names(state)
+    delete_at = parse_time(str(state["delete_at"]))
+    on_calendar = delete_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    service_text = f"""[Unit]
+Description=Delete parked Umlaut Linode {int(state['linode_id'])}
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/{service}.lock /usr/bin/python3 {root}/remote_reaper.py --state {root}/state.json --token-file {root}/token
+Restart=on-failure
+RestartSec=60s
+"""
+    timer_text = f"""[Unit]
+Description=Billing-boundary cleanup for parked Umlaut Linode {int(state['linode_id'])}
+
+[Timer]
+OnCalendar={on_calendar}
+Persistent=true
+AccuracySec=1s
+Unit={service}
+
+[Install]
+WantedBy=timers.target
+"""
+    return service_text, timer_text
+
+
+def arm_remote_reaper(state: dict[str, Any]) -> None:
+    token = reaper_token()
+    assert token is not None
+    service, timer, root = remote_reaper_names(state)
+    service_text, timer_text = remote_reaper_unit_files(state)
+    remote_stage = PurePosixPath("/root") / f".{state['label']}-reaper-stage"
+    ssh_command(
+        state,
+        f"rm -rf {shlex.quote(str(remote_stage))} && "
+        f"install -d -m 0700 {shlex.quote(str(remote_stage))}",
+        timeout=60,
+    )
+    with tempfile.TemporaryDirectory(prefix="umlaut-reaper-") as temporary:
+        staging = Path(temporary)
+        files = {
+            "remote_reaper.py": REMOTE_REAPER_SOURCE.read_text(encoding="utf-8"),
+            "state.json": json.dumps(
+                {
+                    key: state[key]
+                    for key in (
+                        "linode_id",
+                        "firewall_id",
+                        "label",
+                        "lease_id",
+                        "delete_at",
+                    )
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            "token": token + "\n",
+            service: service_text,
+            timer: timer_text,
+        }
+        for name, contents in files.items():
+            local_path = staging / name
+            local_path.write_text(contents, encoding="utf-8")
+            if name == "token":
+                local_path.chmod(0o600)
+            scp_to(state, local_path, f"{remote_stage}/{name}")
+    install = " && ".join(
+        [
+            f"install -d -m 0700 {shlex.quote(str(root))}",
+            f"install -m 0700 {remote_stage}/remote_reaper.py {root}/remote_reaper.py",
+            f"install -m 0600 {remote_stage}/state.json {root}/state.json",
+            f"install -m 0600 {remote_stage}/token {root}/token",
+            f"install -m 0644 {remote_stage}/{service} /etc/systemd/system/{service}",
+            f"install -m 0644 {remote_stage}/{timer} /etc/systemd/system/{timer}",
+            f"rm -rf {shlex.quote(str(remote_stage))}",
+            "systemctl daemon-reload",
+            f"systemctl enable --now {timer}",
+        ]
+    )
+    ssh_command(state, install, timeout=120)
+    state["remote_reaper"] = {
+        "service": service,
+        "timer": timer,
+        "root": str(root),
+    }
+
+
+def disarm_remote_reaper(state: dict[str, Any]) -> None:
+    service, timer, root = remote_reaper_names(state)
+    command = " ; ".join(
+        [
+            f"systemctl disable --now {timer} >/dev/null 2>&1 || true",
+            f"systemctl stop {service} >/dev/null 2>&1 || true",
+            f"rm -f /etc/systemd/system/{timer} /etc/systemd/system/{service}",
+            f"rm -rf {shlex.quote(str(root))}",
+            "systemctl daemon-reload",
+        ]
+    )
+    ssh_command(state, command, timeout=120)
+    state.pop("remote_reaper", None)
+
+
+def cleanup_remote_workspace(state: dict[str, Any]) -> None:
+    uploaded = state.get("uploaded_files", [])
+    uploaded_paths: list[str] = []
+    paths = [
+        str(REMOTE_ROOT / name)
+        for name in (
+            "source",
+            "incoming",
+            "previous",
+            "artifacts",
+            "compat-cache",
+        )
+    ]
+    label = str(state.get("label", ""))
+    if is_managed_label(label):
+        paths.append(f"/root/{label}-source.tar.gz")
+    workload_id = state.get("workload_id")
+    if isinstance(workload_id, str):
+        paths.append(f"/root/{resource_label(workload_id)}-artifacts.tar.gz")
+    if isinstance(uploaded, list):
+        uploaded_paths = [
+            validate_remote_upload_path(value)
+            for value in uploaded
+            if isinstance(value, str)
+        ]
+        paths.extend(uploaded_paths)
+    quoted = " ".join(shlex.quote(value) for value in paths)
+    process_patterns = [f"*{REMOTE_ROOT}/*"]
+    process_patterns.extend(f"*:{value}*" for value in uploaded_paths)
+    joined_patterns = "|".join(process_patterns)
+    script = f"""
+set -Eeuo pipefail
+terminate_workspace_processes() {{
+    signal="$1"
+    for process in /proc/[0-9]*; do
+        pid="${{process#/proc/}}"
+        if test "$pid" = "$$" -o "$pid" = "$PPID"; then
+            continue
+        fi
+        cwd="$(readlink "$process/cwd" 2>/dev/null || true)"
+        executable="$(readlink "$process/exe" 2>/dev/null || true)"
+        case "$cwd:$executable" in
+            {joined_patterns})
+                kill "-$signal" "$pid" 2>/dev/null || true
+                ;;
+        esac
+    done
+}}
+terminate_workspace_processes TERM
+sleep 2
+terminate_workspace_processes KILL
+rm -rf -- {quoted}
+"""
+    ssh_command(state, script, timeout=180)
+    state.pop("uploaded_files", None)
 
 
 def command_path(name: str) -> str:
@@ -824,11 +1271,33 @@ def validate_remote_file_path(value: str) -> str:
     return value
 
 
+def validate_remote_upload_path(value: str) -> str:
+    remote_path = validate_remote_file_path(value)
+    remote_parts = PurePosixPath(remote_path).parts
+    if (
+        len(remote_parts) < 3
+        or remote_parts[1] != "root"
+        or remote_parts[2].startswith(".")
+    ):
+        raise RunnerError(
+            "Upload destinations must be non-hidden paths beneath /root so "
+            "parking can sanitize them safely"
+        )
+    return remote_path
+
+
 def upload_file(state: dict[str, Any], source: Path, destination: str) -> None:
     source = source.resolve()
     if not source.is_file():
         raise RunnerError(f"Upload source is not a file: {source}")
-    scp_to(state, source, validate_remote_file_path(destination))
+    remote_path = validate_remote_upload_path(destination)
+    scp_to(state, source, remote_path)
+    uploaded = state.setdefault("uploaded_files", [])
+    if not isinstance(uploaded, list):
+        raise RunnerError("Active runner state has invalid uploaded-files metadata")
+    if remote_path not in uploaded:
+        uploaded.append(remote_path)
+    save_current(state)
 
 
 def download_file(
@@ -1204,6 +1673,7 @@ def provision(
     linode_type: str = DEFAULT_TYPE,
     region: str = DEFAULT_REGION,
     image: str = DEFAULT_IMAGE,
+    prevalidated: bool = False,
 ) -> dict[str, Any]:
     if CURRENT_STATE.exists():
         existing = load_current()
@@ -1211,10 +1681,11 @@ def provision(
             f"Active state already exists for {existing['label']}; "
             "run status/down before creating another runner"
         )
-    validate_catalog(api, linode_type, region, image)
-    if linode_type == HIGH_MEMORY_TYPE:
-        usage = inspect_high_memory_allowance(api)
-        require_high_memory_allowance(usage)
+    if not prevalidated:
+        validate_catalog(api, linode_type, region, image)
+        if linode_type == HIGH_MEMORY_TYPE:
+            usage = inspect_high_memory_allowance(api)
+            require_high_memory_allowance(usage)
     command_path("ssh")
     command_path("scp")
     ensure_ssh_key()
@@ -1229,6 +1700,7 @@ def provision(
         "run_id": identifier,
         "label": label,
         "created_at": iso_now(),
+        "lifecycle": "active",
         "phase": "creating-firewall",
         "allow_cidr": allow_cidr,
         "type": linode_type,
@@ -1258,13 +1730,11 @@ def provision(
         )
         state["linode_id"] = int(linode["id"])
         created = linode.get("created")
-        if linode_type == HIGH_MEMORY_TYPE:
-            if not isinstance(created, str):
-                raise RunnerError(
-                    "Created high-memory Linode did not include a trusted "
-                    "creation timestamp"
-                )
-            state["linode_created_at"] = format_utc(parse_time(created))
+        if not isinstance(created, str):
+            raise RunnerError(
+                "Created Linode did not include a trusted creation timestamp"
+            )
+        state["linode_created_at"] = format_utc(parse_time(created))
         state["phase"] = "provisioning"
         addresses = linode.get("ipv4", [])
         if addresses:
@@ -1298,6 +1768,318 @@ def provision(
                 file=sys.stderr,
             )
         raise
+
+
+def compatible_runner(
+    state: dict[str, Any],
+    *,
+    linode_type: str,
+    region: str,
+    image: str,
+) -> bool:
+    return (
+        state.get("type") == linode_type
+        and state.get("region") == region
+        and state.get("image") == image
+    )
+
+
+def parked_delete_at(state: dict[str, Any]) -> datetime:
+    value = state.get("delete_at")
+    if not isinstance(value, str):
+        raise RunnerError(
+            f"Parked runner {state.get('label', '<unknown>')} has no deletion deadline"
+        )
+    return parse_time(value)
+
+
+def remaining_parked_states(*, exclude_linode_id: int | None = None) -> list[dict[str, Any]]:
+    return [
+        state
+        for _path, state in list_parked_states()
+        if exclude_linode_id is None or int(state["linode_id"]) != exclude_linode_id
+    ]
+
+
+def process_is_alive(process_id: int) -> bool:
+    if process_id <= 0:
+        return False
+    try:
+        os.kill(process_id, 0)
+    except OSError:
+        return False
+    return True
+
+
+def claim_provision() -> str:
+    """Claim the single active slot while a fresh runner is being created."""
+
+    if PROVISION_CLAIM.is_file():
+        existing = read_state_file(PROVISION_CLAIM)
+        process_id = existing.get("pid")
+        if isinstance(process_id, int) and process_is_alive(process_id):
+            raise RunnerError(
+                f"Another runner acquisition is in progress (PID {process_id})"
+            )
+        PROVISION_CLAIM.unlink()
+    owner = uuid.uuid4().hex
+    atomic_write_json(
+        PROVISION_CLAIM,
+        {"owner": owner, "pid": os.getpid(), "created_at": iso_now()},
+    )
+    return owner
+
+
+def release_provision_claim(owner: str) -> None:
+    if not PROVISION_CLAIM.is_file():
+        return
+    existing = read_state_file(PROVISION_CLAIM)
+    if existing.get("owner") == owner:
+        PROVISION_CLAIM.unlink()
+
+
+def reap_parked_state(
+    api: LinodeApi,
+    path: Path,
+    state: dict[str, Any],
+    *,
+    lease_id: str | None = None,
+    force: bool = False,
+) -> bool:
+    if lease_id is not None and state.get("lease_id") != lease_id:
+        return False
+    if not force and api.trusted_now() < parked_delete_at(state):
+        return False
+    state["phase"] = "deleting"
+    atomic_write_json(path, state)
+    delete_state_resources(api, state, state_path=path)
+    if load_reaper_config(required=False) is not None and reaper_token(required=False):
+        sync_reaper_access(
+            api,
+            remaining_parked_states(exclude_linode_id=int(state["linode_id"])),
+            allowed_existing_states=[state],
+        )
+    return True
+
+
+def activate_parked_runner(
+    api: LinodeApi,
+    path: Path,
+    state: dict[str, Any],
+    *,
+    allow_ip: str | None,
+) -> dict[str, Any] | None:
+    linode_id = int(state["linode_id"])
+    label = str(state["label"])
+    live = api.get(f"/linode/instances/{linode_id}", allow_404=True)
+    if live is None:
+        delete_state_resources(api, state, state_path=path)
+        return None
+    require_managed_label(live.get("label"), label, "Linode")
+    firewall_id = int(state["firewall_id"])
+    firewall = api.get(f"/networking/firewalls/{firewall_id}", allow_404=True)
+    if firewall is None:
+        delete_state_resources(api, state, state_path=path)
+        return None
+    require_managed_label(firewall.get("label"), label, "firewall")
+    if live.get("status") in {"offline", "stopped"}:
+        api.post(f"/linode/instances/{linode_id}/boot", {})
+        live = wait_for_linode(api, linode_id)
+    elif live.get("status") != "running":
+        live = wait_for_linode(api, linode_id)
+    addresses = live.get("ipv4", state.get("ipv4", []))
+    if isinstance(addresses, list) and addresses:
+        state["ipv4"] = addresses[0]
+    state["allow_cidr"] = replace_firewall_rules(api, state, allow_ip)
+    atomic_write_json(path, state)
+    wait_for_ssh(state)
+    disarm_remote_reaper(state)
+    state["lifecycle"] = "active"
+    state["phase"] = "ready"
+    state.pop("delete_at", None)
+    state.pop("lease_id", None)
+    state.pop("parked_at", None)
+    state["reuse_count"] = int(state.get("reuse_count", 0)) + 1
+    atomic_write_json(path, state)
+    os.replace(path, CURRENT_STATE)
+    try:
+        sync_reaper_access(
+            api,
+            remaining_parked_states(exclude_linode_id=linode_id),
+            allowed_existing_states=[state],
+        )
+        state["phase"] = "ready"
+        save_current(state)
+        return state
+    except BaseException:
+        try:
+            delete_state_resources(api, state)
+        except Exception as cleanup_error:
+            print(
+                f"URGENT: failed reused-runner cleanup: {cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
+
+
+def acquire_runner(
+    api: LinodeApi,
+    *,
+    allow_ip: str | None = None,
+    linode_type: str = DEFAULT_TYPE,
+    region: str = DEFAULT_REGION,
+    image: str = DEFAULT_IMAGE,
+) -> tuple[dict[str, Any], bool]:
+    validate_catalog(api, linode_type, region, image)
+    if linode_type == HIGH_MEMORY_TYPE:
+        require_high_memory_allowance(inspect_high_memory_allowance(api))
+    trusted_now = api.trusted_now()
+    claim_owner: str | None = None
+    with lifecycle_lock():
+        if CURRENT_STATE.exists():
+            existing = load_current()
+            raise RunnerError(
+                f"Active state already exists for {existing['label']}; "
+                "run status/down before acquiring another runner"
+            )
+        candidates: list[tuple[Path, dict[str, Any]]] = []
+        for path, state in list_parked_states():
+            if trusted_now + REUSE_DISARM_GUARD >= parked_delete_at(state):
+                reap_parked_state(api, path, state, force=True)
+                continue
+            if compatible_runner(
+                state,
+                linode_type=linode_type,
+                region=region,
+                image=image,
+            ):
+                candidates.append((path, state))
+        candidates.sort(
+            key=lambda item: (parked_delete_at(item[1]), int(item[1]["linode_id"]))
+        )
+        while candidates:
+            path, state = candidates.pop(0)
+            reused = activate_parked_runner(
+                api,
+                path,
+                state,
+                allow_ip=allow_ip,
+            )
+            if reused is not None:
+                print(
+                    f"Reusing parked Linode {reused['linode_id']} "
+                    f"({reused['label']})",
+                    flush=True,
+                )
+                return reused, True
+        claim_owner = claim_provision()
+    try:
+        state = provision(
+            api,
+            allow_ip=allow_ip,
+            linode_type=linode_type,
+            region=region,
+            image=image,
+            prevalidated=True,
+        )
+        return state, False
+    finally:
+        assert claim_owner is not None
+        with lifecycle_lock():
+            release_provision_claim(claim_owner)
+
+
+def park_runner(api: LinodeApi, state: dict[str, Any]) -> bool:
+    """Park an active runner; return False when it was deleted immediately."""
+
+    linode_id = int(state["linode_id"])
+    with lifecycle_lock():
+        current = load_current()
+        if int(current.get("linode_id", -1)) != linode_id:
+            raise RunnerError("Active runner changed before it could be parked")
+        if current.get("lifecycle", "active") != "active":
+            raise RunnerError(
+                f"Runner cannot be parked from lifecycle "
+                f"{current.get('lifecycle')!r}"
+            )
+        state = current
+        state["lifecycle"] = "parking"
+        state["phase"] = "cleaning-for-park"
+        save_current(state)
+    path = f"/linode/instances/{linode_id}"
+    live = api.get(path, allow_404=True)
+    if live is None:
+        delete_state_resources(api, state)
+        return False
+    require_managed_label(live.get("label"), state["label"], "Linode")
+    created = live.get("created")
+    if not isinstance(created, str):
+        created = state.get("linode_created_at")
+    if not isinstance(created, str):
+        raise RunnerError("Live Linode has no trusted creation timestamp")
+    state["linode_created_at"] = format_utc(parse_time(created))
+    trusted_now = api.trusted_now()
+    delete_at = billing_delete_at(parse_time(created), trusted_now)
+    try:
+        cleanup_remote_workspace(state)
+    except BaseException:
+        delete_state_resources(api, state)
+        raise
+    trusted_now = api.trusted_now()
+    if trusted_now >= delete_at:
+        print("Billing reuse cutoff has passed; deleting immediately.", flush=True)
+        delete_state_resources(api, state)
+        return False
+    if load_reaper_config(required=False) is None or not reaper_token(required=False):
+        print(
+            "Restricted remote reaper is not configured; deleting immediately.",
+            file=sys.stderr,
+        )
+        delete_state_resources(api, state)
+        return False
+    state["lease_id"] = uuid.uuid4().hex
+    state["delete_at"] = format_utc(delete_at)
+    state["parked_at"] = format_utc(trusted_now)
+    state["lifecycle"] = "parked"
+    state["phase"] = "arming-reapers"
+    save_current(state)
+    with lifecycle_lock():
+        existing = remaining_parked_states()
+    try:
+        sync_reaper_access(api, [*existing, state])
+        arm_remote_reaper(state)
+    except BaseException:
+        try:
+            sync_reaper_access(
+                api,
+                existing,
+                allowed_existing_states=[state],
+            )
+        except Exception as access_error:
+            print(
+                f"URGENT: could not roll back reaper access: {access_error}",
+                file=sys.stderr,
+            )
+        delete_state_resources(api, state)
+        raise
+    state["phase"] = "parked"
+    save_current(state)
+    destination = parked_state_path(linode_id)
+    with lifecycle_lock():
+        current = load_current()
+        if (
+            int(current.get("linode_id", -1)) != linode_id
+            or current.get("lease_id") != state["lease_id"]
+        ):
+            raise RunnerError("Active runner changed while reapers were armed")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(CURRENT_STATE, destination)
+    print(
+        f"Runner parked until {state['delete_at']} UTC: "
+        f"Linode {linode_id} ({state['label']})",
+        flush=True,
+    )
+    return True
 
 
 def sync_source(state: dict[str, Any], repo_root: Path = REPO_ROOT) -> dict[str, Any]:
@@ -1336,12 +2118,26 @@ rm -f {shlex.quote(remote_archive)}
     return metadata
 
 
+def begin_workload(state: dict[str, Any]) -> str:
+    identifier = run_id()
+    state["workload_id"] = identifier
+    state.pop("remote_artifact_path", None)
+    state.pop("local_artifact_path", None)
+    state["phase"] = "workload-starting"
+    save_current(state)
+    return identifier
+
+
 def run_remote_workload(state: dict[str, Any]) -> None:
     commit = state.get("snapshot", {}).get("eprover_commit") or "worktree-snapshot"
     script_path = (
         f"{REMOTE_ROOT}/source/tools/linode-runner/remote_run.sh"
     )
-    artifact_path = f"{REMOTE_ROOT}/artifacts/{state['label']}"
+    workload_id = state.get("workload_id")
+    if not isinstance(workload_id, str):
+        raise RunnerError("Active runner has no workload ID")
+    workload_label = resource_label(workload_id)
+    artifact_path = f"{REMOTE_ROOT}/artifacts/{workload_label}"
     command = " ".join(
         shlex.quote(value)
         for value in [
@@ -1362,22 +2158,31 @@ def run_remote_workload(state: dict[str, Any]) -> None:
 
 
 def collect_artifacts(state: dict[str, Any]) -> Path:
+    workload_id = state.get("workload_id")
+    if not isinstance(workload_id, str):
+        raise RunnerError("Active runner has no workload ID")
+    workload_label = resource_label(workload_id)
     remote_artifacts = state.get(
-        "remote_artifact_path", f"{REMOTE_ROOT}/artifacts/{state['label']}"
+        "remote_artifact_path", f"{REMOTE_ROOT}/artifacts/{workload_label}"
     )
-    remote_archive = f"/root/{state['label']}-artifacts.tar.gz"
+    remote_archive = f"/root/{workload_label}-artifacts.tar.gz"
     pack = (
         f"test -d {shlex.quote(remote_artifacts)} && "
         f"tar -C {shlex.quote(remote_artifacts)} -czf "
         f"{shlex.quote(remote_archive)} ."
     )
     ssh_command(state, pack, timeout=900)
-    local_dir = ARTIFACT_ROOT / state["run_id"]
+    local_dir = ARTIFACT_ROOT / workload_id
     local_archive = local_dir / "artifacts.tar.gz"
     scp_from(state, remote_archive, local_archive)
     safe_extract(local_archive, local_dir)
     local_archive.unlink()
-    ssh_command(state, f"rm -f {shlex.quote(remote_archive)}", timeout=60)
+    ssh_command(
+        state,
+        f"rm -f {shlex.quote(remote_archive)} && "
+        f"rm -rf {shlex.quote(str(remote_artifacts))}",
+        timeout=60,
+    )
     state["local_artifact_path"] = str(local_dir)
     state["phase"] = "artifacts-collected"
     save_current(state)
@@ -1395,7 +2200,12 @@ def wait_until_absent(
     raise RunnerError(f"Timed out waiting for deletion: {path}")
 
 
-def delete_state_resources(api: LinodeApi, state: dict[str, Any]) -> None:
+def delete_state_resources(
+    api: LinodeApi,
+    state: dict[str, Any],
+    *,
+    state_path: Path | None = None,
+) -> None:
     label = str(state["label"])
     if not is_managed_label(label):
         raise RunnerError(f"Refusing cleanup for unmanaged label: {label}")
@@ -1435,17 +2245,28 @@ def delete_state_resources(api: LinodeApi, state: dict[str, Any]) -> None:
                     time.sleep(5)
             wait_until_absent(api, path)
     state["phase"] = "deleted"
+    state["lifecycle"] = "deleted"
     state["deleted_at"] = (
         format_utc(linode_deleted_at)
         if isinstance(linode_deleted_at, datetime)
         else iso_now()
     )
     archive_state(state)
-    if CURRENT_STATE.exists():
-        CURRENT_STATE.unlink()
+    path = CURRENT_STATE if state_path is None else state_path
+    if path.is_file():
+        saved = read_state_file(path)
+        if (
+            saved.get("linode_id") == state.get("linode_id")
+            and saved.get("label") == state.get("label")
+        ):
+            path.unlink()
 
 
-def refresh_firewall(api: LinodeApi, state: dict[str, Any], allow_ip: str | None) -> None:
+def replace_firewall_rules(
+    api: LinodeApi,
+    state: dict[str, Any],
+    allow_ip: str | None,
+) -> str:
     allow_cidr = detect_public_ipv4(allow_ip)
     firewall_id = int(state["firewall_id"])
     live = api.get(f"/networking/firewalls/{firewall_id}")
@@ -1454,6 +2275,11 @@ def refresh_firewall(api: LinodeApi, state: dict[str, Any], allow_ip: str | None
         f"/networking/firewalls/{firewall_id}/rules",
         firewall_rules(allow_cidr),
     )
+    return allow_cidr
+
+
+def refresh_firewall(api: LinodeApi, state: dict[str, Any], allow_ip: str | None) -> None:
+    allow_cidr = replace_firewall_rules(api, state, allow_ip)
     state["allow_cidr"] = allow_cidr
     save_current(state)
     print(f"Firewall now allows SSH from {allow_cidr}")
@@ -1461,20 +2287,32 @@ def refresh_firewall(api: LinodeApi, state: dict[str, Any], allow_ip: str | None
 
 def status(api: LinodeApi) -> None:
     state = load_current(required=False)
-    if state is None:
-        print("No active runner.")
-        return
-    result = dict(state)
-    linode_id = state.get("linode_id")
-    firewall_id = state.get("firewall_id")
-    if linode_id is not None:
-        live = api.get(f"/linode/instances/{linode_id}", allow_404=True)
-        result["live_linode_status"] = None if live is None else live.get("status")
-    if firewall_id is not None:
-        live = api.get(
-            f"/networking/firewalls/{firewall_id}", allow_404=True
-        )
-        result["live_firewall_status"] = None if live is None else live.get("status")
+
+    def with_live_status(value: dict[str, Any]) -> dict[str, Any]:
+        result = dict(value)
+        linode_id = value.get("linode_id")
+        firewall_id = value.get("firewall_id")
+        if linode_id is not None:
+            live = api.get(f"/linode/instances/{linode_id}", allow_404=True)
+            result["live_linode_status"] = (
+                None if live is None else live.get("status")
+            )
+        if firewall_id is not None:
+            live = api.get(
+                f"/networking/firewalls/{firewall_id}", allow_404=True
+            )
+            result["live_firewall_status"] = (
+                None if live is None else live.get("status")
+            )
+        return result
+
+    result = {
+        "active": None if state is None else with_live_status(state),
+        "parked": [
+            with_live_status(parked)
+            for _path, parked in list_parked_states()
+        ],
+    }
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
@@ -1500,22 +2338,23 @@ def garbage_collect(
     if older_than_hours < 1:
         raise RunnerError("--older-than-hours must be at least 1")
     cutoff = utc_now() - timedelta(hours=older_than_hours)
-    current = load_current(required=False) or {}
-    protected_linode = current.get("linode_id")
-    protected_firewall = current.get("firewall_id")
+    protected_states = [load_current(required=False) or {}]
+    protected_states.extend(state for _path, state in list_parked_states())
+    protected_linodes = {state.get("linode_id") for state in protected_states}
+    protected_firewalls = {state.get("firewall_id") for state in protected_states}
     linodes = [
         item
         for item in managed_older_than(
             api.list_all("/linode/instances"), cutoff
         )
-        if item.get("id") != protected_linode
+        if item.get("id") not in protected_linodes
     ]
     firewalls = [
         item
         for item in managed_older_than(
             api.list_all("/networking/firewalls"), cutoff
         )
-        if item.get("id") != protected_firewall
+        if item.get("id") not in protected_firewalls
     ]
     if not linodes and not firewalls:
         print("No stale managed resources found.")
@@ -1549,6 +2388,7 @@ def initialize() -> None:
     command_path("scp")
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     RUN_HISTORY.mkdir(parents=True, exist_ok=True)
+    PARKED_ROOT.mkdir(parents=True, exist_ok=True)
     print(f"Dedicated SSH key ready: {SSH_KEY}")
     print(f"Local runner state: {LOCAL_ROOT}")
 
@@ -1578,6 +2418,7 @@ def preflight(
             active_linodes=active_linodes,
         )
         require_high_memory_allowance(usage)
+    validate_reaper_setup(api)
 
 
 def add_provision_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1612,7 +2453,7 @@ def parser() -> argparse.ArgumentParser:
         "check", help="validate local tools, API permissions, plan, and capacity"
     )
     add_provision_arguments(check)
-    up = commands.add_parser("up", help="provision and bootstrap a runner")
+    up = commands.add_parser("up", help="reuse or provision a compatible runner")
     add_provision_arguments(up)
     commands.add_parser("sync", help="upload a fresh current-worktree snapshot")
     upload = commands.add_parser(
@@ -1633,7 +2474,7 @@ def parser() -> argparse.ArgumentParser:
     )
     refresh.add_argument("--allow-ip")
     run = commands.add_parser(
-        "run", help="provision, sync, build/profile, collect, and delete"
+        "run", help="acquire, sync, build/profile, collect, and park"
     )
     add_provision_arguments(run)
     run.add_argument(
@@ -1641,8 +2482,21 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="retain paid resources after a workload failure for debugging",
     )
-    commands.add_parser("down", help="delete the active Linode and firewall")
+    down = commands.add_parser("down", help="park the active runner for reuse")
+    down.add_argument(
+        "--now",
+        action="store_true",
+        help="delete the active runner immediately instead of parking it",
+    )
+    down.add_argument(
+        "--all",
+        action="store_true",
+        help="delete the active runner and every parked runner immediately",
+    )
     commands.add_parser("status", help="show local and live runner state")
+    reap = commands.add_parser("reap", help=argparse.SUPPRESS)
+    reap.add_argument("--linode-id", type=int, required=True)
+    reap.add_argument("--lease-id", required=True)
     gc = commands.add_parser("gc", help="find stale resources with the managed prefix")
     gc.add_argument("--older-than-hours", type=float, default=6)
     gc.add_argument("--yes", action="store_true", help="delete listed resources")
@@ -1665,7 +2519,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 image=arguments.image,
             )
         elif arguments.command == "up":
-            state = provision(
+            state, reused = acquire_runner(
                 api,
                 allow_ip=arguments.allow_ip,
                 linode_type=arguments.linode_type,
@@ -1673,7 +2527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 image=arguments.image,
             )
             print(
-                f"Runner ready: {state['label']} "
+                f"Runner ready ({'reused' if reused else 'new'}): {state['label']} "
                 f"(Linode {state['linode_id']}, {state['ipv4']})"
             )
         elif arguments.command == "sync":
@@ -1704,10 +2558,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.command == "refresh-ip":
             refresh_firewall(api, load_current(), arguments.allow_ip)
         elif arguments.command == "down":
-            delete_state_resources(api, load_current())
-            print("Runner and firewall deleted.")
+            if arguments.all:
+                current = load_current(required=False)
+                if current is not None:
+                    delete_state_resources(api, current)
+                for path, parked in list_parked_states():
+                    reap_parked_state(api, path, parked, force=True)
+                if load_reaper_config(required=False) is not None and reaper_token(
+                    required=False
+                ):
+                    sync_reaper_access(api, [])
+                print("Active and parked runners deleted.")
+            elif arguments.now:
+                delete_state_resources(api, load_current())
+                print("Runner and firewall deleted.")
+            elif park_runner(api, load_current()):
+                print("Runner is available for billing-aware reuse.")
+            else:
+                print("Runner and firewall deleted.")
         elif arguments.command == "status":
             status(api)
+        elif arguments.command == "reap":
+            path = parked_state_path(arguments.linode_id)
+            with lifecycle_lock():
+                if not path.is_file():
+                    print("Parked runner is already absent.")
+                else:
+                    parked = read_state_file(path)
+                    if reap_parked_state(
+                        api,
+                        path,
+                        parked,
+                        lease_id=arguments.lease_id,
+                    ):
+                        print("Parked runner and firewall deleted.")
+                    else:
+                        print("Parked runner lease is stale or not yet due.")
         elif arguments.command == "gc":
             garbage_collect(
                 api,
@@ -1718,14 +2604,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             state: dict[str, Any] | None = None
             workload_error: BaseException | None = None
             try:
-                state = provision(
+                state, reused = acquire_runner(
                     api,
                     allow_ip=arguments.allow_ip,
                     linode_type=arguments.linode_type,
                     region=arguments.region,
                     image=arguments.image,
                 )
+                print(f"Using {'reused' if reused else 'new'} Linode {state['linode_id']}")
                 sync_source(state)
+                begin_workload(state)
                 run_remote_workload(state)
                 local_artifacts = collect_artifacts(state)
                 print(f"Artifacts collected at {local_artifacts}")
@@ -1745,11 +2633,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     workload_error is not None and arguments.keep_on_failure
                 ):
                     try:
-                        delete_state_resources(api, state)
-                        print("Runner and firewall deleted.")
+                        if park_runner(api, state):
+                            print("Runner parked for billing-aware reuse.")
+                        else:
+                            print("Runner and firewall deleted.")
                     except Exception as cleanup_error:
                         print(
-                            f"URGENT: cleanup failed; run 'down': {cleanup_error}",
+                            "URGENT: cleanup failed; run 'down --now': "
+                            f"{cleanup_error}",
                             file=sys.stderr,
                         )
                         if workload_error is None:

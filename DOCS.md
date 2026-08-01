@@ -494,11 +494,12 @@ of earlier work, not current instructions.
 ## Ephemeral Linode Compute
 
 Use the single required workflow in
-[`docs/linode-runner.md`](docs/linode-runner.md). It provisions a short-lived
-runner, synchronizes the exact current worktree without depending on a pushed
-branch, runs every Linux Rust/C quality and parity check, cross-compiles
-Windows GNU x64 without executing it, collects timing and Callgrind evidence,
-and guarantees guarded teardown.
+[`docs/linode-runner.md`](docs/linode-runner.md). It acquires a short-lived
+runner, reusing an exact type/region/image match within an already-paid billing
+hour when possible. It synchronizes the exact current worktree without
+depending on a pushed branch, runs every Linux Rust/C quality and parity check,
+cross-compiles Windows GNU x64 without executing it, collects timing and
+Callgrind evidence, sanitizes the host, and guarantees guarded cleanup.
 
 The normal default is the 8 GiB `g8-dedicated-8-4` profile at $0.14 an hour.
 Use `.\linode-runner.ps1 run` for normal validation. The explicit
@@ -506,6 +507,16 @@ Use `.\linode-runner.ps1 run` for normal validation. The explicit
 when a task should more closely resemble the CASC configuration. For a closer
 CASC match, every actual prover command on that host should include
 `--memory-limit=131072`, which is the prover's MB value for 128 GiB.
+
+`run` and `down` park a compatible runner by default until two minutes before
+the end of its current paid hour. A Windows Scheduled Task and an independent
+persistent systemd timer on the Linode are both armed first; the remote path
+uses a dedicated restricted reaper PAT with exact per-entity roles and still
+stops billing when Windows is off. A later `up` or `run` reuses the same
+runner. `down --now` deletes the active runner immediately, while `down --all`
+also deletes all parked runners. Missing or unsafe reaper configuration fails
+closed to immediate deletion. See the runbook for `init-reaper` setup, status,
+lease behavior, sanitization, and recovery.
 
 High-memory usage has a four-hour daily base allowance and a bank capped at four
 hours. The bank starts full before the earliest trusted run, unused daily time
