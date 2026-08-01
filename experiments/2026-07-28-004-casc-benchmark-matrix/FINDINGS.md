@@ -1,15 +1,14 @@
-# CASC-30 benchmark matrix and resumable batch harness
+# CASC-2025 and CASC-J13 benchmark matrix and resumable batch harness
 
-Bead: `E_Rust_Port-9jt.2.1`
+Beads: `E_Rust_Port-9jt.2.1`, `E_Rust_Port-9jt.2.7`
 
 ## Decision
 
 Accept the manifest, strict batch protocol, ignored-corpus transfer boundary,
 and report generator as the reusable competitive-evaluation substrate.
-Do not close the Bead or infer full-matrix results from the normal-runner
-smoke. The canonical 5,802-run acceptance gate remains
-`E_Rust_Port-9jt.2.7`, which is blocked by provider-plan gate
-`E_Rust_Port-9jt.8.7`.
+Do not infer full-matrix results from the normal-runner smoke. The high-memory
+provider gate passed on 2026-08-01; the expanded canonical 8,502-run acceptance
+gate remains `E_Rust_Port-9jt.2.7` until both release contracts complete.
 
 ## Manifest result
 
@@ -33,6 +32,35 @@ increasing difficulty order. The manifest consequently calls its five
 within-category bands an ordinal difficulty proxy and never invents numeric
 TPTP ratings. SLH families come from the retained Isabelle theory path in the
 `Names` header; other problems use the TPTP/entrant three-letter family.
+
+## CASC-J13 manifest extension
+
+The immutable
+[`casc_2026_manifest.jsonl`](../../benchmarks/casc_2026_manifest.jsonl)
+reconciles the official CASC-J13 ATP corpus with the published result tables:
+
+- 1,350 problems across TNE 100, TEQ 300, FNE 100, FEQ 300, FNN 50, FNQ 100,
+  and UEQ 400;
+- 2,438 recursively inventoried axioms;
+- 50 indivisible source families and a 935/229/186 train/validation/test split;
+- exact per-problem, problem-tree, axiom-tree, and all 26 official CSV hashes;
+- PRV retained as official context but excluded from the ATP problem set; and
+- manifest SHA-256
+  `939f8d03f0ceb0cbccd6377a01b605d84adeaa46e892a630513cccb82c825941`.
+
+Every J13 ATP problem uses the announced 180-second wall boundary, eight
+schedule cores, and 128 GiB memory contract. The ignored deterministic J13
+transfer archive is 196,467,548 bytes with SHA-256
+`ab89485b9d00b00e1098a3ab3184e47d10e59978320dca1f541480320e2a7fdc`.
+The generalized archive tool derives its confined prefix and exact file counts
+from the selected manifest instead of trusting a caller-supplied year.
+
+The batch harness now supports session-only new-result and wall-time caps so a
+large immutable contract can be safely checkpointed within the fixed-EST
+high-memory allowance. These caps do not enter the contract and therefore do
+not invalidate later hash-checked resume. `combined_report.py` preserves
+release identity across overlapping problem identifiers and emits complete
+per-release and combined coverage, overlap, status, time, and memory views.
 
 ## Runtime contract
 
@@ -115,4 +143,6 @@ required eight-core/128 GiB environment or execute all 2,901 problems for both
 solvers. The earlier `g7-highmem-8` provider restriction was resolved on
 2026-08-01 when the guarded lifecycle gate passed. Gate
 `E_Rust_Port-9jt.2.7` now preserves the full-run acceptance work itself,
-expanded to the 2,901 CASC-2025 and 1,350 CASC-J13/2026 ATP problems.
+expanded to the 2,901 CASC-2025 and 1,350 CASC-J13/2026 ATP problems. The J13
+manifest, archive, and combined-report contract are now ready; the 8,502
+solver/problem executions and final reports remain outstanding.

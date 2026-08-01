@@ -1,21 +1,29 @@
-# CASC-30 benchmark matrix and batch protocol
+# CASC-2025 and CASC-J13 benchmark matrix and batch protocol
 
-The checked-in CASC-30 (2025) corpus is the reproducible public baseline for
-Umlaut's post-port experiments. It is not an unseen CASC-2027 set, and the
-pinned local Vampire executable is not claimed to reproduce the official
-Vampire entry or the StarExec environment.
+The checked-in CASC-30 (2025) and CASC-J13 (2026) corpora are reproducible
+public baselines for Umlaut's post-port experiments. They are not an unseen
+CASC-2027 set, and the pinned local Vampire executable is not claimed to
+reproduce the official Vampire entry or the StarExec environment.
 
-The authoritative machine-readable inventory is
-[`benchmarks/casc_2025_manifest.jsonl`](../benchmarks/casc_2025_manifest.jsonl).
-It contains 2,901 problems in 12 categories and eight divisions, 100
-indivisible source families, and exact problem, axiom-tree, and official-CSV
-hashes. The current file is 1,730,358 bytes with SHA-256
+The authoritative machine-readable inventories are
+[`benchmarks/casc_2025_manifest.jsonl`](../benchmarks/casc_2025_manifest.jsonl)
+and
+[`benchmarks/casc_2026_manifest.jsonl`](../benchmarks/casc_2026_manifest.jsonl).
+The 2025 manifest contains 2,901 problems in 12 categories and eight
+divisions, 100 indivisible source families, and exact problem, axiom-tree, and
+official-CSV hashes. It is 1,730,358 bytes with SHA-256
 `31c9a99e4b34b56352b3311f3efe5c97f728fd078783085e1811d83eec271f6d`.
-Regenerate or verify it with:
+The J13 manifest contains 1,350 ATP problems in seven categories and four
+divisions, 50 families, 2,438 axioms, and all 26 official result/summary CSV
+hashes. It is 863,219 bytes with SHA-256
+`939f8d03f0ceb0cbccd6377a01b605d84adeaa46e892a630513cccb82c825941`.
+Regenerate or verify them with:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\casc_benchmark\manifest.py --repo-root .
 .\.venv\Scripts\python.exe tools\casc_benchmark\manifest.py --repo-root . --check
+.\.venv\Scripts\python.exe tools\casc_benchmark\manifest.py --repo-root . --release 2026
+.\.venv\Scripts\python.exe tools\casc_benchmark\manifest.py --repo-root . --release 2026 --check
 ```
 
 The generator reconciles every normalized official result-table identifier
@@ -50,6 +58,12 @@ The category semantics come from the CASC division definitions:
 - unsatisfiable: EPU and UEQ; and
 - satisfiable: EPS.
 
+CASC-J13 uses TNE, TEQ, FNE, FEQ, FNN, FNQ, and UEQ. Its official
+`Problems.tgz` ATP corpus excludes the separate PRV proof-verification inputs;
+the 26 checked-in CSVs still preserve PRV as explicit official context. The
+J13 family-held-out partition contains 935 train, 229 validation, and 186 test
+problems without splitting a family.
+
 The harness checks a solver's terminal SZS status against this independent
 category contract. It never treats Vampire, Umlaut, or the official CSV result
 of another system as a soundness oracle.
@@ -77,6 +91,12 @@ EPR; 240 seconds for THF, FOF, and UEQ; and 480 seconds for ICU. Those limits
 and the 128 GiB competition memory limit are published on the
 [CASC-30 archive page](https://tptp.org/CASC/30/).
 
+For CASC-J13, all four ATP divisions use a 180-second wall contract with no
+CPU limit. The [J13 design](https://tptp.org/CASC/J13/Design.html) specifies
+wall limits, a 120-second minimum, eight available cores per system run, and a
+128 GiB memory limit; the official result tables contain accepted runs through
+exactly 180.00 seconds and none beyond that announced boundary.
+
 Umlaut uses the complete `satauto-schedule` for satisfiable/non-theorem
 categories and `auto-schedule` elsewhere. Vampire uses the pinned
 `casc_sat_2025` or `casc_2025` schedule, a fixed seed of one, and disabled
@@ -92,6 +112,12 @@ The output root contains:
 - one host/session record per Linode;
 - atomic JSON results plus complete stdout and stderr for every pair; and
 - a regenerable `summary.json`.
+
+[`tools/casc_benchmark/combined_report.py`](../tools/casc_benchmark/combined_report.py)
+accepts complete, independently contracted release runs. It preserves release
+identity even when a problem identifier appears in both corpora and emits the
+combined release/category/division/split/difficulty, overlap, status, time, and
+memory views required for the 4,251-problem/8,502-result matrix.
 
 An existing result is reused only after its contract, problem hash, and output
 hashes pass. A changed binary, manifest, presentation, seed, selection, or
@@ -134,6 +160,24 @@ finally {
 }
 ```
 
+Build the J13 transfer archive with its explicit manifest:
+
+```powershell
+$j13Corpus = ".artifacts\casc-benchmark\casc_2026_corpus.tar.gz"
+.\.venv\Scripts\python.exe tools\casc_benchmark\corpus_archive.py pack `
+    --repo-root . `
+    --manifest benchmarks\casc_2026_manifest.jsonl `
+    --output $j13Corpus
+```
+
+The retained J13 archive is 196,467,548 bytes with SHA-256
+`ab89485b9d00b00e1098a3ab3184e47d10e59978320dca1f541480320e2a7fdc`.
+Upload and extract it with `casc_2026_manifest.jsonl`, then use a distinct
+year-tagged output root. `--max-new-results` and
+`--max-session-wall-seconds` bound one billable session without changing the
+immutable full-run contract; a later session validates and resumes every
+existing result.
+
 If the run needs another guarded session, upload and extract the downloaded
 archive before invoking the same batch command. Resume succeeds only when the
 rebuilt Umlaut hash and every other contract input remain identical. Create
@@ -169,3 +213,12 @@ report includes per-category, division, split, and difficulty-band coverage;
 classification counts; wall/CPU/peak-memory distributions; time curves;
 overlap and unique solves; final-status pairs; and proof/model polarity
 disagreements.
+
+After both release reports are complete, generate the combined report with:
+
+```text
+python3 tools/casc_benchmark/combined_report.py \
+  --input 2025 benchmarks/casc_2025_manifest.jsonl /path/to/casc30-v1 \
+  --input 2026 benchmarks/casc_2026_manifest.jsonl /path/to/casc-j13-v1 \
+  --output /path/to/casc-combined-v1.json
+```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the CASC-30 manifest, batch, and report contracts."""
+"""Regression tests for the CASC manifest, batch, and report contracts."""
 
 from __future__ import annotations
 
@@ -8,18 +8,20 @@ import os
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parents[1]
 sys.path.insert(0, str(THIS_DIR))
 
 import batch  # noqa: E402
+import combined_report  # noqa: E402
 import corpus_archive  # noqa: E402
 import manifest  # noqa: E402
 import report  # noqa: E402
 
 MANIFEST_PATH = REPO_ROOT / "benchmarks" / "casc_2025_manifest.jsonl"
+J13_MANIFEST_PATH = REPO_ROOT / "benchmarks" / "casc_2026_manifest.jsonl"
 
 
 class ManifestTests(unittest.TestCase):
@@ -91,6 +93,62 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(
             manifest.source_family("SLH", "SLH0001^1", text),
             "SLH:Combinable_Wands",
+        )
+
+
+class J13ManifestTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.metadata, cls.records = manifest.load_manifest(J13_MANIFEST_PATH)
+
+    def test_checked_in_manifest_covers_j13_atp_corpus_exactly(self):
+        self.assertEqual(self.metadata["problem_count"], 1350)
+        self.assertEqual(self.metadata["sources"]["axiom_count"], 2438)
+        self.assertEqual(
+            self.metadata["category_counts"],
+            {
+                "FEQ": 300,
+                "FNE": 100,
+                "FNN": 50,
+                "FNQ": 100,
+                "TEQ": 300,
+                "TNE": 100,
+                "UEQ": 400,
+            },
+        )
+        self.assertNotIn("PRV", self.metadata["category_counts"])
+        self.assertEqual(
+            len(self.metadata["sources"]["official_result_file_sha256"]), 26
+        )
+        self.assertTrue(
+            all(record["limit_kind"] == "wall" for record in self.records)
+        )
+        self.assertTrue(
+            all(record["limit_seconds"] == 180 for record in self.records)
+        )
+        self.assertTrue(
+            all(
+                record["path"].startswith("problems/casc_2026/")
+                for record in self.records
+            )
+        )
+
+    def test_j13_holdout_never_splits_a_family(self):
+        family_splits: dict[str, set[str]] = {}
+        category_splits: dict[str, set[str]] = {}
+        for record in self.records:
+            family_splits.setdefault(record["family"], set()).add(
+                record["holdout_split"]
+            )
+            category_splits.setdefault(record["category"], set()).add(
+                record["holdout_split"]
+            )
+        self.assertTrue(all(len(splits) == 1 for splits in family_splits.values()))
+        self.assertTrue(
+            all(
+                splits == {"train", "validation", "test"}
+                for splits in category_splits.values()
+            )
         )
 
 
@@ -235,6 +293,28 @@ class BatchContractTests(unittest.TestCase):
         self.assertEqual(session["runner"], runner)
         self.assertEqual(session["cgroup_root"], str(Path("/sys/fs/cgroup")))
 
+    def test_resumable_session_limits_are_not_part_of_the_contract(self):
+        arguments = batch.parse_args(
+            [
+                "--manifest",
+                "manifest.jsonl",
+                "--problem-root",
+                ".",
+                "--output-root",
+                "results",
+                "--umlaut-binary",
+                "umlaut",
+                "--solvers",
+                "umlaut",
+                "--max-new-results",
+                "7",
+                "--max-session-wall-seconds",
+                "3600",
+            ]
+        )
+        self.assertEqual(arguments.max_new_results, 7)
+        self.assertEqual(arguments.max_session_wall_seconds, 3600)
+
 
 class CorpusArchiveTests(unittest.TestCase):
     def test_member_paths_are_confined_to_the_ignored_corpus_tree(self):
@@ -252,6 +332,17 @@ class CorpusArchiveTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(corpus_archive.CorpusArchiveError):
                     corpus_archive.validated_member_path(invalid)
+
+    def test_j13_member_paths_use_the_manifest_prefix(self):
+        prefix = PurePosixPath("problems/casc_2026")
+        valid = "problems/casc_2026/FEQ/MGT090+1.p"
+        self.assertEqual(
+            corpus_archive.validated_member_path(valid, prefix).as_posix(), valid
+        )
+        with self.assertRaises(corpus_archive.CorpusArchiveError):
+            corpus_archive.validated_member_path(
+                "problems/casc_2025/FEQ/MGT090+1.p", prefix
+            )
 
     def test_tar_metadata_is_reproducible_and_non_executable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -338,6 +429,30 @@ class ReportTests(unittest.TestCase):
     def test_complete_report_rejects_missing_results(self):
         with self.assertRaisesRegex(batch.BatchError, "incomplete"):
             report.build_report(MANIFEST_PATH, self.run_root, require_complete=True)
+
+    def test_combined_report_keeps_release_identities_distinct(self):
+        first, second = self.records
+        self.write_result("umlaut", first, status="Theorem", solved=True, wall=1.0)
+        self.write_result("vampire", first, status="Theorem", solved=True, wall=0.5)
+        self.write_result("umlaut", second, status="GaveUp", solved=False, wall=2.0)
+        self.write_result(
+            "vampire", second, status="GaveUp", solved=False, wall=2.5
+        )
+        value = combined_report.build_combined_report(
+            [
+                ("first", MANIFEST_PATH, self.run_root),
+                ("second", MANIFEST_PATH, self.run_root),
+            ]
+        )
+        self.assertTrue(value["complete"])
+        self.assertEqual(value["targeted_problems"], 4)
+        self.assertEqual(value["completed_results"], 8)
+        self.assertEqual(
+            value["solvers"]["umlaut"]["groups"]["release"]["first"][
+                "targeted"
+            ],
+            2,
+        )
 
 
 if __name__ == "__main__":

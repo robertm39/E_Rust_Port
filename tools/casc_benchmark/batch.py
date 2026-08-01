@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a resumable, resource-isolated CASC-30 prover matrix on Linux."""
+"""Run a resumable, resource-isolated CASC prover matrix on Linux."""
 
 from __future__ import annotations
 
@@ -433,7 +433,8 @@ def contract_value(
         "adapters": {
             "umlaut": "auto/satauto schedule; one core for SLH; TSTP proof output",
             "vampire": (
-                "CASC-2025 unsat/sat schedule; fixed seed; one core for SLH; "
+                "Pinned Vampire 5.0.1 casc_2025/casc_sat_2025 built-in "
+                "schedules; fixed seed; one core for CPU-limited categories; "
                 "TPTP input"
             ),
         },
@@ -735,6 +736,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--problem", action="append", default=[])
     parser.add_argument("--max-problems", type=int)
+    parser.add_argument(
+        "--max-new-results",
+        type=int,
+        help="stop this resumable session after publishing this many new results",
+    )
+    parser.add_argument(
+        "--max-session-wall-seconds",
+        type=float,
+        help=(
+            "stop before starting another result after this session wall time; "
+            "one in-flight result may finish after the boundary"
+        ),
+    )
     parser.add_argument("--session-id")
     parser.add_argument("--runner-label")
     parser.add_argument("--runner-run-id")
@@ -790,6 +804,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise BatchError("--memory-limit-mib must be at least 20")
         if arguments.max_problems is not None and arguments.max_problems < 1:
             raise BatchError("--max-problems must be positive")
+        if arguments.max_new_results is not None and arguments.max_new_results < 1:
+            raise BatchError("--max-new-results must be positive")
+        if (
+            arguments.max_session_wall_seconds is not None
+            and arguments.max_session_wall_seconds <= 0
+        ):
+            raise BatchError("--max-session-wall-seconds must be positive")
 
         manifest_path = arguments.manifest.resolve()
         metadata, records = load_manifest(manifest_path)
@@ -895,15 +916,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         environment = os.environ.copy()
-        environment["TPTP"] = str(problem_root / "problems" / "casc_2025")
+        corpus_root = metadata["sources"].get(
+            "corpus_root", "problems/casc_2025"
+        )
+        environment["TPTP"] = str(problem_root / corpus_root)
         completed = 0
         resumed = 0
+        session_started = time.monotonic()
+        stopped_after_session_limit = False
         selected_ids = {record["problem_id"] for record in selected}
         for index, record in enumerate(records, start=1):
             if record["problem_id"] not in selected_ids:
                 continue
             problem = problem_root / record["path"]
             for solver, binary in paths.items():
+                if (
+                    arguments.max_new_results is not None
+                    and completed >= arguments.max_new_results
+                ) or (
+                    arguments.max_session_wall_seconds is not None
+                    and time.monotonic() - session_started
+                    >= arguments.max_session_wall_seconds
+                ):
+                    stopped_after_session_limit = True
+                    break
                 command = solver_command(
                     solver,
                     binary,
@@ -939,9 +975,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"{result['wall_seconds']:.3f}s",
                         flush=True,
                     )
+            if stopped_after_session_limit:
+                break
         session["completed_at"] = utc_now()
         session["new_results"] = completed
         session["resumed_results"] = resumed
+        session["max_new_results"] = arguments.max_new_results
+        session["max_session_wall_seconds"] = arguments.max_session_wall_seconds
+        session["stopped_after_session_limit"] = stopped_after_session_limit
         atomic_write_json(output_root / "sessions" / f"{session_id}.json", session)
         print(
             f"OK: contract {contract['contract_id']}; "

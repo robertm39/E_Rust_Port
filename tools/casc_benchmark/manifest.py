@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and validate the immutable CASC-30 benchmark manifest."""
+"""Build and validate immutable CASC benchmark manifests."""
 
 from __future__ import annotations
 
@@ -67,6 +67,80 @@ CATEGORIES: dict[str, Category] = {
     "SLH": Category("SLH", "theorem", "cpu", 15, "sledgehammer"),
     "ICU": Category("ICU", "theorem", "wall", 480, "entrant"),
 }
+
+CATEGORIES_J13: dict[str, Category] = {
+    "TNE": Category("THF", "theorem", "wall", 180, "tptp"),
+    "TEQ": Category("THF", "theorem", "wall", 180, "tptp"),
+    "FNE": Category("FOF", "theorem", "wall", 180, "tptp"),
+    "FEQ": Category("FOF", "theorem", "wall", 180, "tptp"),
+    "FNN": Category("FNT", "non_theorem", "wall", 180, "tptp"),
+    "FNQ": Category("FNT", "non_theorem", "wall", 180, "tptp"),
+    "UEQ": Category("UEQ", "unsatisfiable", "wall", 180, "tptp"),
+}
+
+
+@dataclass(frozen=True)
+class ReleaseSpec:
+    release: str
+    corpus: str
+    problems_relative: Path
+    results_relative: Path
+    categories: dict[str, Category]
+    problem_count: int
+    partition_salt: str
+    presentation_id: str
+    presentation_description: str
+    design_url: str
+    archive_url: str
+    problem_archive_sha256: str | None = None
+    axiom_archive_sha256: str | None = None
+
+
+RELEASES: dict[str, ReleaseSpec] = {
+    "2025": ReleaseSpec(
+        release="2025",
+        corpus="CASC-30 (2025) official competition problems",
+        problems_relative=Path("problems/casc_2025"),
+        results_relative=Path("casc_2025_results"),
+        categories=CATEGORIES,
+        problem_count=2901,
+        partition_salt=PARTITION_SALT,
+        presentation_id="casc30-official-obfuscated",
+        presentation_description=(
+            "Official CASC-30 presentation, including organizer reordering "
+            "and equality/connective reversals where applicable."
+        ),
+        design_url=OFFICIAL_DESIGN_URL,
+        archive_url=OFFICIAL_ARCHIVE_URL,
+        problem_archive_sha256=PROBLEM_ARCHIVE_SHA256,
+        axiom_archive_sha256=AXIOM_ARCHIVE_SHA256,
+    ),
+    "2026": ReleaseSpec(
+        release="2026",
+        corpus="CASC-J13 (2026) official competition ATP problems",
+        problems_relative=Path("problems/casc_2026"),
+        # The imported official result directory retains its published typo.
+        results_relative=Path("cast_2026_results"),
+        categories=CATEGORIES_J13,
+        problem_count=1350,
+        partition_salt="umlaut-casc-j13-family-holdout-v1",
+        presentation_id="casc-j13-official-obfuscated",
+        presentation_description=(
+            "Official CASC-J13 presentation, including organizer comment "
+            "stripping, formula reordering, connective swaps, and equality "
+            "reversals where applicable."
+        ),
+        design_url="https://tptp.org/CASC/J13/Design.html",
+        archive_url="https://tptp.org/CASC/J13/",
+    ),
+}
+
+
+def release_spec(release: str) -> ReleaseSpec:
+    try:
+        return RELEASES[release]
+    except KeyError as error:  # pragma: no cover - argparse constrains the CLI.
+        raise ManifestError(f"unsupported CASC release {release!r}") from error
 
 
 class ManifestError(RuntimeError):
@@ -136,10 +210,10 @@ def source_family(category: str, problem_id: str, text: str) -> str:
     return match.group(0).upper()
 
 
-def partition_for_family(family: str) -> str:
+def partition_for_family(family: str, salt: str = PARTITION_SALT) -> str:
     """Return the initial deterministic 70/15/15 assignment for one family."""
 
-    material = f"{PARTITION_SALT}\0{family}".encode()
+    material = f"{salt}\0{family}".encode()
     bucket = int.from_bytes(hashlib.sha256(material).digest()[:8], "big") % 10_000
     if bucket < 7_000:
         return "train"
@@ -148,7 +222,9 @@ def partition_for_family(family: str) -> str:
     return "test"
 
 
-def family_partition_map(records: Sequence[dict[str, Any]]) -> dict[str, str]:
+def family_partition_map(
+    records: Sequence[dict[str, Any]], *, salt: str = PARTITION_SALT
+) -> dict[str, str]:
     """Assign whole families, repairing hashes so every category has each split."""
 
     split_names = ("train", "validation", "test")
@@ -162,7 +238,7 @@ def family_partition_map(records: Sequence[dict[str, Any]]) -> dict[str, str]:
         counts[category] = counts.get(category, 0) + 1
         category_totals[category] = category_totals.get(category, 0) + 1
     assignment = {
-        family: partition_for_family(family) for family in family_category_counts
+        family: partition_for_family(family, salt) for family in family_category_counts
     }
 
     def family_presence() -> dict[str, dict[str, int]]:
@@ -192,7 +268,8 @@ def family_partition_map(records: Sequence[dict[str, Any]]) -> dict[str, str]:
                 score += ((counts[category][split] - target) ** 2) / max(target, 1)
         return score
 
-    for _iteration in range(len(family_category_counts) * len(CATEGORIES)):
+    category_count = len({record["category"] for record in records})
+    for _iteration in range(len(family_category_counts) * category_count):
         presence = family_presence()
         missing = [
             (category, split)
@@ -258,9 +335,11 @@ def _result_rows(results_root: Path, category: str) -> list[str]:
     return problem_ids
 
 
-def _corpus_files(problems_root: Path) -> dict[str, dict[str, Path]]:
+def _corpus_files(
+    problems_root: Path, categories: dict[str, Category] = CATEGORIES
+) -> dict[str, dict[str, Path]]:
     files: dict[str, dict[str, Path]] = {}
-    for category in CATEGORIES:
+    for category in categories:
         category_root = problems_root / category
         if not category_root.is_dir():
             raise ManifestError(f"missing category directory: {category_root}")
@@ -278,10 +357,13 @@ def _relative_posix(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def _metadata(repo_root: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
-    results_root = repo_root / "casc_2025_results"
-    problems_root = repo_root / "problems" / "casc_2025"
+def _metadata(
+    repo_root: Path, records: list[dict[str, Any]], spec: ReleaseSpec
+) -> dict[str, Any]:
+    results_root = repo_root / spec.results_relative
+    problems_root = repo_root / spec.problems_relative
     axiom_files = list((problems_root / "Axioms").rglob("*.ax"))
+    problem_files = list(problems_root.glob("*/*.p"))
     result_files = sorted(results_root.glob("*_results.csv"))
     summary_files = sorted(results_root.glob("*_summary.csv"))
     partitions: dict[str, int] = {}
@@ -295,11 +377,68 @@ def _metadata(repo_root: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
         categories[record["category"]] = categories.get(record["category"], 0) + 1
         divisions[record["division"]] = divisions.get(record["division"], 0) + 1
         families.add(record["family"])
+    if spec.release == "2025":
+        resource_policy = {
+            "memory_limit_mib": 131072,
+            "wall_seconds": {
+                "THF": 240,
+                "TFA": 120,
+                "TFN": 120,
+                "FOF": 240,
+                "EPR": 120,
+                "UEQ": 240,
+                "ICU": 480,
+            },
+            "cpu_seconds": {"SLH": 15},
+        }
+        sources: dict[str, Any] = {
+            "design_url": spec.design_url,
+            "archive_url": spec.archive_url,
+            "problem_archive_sha256": spec.problem_archive_sha256,
+            "axiom_archive_sha256": spec.axiom_archive_sha256,
+            "axiom_count": len(axiom_files),
+            "axiom_tree_sha256": tree_sha256(axiom_files, repo_root),
+            "official_result_file_sha256": {
+                _relative_posix(path, repo_root): sha256_file(path)
+                for path in [*result_files, *summary_files]
+            },
+        }
+    else:
+        resource_policy = {
+            "memory_limit_mib": 131072,
+            "wall_seconds": {
+                division: 180
+                for division in sorted({value.division for value in spec.categories.values()})
+            },
+            "cpu_seconds": {},
+            "limit_evidence": (
+                "CASC-J13 imposed wall limits, published a 120-second minimum, "
+                "and the official result tables contain accepted runs through "
+                "180.00 seconds; this release contract uses the announced "
+                "180-second competition boundary."
+            ),
+        }
+        sources = {
+            "design_url": spec.design_url,
+            "archive_url": spec.archive_url,
+            "corpus_root": spec.problems_relative.as_posix(),
+            "problem_tree_sha256": tree_sha256(problem_files, repo_root),
+            "axiom_count": len(axiom_files),
+            "axiom_tree_sha256": tree_sha256(axiom_files, repo_root),
+            "official_result_file_sha256": {
+                _relative_posix(path, repo_root): sha256_file(path)
+                for path in [*result_files, *summary_files]
+            },
+            "official_result_context": (
+                "All 26 published CSVs are hashed; PRV is contextual and is "
+                "not part of the Problems.tgz ATP corpus."
+            ),
+        }
     return {
         "record_type": "manifest",
         "schema_version": SCHEMA_VERSION,
         "kind": MANIFEST_KIND,
-        "corpus": "CASC-30 (2025) official competition problems",
+        "corpus": spec.corpus,
         "problem_count": len(records),
         "family_count": len(families),
         "category_counts": dict(sorted(categories.items())),
@@ -307,7 +446,7 @@ def _metadata(repo_root: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
         "partition_counts": dict(sorted(partitions.items())),
         "partition_policy": {
             "unit": "complete source family",
-            "salt": PARTITION_SALT,
+            "salt": spec.partition_salt,
             "thresholds_per_10000": {
                 "train": [0, 6999],
                 "validation": [7000, 8499],
@@ -329,52 +468,29 @@ def _metadata(repo_root: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
                 "numeric TPTP rating and must not be used as one."
             ),
         },
-        "resource_policy": {
-            "memory_limit_mib": 131072,
-            "wall_seconds": {
-                "THF": 240,
-                "TFA": 120,
-                "TFN": 120,
-                "FOF": 240,
-                "EPR": 120,
-                "UEQ": 240,
-                "ICU": 480,
-            },
-            "cpu_seconds": {"SLH": 15},
-        },
+        "resource_policy": resource_policy,
         "presentation": {
-            "id": "casc30-official-obfuscated",
-            "description": (
-                "Official CASC-30 presentation, including organizer reordering "
-                "and equality/connective reversals where applicable."
-            ),
+            "id": spec.presentation_id,
+            "description": spec.presentation_description,
         },
-        "sources": {
-            "design_url": OFFICIAL_DESIGN_URL,
-            "archive_url": OFFICIAL_ARCHIVE_URL,
-            "problem_archive_sha256": PROBLEM_ARCHIVE_SHA256,
-            "axiom_archive_sha256": AXIOM_ARCHIVE_SHA256,
-            "axiom_count": len(axiom_files),
-            "axiom_tree_sha256": tree_sha256(axiom_files, repo_root),
-            "official_result_file_sha256": {
-                _relative_posix(path, repo_root): sha256_file(path)
-                for path in [*result_files, *summary_files]
-            },
-        },
+        "sources": sources,
     }
 
 
-def build_manifest(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def build_manifest(
+    repo_root: Path, release: str = "2025"
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Build the complete manifest from the checked-in corpus and CSVs."""
 
     repo_root = repo_root.resolve()
-    problems_root = repo_root / "problems" / "casc_2025"
-    results_root = repo_root / "casc_2025_results"
-    files = _corpus_files(problems_root)
+    spec = release_spec(release)
+    problems_root = repo_root / spec.problems_relative
+    results_root = repo_root / spec.results_relative
+    files = _corpus_files(problems_root, spec.categories)
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for category, details in CATEGORIES.items():
+    for category, details in spec.categories.items():
         official_ids = _result_rows(results_root, category)
         category_files = files[category]
         missing = sorted(set(official_ids) - set(category_files))
@@ -416,13 +532,15 @@ def build_manifest(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]
                     "header_status": fields.get("status"),
                     "header_rating": fields.get("rating"),
                     "includes": parse_includes(text),
-                    "presentation_id": "casc30-official-obfuscated",
+                    "presentation_id": spec.presentation_id,
                 }
             )
 
-    if len(records) != 2901:
-        raise ManifestError(f"expected 2901 problems, found {len(records)}")
-    partitions = family_partition_map(records)
+    if len(records) != spec.problem_count:
+        raise ManifestError(
+            f"expected {spec.problem_count} problems, found {len(records)}"
+        )
+    partitions = family_partition_map(records, salt=spec.partition_salt)
     for record in records:
         record["holdout_split"] = partitions[record["family"]]
     all_problem_files = list(problems_root.glob("*/*.p"))
@@ -431,7 +549,7 @@ def build_manifest(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]
             f"corpus contains {len(all_problem_files)} .p files, manifest has "
             f"{len(records)}"
         )
-    return _metadata(repo_root, records), records
+    return _metadata(repo_root, records, spec), records
 
 
 def manifest_bytes(metadata: dict[str, Any], records: Iterable[dict[str, Any]]) -> bytes:
@@ -485,8 +603,11 @@ def verify_corpus(
     """Verify that every manifest problem and include still matches the corpus."""
 
     repo_root = repo_root.resolve()
-    problems_root = repo_root / "problems" / "casc_2025"
+    problems_root = repo_root / metadata["sources"].get(
+        "corpus_root", "problems/casc_2025"
+    )
     axiom_files = list((problems_root / "Axioms").rglob("*.ax"))
+    problem_files = list(problems_root.glob("*/*.p"))
     if len(axiom_files) != metadata["sources"]["axiom_count"]:
         raise ManifestError(
             f"axiom count mismatch: {len(axiom_files)} != "
@@ -494,6 +615,12 @@ def verify_corpus(
         )
     if tree_sha256(axiom_files, repo_root) != metadata["sources"]["axiom_tree_sha256"]:
         raise ManifestError("axiom tree hash does not match the manifest")
+    expected_problem_tree = metadata["sources"].get("problem_tree_sha256")
+    if (
+        expected_problem_tree is not None
+        and tree_sha256(problem_files, repo_root) != expected_problem_tree
+    ):
+        raise ManifestError("problem tree hash does not match the manifest")
     for record in records:
         path = repo_root / record["path"]
         if not path.is_file():
@@ -510,13 +637,14 @@ def verify_corpus(
         raise ManifestError("metadata count changed during corpus verification")
 
 
-def default_output(repo_root: Path) -> Path:
-    return repo_root / "benchmarks" / "casc_2025_manifest.jsonl"
+def default_output(repo_root: Path, release: str = "2025") -> Path:
+    return repo_root / "benchmarks" / f"casc_{release}_manifest.jsonl"
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument("--release", choices=sorted(RELEASES), default="2025")
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--check",
@@ -532,10 +660,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     output = (
         arguments.output.resolve()
         if arguments.output
-        else default_output(repo_root).resolve()
+        else default_output(repo_root, arguments.release).resolve()
     )
     try:
-        metadata, records = build_manifest(repo_root)
+        metadata, records = build_manifest(repo_root, arguments.release)
         expected = manifest_bytes(metadata, records)
         if arguments.check:
             if not output.is_file():
@@ -549,7 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(expected)
         print(
-            f"OK: {len(records)} CASC-30 problems, "
+            f"OK: {len(records)} CASC {arguments.release} problems, "
             f"manifest SHA-256 {sha256_bytes(expected)}"
         )
         return 0

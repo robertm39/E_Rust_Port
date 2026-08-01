@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize a resumable CASC-30 batch without treating either prover as an oracle."""
+"""Summarize a resumable CASC batch without treating either prover as an oracle."""
 
 from __future__ import annotations
 
@@ -89,13 +89,16 @@ def load_results(
 
 
 def group_keys(record: dict[str, Any]) -> list[tuple[str, str]]:
-    return [
+    keys = [
         ("overall", "all"),
         ("division", record["division"]),
         ("category", record["category"]),
         ("split", record["holdout_split"]),
         ("difficulty_band", record["difficulty_band"]),
     ]
+    if "release" in record:
+        keys.append(("release", record["release"]))
+    return keys
 
 
 def solver_summary(
@@ -261,9 +264,10 @@ def build_report(
         "missing_results": missing_results,
         "complete": missing_results == 0,
         "official_context_warning": (
-            "The checked-in CASC-30 CSVs describe official competition entries. "
-            "This local pinned Vampire run is not claimed to reproduce Vampire's "
-            "official CASC configuration or StarExec environment."
+            f"The checked-in CSVs for {metadata['corpus']} describe official "
+            "competition entries. This local pinned Vampire run is not claimed "
+            "to reproduce Vampire's official CASC configuration or StarExec "
+            "environment."
         ),
         "manifest_partition_counts": metadata["partition_counts"],
         "solvers": {
