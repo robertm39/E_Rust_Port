@@ -382,6 +382,17 @@ summary and combined report without archive extraction. On the existing
 965-result checkpoint that bridge independently reproduced the prior combined
 report byte-for-byte at SHA-256
 `d325fa2d64945952d7a5f713e54d2e7ff0a9a858743688ff0a7bf285810955ad`.
+The validator also independently requires the Bead's analysis surface rather than
+relying only on reproduction through the same report functions. Every per-release
+and combined solver view must expose classification and final-status counts, time
+curves, and nonempty category/division/split/difficulty/overall groups; every
+group must carry coverage plus CPU, wall-time, and peak-memory distributions.
+Every overlap view must carry both/unique/neither/incomplete solve counts, status
+pairs, and polarity disagreements. Combined reports additionally require release
+groups, both nested release summaries, and explicit official-CSV context. Removing
+a combined release group or a per-release peak-memory distribution fails focused
+validation. Eleven validator tests and all 52 related tests pass; the real
+965-result legacy bridge passes this acceptance-surface gate unchanged.
 The legacy-compatible path also retains the same contract, inner-archive,
 per-release report, and 483/482 solver hashes recorded above; wrong outer hashes
 and wrong expected-result counts are rejected. The validator now also parses the

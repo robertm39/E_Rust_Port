@@ -400,6 +400,174 @@ def safe_result_key(index: int, record: dict[str, Any]) -> str:
     return f"{index:04d}-{record['category'].lower()}-{suffix}"
 
 
+def require_mapping(value: object, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError(f"report {context} is not an object")
+    return value
+
+
+def require_keys(
+    value: dict[str, Any], required: set[str], context: str
+) -> None:
+    missing = sorted(required - value.keys())
+    if missing:
+        raise ValidationError(f"report {context} lacks fields: {missing!r}")
+
+
+def validate_report_acceptance_surface(
+    report: dict[str, Any], *, combined: bool
+) -> None:
+    """Require every analysis surface promised by the matrix Bead."""
+    require_keys(
+        report,
+        {
+            "targeted_problems",
+            "expected_results",
+            "completed_results",
+            "missing_results",
+            "solvers",
+            "overlap",
+        },
+        "root",
+    )
+    solvers = require_mapping(report.get("solvers"), "solvers")
+    if set(solvers) != {"umlaut", "vampire"}:
+        raise ValidationError("report solver identities are not Umlaut and Vampire")
+    group_kinds = {"overall", "category", "division", "split", "difficulty_band"}
+    if combined:
+        group_kinds.add("release")
+    distribution_fields = {
+        "count",
+        "min",
+        "max",
+        "mean",
+        "p50",
+        "p90",
+        "p95",
+    }
+    group_fields = {
+        "targeted",
+        "completed",
+        "missing",
+        "accepted_solved",
+        "wrong_status",
+        "solve_rate",
+        "cpu_seconds_solved",
+        "wall_seconds_solved",
+        "peak_memory_mib_completed",
+    }
+    for solver, raw_solver in solvers.items():
+        solver_report = require_mapping(raw_solver, f"solver {solver}")
+        require_keys(
+            solver_report,
+            {"classification_counts", "final_status_counts", "groups", "time_curve"},
+            f"solver {solver}",
+        )
+        for field in ("classification_counts", "final_status_counts"):
+            require_mapping(solver_report[field], f"solver {solver} {field}")
+        time_curve = require_mapping(
+            solver_report["time_curve"], f"solver {solver} time_curve"
+        )
+        if not time_curve:
+            raise ValidationError(f"report solver {solver} time curve is empty")
+        groups = require_mapping(solver_report["groups"], f"solver {solver} groups")
+        require_keys(groups, group_kinds, f"solver {solver} groups")
+        for kind in sorted(group_kinds):
+            grouped = require_mapping(groups[kind], f"solver {solver} group {kind}")
+            if not grouped:
+                raise ValidationError(f"report solver {solver} group {kind} is empty")
+            for name, raw_statistics in grouped.items():
+                statistics = require_mapping(
+                    raw_statistics,
+                    f"solver {solver} group {kind}/{name}",
+                )
+                require_keys(
+                    statistics,
+                    group_fields,
+                    f"solver {solver} group {kind}/{name}",
+                )
+                for field in (
+                    "cpu_seconds_solved",
+                    "wall_seconds_solved",
+                    "peak_memory_mib_completed",
+                ):
+                    distribution = require_mapping(
+                        statistics[field],
+                        f"solver {solver} group {kind}/{name} {field}",
+                    )
+                    require_keys(
+                        distribution,
+                        distribution_fields,
+                        f"solver {solver} group {kind}/{name} {field}",
+                    )
+
+    overlap = require_mapping(report.get("overlap"), "overlap")
+    require_keys(overlap, group_kinds, "overlap")
+    overlap_fields = {
+        "targeted",
+        "both_solved",
+        "umlaut_only",
+        "vampire_only",
+        "neither_solved",
+        "incomplete",
+        "polarity_disagreements",
+        "final_status_pairs",
+    }
+    for kind in sorted(group_kinds):
+        grouped = require_mapping(overlap[kind], f"overlap group {kind}")
+        if not grouped:
+            raise ValidationError(f"report overlap group {kind} is empty")
+        for name, raw_statistics in grouped.items():
+            statistics = require_mapping(
+                raw_statistics,
+                f"overlap group {kind}/{name}",
+            )
+            require_keys(statistics, overlap_fields, f"overlap group {kind}/{name}")
+            require_mapping(
+                statistics["final_status_pairs"],
+                f"overlap group {kind}/{name} final_status_pairs",
+            )
+
+    if combined:
+        official = require_mapping(report.get("official_context"), "official context")
+        require_keys(official, {"csv_count", "warning"}, "official context")
+        warning = official["warning"]
+        if (
+            not isinstance(warning, str)
+            or "contextual" not in warning.lower()
+            or "not claimed" not in warning.lower()
+        ):
+            raise ValidationError("combined report lacks contextual CSV warning")
+        releases = require_mapping(report.get("releases"), "releases")
+        if len(releases) < 2:
+            raise ValidationError("combined report has fewer than two releases")
+        for release, raw_release in releases.items():
+            release_report = require_mapping(raw_release, f"release {release}")
+            require_keys(
+                release_report,
+                {"official_csv_count", "summary"},
+                f"release {release}",
+            )
+            summary = require_mapping(
+                release_report.get("summary"),
+                f"release {release} summary",
+            )
+            validate_report_acceptance_surface(summary, combined=False)
+    else:
+        warning = report.get("official_context_warning")
+        if (
+            not isinstance(warning, str)
+            or "official" not in warning.lower()
+            or "not claimed" not in warning.lower()
+        ):
+            raise ValidationError("release report lacks official-context warning")
+        partitions = require_mapping(
+            report.get("manifest_partition_counts"), "partitions"
+        )
+        if not partitions:
+            raise ValidationError("release report partition counts are empty")
+
+
 def expected_run_report(
     metadata: dict[str, Any],
     records: Sequence[dict[str, Any]],
@@ -435,6 +603,7 @@ def expected_run_report(
         report["overlap"] = overlap_summary(
             solvers[0], solvers[1], records, results
         )
+    validate_report_acceptance_surface(report, combined=False)
     return report
 
 
@@ -687,6 +856,7 @@ def expected_combined_report(
             combined_records,
             combined_results,
         )
+    validate_report_acceptance_surface(value, combined=True)
     return value
 
 

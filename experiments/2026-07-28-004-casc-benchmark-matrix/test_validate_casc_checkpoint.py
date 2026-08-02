@@ -347,6 +347,15 @@ class RunValidationTests(unittest.TestCase):
                 {"LEFT": 1, "RIGHT": 1},
             )
 
+            broken_surface = json.loads(json.dumps(combined))
+            del broken_surface["solvers"]["umlaut"]["groups"]["release"]
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "release"
+            ):
+                VALIDATOR.validate_report_acceptance_surface(
+                    broken_surface, combined=True
+                )
+
             combined["releases"]["RIGHT"]["summary"]["completed_results"] = 0
             with self.assertRaisesRegex(
                 VALIDATOR.ValidationError, "does not reproduce"
@@ -356,6 +365,29 @@ class RunValidationTests(unittest.TestCase):
                     structured=structured,
                     specifications=specifications,
                     runs=runs,
+                )
+
+    def test_rejects_release_report_missing_memory_distribution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, hashes, structured, contract_id = self.make_fixture(root)
+            run = VALIDATOR.validate_run(
+                hashes=hashes,
+                structured=structured,
+                run_name="fixture",
+                manifest_path=manifest,
+                contract_id=contract_id,
+                expected_results=1,
+            )
+            broken_surface = json.loads(json.dumps(run["_summary"]))
+            del broken_surface["solvers"]["umlaut"]["groups"]["overall"][
+                "all"
+            ]["peak_memory_mib_completed"]
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "peak_memory_mib_completed"
+            ):
+                VALIDATOR.validate_report_acceptance_surface(
+                    broken_surface, combined=False
                 )
 
 
