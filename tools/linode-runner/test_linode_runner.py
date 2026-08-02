@@ -546,6 +546,63 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
         self.assertIn("PACKAGE_MAINTENANCE_LIFECYCLE_COMPLETE", lifecycle)
 
 
+class RemoteExecDiagnosticsTests(unittest.TestCase):
+    def test_exec_failure_includes_both_remote_streams(self):
+        failure = runner.RunnerError(
+            "Command failed with exit code 1: ssh\n"
+            "remote stdout\nremote stderr"
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(
+                runner,
+                "ssh_command",
+                side_effect=failure,
+            ) as ssh,
+            mock.patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            exit_code = runner.main(["exec", "--", "false"])
+
+        self.assertEqual(exit_code, 1)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            "false",
+            capture=True,
+        )
+        self.assertIn("remote stdout", stderr.getvalue())
+        self.assertIn("remote stderr", stderr.getvalue())
+
+    def test_exec_captures_and_replays_both_remote_streams(self):
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout="remote stdout\n",
+            stderr="remote stderr\n",
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(
+                runner,
+                "ssh_command",
+                return_value=result,
+            ) as ssh,
+            mock.patch("sys.stdout", new_callable=StringIO) as stdout,
+            mock.patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            exit_code = runner.main(["exec", "--", "printf", "diagnostic"])
+
+        self.assertEqual(exit_code, 0)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            "printf diagnostic",
+            capture=True,
+        )
+        self.assertEqual(stdout.getvalue(), "remote stdout\n")
+        self.assertEqual(stderr.getvalue(), "remote stderr\n")
+
+
 @unittest.skipUnless(
     os.name == "posix" and shutil.which("bash") and shutil.which("git"),
     "requires POSIX bash and Git",

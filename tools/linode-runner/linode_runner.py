@@ -2977,7 +2977,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 remote_arguments.pop(0)
             if not remote_arguments:
                 raise RunnerError("Provide a remote command after 'exec --'")
-            ssh_command(state, " ".join(remote_arguments))
+            result = ssh_command(
+                state,
+                " ".join(remote_arguments),
+                capture=True,
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
         elif arguments.command == "refresh-ip":
             refresh_firewall(api, load_current(), arguments.allow_ip)
         elif arguments.command == "down":

@@ -601,6 +601,27 @@ controller-source regressions pin that guard and the two explicit frozen-contrac
 call sites.  The exact ready runner can therefore be claimed by the already
 fail-closed existing-runner path without another provider allocation.
 
+The exact-host retry uploaded source snapshot `dd013dfa...`, the immutable J13
+corpus, checkpoint, frozen Umlaut, and pinned Vampire.  All four outer hashes,
+the 1,350-problem/2,438-axiom extraction, every inner checkpoint hash, the
+frozen contract-file hash, report reconstruction, and the 965-result inventory
+passed.  The combined preflight command then exited 1 before any solver or
+batch service launched.  Because the runner's remote-exec path inherited SSH
+stderr, the controller retained only the generic SSH exit and could not
+distinguish its final batch verification from the preceding shell assertions.
+The fail-closed prelaunch cleanup deleted Linode `102069265` and firewall
+`100901107`; runner state is empty.
+
+Remote exec now captures and replays both SSH streams, including them in a
+nonzero-exit diagnostic.  The controller separately validates restored
+summary/result inventory with explicit Python errors and invokes frozen-contract
+`--verify-only` as its own logged remote phase.  A successor failure will
+therefore identify the exact assertion without weakening any input, contract,
+or no-solver-before-preflight gate.  Eighty-one runner tests, 20
+controller/planner tests, 26 batch/report tests, 11 checkpoint-validator tests,
+and the forecast regression pass; the PowerShell parser, Python compiler, and
+whitespace gate also pass.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

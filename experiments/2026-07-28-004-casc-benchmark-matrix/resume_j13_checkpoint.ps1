@@ -645,12 +645,54 @@ tar -xzf casc-runs.tar.gz -C /opt/e-rust-port
 printf '%s  %s\n' '$expectedContractFile' '$runRoot/contract.json' | sha256sum -c -
 cd /opt/e-rust-port/source
 python3 tools/casc_benchmark/report.py --manifest '$remoteManifestRelative' --run-root '$runRoot' --allow-partial
-grep -Fq '"contract_id":"$expectedContract"' '$runRoot/summary.json'
-grep -Fq '"completed_results":$ExpectedInitialResults' '$runRoot/summary.json'
-test "`$(find '$runRoot/results' -type f -name '*.json' | wc -l)" -eq '$ExpectedInitialResults'
-python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --problem-root /opt/e-rust-port/source --output-root '$runRoot' --umlaut-binary '$remoteUmlaut' --vampire-binary '$remoteVampire' --solvers both --cores 8 --memory-limit-mib 131072 --pids-limit 512 --vampire-seed 1 --wall-grace-seconds 0.25 --terminate-grace-seconds 1 --session-id '$Release-preflight-$runId' --source-snapshot-sha256 '$sourceSnapshot' --expected-contract-id '$expectedContract' --runner-label '$runnerLabel' --runner-run-id '$runId' --linode-id '$linodeId' --verify-only
+python3 - '$runRoot' '$expectedContract' '$ExpectedInitialResults' <<'PY'
+import json
+import sys
+from pathlib import Path
+
+run_root = Path(sys.argv[1])
+expected_contract = sys.argv[2]
+expected_results = int(sys.argv[3])
+summary = json.loads((run_root / "summary.json").read_text(encoding="utf-8"))
+if summary.get("contract_id") != expected_contract:
+    raise SystemExit(
+        f"summary contract mismatch: {summary.get('contract_id')!r}"
+    )
+if summary.get("completed_results") != expected_results:
+    raise SystemExit(
+        "summary completed-result mismatch: "
+        f"{summary.get('completed_results')!r}"
+    )
+actual_results = sum(1 for _path in (run_root / "results").rglob("*.json"))
+if actual_results != expected_results:
+    raise SystemExit(
+        f"result inventory mismatch: {actual_results} != {expected_results}"
+    )
+print(
+    f"OK: summary contract/count/result inventory {expected_results}"
+)
+PY
 "@
     Invoke-Runner @("exec", "--", $preflightCommand) | Out-Null
+    Write-ResumeLog (
+        "checkpoint_restore_verified initial_results=$ExpectedInitialResults"
+    )
+
+    $verifyCommand = "python3 tools/casc_benchmark/batch.py " +
+        "--manifest '$remoteManifestRelative' " +
+        "--problem-root /opt/e-rust-port/source " +
+        "--output-root '$runRoot' " +
+        "--umlaut-binary '$remoteUmlaut' " +
+        "--vampire-binary '$remoteVampire' " +
+        "--solvers both --cores 8 --memory-limit-mib 131072 " +
+        "--pids-limit 512 --vampire-seed 1 " +
+        "--wall-grace-seconds 0.25 --terminate-grace-seconds 1 " +
+        "--session-id '$Release-preflight-$runId' " +
+        "--source-snapshot-sha256 '$sourceSnapshot' " +
+        "--expected-contract-id '$expectedContract' " +
+        "--runner-label '$runnerLabel' --runner-run-id '$runId' " +
+        "--linode-id '$linodeId' --verify-only"
+    Invoke-Runner @("exec", "--", $verifyCommand) | Out-Null
     Write-ResumeLog "preflight_passed initial_results=$ExpectedInitialResults"
 
     $batchCommand = @(

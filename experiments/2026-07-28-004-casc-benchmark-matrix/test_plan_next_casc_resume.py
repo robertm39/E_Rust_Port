@@ -33,7 +33,19 @@ class ResumeControllerSourceTests(unittest.TestCase):
         source = CONTROLLER.read_text(encoding="utf-8")
 
         self.assertEqual(source.count('"--expected-contract-id"'), 1)
-        self.assertEqual(source.count("--expected-contract-id '$expectedContract'"), 1)
+        self.assertEqual(
+            source.count("--expected-contract-id '$expectedContract'"),
+            1,
+        )
+
+    def test_restore_inventory_and_batch_verification_are_separate(self) -> None:
+        source = CONTROLLER.read_text(encoding="utf-8")
+
+        self.assertIn("checkpoint_restore_verified", source)
+        self.assertIn('$verifyCommand = "python3 tools/casc_benchmark/batch.py "', source)
+        preflight = source.split('$preflightCommand = @"', 1)[1].split('"@', 1)[0]
+        self.assertNotIn("grep -Fq", preflight)
+        self.assertIn("summary contract mismatch", preflight)
 
 
 class ResumePlanningTests(unittest.TestCase):
