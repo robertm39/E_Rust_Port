@@ -24,7 +24,9 @@ RELEASES = {
         "contract_id": (
             "9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676"
         ),
+        "targeted_problems": 1350,
         "expected_results": 2700,
+        "official_csv_count": 26,
     },
     "casc2025": {
         "manifest": REPO_ROOT / "benchmarks" / "casc_2025_manifest.jsonl",
@@ -32,13 +34,54 @@ RELEASES = {
         "contract_id": (
             "e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa"
         ),
+        "targeted_problems": 2901,
         "expected_results": 5802,
+        "official_csv_count": 40,
     },
 }
 
 
 class PlanningError(RuntimeError):
     """Raised when trusted evidence cannot support a safe resume plan."""
+
+
+def validated_result_count(
+    *,
+    release: str,
+    checkpoint_sha256: str,
+    validation: dict[str, Any],
+) -> int:
+    """Return a result count only after validating release identity evidence."""
+    config = RELEASES[release]
+    archive = validation.get("archive")
+    run = validation.get("run")
+    if not isinstance(archive, dict):
+        raise PlanningError("validation has no archive object")
+    if not isinstance(run, dict):
+        raise PlanningError("validation has no run object")
+    checks = {
+        "validation schema": (validation.get("schema_version"), 1),
+        "validation kind": (
+            validation.get("kind"),
+            "umlaut-casc-checkpoint-validation",
+        ),
+        "archive SHA-256": (archive.get("sha256"), checkpoint_sha256),
+        "run name": (run.get("run_name"), config["run_name"]),
+        "contract ID": (run.get("contract_id"), config["contract_id"]),
+        "release result boundary": (
+            run.get("expected_results"),
+            config["expected_results"],
+        ),
+    }
+    for name, (actual, expected) in checks.items():
+        if actual != expected:
+            raise PlanningError(f"{name} mismatch: {actual!r} != {expected!r}")
+    completed = run.get("completed_results")
+    if isinstance(completed, bool) or not isinstance(completed, int):
+        raise PlanningError("validation has an invalid completed result count")
+    if not 0 <= completed <= config["expected_results"]:
+        raise PlanningError("validated result count is outside the release boundary")
+    return completed
 
 
 def parse_utc(value: object, field: str) -> datetime:
@@ -65,25 +108,12 @@ def build_resume_plan(
 ) -> dict[str, Any]:
     config = RELEASES[release]
     service_runtime_seconds = max_session_wall_seconds + 300
+    completed = validated_result_count(
+        release=release,
+        checkpoint_sha256=checkpoint_sha256,
+        validation=validation,
+    )
     checks = {
-        "validation schema": (validation.get("schema_version"), 1),
-        "validation kind": (
-            validation.get("kind"),
-            "umlaut-casc-checkpoint-validation",
-        ),
-        "archive SHA-256": (
-            validation.get("archive", {}).get("sha256"),
-            checkpoint_sha256,
-        ),
-        "run name": (validation.get("run", {}).get("run_name"), config["run_name"]),
-        "contract ID": (
-            validation.get("run", {}).get("contract_id"),
-            config["contract_id"],
-        ),
-        "release result boundary": (
-            validation.get("run", {}).get("expected_results"),
-            config["expected_results"],
-        ),
         "allowance kind": (
             allowance.get("kind"),
             "umlaut-linode-high-memory-allowance",
@@ -101,11 +131,6 @@ def build_resume_plan(
     for name, (actual, expected) in checks.items():
         if actual != expected:
             raise PlanningError(f"{name} mismatch: {actual!r} != {expected!r}")
-    completed = validation["run"].get("completed_results")
-    if isinstance(completed, bool) or not isinstance(completed, int):
-        raise PlanningError("validation has an invalid completed result count")
-    if not 0 <= completed <= config["expected_results"]:
-        raise PlanningError("validated result count is outside the release boundary")
 
     observed_at = parse_utc(allowance.get("observed_at_utc"), "observed_at_utc")
     required_now = allowance.get("required_start_available_now")
@@ -180,6 +205,90 @@ def build_resume_plan(
     return result
 
 
+def build_campaign_complete_plan(
+    *,
+    checkpoint: Path,
+    checkpoint_sha256: str,
+    completed_results: dict[str, int],
+    combined_validation: dict[str, Any],
+) -> dict[str, Any]:
+    expected_results = {
+        release: int(config["expected_results"])
+        for release, config in RELEASES.items()
+    }
+    if completed_results != expected_results:
+        raise PlanningError("campaign completion requires every release boundary")
+    validated_result_count(
+        release="j13",
+        checkpoint_sha256=checkpoint_sha256,
+        validation=combined_validation,
+    )
+    combined = combined_validation.get("combined")
+    if not isinstance(combined, dict):
+        raise PlanningError("campaign completion has no combined evidence")
+    expected_targeted_problems = sum(
+        int(config["targeted_problems"]) for config in RELEASES.values()
+    )
+    expected_combined_results = sum(
+        int(config["expected_results"]) for config in RELEASES.values()
+    )
+    expected_official_csv_count = sum(
+        int(config["official_csv_count"]) for config in RELEASES.values()
+    )
+    combined_checks = {
+        "combined report embedding": (combined.get("embedded"), True),
+        "combined releases": (
+            combined.get("releases"),
+            sorted(RELEASES),
+        ),
+        "combined targeted problems": (
+            combined.get("targeted_problems"),
+            expected_targeted_problems,
+        ),
+        "combined expected results": (
+            combined.get("expected_results"),
+            expected_combined_results,
+        ),
+        "combined completed results": (
+            combined.get("completed_results"),
+            expected_combined_results,
+        ),
+        "combined missing results": (combined.get("missing_results"), 0),
+        "combined official CSV count": (
+            combined.get("official_csv_count"),
+            expected_official_csv_count,
+        ),
+    }
+    for name, (actual, expected) in combined_checks.items():
+        if actual != expected:
+            raise PlanningError(f"{name} mismatch: {actual!r} != {expected!r}")
+    summary_sha256 = combined.get("summary_sha256")
+    if not isinstance(summary_sha256, str) or len(summary_sha256) != 64:
+        raise PlanningError("combined report has an invalid SHA-256")
+    if any(value not in "0123456789abcdef" for value in summary_sha256):
+        raise PlanningError("combined report has an invalid SHA-256")
+    return {
+        "schema_version": 1,
+        "kind": "umlaut-casc-next-resume-plan",
+        "release": None,
+        "status": "campaign_complete",
+        "checkpoint": {
+            "path": str(checkpoint.resolve()),
+            "sha256": checkpoint_sha256,
+            "completed_results": completed_results,
+            "expected_results": expected_results,
+        },
+        "allowance": None,
+        "combined_report": {
+            "sha256": summary_sha256,
+            "targeted_problems": combined["targeted_problems"],
+            "completed_results": combined["completed_results"],
+            "official_csv_count": combined["official_csv_count"],
+        },
+        "controller": None,
+    }
+
+
 def run_json(command: Sequence[str], description: str) -> dict[str, Any]:
     completed = subprocess.run(
         list(command),
@@ -200,9 +309,59 @@ def run_json(command: Sequence[str], description: str) -> dict[str, Any]:
     return value
 
 
+def emit_plan(plan: dict[str, Any], destination: Path | None) -> None:
+    output = json.dumps(plan, indent=2, sort_keys=True) + "\n"
+    if destination is not None:
+        resolved = destination.resolve()
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(output, encoding="utf-8", newline="\n")
+    print(output, end="")
+
+
+def validation_command(
+    *,
+    checkpoint: Path,
+    checkpoint_sha256: str,
+    release: str,
+    combined: bool = False,
+) -> list[str]:
+    config = RELEASES[release]
+    command = [
+        sys.executable,
+        str(VALIDATOR),
+        "--archive",
+        str(checkpoint),
+        "--archive-sha256",
+        checkpoint_sha256,
+        "--manifest",
+        str(config["manifest"]),
+        "--run-name",
+        str(config["run_name"]),
+        "--contract-id",
+        str(config["contract_id"]),
+    ]
+    if combined:
+        for combined_release, combined_config in RELEASES.items():
+            command.extend(
+                [
+                    "--combined-run",
+                    combined_release,
+                    str(combined_config["manifest"]),
+                    str(combined_config["run_name"]),
+                    str(combined_config["contract_id"]),
+                ]
+            )
+    return command
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release", choices=tuple(RELEASES), required=True)
+    parser.add_argument(
+        "--release",
+        choices=("auto", *RELEASES),
+        default="auto",
+        help="release to resume, or the first incomplete release (default: auto)",
+    )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
     parser.add_argument("--max-session-wall-seconds", type=int, default=14400)
@@ -224,24 +383,57 @@ def main(argv: Sequence[str] | None = None) -> int:
             value not in "0123456789abcdef" for value in checkpoint_sha256
         ):
             raise PlanningError("--checkpoint-sha256 must be lowercase hex")
-        config = RELEASES[arguments.release]
-        validation = run_json(
-            [
-                sys.executable,
-                str(VALIDATOR),
-                "--archive",
-                str(checkpoint),
-                "--archive-sha256",
-                checkpoint_sha256,
-                "--manifest",
-                str(config["manifest"]),
-                "--run-name",
-                str(config["run_name"]),
-                "--contract-id",
-                str(config["contract_id"]),
-            ],
-            "checkpoint validation",
+        releases = (
+            tuple(RELEASES)
+            if arguments.release == "auto"
+            else (arguments.release,)
         )
+        completed_results: dict[str, int] = {}
+        selected_release: str | None = None
+        selected_validation: dict[str, Any] | None = None
+        for release in releases:
+            config = RELEASES[release]
+            validation = run_json(
+                validation_command(
+                    checkpoint=checkpoint,
+                    checkpoint_sha256=checkpoint_sha256,
+                    release=release,
+                ),
+                f"{release} checkpoint validation",
+            )
+            completed_results[release] = validated_result_count(
+                release=release,
+                checkpoint_sha256=checkpoint_sha256,
+                validation=validation,
+            )
+            if completed_results[release] < config["expected_results"]:
+                selected_release = release
+                selected_validation = validation
+                break
+        if selected_release is None:
+            if arguments.release != "auto":
+                selected_release = arguments.release
+                selected_validation = validation
+            else:
+                combined_validation = run_json(
+                    validation_command(
+                        checkpoint=checkpoint,
+                        checkpoint_sha256=checkpoint_sha256,
+                        release="j13",
+                        combined=True,
+                    ),
+                    "complete campaign validation",
+                )
+                plan = build_campaign_complete_plan(
+                    checkpoint=checkpoint,
+                    checkpoint_sha256=checkpoint_sha256,
+                    completed_results=completed_results,
+                    combined_validation=combined_validation,
+                )
+                emit_plan(plan, arguments.output)
+                return 0
+        if selected_validation is None:  # pragma: no cover - defensive invariant
+            raise PlanningError("release selection produced no validation evidence")
         powershell = shutil.which("powershell.exe") or shutil.which("powershell")
         if powershell is None:
             raise PlanningError("PowerShell is required to query runner allowance")
@@ -262,20 +454,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "high-memory allowance query",
         )
         plan = build_resume_plan(
-            release=arguments.release,
+            release=selected_release,
             checkpoint=checkpoint,
             checkpoint_sha256=checkpoint_sha256,
-            validation=validation,
+            validation=selected_validation,
             allowance=allowance,
             max_session_wall_seconds=arguments.max_session_wall_seconds,
             boundary_guard_seconds=arguments.boundary_guard_seconds,
         )
-        output = json.dumps(plan, indent=2, sort_keys=True) + "\n"
-        if arguments.output is not None:
-            destination = arguments.output.resolve()
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(output, encoding="utf-8", newline="\n")
-        print(output, end="")
+        emit_plan(plan, arguments.output)
         return 0
     except (OSError, PlanningError) as error:
         print(f"error: {error}", file=sys.stderr)

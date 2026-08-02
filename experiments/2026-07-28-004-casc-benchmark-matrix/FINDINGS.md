@@ -424,17 +424,25 @@ until the explicit UTC boundary, then reruns mutable repository and provider
 preflights. The independent service ceiling is 14,700 seconds.
 
 [`plan_next_casc_resume.py`](plan_next_casc_resume.py) is the nonmutating handoff
-for later slices. It invokes the streaming validator without a caller-supplied
-count, queries `linode-runner allowance --required-seconds` for the complete
-service ceiling, rejects mismatched schemas, archive/contract/release identities,
-active managed hosts, inconsistent duration decisions, complete releases, and
-boundaries too far away for the controller's 24-hour guard, then emits the exact
-argument vector to arm. On the current checkpoint it independently reproduced
-965 retained results and the existing 2026-08-02 05:00:10 UTC invocation. The
-ignored plan captured at provider time 02:07:25 UTC has SHA-256
+for later slices. Its default `auto` mode lazily invokes the streaming validator
+without a caller-supplied count in campaign order, selects the first incomplete
+release, and crosses from J13 to CASC-2025 only after observing J13's exact 2,700
+result boundary. It reports `campaign_complete` without a provider query only
+after validating both exact release boundaries and reproducing the embedded
+4,251-problem, 8,502-result combined report with all 66 contextual CSVs; an
+explicit release remains available for diagnosis. For a continuation it queries
+`linode-runner allowance --required-seconds` for the complete service ceiling,
+archive/contract/release identities, active managed hosts, inconsistent duration
+decisions, and boundaries too far away for the controller's 24-hour guard, then
+emits the exact argument vector to arm. On the current legacy checkpoint, lazy
+validation stops at incomplete J13 without requiring the intentionally absent
+untouched CASC-2025 summary. It independently reproduced 965 retained results and
+the existing 2026-08-02 05:00:10 UTC invocation. The ignored plan captured at
+provider time 02:07:25 UTC has SHA-256
 `1263d1f07bc095607b5194776994b793436534aa9c726f196feb18a147319cc7`;
-four focused tests cover the guarded boundary, complete-release stop, wrong
-duration, and inconsistent allowance decisions.
+eleven focused tests cover guarded boundaries, release transition and campaign
+completion, malformed validation structure, wrong durations, and inconsistent
+allowance decisions.
 
 ## CASC-2025 continuation readiness
 
