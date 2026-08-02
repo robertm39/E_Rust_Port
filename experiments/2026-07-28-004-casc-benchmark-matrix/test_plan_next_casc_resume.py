@@ -80,8 +80,20 @@ class ResumePlanningTests(unittest.TestCase):
         }
         return validation
 
-    def run_main(self, responses: list[object]) -> tuple[int, dict, object, object]:
+    def run_main(
+        self,
+        responses: list[object],
+        extra_arguments: list[str] | None = None,
+    ) -> tuple[int, dict, object, object]:
         output = io.StringIO()
+        arguments = [
+            "--checkpoint",
+            str(self.CHECKPOINT),
+            "--checkpoint-sha256",
+            self.SHA256,
+        ]
+        if extra_arguments is not None:
+            arguments.extend(extra_arguments)
         with (
             patch.object(PLANNER, "run_json", side_effect=responses) as runner,
             patch.object(
@@ -91,14 +103,7 @@ class ResumePlanningTests(unittest.TestCase):
             ) as which,
             redirect_stdout(output),
         ):
-            status = PLANNER.main(
-                [
-                    "--checkpoint",
-                    str(self.CHECKPOINT),
-                    "--checkpoint-sha256",
-                    self.SHA256,
-                ]
-            )
+            status = PLANNER.main(arguments)
         return status, json.loads(output.getvalue()), runner, which
 
     def run_main_error(
@@ -252,6 +257,22 @@ class ResumePlanningTests(unittest.TestCase):
         self.assertEqual(runner.call_count, 3)
         which.assert_called_once()
 
+    def test_inspect_only_reports_j13_without_allowance(self) -> None:
+        status, value, runner, which = self.run_main(
+            [
+                self.validation(965),
+                PLANNER.PlanningError("not the outer release"),
+            ],
+            ["--inspect-only"],
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(value["kind"], "umlaut-casc-checkpoint-state")
+        self.assertEqual(value["release"], "j13")
+        self.assertEqual(value["outer_release"], "j13")
+        self.assertEqual(value["checkpoint"]["completed_results"], 965)
+        self.assertEqual(runner.call_count, 2)
+        which.assert_not_called()
+
     def test_auto_mode_transitions_to_casc2025(self) -> None:
         status, value, runner, which = self.run_main(
             [
@@ -272,6 +293,30 @@ class ResumePlanningTests(unittest.TestCase):
         manifest_index = combined_command.index("--manifest") + 1
         self.assertIn("casc_2026_manifest.jsonl", combined_command[manifest_index])
         which.assert_called_once()
+
+    def test_inspect_only_reports_cross_release_transition(self) -> None:
+        status, value, runner, which = self.run_main(
+            [
+                self.validation(2700),
+                PLANNER.PlanningError("not the outer release"),
+                self.combined_validation(
+                    selected_release="j13",
+                    j13=2700,
+                    casc2025=0,
+                ),
+            ],
+            ["--inspect-only"],
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(value["release"], "casc2025")
+        self.assertEqual(value["outer_release"], "j13")
+        self.assertEqual(value["checkpoint"]["completed_results"], 0)
+        self.assertEqual(
+            value["campaign_completed_results"],
+            {"j13": 2700, "casc2025": 0},
+        )
+        self.assertEqual(runner.call_count, 3)
+        which.assert_not_called()
 
     def test_auto_mode_continues_casc2025_from_its_outer_inventory(self) -> None:
         status, value, runner, which = self.run_main(

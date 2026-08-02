@@ -442,7 +442,8 @@ emits the exact argument vector to arm. On the current checkpoint it independent
 reproduced 965 retained results and the existing 2026-08-02 05:00:10 UTC
 invocation. The ignored plan captured at provider time 02:07:25 UTC has SHA-256
 `1263d1f07bc095607b5194776994b793436534aa9c726f196feb18a147319cc7`;
-15 focused tests cover guarded boundaries, both outer-run continuations, release
+17 focused tests cover guarded boundaries, inspection without an allowance query,
+both outer-run continuations, release
 transition, campaign completion, ambiguous inventories, malformed or inconsistent
 validation, illegal campaign ordering, and allowance decisions. The real legacy
 combined bridge now reports per-release counts `CASC-J13=965` and `CASC-2025=0`
@@ -450,6 +451,17 @@ while reproducing combined-summary SHA-256 `d325fa2d...`. Final combined validat
 selects CASC-2025 so its selected run matches the 5,802-path outer inventory; it
 reconstructs constituent runs in the canonical report order and spelling,
 `CASC-2025` then `CASC-J13`, rather than reusing campaign order or internal keys.
+
+Future [`resume_j13_checkpoint.ps1`](resume_j13_checkpoint.ps1) invocations call
+the planner's `--inspect-only` mode before returning a dry-run plan or making any
+provider mutation. The controller requires the requested release, initial count,
+release boundary, checkpoint path, and archive hash to match that state. A
+scheduled execution repeats the inspection after waking and after its clean-main
+check, closing the gap where a direct or stale invocation could provision before
+discovering a campaign mismatch remotely. The real J13 dry run reports outer
+release `j13` and count 965; a premature CASC-2025 request at zero results is
+rejected locally. Armed PID 20052 predates this change but was
+already created from the exact validated 965-result plan and remains unchanged.
 
 ## CASC-2025 continuation readiness
 

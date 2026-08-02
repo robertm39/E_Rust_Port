@@ -112,6 +112,7 @@ $j13RunRoot = "/opt/e-rust-port/casc-runs/$j13RunName"
 $combinedSummary = "/opt/e-rust-port/casc-runs/combined-summary.json"
 $runnerPath = Join-Path $repoRoot "linode-runner.ps1"
 $validatorPath = Join-Path $PSScriptRoot "validate_casc_checkpoint.py"
+$plannerPath = Join-Path $PSScriptRoot "plan_next_casc_resume.py"
 $manifestPath = Join-Path (
     $repoRoot
 ) "benchmarks\$($releaseConfig.manifest_file)"
@@ -168,6 +169,9 @@ if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $validatorPath -PathType Leaf)) {
     throw "Checkpoint validator is missing: $validatorPath"
 }
+if (-not (Test-Path -LiteralPath $plannerPath -PathType Leaf)) {
+    throw "Checkpoint campaign planner is missing: $plannerPath"
+}
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "CASC manifest is missing: $manifestPath"
 }
@@ -202,6 +206,59 @@ if ($PSBoundParameters.ContainsKey("NotBeforeUtc")) {
     }
 }
 
+function Invoke-CampaignInspector {
+    $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $python -PathType Leaf) {
+        $pythonPrefix = @("-u")
+    }
+    else {
+        $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
+        if ($null -ne $pythonCommand) {
+            $python = $pythonCommand.Source
+            $pythonPrefix = @("-3", "-u")
+        }
+        else {
+            $pythonCommand = Get-Command python -ErrorAction Stop
+            $python = $pythonCommand.Source
+            $pythonPrefix = @("-u")
+        }
+    }
+    $output = & $python @pythonPrefix $plannerPath `
+        --checkpoint $checkpointPath `
+        --checkpoint-sha256 $CheckpointSha256 `
+        --max-session-wall-seconds $MaxSessionWallSeconds `
+        --inspect-only 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw (
+            "Checkpoint campaign inspection failed: " +
+            (($output | ForEach-Object { [string]$_ }) -join "`n")
+        )
+    }
+    try {
+        $state = (($output | ForEach-Object { [string]$_ }) -join "`n") |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Checkpoint campaign inspector did not emit valid JSON"
+    }
+    if (
+        [int]$state.schema_version -ne 1 -or
+        [string]$state.kind -ne "umlaut-casc-checkpoint-state" -or
+        [string]$state.status -ne "resume_candidate" -or
+        [string]$state.release -ne $Release -or
+        [string]$state.checkpoint.path -ne $checkpointPath -or
+        [string]$state.checkpoint.sha256 -ne $CheckpointSha256 -or
+        [int]$state.checkpoint.completed_results -ne $ExpectedInitialResults -or
+        [int]$state.checkpoint.expected_results -ne $expectedTotalResults
+    ) {
+        throw (
+            "Requested release/count does not match validated campaign state"
+        )
+    }
+    return $state
+}
+
 $plan = [ordered]@{
     schema_version = 1
     kind = "umlaut-casc-guarded-resume-plan"
@@ -232,6 +289,11 @@ $plan = [ordered]@{
         }
     }
 }
+$campaignState = Invoke-CampaignInspector
+$plan.checkpoint["outer_release"] = [string]$campaignState.outer_release
+$plan.checkpoint["campaign_completed_results"] = (
+    $campaignState.campaign_completed_results
+)
 if (-not $Execute) {
     $plan | ConvertTo-Json -Depth 5
     Write-Host "Inputs verified. Pass -Execute to provision and resume."
@@ -261,6 +323,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($null -ne $worktreeStatus -and @($worktreeStatus).Count -gt 0) {
     throw "Guarded CASC resumes require a clean worktree"
 }
+$null = Invoke-CampaignInspector
 
 $artifactRoot = Join-Path $repoRoot ".artifacts\casc-benchmark"
 [IO.Directory]::CreateDirectory($artifactRoot) | Out-Null

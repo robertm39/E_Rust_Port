@@ -411,6 +411,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-sha256", required=True)
     parser.add_argument("--max-session-wall-seconds", type=int, default=14400)
     parser.add_argument("--boundary-guard-seconds", type=int, default=10)
+    parser.add_argument(
+        "--inspect-only",
+        action="store_true",
+        help="validate campaign state without querying provider allowance",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
@@ -430,8 +435,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise PlanningError("--checkpoint-sha256 must be lowercase hex")
         selected_release: str
         selected_count: int
+        outer_release: str
+        campaign_completed_results: dict[str, int]
         if arguments.release != "auto":
             selected_release = arguments.release
+            outer_release = selected_release
             selected_validation = run_json(
                 validation_command(
                     checkpoint=checkpoint,
@@ -445,6 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 checkpoint_sha256=checkpoint_sha256,
                 validation=selected_validation,
             )
+            campaign_completed_results = {selected_release: selected_count}
         else:
             valid_outer_releases: dict[str, tuple[dict[str, Any], int]] = {}
             validation_failures: dict[str, str] = {}
@@ -486,6 +495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ):
                 selected_release = outer_release
                 selected_count = outer_count
+                campaign_completed_results = {outer_release: outer_count}
             else:
                 combined_validation = run_json(
                     validation_command(
@@ -527,6 +537,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return 0
                 selected_release = incomplete_releases[0]
                 selected_count = completed_results[selected_release]
+                campaign_completed_results = completed_results
+        if arguments.inspect_only:
+            state = {
+                "schema_version": 1,
+                "kind": "umlaut-casc-checkpoint-state",
+                "status": "resume_candidate",
+                "release": selected_release,
+                "outer_release": outer_release,
+                "checkpoint": {
+                    "path": str(checkpoint),
+                    "sha256": checkpoint_sha256,
+                    "completed_results": selected_count,
+                    "expected_results": RELEASES[selected_release][
+                        "expected_results"
+                    ],
+                },
+                "campaign_completed_results": campaign_completed_results,
+            }
+            emit_plan(state, arguments.output)
+            return 0
         powershell = shutil.which("powershell.exe") or shutil.which("powershell")
         if powershell is None:
             raise PlanningError("PowerShell is required to query runner allowance")
