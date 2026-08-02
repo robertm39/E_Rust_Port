@@ -8,8 +8,11 @@ param(
     [string]$CheckpointSha256,
 
     [Parameter(Mandatory = $true)]
-    [ValidateRange(1, 2699)]
+    [ValidateRange(0, 5801)]
     [int]$ExpectedInitialResults,
+
+    [ValidateSet("j13", "casc2025")]
+    [string]$Release = "j13",
 
     [ValidateRange(60, 14400)]
     [int]$MaxSessionWallSeconds = 14400,
@@ -25,17 +28,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$expectedContract = (
-    "9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676"
-)
-$expectedContractFile = (
-    "4a66c48124cdfb89da5c17ac87229e599ae2dffd92976c0ff89804d362bc6075"
-)
 $sourceSnapshot = (
     "88bd4fb2010ede33d8f2dd4e6f60957751a0b3183375c57516a6fe06810efa10"
-)
-$corpusSha256 = (
-    "ab89485b9d00b00e1098a3ab3184e47d10e59978320dca1f541480320e2a7fdc"
 )
 $umlautSha256 = (
     "8c093b91e7e0de5f37d2f8066199f9b57aaea3a1041f9fa9eb21d116ae1decda"
@@ -43,16 +37,70 @@ $umlautSha256 = (
 $vampireSha256 = (
     "3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665"
 )
-$runRoot = "/opt/e-rust-port/casc-runs/casc-j13-2026-089e06c8-v2"
 $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+$releaseConfig = switch ($Release) {
+    "j13" {
+        [ordered]@{
+            contract = (
+                "9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676"
+            )
+            contract_file = (
+                "4a66c48124cdfb89da5c17ac87229e599ae2dffd92976c0ff89804d362bc6075"
+            )
+            corpus_file = "casc_2026_corpus.tar.gz"
+            corpus_sha256 = (
+                "ab89485b9d00b00e1098a3ab3184e47d10e59978320dca1f541480320e2a7fdc"
+            )
+            manifest_file = "casc_2026_manifest.jsonl"
+            run_name = "casc-j13-2026-089e06c8-v2"
+            checkpoint_prefix = "j13-checkpoint"
+            service_prefix = "casc-j13-v2-resume"
+            session_prefix = "j13-resume"
+            expected_total_results = 2700
+        }
+        break
+    }
+    "casc2025" {
+        [ordered]@{
+            contract = (
+                "e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa"
+            )
+            contract_file = (
+                "f895aa07141b091060f3ee46d28f91abd6f484f3ad690630af08a7dbe34284c5"
+            )
+            corpus_file = "casc_2025_corpus.tar.gz"
+            corpus_sha256 = (
+                "efcebc55298d4c6770113c095e8cefdd77b9e8cbe3afa3078201f541893d1a7d"
+            )
+            manifest_file = "casc_2025_manifest.jsonl"
+            run_name = "casc30-2025-089e06c8-v2"
+            checkpoint_prefix = "casc2025-checkpoint"
+            service_prefix = "casc2025-v2-resume"
+            session_prefix = "casc2025-resume"
+            expected_total_results = 5802
+        }
+        break
+    }
+}
+$expectedContract = [string]$releaseConfig.contract
+$expectedContractFile = [string]$releaseConfig.contract_file
+$corpusSha256 = [string]$releaseConfig.corpus_sha256
+$runName = [string]$releaseConfig.run_name
+$runRoot = "/opt/e-rust-port/casc-runs/$runName"
+$checkpointPrefix = [string]$releaseConfig.checkpoint_prefix
+$servicePrefix = [string]$releaseConfig.service_prefix
+$sessionPrefix = [string]$releaseConfig.session_prefix
+$expectedTotalResults = [int]$releaseConfig.expected_total_results
 $runnerPath = Join-Path $repoRoot "linode-runner.ps1"
 $validatorPath = Join-Path $PSScriptRoot "validate_casc_checkpoint.py"
-$manifestPath = Join-Path $repoRoot "benchmarks\casc_2026_manifest.jsonl"
+$manifestPath = Join-Path (
+    $repoRoot
+) "benchmarks\$($releaseConfig.manifest_file)"
 $corpusPath = Join-Path (
     $repoRoot
-) ".artifacts\casc-benchmark\casc_2026_corpus.tar.gz"
+) ".artifacts\casc-benchmark\$($releaseConfig.corpus_file)"
 $umlautPath = Join-Path (
     $repoRoot
 ) ".artifacts\casc-benchmark\umlaut-4e87dac3"
@@ -71,9 +119,9 @@ else {
 $checkpointName = [IO.Path]::GetFileName($checkpointPath)
 if (
     $checkpointName -notmatch
-    "^j13-checkpoint-[0-9]{6}-[0-9]{6}-[0-9a-f]{4}\.tar\.gz$"
+    "^(j13|casc2025)-checkpoint-[0-9]{6}-[0-9]{6}-[0-9a-f]{4}\.tar\.gz$"
 ) {
-    throw "Checkpoint filename does not identify a guarded J13 run: $checkpointName"
+    throw "Checkpoint filename does not identify a guarded CASC run: $checkpointName"
 }
 $checkpointRootName = $checkpointName.Substring(0, $checkpointName.Length - 7)
 $CheckpointSha256 = $CheckpointSha256.ToLowerInvariant()
@@ -104,7 +152,13 @@ if (-not (Test-Path -LiteralPath $validatorPath -PathType Leaf)) {
     throw "Checkpoint validator is missing: $validatorPath"
 }
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-    throw "J13 manifest is missing: $manifestPath"
+    throw "CASC manifest is missing: $manifestPath"
+}
+if ($ExpectedInitialResults -ge $expectedTotalResults) {
+    throw (
+        "ExpectedInitialResults must be smaller than the $Release total " +
+        "$expectedTotalResults"
+    )
 }
 $null = Get-VerifiedSha256 -Path $checkpointPath -Expected $CheckpointSha256
 $null = Get-VerifiedSha256 -Path $corpusPath -Expected $corpusSha256
@@ -133,11 +187,13 @@ if ($PSBoundParameters.ContainsKey("NotBeforeUtc")) {
 
 $plan = [ordered]@{
     schema_version = 1
-    kind = "umlaut-casc-j13-guarded-resume-plan"
+    kind = "umlaut-casc-guarded-resume-plan"
+    release = $Release
     checkpoint = [ordered]@{
         path = $checkpointPath
         sha256 = $CheckpointSha256
         expected_results = $ExpectedInitialResults
+        total_results = $expectedTotalResults
     }
     immutable_inputs = [ordered]@{
         contract_id = $expectedContract
@@ -179,14 +235,14 @@ if ($null -ne $notBefore -and [DateTimeOffset]::UtcNow -lt $notBefore) {
 
 $branch = (& git -C $repoRoot branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0 -or $branch -ne "main") {
-    throw "Guarded J13 resumes require the clean main branch; found '$branch'"
+    throw "Guarded CASC resumes require the clean main branch; found '$branch'"
 }
 $worktreeStatus = & git -C $repoRoot status --porcelain=v1
 if ($LASTEXITCODE -ne 0) {
     throw "Could not inspect the git worktree"
 }
 if ($null -ne $worktreeStatus -and @($worktreeStatus).Count -gt 0) {
-    throw "Guarded J13 resumes require a clean worktree"
+    throw "Guarded CASC resumes require a clean worktree"
 }
 
 $artifactRoot = Join-Path $repoRoot ".artifacts\casc-benchmark"
@@ -194,7 +250,7 @@ $artifactRoot = Join-Path $repoRoot ".artifacts\casc-benchmark"
 $controllerId = (
     [DateTimeOffset]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-$PID"
 )
-$logPath = Join-Path $artifactRoot "j13-resume-controller-$controllerId.log"
+$logPath = Join-Path $artifactRoot "$Release-resume-controller-$controllerId.log"
 if (Test-Path -LiteralPath $logPath) {
     throw "Refusing to overwrite controller log: $logPath"
 }
@@ -261,7 +317,7 @@ function Invoke-CheckpointValidator {
         --archive $Archive `
         --archive-sha256 $ArchiveSha256 `
         --manifest $manifestPath `
-        --run-name "casc-j13-2026-089e06c8-v2" `
+        --run-name $runName `
         --contract-id $expectedContract `
         --expected-results $ResultCount 2>&1
     $exitCode = $LASTEXITCODE
@@ -328,7 +384,7 @@ try {
         throw "An active managed runner already exists"
     }
     if (@($initialStatus.parked).Count -ne 0) {
-        throw "Parked managed runners must be resolved before a J13 resume"
+        throw "Parked managed runners must be resolved before a CASC resume"
     }
 
     Invoke-Runner @("check", "--high-memory") | Out-Null
@@ -358,18 +414,20 @@ try {
         throw "Managed runner is not a ready canonical high-memory host"
     }
 
-    $sessionId = "j13-resume-$runId"
-    $unit = "casc-j13-v2-resume-$runId.service"
-    $remoteCheckpointInput = "/root/input-j13-checkpoint.tar.gz"
-    $remoteCorpus = "/root/casc_2026_corpus.tar.gz"
+    $sessionId = "$sessionPrefix-$runId"
+    $unit = "$servicePrefix-$runId.service"
+    $remoteCheckpointInput = "/root/input-casc-checkpoint.tar.gz"
+    $remoteCorpus = "/root/$($releaseConfig.corpus_file)"
+    $remoteManifestRelative = "benchmarks/$($releaseConfig.manifest_file)"
+    $remoteManifest = "/opt/e-rust-port/source/$remoteManifestRelative"
     $remoteUmlaut = "/root/umlaut-4e87dac3"
     $remoteVampire = "/root/vampire-5.0.1"
-    $remoteRestoreRoot = "/root/j13-restore"
-    $remoteCheckpointRoot = "/root/j13-checkpoint-$runId"
+    $remoteRestoreRoot = "/root/casc-restore"
+    $remoteCheckpointRoot = "/root/$checkpointPrefix-$runId"
     $remoteArchive = "$remoteCheckpointRoot.tar.gz"
     $localArchive = Join-Path (
         $artifactRoot
-    ) "j13-checkpoint-$runId.tar.gz"
+    ) "$checkpointPrefix-$runId.tar.gz"
     if (Test-Path -LiteralPath $localArchive) {
         throw "Refusing to overwrite checkpoint output: $localArchive"
     }
@@ -392,18 +450,18 @@ test ! -e '$remoteRestoreRoot'
 test ! -e '/opt/e-rust-port/casc-runs'
 install -d -m 0700 '$remoteRestoreRoot'
 cd /opt/e-rust-port/source
-python3 tools/casc_benchmark/corpus_archive.py extract --archive '$remoteCorpus' --destination /opt/e-rust-port/source --manifest benchmarks/casc_2026_manifest.jsonl
+python3 tools/casc_benchmark/corpus_archive.py extract --archive '$remoteCorpus' --destination /opt/e-rust-port/source --manifest '$remoteManifestRelative'
 tar -xzf '$remoteCheckpointInput' -C '$remoteRestoreRoot'
 cd '$remoteRestoreRoot/$checkpointRootName'
 sha256sum -c SHA256SUMS
 tar -xzf casc-runs.tar.gz -C /opt/e-rust-port
 printf '%s  %s\n' '$expectedContractFile' '$runRoot/contract.json' | sha256sum -c -
 cd /opt/e-rust-port/source
-python3 tools/casc_benchmark/report.py --manifest benchmarks/casc_2026_manifest.jsonl --run-root '$runRoot' --allow-partial
+python3 tools/casc_benchmark/report.py --manifest '$remoteManifestRelative' --run-root '$runRoot' --allow-partial
 grep -Fq '"contract_id":"$expectedContract"' '$runRoot/summary.json'
 grep -Fq '"completed_results":$ExpectedInitialResults' '$runRoot/summary.json'
 test "`$(find '$runRoot/results' -type f -name '*.json' | wc -l)" -eq '$ExpectedInitialResults'
-python3 tools/casc_benchmark/batch.py --manifest benchmarks/casc_2026_manifest.jsonl --problem-root /opt/e-rust-port/source --output-root '$runRoot' --umlaut-binary '$remoteUmlaut' --vampire-binary '$remoteVampire' --solvers both --cores 8 --memory-limit-mib 131072 --pids-limit 512 --vampire-seed 1 --wall-grace-seconds 0.25 --terminate-grace-seconds 1 --session-id 'j13-preflight-$runId' --source-snapshot-sha256 '$sourceSnapshot' --runner-label '$runnerLabel' --runner-run-id '$runId' --linode-id '$linodeId' --verify-only
+python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --problem-root /opt/e-rust-port/source --output-root '$runRoot' --umlaut-binary '$remoteUmlaut' --vampire-binary '$remoteVampire' --solvers both --cores 8 --memory-limit-mib 131072 --pids-limit 512 --vampire-seed 1 --wall-grace-seconds 0.25 --terminate-grace-seconds 1 --session-id '$Release-preflight-$runId' --source-snapshot-sha256 '$sourceSnapshot' --runner-label '$runnerLabel' --runner-run-id '$runId' --linode-id '$linodeId' --verify-only
 "@
     Invoke-Runner @("exec", "--", $preflightCommand) | Out-Null
     Write-ResumeLog "preflight_passed initial_results=$ExpectedInitialResults"
@@ -412,7 +470,7 @@ python3 tools/casc_benchmark/batch.py --manifest benchmarks/casc_2026_manifest.j
         "/usr/bin/python3",
         "/opt/e-rust-port/source/tools/casc_benchmark/batch.py",
         "--manifest",
-        "/opt/e-rust-port/source/benchmarks/casc_2026_manifest.jsonl",
+        $remoteManifest,
         "--problem-root",
         "/opt/e-rust-port/source",
         "--output-root",
@@ -530,7 +588,7 @@ python3 tools/casc_benchmark/batch.py --manifest benchmarks/casc_2026_manifest.j
 set -Eeuo pipefail
 if pgrep -f '^/root/umlaut-4e87dac3( |$)' || pgrep -f '^/root/vampire-5.0.1( |$)' || pgrep -f '^/usr/bin/python3 /opt/e-rust-port/source/tools/casc_benchmark/batch.py( |$)'; then echo 'solver or batch process remains' >&2; exit 1; fi
 cd /opt/e-rust-port/source
-python3 tools/casc_benchmark/report.py --manifest benchmarks/casc_2026_manifest.jsonl --run-root '$runRoot' --allow-partial
+python3 tools/casc_benchmark/report.py --manifest '$remoteManifestRelative' --run-root '$runRoot' --allow-partial
 grep -Fq '"contract_id":"$expectedContract"' '$runRoot/summary.json'
 test ! -e '$remoteCheckpointRoot'
 install -d -m 0700 '$remoteCheckpointRoot'
@@ -546,11 +604,11 @@ systemctl list-units --all --plain --no-legend 'umlaut-casc-*' > '$remoteCheckpo
 test ! -s '$remoteCheckpointRoot/cgroup-residue.txt'
 test ! -s '$remoteCheckpointRoot/solver-units.txt'
 sha256sum '$remoteCorpus' '$remoteCheckpointInput' '$remoteUmlaut' '$remoteVampire' > '$remoteCheckpointRoot/input-sha256s.txt'
-printf '%s\n' 'controller_id=$controllerId' 'parent_checkpoint=$checkpointName' 'parent_checkpoint_sha256=$CheckpointSha256' 'initial_results=$ExpectedInitialResults' 'max_session_wall_seconds=$MaxSessionWallSeconds' 'runner_id=$runId' 'runner_label=$runnerLabel' 'linode_id=$linodeId' 'unit=$unit' 'initial_main_pid=$expectedMainPid' 'initial_invocation_id=$expectedInvocation' > '$remoteCheckpointRoot/resume-metadata.txt'
+printf '%s\n' 'controller_id=$controllerId' 'release=$Release' 'parent_checkpoint=$checkpointName' 'parent_checkpoint_sha256=$CheckpointSha256' 'initial_results=$ExpectedInitialResults' 'expected_total_results=$expectedTotalResults' 'max_session_wall_seconds=$MaxSessionWallSeconds' 'runner_id=$runId' 'runner_label=$runnerLabel' 'linode_id=$linodeId' 'unit=$unit' 'initial_main_pid=$expectedMainPid' 'initial_invocation_id=$expectedInvocation' > '$remoteCheckpointRoot/resume-metadata.txt'
 cd '$remoteCheckpointRoot'
 sha256sum -- * > SHA256SUMS
 cd /root
-tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArchive' 'j13-checkpoint-$runId'
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArchive' '$checkpointPrefix-$runId'
 "@
     Invoke-Runner @("exec", "--", $captureCommand) | Out-Null
 
@@ -576,7 +634,10 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArch
     if (-not [int]::TryParse($finalCountText.Trim(), [ref]$finalCount)) {
         throw "Could not parse the final result count"
     }
-    if ($finalCount -le $ExpectedInitialResults -or $finalCount -gt 2700) {
+    if (
+        $finalCount -le $ExpectedInitialResults -or
+        $finalCount -gt $expectedTotalResults
+    ) {
         throw (
             "Final result count is outside the guarded range: " +
             "$finalCount after $ExpectedInitialResults"

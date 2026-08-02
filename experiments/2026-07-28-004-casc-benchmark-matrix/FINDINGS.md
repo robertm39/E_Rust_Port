@@ -302,11 +302,15 @@ benchmarks at a `1.0821091514x` aggregate Rust/C wall-time ratio.
 ## Guarded checkpoint controller
 
 [`resume_j13_checkpoint.ps1`](resume_j13_checkpoint.ps1) turns each remaining
-J13 slice into one fail-closed operation. Its default mode performs no network
-or provider mutation: it hash-checks the explicit parent checkpoint, corpus,
-frozen Umlaut, and pinned Vampire, then emits the proposed immutable contract
-and resource limits. `-Execute` additionally requires a clean `main`, checks
-the guarded high-memory allowance immediately before acquisition, and pins the
+J13 slice and the subsequent CASC-2025 slices into one fail-closed operation.
+The transitional filename is retained while the armed J13 process is alive;
+`-Release j13` is the default, while `-Release casc2025` selects the already
+verified 2025 contract, corpus, manifest, 5,802-result boundary, service name,
+and checkpoint prefix. The default mode performs no network or provider
+mutation: it hash-checks the explicit parent checkpoint, release corpus, frozen
+Umlaut, and pinned Vampire, then emits the proposed immutable contract and
+resource limits. `-Execute` additionally requires a clean `main`, checks the
+guarded high-memory allowance immediately before acquisition, and pins the
 fresh runner, Linode, transient-service PID, invocation, and zero-restart
 identity.
 
@@ -340,6 +344,7 @@ The validated next invocation is:
 
 ```powershell
 .\experiments\2026-07-28-004-casc-benchmark-matrix\resume_j13_checkpoint.ps1 `
+    -Release j13 `
     -CheckpointArchive .artifacts\casc-benchmark\j13-checkpoint-260801-092150-91c1.tar.gz `
     -CheckpointSha256 1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b `
     -ExpectedInitialResults 965 `
@@ -373,7 +378,11 @@ Vampire, and source snapshot used by J13. Completing it requires 5,802 result
 records: 1,000 SLH problems use 15 CPU seconds, 500 problems use 120 wall
 seconds, 1,300 use 240 wall seconds, and 101 use 480 wall seconds. No fresh
 contract construction or mixed binary is needed after J13 completes; the
-successor combined checkpoint is the canonical CASC-2025 starting point.
+successor combined checkpoint is the canonical CASC-2025 starting point. The
+release-aware controller's nonmutating plans independently hash-verified both
+release configurations. Regenerating the partial 2025 report at this untouched
+boundary also passed with the expected 0/5,802 count, zero results for each
+solver, and contract ID `e71fc642...`.
 
 ## Remaining acceptance boundary
 
