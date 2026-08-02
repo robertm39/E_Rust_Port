@@ -299,6 +299,43 @@ Clippy, native and Windows GNU x64 builds, clean FOL/HO C builds, 50 main and
 216 tool comparisons with zero unexpected mismatches, and ten behavior-exact
 benchmarks at a `1.0821091514x` aggregate Rust/C wall-time ratio.
 
+## Guarded checkpoint controller
+
+[`resume_j13_checkpoint.ps1`](resume_j13_checkpoint.ps1) turns each remaining
+J13 slice into one fail-closed operation. Its default mode performs no network
+or provider mutation: it hash-checks the explicit parent checkpoint, corpus,
+frozen Umlaut, and pinned Vampire, then emits the proposed immutable contract
+and resource limits. `-Execute` additionally requires a clean `main`, checks
+the guarded high-memory allowance immediately before acquisition, and pins the
+fresh runner, Linode, transient-service PID, invocation, and zero-restart
+identity.
+
+Before launching a prover, the controller safely restores both archives,
+checks the checkpoint's inner hashes and contract file, regenerates the partial
+report to validate every retained result and stdout/stderr hash, checks the
+expected retained-result count, and runs the batch harness's canonical host,
+corpus, binary, cgroup, and contract preflight. It monitors at most once per
+minute. After service exit it rejects process, cgroup, and unit residue,
+regenerates the report, embeds parentage and lifecycle evidence in a normalized
+checkpoint, downloads and hash-checks that checkpoint, and only then deletes
+the managed Linode and firewall. A launch-uncertain or capture-failed runner is
+retained for recovery; a failure before any launch attempt is deleted.
+
+The validated next invocation is:
+
+```powershell
+.\experiments\2026-07-28-004-casc-benchmark-matrix\resume_j13_checkpoint.ps1 `
+    -CheckpointArchive .artifacts\casc-benchmark\j13-checkpoint-260801-092150-91c1.tar.gz `
+    -CheckpointSha256 1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b `
+    -ExpectedInitialResults 965 `
+    -MaxSessionWallSeconds 14400 `
+    -Execute
+```
+
+The 14,400-second batch guard reserves the projected 20-minute bank after the
+2026-08-02 05:00 UTC accounting boundary for provisioning, transfer, report,
+capture, and teardown. The independent service ceiling is 14,700 seconds.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
