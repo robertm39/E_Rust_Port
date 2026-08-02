@@ -215,6 +215,174 @@ class ExplicitTransferTests(unittest.TestCase):
         )
         self.assertEqual(payload["type"], "g7-highmem-8")
 
+    @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+    def test_powershell_wrapper_preserves_successful_native_stderr(self):
+        wrapper = MODULE_PATH.parents[2] / "linode-runner.ps1"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            copied_wrapper = root / "linode-runner.ps1"
+            copied_wrapper.write_bytes(wrapper.read_bytes())
+            controller = root / "tools" / "linode-runner" / "linode_runner.py"
+            controller.parent.mkdir(parents=True)
+            controller.write_text(
+                "import sys\n"
+                "print('controller stdout')\n"
+                "print('Created symlink test', file=sys.stderr)\n",
+                encoding="utf-8",
+            )
+            local_app_data = root / "local-app-data"
+            secret = local_app_data / "E-Rust-Port" / "linode-token.dpapi"
+            secret.parent.mkdir(parents=True)
+            setup = (
+                "$secure=ConvertTo-SecureString 'test-token' "
+                "-AsPlainText -Force; $secure | ConvertFrom-SecureString | "
+                f"Set-Content -LiteralPath '{secret}'; "
+                f"& '{copied_wrapper}' status; exit $LASTEXITCODE"
+            )
+            environment = os.environ.copy()
+            environment["LOCALAPPDATA"] = str(local_app_data)
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    setup,
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("controller stdout", result.stdout)
+        self.assertIn("Created symlink test", result.stderr)
+
+
+class InterruptedBootstrapRecoveryTests(unittest.TestCase):
+    def state(self) -> dict:
+        return {
+            "run_id": "260802-050016-76d3",
+            "label": "e-rust-codex-260802-050016-76d3",
+            "lifecycle": "active",
+            "phase": "bootstrapping",
+            "linode_id": 102066534,
+            "firewall_id": 100863634,
+            "ipv4": "192.0.2.8",
+            "type": runner.HIGH_MEMORY_TYPE,
+            "region": "us-ord",
+            "image": "linode/ubuntu24.04",
+        }
+
+    def api(self, state: dict) -> FakeApi:
+        return FakeApi(
+            {
+                f"/linode/instances/{state['linode_id']}": {
+                    "label": state["label"],
+                    "status": "running",
+                    "ipv4": [state["ipv4"]],
+                    "type": state["type"],
+                    "region": state["region"],
+                    "image": state["image"],
+                },
+                f"/networking/firewalls/{state['firewall_id']}": {
+                    "label": state["label"],
+                    "status": "enabled",
+                },
+            }
+        )
+
+    def test_recovery_revalidates_live_and_remote_state_before_ready(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            lock = root / "lifecycle.lock"
+            state = self.state()
+            write_json(current, state)
+            maintenance = package_maintenance_state()
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", lock),
+                mock.patch.object(runner, "wait_for_ssh") as wait_for_ssh,
+                mock.patch.object(
+                    runner,
+                    "read_package_maintenance_state",
+                    return_value=maintenance,
+                ) as read_maintenance,
+            ):
+                recovered = runner.recover_interrupted_bootstrap(
+                    self.api(state), state
+                )
+
+            saved = json.loads(current.read_text(encoding="utf-8"))
+        self.assertEqual(recovered["phase"], "ready")
+        self.assertEqual(saved, recovered)
+        self.assertEqual(saved["package_maintenance"], maintenance)
+        wait_for_ssh.assert_called_once_with(state)
+        read_maintenance.assert_called_once_with(state)
+
+    def test_recovery_rejects_live_identity_mismatch_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+            api = self.api(state)
+            api.resources[f"/linode/instances/{state['linode_id']}"][
+                "label"
+            ] = "somebody-elses-runner"
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(runner, "wait_for_ssh") as wait_for_ssh,
+                mock.patch.object(
+                    runner, "read_package_maintenance_state"
+                ) as read_maintenance,
+                self.assertRaisesRegex(runner.RunnerError, "live label"),
+            ):
+                runner.recover_interrupted_bootstrap(api, state)
+
+            saved = json.loads(current.read_text(encoding="utf-8"))
+        self.assertEqual(saved, state)
+        wait_for_ssh.assert_not_called()
+        read_maintenance.assert_not_called()
+
+    def test_recovery_rechecks_saved_identity_before_committing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+
+            def replace_active(_state: dict) -> dict:
+                changed = dict(state)
+                changed["linode_id"] += 1
+                write_json(current, changed)
+                return package_maintenance_state()
+
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(runner, "wait_for_ssh"),
+                mock.patch.object(
+                    runner,
+                    "read_package_maintenance_state",
+                    side_effect=replace_active,
+                ),
+                self.assertRaisesRegex(runner.RunnerError, "identity changed"),
+            ):
+                runner.recover_interrupted_bootstrap(self.api(state), state)
+
+            saved = json.loads(current.read_text(encoding="utf-8"))
+        self.assertEqual(saved["linode_id"], state["linode_id"] + 1)
+        self.assertNotIn("package_maintenance", saved)
+
+    def test_recover_command_is_explicit(self):
+        self.assertEqual(runner.parser().parse_args(["recover"]).command, "recover")
+
     def test_catalog_accepts_both_supported_plans(self):
         class CatalogApi:
             def get(self, path):

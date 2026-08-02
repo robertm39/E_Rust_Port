@@ -6,6 +6,7 @@ param(
         "init-reaper",
         "check",
         "up",
+        "recover",
         "sync",
         "upload",
         "download",
@@ -159,8 +160,20 @@ function Sync-LocalReaperTasks {
 }
 
 if ($Command -eq "init") {
-    & $python @pythonPrefix $controller $Command @RunnerArguments
-    exit $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell promotes native stderr to NativeCommandError
+        # records.  The Python controller's exit code is authoritative; tools
+        # such as systemctl may emit harmless progress on stderr while still
+        # succeeding.
+        $ErrorActionPreference = "Continue"
+        & $python @pythonPrefix $controller $Command @RunnerArguments
+        $runnerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    exit $runnerExitCode
 }
 
 if ($Command -eq "init-reaper") {
@@ -191,8 +204,17 @@ try {
             $reaperTokenPointer
         )
     }
-    & $python @pythonPrefix $controller $Command @RunnerArguments
-    $runnerExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Preserve native stderr without letting Windows PowerShell terminate
+        # this wrapper before the controller can report its real exit code.
+        $ErrorActionPreference = "Continue"
+        & $python @pythonPrefix $controller $Command @RunnerArguments
+        $runnerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 }
 finally {
     Remove-Item Env:LINODE_TOKEN -ErrorAction SilentlyContinue

@@ -417,6 +417,21 @@ for it to disappear, and then removes the firewall.
 
 ## Failure recovery and stale-resource cleanup
 
+If the local PowerShell controller is interrupted while a fresh runner is in
+the `bootstrapping` phase, first inspect `status`.  When the exact saved Linode
+and firewall are still live and the remote bootstrap completed, recover the
+allocation without reprovisioning:
+
+```powershell
+.\linode-runner.ps1 recover
+```
+
+Recovery is fail-closed: it accepts only an active `bootstrapping` state,
+revalidates the saved resource labels, live statuses, address, plan metadata,
+SSH reachability, and the complete package-maintenance quiescence record before
+changing the local phase to `ready`.  If any check fails, use `down --now` and
+start a new guarded lifecycle instead of editing runner state by hand.
+
 The default `run` behavior parks resources after success, command failure, or
 interruption. If parking cannot be guarded, it falls back to deletion. If
 cleanup itself fails, the local state is retained and the controller prints an

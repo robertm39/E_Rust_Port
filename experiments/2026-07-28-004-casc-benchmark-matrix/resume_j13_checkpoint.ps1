@@ -22,6 +22,9 @@ param(
 
     [string]$NotBeforeUtc,
 
+    [ValidatePattern("^[0-9]{6}-[0-9]{6}-[0-9a-f]{4}$")]
+    [string]$ExistingRunnerRunId,
+
     [switch]$Execute
 )
 
@@ -288,6 +291,14 @@ $plan = [ordered]@{
             $notBefore.ToString("O")
         }
     }
+    existing_runner_run_id = if (
+        $PSBoundParameters.ContainsKey("ExistingRunnerRunId")
+    ) {
+        $ExistingRunnerRunId
+    }
+    else {
+        $null
+    }
 }
 $campaignState = Invoke-CampaignInspector
 $plan.checkpoint["outer_release"] = [string]$campaignState.outer_release
@@ -440,6 +451,11 @@ function Get-RunnerStatus {
 }
 
 function Get-RequiredHighMemoryAllowance {
+    param(
+        [ValidateRange(0, 1)]
+        [int]$ExpectedActiveManagedHighMemory = 0
+    )
+
     $raw = Invoke-Runner @(
         "allowance",
         "--required-seconds",
@@ -455,9 +471,13 @@ function Get-RequiredHighMemoryAllowance {
         [int]$allowance.schema_version -ne 1 -or
         [string]$allowance.kind -ne "umlaut-linode-high-memory-allowance" -or
         [int]$allowance.required_seconds -ne $serviceRuntimeSeconds -or
-        -not [bool]$allowance.required_start_available_now -or
         [int]$allowance.remaining_seconds -lt $serviceRuntimeSeconds -or
-        [int]$allowance.active_managed_high_memory -ne 0
+        [int]$allowance.active_managed_high_memory -ne
+            $ExpectedActiveManagedHighMemory -or
+        (
+            $ExpectedActiveManagedHighMemory -eq 0 -and
+            -not [bool]$allowance.required_start_available_now
+        )
     ) {
         throw (
             "Trusted allowance does not permit the required " +
@@ -506,23 +526,53 @@ $expectedMainPid = $null
 try {
     Write-ResumeLog "controller_started"
     $initialStatus = Get-RunnerStatus
-    if ($null -ne $initialStatus.active) {
-        throw "An active managed runner already exists"
-    }
     if (@($initialStatus.parked).Count -ne 0) {
         throw "Parked managed runners must be resolved before a CASC resume"
     }
-
-    $allowance = Get-RequiredHighMemoryAllowance
-    Write-ResumeLog (
-        "allowance_verified observed_at=$($allowance.observed_at_utc) " +
-        "remaining_seconds=$($allowance.remaining_seconds)"
+    $useExistingRunner = $PSBoundParameters.ContainsKey(
+        "ExistingRunnerRunId"
     )
-    Invoke-Runner @("check", "--high-memory") | Out-Null
-    Invoke-Runner @("up", "--high-memory") | Out-Null
-    $runnerAcquired = $true
+    if ($useExistingRunner) {
+        $status = $initialStatus
+        $candidate = $status.active
+        if (
+            $null -eq $candidate -or
+            [string]$candidate.run_id -ne $ExistingRunnerRunId -or
+            [string]$candidate.label -ne
+                "e-rust-codex-$ExistingRunnerRunId" -or
+            [string]$candidate.lifecycle -ne "active" -or
+            [string]$candidate.type -ne "g7-highmem-8" -or
+            [string]$candidate.phase -ne "ready" -or
+            [string]$candidate.live_linode_status -ne "running" -or
+            [string]$candidate.live_firewall_status -ne "enabled"
+        ) {
+            throw "Requested existing runner is not the exact ready host"
+        }
+        $allowance = Get-RequiredHighMemoryAllowance `
+            -ExpectedActiveManagedHighMemory 1
+        Write-ResumeLog (
+            "allowance_verified_existing observed_at=" +
+            "$($allowance.observed_at_utc) remaining_seconds=" +
+            "$($allowance.remaining_seconds)"
+        )
+        $runnerAcquired = $true
+        Write-ResumeLog "existing_runner_claimed run_id=$ExistingRunnerRunId"
+    }
+    else {
+        if ($null -ne $initialStatus.active) {
+            throw "An active managed runner already exists"
+        }
+        $allowance = Get-RequiredHighMemoryAllowance
+        Write-ResumeLog (
+            "allowance_verified observed_at=$($allowance.observed_at_utc) " +
+            "remaining_seconds=$($allowance.remaining_seconds)"
+        )
+        Invoke-Runner @("check", "--high-memory") | Out-Null
+        Invoke-Runner @("up", "--high-memory") | Out-Null
+        $runnerAcquired = $true
+        $status = Get-RunnerStatus
+    }
 
-    $status = Get-RunnerStatus
     $active = $status.active
     if ($null -eq $active) {
         throw "High-memory runner acquisition did not create active state"

@@ -521,6 +521,54 @@ zero. Its official context totals exactly 66 CSVs (40 CASC-2025 plus 26 J13)
 and preserves the warning that local runs do not reproduce official entries or
 the StarExec environment.
 
+## Interrupted launch recovery
+
+The 2026-08-02 05:00 UTC guarded launch provisioned high-memory runner
+`260802-050016-76d3` (Linode `102066534`), but Windows PowerShell promoted the
+successful bootstrap's informational `systemctl mask` stderr into a terminating
+`NativeCommandError`.  The benchmark controller exited before recording the
+ready runner even though the remote bootstrap completed.  The question was
+whether the exact paid allocation could be recovered without trusting partial
+local state or manually editing its identity record.
+
+The controller now treats the Python process exit code as authoritative while
+preserving native stderr, and `linode-runner recover` provides a narrow,
+fail-closed recovery path.  It accepts only the `active`/`bootstrapping` phase,
+revalidates the exact saved Linode and firewall labels, running/enabled states,
+IPv4 address, available plan metadata, and SSH reachability, then reads and
+validates the complete remote package-maintenance record.  It rechecks the saved
+identity under the lifecycle lock immediately before committing `phase=ready`.
+The CASC resume controller can explicitly claim that exact ready run ID; normal
+invocations still reject every pre-existing active runner.
+
+Exact local validation and recovery commands were:
+
+```powershell
+python tools/linode-runner/test_linode_runner.py
+.\linode-runner.ps1 exec -- "date -u; ... read-only bootstrap checks ..."
+.\linode-runner.ps1 recover
+.\linode-runner.ps1 status
+.\experiments\2026-07-28-004-casc-benchmark-matrix\resume_j13_checkpoint.ps1 `
+    -CheckpointArchive .artifacts\casc-benchmark\j13-checkpoint-260801-092150-91c1.tar.gz `
+    -CheckpointSha256 1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b `
+    -ExpectedInitialResults 965 -MaxSessionWallSeconds 13500 `
+    -ExistingRunnerRunId 260802-050016-76d3
+```
+
+All 79 runner tests passed, including a Windows subprocess regression that emits
+the original successful-stderr shape, live-identity mismatch rejection, and an
+identity-swap-before-commit falsification.  The real recovery reproduced remote
+quiescence-record SHA-256
+`627fe62915ac1c5de2e688c22f2110207f00f9311df542a989d058dacecdb345`;
+all four apt maintenance units were inactive and masked, and live Linode and
+firewall states were `running` and `enabled`.  The exact existing-runner dry run
+then reproduced the 965-result J13 campaign boundary.  The replacement session
+is reduced to 13,500 batch seconds plus a 300-second service guard so the already
+consumed bootstrap time remains inside the bank-adjusted provider allowance.
+This recovery proves only the host bootstrap and controller handoff; the matrix
+successor remains subject to the normal service, capture, and streaming archive
+validators.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

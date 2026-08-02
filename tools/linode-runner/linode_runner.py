@@ -1946,8 +1946,9 @@ def validate_package_maintenance_record(value: object) -> dict[str, Any]:
     return value
 
 
-def bootstrap(state: dict[str, Any]) -> dict[str, Any]:
-    ssh_command(state, bootstrap_script(), timeout=1800)
+def read_package_maintenance_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Read and validate the bootstrap completion record from a runner."""
+
     result = ssh_command(
         state,
         f"cat {shlex.quote(str(PACKAGE_MAINTENANCE_RECORD))}",
@@ -1966,6 +1967,94 @@ def bootstrap(state: dict[str, Any]) -> dict[str, Any]:
         "sha256": hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
         "record": validated,
     }
+
+
+def bootstrap(state: dict[str, Any]) -> dict[str, Any]:
+    ssh_command(state, bootstrap_script(), timeout=1800)
+    return read_package_maintenance_state(state)
+
+
+def recover_interrupted_bootstrap(
+    api: LinodeApi,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Promote an interrupted local bootstrap only after full revalidation."""
+
+    if state.get("lifecycle") != "active":
+        raise RunnerError(
+            "Only an active runner can recover an interrupted bootstrap"
+        )
+    if state.get("phase") != "bootstrapping":
+        raise RunnerError(
+            "Runner recovery requires phase 'bootstrapping'; "
+            f"found {state.get('phase')!r}"
+        )
+    label = state.get("label")
+    if not isinstance(label, str):
+        raise RunnerError("Interrupted runner has no saved label")
+    try:
+        linode_id = int(state["linode_id"])
+        firewall_id = int(state["firewall_id"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RunnerError(
+            "Interrupted runner has incomplete saved resource identity"
+        ) from error
+
+    live_linode = api.get(
+        f"/linode/instances/{linode_id}", allow_404=True
+    )
+    if live_linode is None:
+        raise RunnerError("Interrupted runner Linode no longer exists")
+    require_managed_label(live_linode.get("label"), label, "Linode")
+    if live_linode.get("status") != "running":
+        raise RunnerError(
+            "Interrupted runner Linode is not running: "
+            f"{live_linode.get('status')!r}"
+        )
+    live_firewall = api.get(
+        f"/networking/firewalls/{firewall_id}", allow_404=True
+    )
+    if live_firewall is None:
+        raise RunnerError("Interrupted runner firewall no longer exists")
+    require_managed_label(live_firewall.get("label"), label, "firewall")
+    if live_firewall.get("status") != "enabled":
+        raise RunnerError(
+            "Interrupted runner firewall is not enabled: "
+            f"{live_firewall.get('status')!r}"
+        )
+    live_addresses = live_linode.get("ipv4")
+    if (
+        not isinstance(live_addresses, list)
+        or state.get("ipv4") not in live_addresses
+    ):
+        raise RunnerError(
+            "Interrupted runner IPv4 does not match the live Linode"
+        )
+    for field in ("type", "region", "image"):
+        live_value = live_linode.get(field)
+        if live_value is not None and live_value != state.get(field):
+            raise RunnerError(
+                f"Interrupted runner {field} does not match live Linode: "
+                f"{live_value!r}"
+            )
+
+    wait_for_ssh(state)
+    package_maintenance = read_package_maintenance_state(state)
+    with lifecycle_lock():
+        current = load_current()
+        if (
+            current.get("phase") != "bootstrapping"
+            or current.get("linode_id") != linode_id
+            or current.get("firewall_id") != firewall_id
+            or current.get("label") != label
+        ):
+            raise RunnerError(
+                "Active runner identity changed during bootstrap recovery"
+            )
+        current["package_maintenance"] = package_maintenance
+        current["phase"] = "ready"
+        save_current(current)
+    return current
 
 
 def provision(
@@ -2770,6 +2859,10 @@ def parser() -> argparse.ArgumentParser:
     add_provision_arguments(check)
     up = commands.add_parser("up", help="reuse or provision a compatible runner")
     add_provision_arguments(up)
+    commands.add_parser(
+        "recover",
+        help="revalidate and recover an interrupted bootstrap",
+    )
     commands.add_parser("sync", help="upload a fresh current-worktree snapshot")
     upload = commands.add_parser(
         "upload", help="upload one explicit local artifact to the active runner"
@@ -2852,6 +2945,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(
                 f"Runner ready ({'reused' if reused else 'new'}): {state['label']} "
+                f"(Linode {state['linode_id']}, {state['ipv4']})"
+            )
+        elif arguments.command == "recover":
+            state = recover_interrupted_bootstrap(api, load_current())
+            print(
+                f"Runner recovered: {state['label']} "
                 f"(Linode {state['linode_id']}, {state['ipv4']})"
             )
         elif arguments.command == "sync":
