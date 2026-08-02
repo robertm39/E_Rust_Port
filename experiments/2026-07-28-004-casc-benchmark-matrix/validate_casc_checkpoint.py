@@ -178,6 +178,8 @@ def copy_validated_inner_archive(
         if inner_name not in members:
             raise ValidationError("outer archive has no casc-runs.tar.gz")
         actual_hashes: dict[str, str] = {}
+        captured: dict[str, bytes] = {}
+        captured_names = {"result-count.txt", "result-files.txt"}
         for name, member in members.items():
             if name == sums_name:
                 continue
@@ -189,6 +191,14 @@ def copy_validated_inner_archive(
                 if name == inner_name:
                     with inner_path.open("wb") as output:
                         actual_hashes[short_name] = copy_and_hash(source, output)
+                elif short_name in captured_names:
+                    data = source.read(JSON_LIMIT + 1)
+                    if len(data) != member.size or len(data) > JSON_LIMIT:
+                        raise ValidationError(
+                            f"outer evidence is too large: {short_name}"
+                        )
+                    captured[short_name] = data
+                    actual_hashes[short_name] = hashlib.sha256(data).hexdigest()
                 else:
                     actual_hashes[short_name] = sha256_stream(source)
         for name, expected in sums.items():
@@ -219,6 +229,7 @@ def copy_validated_inner_archive(
             "member_count": len(members),
             "inner_bytes": members[inner_name].size,
             "inner_sha256": actual_hashes["casc-runs.tar.gz"],
+            "captured": captured,
         }
 
 
@@ -257,6 +268,48 @@ def read_inner_archive(
                     raise ValidationError(f"short inner member read: {name}")
                 structured[name] = data
     return hashes, structured, member_count
+
+
+def validate_outer_result_inventory(
+    *,
+    captured: dict[str, bytes],
+    hashes: dict[str, str],
+    run_name: str,
+    expected_results: int,
+) -> dict[str, Any]:
+    required = {"result-count.txt", "result-files.txt"}
+    if not required.issubset(captured):
+        raise ValidationError("outer archive lacks result inventory evidence")
+    try:
+        count_text = captured["result-count.txt"].decode("utf-8")
+        files_text = captured["result-files.txt"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("outer result inventory is not UTF-8") from error
+    count_match = re.fullmatch(r"\s*(\d+)\s+\S*result-files\.txt\s*", count_text)
+    if count_match is None:
+        raise ValidationError("outer result count has an invalid format")
+    recorded_count = int(count_match.group(1))
+    lines = files_text.splitlines()
+    if any(not line or line != line.strip() for line in lines):
+        raise ValidationError("outer result inventory has an invalid path line")
+    if len(set(lines)) != len(lines):
+        raise ValidationError("outer result inventory contains duplicate paths")
+    nested_prefix = f"casc-runs/{run_name}/results/"
+    expected_paths = {
+        f"/opt/e-rust-port/{name}"
+        for name in hashes
+        if name.startswith(nested_prefix) and name.endswith(".json")
+    }
+    if set(lines) != expected_paths:
+        raise ValidationError("outer result inventory differs from nested results")
+    if recorded_count != len(lines) or recorded_count != expected_results:
+        raise ValidationError("outer result count differs from validated results")
+    return {
+        "result_count": recorded_count,
+        "result_files_sha256": hashlib.sha256(
+            captured["result-files.txt"]
+        ).hexdigest(),
+    }
 
 
 def safe_result_key(index: int, record: dict[str, Any]) -> str:
@@ -764,6 +817,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 contract_id=contract_id,
                 expected_results=arguments.expected_results,
             )
+        outer_result_inventory = validate_outer_result_inventory(
+            captured=outer["captured"],
+            hashes=hashes,
+            run_name=arguments.run_name,
+            expected_results=arguments.expected_results,
+        )
         result = {
             "schema_version": 1,
             "kind": "umlaut-casc-checkpoint-validation",
@@ -773,6 +832,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "sha256": actual_archive_hash,
                 "root": root,
                 "outer_regular_member_count": outer["member_count"],
+                "result_inventory": outer_result_inventory,
             },
             "inner_archive": {
                 "bytes": outer["inner_bytes"],

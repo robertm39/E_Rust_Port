@@ -352,11 +352,16 @@ report byte-for-byte at SHA-256
 `d325fa2d64945952d7a5f713e54d2e7ff0a9a858743688ff0a7bf285810955ad`.
 The legacy-compatible path also retains the same contract, inner-archive,
 per-release report, and 483/482 solver hashes recorded above; wrong outer hashes
-and wrong expected-result counts are rejected. Eight focused unit tests
-additionally reject absolute, parent-traversing, backslash, duplicate, linked,
-unchecksummed, contract-tampered, orphan-artifact, missing-summary-without-opt-in,
-and inconsistent combined fixtures while accepting internally consistent
-single- and two-release runs.
+and wrong expected-result counts are rejected. The validator now also parses the
+outer `wc` record and full absolute result-file inventory and requires their
+count and path set to equal the selected nested run; the 965-result checkpoint's
+inventory hash is
+`b4d5e32777b02b7ca512a72c64de05736ec979ff5f783c1e754bd5dc33a5ef1d`.
+Nine focused unit tests additionally reject absolute, parent-traversing,
+backslash, duplicate, linked, unchecksummed, contract-tampered, orphan-artifact,
+missing-summary-without-opt-in, inconsistent combined, and mismatched outer
+inventory fixtures while accepting internally consistent single- and
+two-release runs.
 
 The validated next invocation is:
 

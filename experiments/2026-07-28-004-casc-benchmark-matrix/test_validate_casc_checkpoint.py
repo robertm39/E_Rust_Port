@@ -51,6 +51,33 @@ class PathAndInventoryTests(unittest.TestCase):
                 with self.assertRaises(VALIDATOR.ValidationError):
                     VALIDATOR.regular_members(archive)
 
+    def test_reconciles_outer_result_inventory(self) -> None:
+        nested = "casc-runs/run/results/umlaut/foo/result.json"
+        absolute = f"/opt/e-rust-port/{nested}"
+        hashes = {nested: "a" * 64}
+        captured = {
+            "result-count.txt": b"1 /root/checkpoint/result-files.txt\n",
+            "result-files.txt": f"{absolute}\n".encode(),
+        }
+        evidence = VALIDATOR.validate_outer_result_inventory(
+            captured=captured,
+            hashes=hashes,
+            run_name="run",
+            expected_results=1,
+        )
+        self.assertEqual(evidence["result_count"], 1)
+
+        captured["result-count.txt"] = b"2 result-files.txt\n"
+        with self.assertRaisesRegex(
+            VALIDATOR.ValidationError, "count differs"
+        ):
+            VALIDATOR.validate_outer_result_inventory(
+                captured=captured,
+                hashes=hashes,
+                run_name="run",
+                expected_results=1,
+            )
+
             linked = Path(temporary) / "linked.tar"
             with tarfile.open(linked, "w") as archive:
                 link = tarfile.TarInfo("root/link")
