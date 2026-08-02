@@ -329,12 +329,15 @@ The validated next invocation is:
     -CheckpointSha256 1f51d7cc69744d14e36564048e02b2a77d4451e23248bb8900cf4b632020590b `
     -ExpectedInitialResults 965 `
     -MaxSessionWallSeconds 14400 `
+    -NotBeforeUtc 2026-08-02T05:00:10Z `
     -Execute
 ```
 
 The 14,400-second batch guard reserves the projected 20-minute bank after the
 2026-08-02 05:00 UTC accounting boundary for provisioning, transfer, report,
-capture, and teardown. The independent service ceiling is 14,700 seconds.
+capture, and teardown. The controller sleeps in intervals of at most 60 seconds
+until the explicit UTC boundary, then reruns mutable repository and provider
+preflights. The independent service ceiling is 14,700 seconds.
 
 ## Remaining acceptance boundary
 

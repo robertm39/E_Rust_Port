@@ -17,6 +17,8 @@ param(
     [ValidateRange(10, 60)]
     [int]$PollSeconds = 60,
 
+    [string]$NotBeforeUtc,
+
     [switch]$Execute
 )
 
@@ -101,6 +103,26 @@ $null = Get-VerifiedSha256 -Path $corpusPath -Expected $corpusSha256
 $null = Get-VerifiedSha256 -Path $umlautPath -Expected $umlautSha256
 $null = Get-VerifiedSha256 -Path $vampirePath -Expected $vampireSha256
 
+$notBefore = $null
+if ($PSBoundParameters.ContainsKey("NotBeforeUtc")) {
+    try {
+        $notBefore = [DateTimeOffset]::Parse(
+            $NotBeforeUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            (
+                [Globalization.DateTimeStyles]::AssumeUniversal -bor
+                [Globalization.DateTimeStyles]::AdjustToUniversal
+            )
+        )
+    }
+    catch {
+        throw "NotBeforeUtc must be an ISO-8601 timestamp: $NotBeforeUtc"
+    }
+    if ($notBefore -gt [DateTimeOffset]::UtcNow.AddHours(24)) {
+        throw "NotBeforeUtc must be no more than 24 hours in the future"
+    }
+}
+
 $plan = [ordered]@{
     schema_version = 1
     kind = "umlaut-casc-j13-guarded-resume-plan"
@@ -121,12 +143,30 @@ $plan = [ordered]@{
         max_session_wall_seconds = $MaxSessionWallSeconds
         service_runtime_seconds = $serviceRuntimeSeconds
         poll_seconds = $PollSeconds
+        not_before_utc = if ($null -eq $notBefore) {
+            $null
+        }
+        else {
+            $notBefore.ToString("O")
+        }
     }
 }
 if (-not $Execute) {
     $plan | ConvertTo-Json -Depth 5
     Write-Host "Inputs verified. Pass -Execute to provision and resume."
     exit 0
+}
+
+if ($null -ne $notBefore -and [DateTimeOffset]::UtcNow -lt $notBefore) {
+    Write-Host "Inputs verified. Waiting until $($notBefore.ToString('O'))."
+    while ([DateTimeOffset]::UtcNow -lt $notBefore) {
+        $remainingSeconds = [Math]::Ceiling(
+            ($notBefore - [DateTimeOffset]::UtcNow).TotalSeconds
+        )
+        $sleepSeconds = [Math]::Min(60, [Math]::Max(1, $remainingSeconds))
+        Start-Sleep -Seconds $sleepSeconds
+    }
+    Write-Host "Not-before boundary reached; rerunning mutable preflights."
 }
 
 $branch = (& git -C $repoRoot branch --show-current).Trim()
