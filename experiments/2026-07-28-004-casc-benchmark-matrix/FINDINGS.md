@@ -341,16 +341,22 @@ and path, hashes every referenced stdout/stderr artifact, rejects orphan
 artifacts, and reconciles solver/result counts with the regenerated report and
 session runner identities. Future controller invocations additionally name both
 immutable releases: the local gate then requires `combined-summary.json`, fully
-validates both run roots, matches its embedded per-release reports byte-for-byte
-at the JSON-value level, and reconciles the campaign problem/result/solver and
-official-CSV totals before resource deletion. The opt-in combined gate preserves
-the single-release invocation used by the already armed controller. The existing
-965-result checkpoint passes that legacy-compatible path with the same contract,
-inner-archive, report, and 483/482 solver hashes recorded above; wrong outer
-hashes and wrong expected-result counts are rejected. Seven focused unit tests
+validates both run roots, exactly reconstructs both per-release reports and the
+combined report from validated records, and requires the embedded JSON values to
+match before resource deletion. The opt-in `--combined-output` bridge preserves
+the single-release invocation used by the already armed controller while
+allowing its legacy-shaped successor to reconstruct a missing zero-result release
+summary and combined report without archive extraction. On the existing
+965-result checkpoint that bridge independently reproduced the prior combined
+report byte-for-byte at SHA-256
+`d325fa2d64945952d7a5f713e54d2e7ff0a9a858743688ff0a7bf285810955ad`.
+The legacy-compatible path also retains the same contract, inner-archive,
+per-release report, and 483/482 solver hashes recorded above; wrong outer hashes
+and wrong expected-result counts are rejected. Eight focused unit tests
 additionally reject absolute, parent-traversing, backslash, duplicate, linked,
-unchecksummed, contract-tampered, orphan-artifact, and inconsistent combined
-fixtures while accepting internally consistent single- and two-release runs.
+unchecksummed, contract-tampered, orphan-artifact, missing-summary-without-opt-in,
+and inconsistent combined fixtures while accepting internally consistent
+single- and two-release runs.
 
 The validated next invocation is:
 

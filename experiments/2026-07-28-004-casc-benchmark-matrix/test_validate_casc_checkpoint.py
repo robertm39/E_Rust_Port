@@ -78,6 +78,7 @@ class RunValidationTests(unittest.TestCase):
             "corpus": f"{run_name}-corpus",
             "problem_count": 1,
             "presentation": {"id": "fixture-presentation"},
+            "partition_counts": {"test": 1},
             "sources": {
                 "official_result_file_sha256": {"official.csv": "2" * 64}
             },
@@ -86,6 +87,9 @@ class RunValidationTests(unittest.TestCase):
             "record_type": "problem",
             "problem_id": problem_id,
             "category": "FOO",
+            "division": "FOF",
+            "holdout_split": "test",
+            "difficulty_band": "easy",
             "sha256": "1" * 64,
         }
         manifest = root / "manifest.jsonl"
@@ -100,6 +104,8 @@ class RunValidationTests(unittest.TestCase):
             "selected_problem_ids": [problem_id],
             "selected_problem_ids_sha256": selected_hash,
             "presentation_id": "fixture-presentation",
+            "canonical_full_selection": True,
+            "solvers": ["umlaut", "vampire"],
         }
         contract_id = hashlib.sha256(canonical_json(contract)).hexdigest()
         contract["contract_id"] = contract_id
@@ -110,21 +116,21 @@ class RunValidationTests(unittest.TestCase):
             "problem_id": problem_id,
             "problem_sha256": "1" * 64,
             "solver": "umlaut",
+            "classification": "solved",
+            "expected_status_match": True,
+            "final_szs_status": "Theorem",
+            "wall_seconds": 0.1,
+            "cpu_seconds": 0.1,
+            "peak_memory_mib": 1.0,
             "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
             "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         }
-        summary = {
-            "contract_id": contract_id,
-            "manifest_sha256": manifest_hash,
-            "completed_results": 1,
-            "expected_results": 2,
-            "missing_results": 1,
-            "complete": False,
-            "solvers": {
-                "umlaut": {"groups": {"overall": {"all": {"completed": 1}}}},
-                "vampire": {"groups": {"overall": {"all": {"completed": 0}}}},
-            },
-        }
+        summary = VALIDATOR.expected_run_report(
+            metadata,
+            [record],
+            contract,
+            {("umlaut", problem_id): result},
+        )
         session = {
             "contract_id": contract_id,
             "runner": {"label": "runner", "run_id": "run", "linode_id": 1},
@@ -186,6 +192,36 @@ class RunValidationTests(unittest.TestCase):
                     expected_results=1,
                 )
 
+    def test_reconstructs_missing_summary_only_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, hashes, structured, contract_id = self.make_fixture(
+                Path(temporary)
+            )
+            name = "casc-runs/fixture/summary.json"
+            del hashes[name]
+            del structured[name]
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "missing summary"
+            ):
+                VALIDATOR.validate_run(
+                    hashes=hashes,
+                    structured=structured,
+                    run_name="fixture",
+                    manifest_path=manifest,
+                    contract_id=contract_id,
+                    expected_results=1,
+                )
+            result = VALIDATOR.validate_run(
+                hashes=hashes,
+                structured=structured,
+                run_name="fixture",
+                manifest_path=manifest,
+                contract_id=contract_id,
+                expected_results=1,
+                allow_missing_summary=True,
+            )
+            self.assertFalse(result["summary_embedded"])
+
     def test_rejects_orphan_result_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest, hashes, structured, contract_id = self.make_fixture(
@@ -234,53 +270,7 @@ class RunValidationTests(unittest.TestCase):
                 )
                 for release, manifest, run_name, contract_id in specifications
             }
-            releases = {
-                release: {
-                    "corpus": runs[release]["corpus"],
-                    "manifest_sha256": runs[release]["manifest_sha256"],
-                    "contract_id": runs[release]["contract_id"],
-                    "official_csv_count": 1,
-                    "summary": json.loads(
-                        structured[f"casc-runs/{run_name}/summary.json"]
-                    ),
-                }
-                for release, _manifest, run_name, _contract_id in specifications
-            }
-            combined = {
-                "schema_version": 1,
-                "kind": "umlaut-casc-combined-benchmark-report",
-                "complete": False,
-                "targeted_problems": 2,
-                "expected_results": 4,
-                "completed_results": 2,
-                "missing_results": 2,
-                "official_context": {"csv_count": 2},
-                "releases": dict(sorted(releases.items())),
-                "solvers": {
-                    "umlaut": {
-                        "groups": {
-                            "overall": {
-                                "all": {
-                                    "targeted": 2,
-                                    "completed": 2,
-                                    "missing": 0,
-                                }
-                            }
-                        }
-                    },
-                    "vampire": {
-                        "groups": {
-                            "overall": {
-                                "all": {
-                                    "targeted": 2,
-                                    "completed": 0,
-                                    "missing": 2,
-                                }
-                            }
-                        }
-                    },
-                },
-            }
+            combined = VALIDATOR.expected_combined_report(specifications, runs)
             combined_name = "casc-runs/combined-summary.json"
             structured[combined_name] = canonical_json(combined)
             evidence = VALIDATOR.validate_combined_summary(
@@ -294,7 +284,7 @@ class RunValidationTests(unittest.TestCase):
 
             combined["releases"]["RIGHT"]["summary"]["completed_results"] = 0
             with self.assertRaisesRegex(
-                VALIDATOR.ValidationError, "release reports do not match"
+                VALIDATOR.ValidationError, "does not reproduce"
             ):
                 VALIDATOR.validate_combined_summary(
                     summary=combined,

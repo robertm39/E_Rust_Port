@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -18,6 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "casc_benchmark"))
 
 from manifest import ManifestError, load_manifest, sha256_file  # noqa: E402
+from report import (  # noqa: E402
+    REPORT_SCHEMA_VERSION,
+    overlap_summary,
+    solver_summary,
+)
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RUN_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
@@ -106,6 +112,10 @@ def parse_json(data: bytes, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValidationError(f"expected a JSON object in {name}")
     return value
+
+
+def canonical_json(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def parse_sha256s(data: bytes) -> dict[str, str]:
@@ -254,6 +264,44 @@ def safe_result_key(index: int, record: dict[str, Any]) -> str:
     return f"{index:04d}-{record['category'].lower()}-{suffix}"
 
 
+def expected_run_report(
+    metadata: dict[str, Any],
+    records: Sequence[dict[str, Any]],
+    contract: dict[str, Any],
+    results: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    solvers = sorted(contract["solvers"])
+    expected_results = len(records) * len(solvers)
+    missing_results = expected_results - len(results)
+    report: dict[str, Any] = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "kind": "umlaut-casc-benchmark-report",
+        "contract_id": contract["contract_id"],
+        "manifest_sha256": contract["manifest_sha256"],
+        "canonical_full_selection": contract["canonical_full_selection"],
+        "targeted_problems": len(records),
+        "expected_results": expected_results,
+        "completed_results": len(results),
+        "missing_results": missing_results,
+        "complete": missing_results == 0,
+        "official_context_warning": (
+            f"The checked-in CSVs for {metadata['corpus']} describe official "
+            "competition entries. This local pinned Vampire run is not claimed "
+            "to reproduce Vampire's official CASC configuration or StarExec "
+            "environment."
+        ),
+        "manifest_partition_counts": metadata["partition_counts"],
+        "solvers": {
+            solver: solver_summary(solver, records, results) for solver in solvers
+        },
+    }
+    if len(solvers) == 2:
+        report["overlap"] = overlap_summary(
+            solvers[0], solvers[1], records, results
+        )
+    return report
+
+
 def validate_run(
     *,
     hashes: dict[str, str],
@@ -262,6 +310,7 @@ def validate_run(
     manifest_path: Path,
     contract_id: str,
     expected_results: int,
+    allow_missing_summary: bool = False,
 ) -> dict[str, Any]:
     metadata, records = load_manifest(manifest_path)
     manifest_hash = sha256_file(manifest_path)
@@ -272,8 +321,10 @@ def validate_run(
     prefix = f"casc-runs/{run_name}/"
     contract_name = f"{prefix}contract.json"
     summary_name = f"{prefix}summary.json"
-    if contract_name not in structured or summary_name not in structured:
-        raise ValidationError("target run is missing contract.json or summary.json")
+    if contract_name not in structured:
+        raise ValidationError("target run is missing contract.json")
+    if summary_name not in structured and not allow_missing_summary:
+        raise ValidationError("target run is missing summary.json")
     contract = parse_json(structured[contract_name], contract_name)
     if contract.get("contract_id") != contract_id:
         raise ValidationError("target contract ID mismatch")
@@ -313,6 +364,7 @@ def validate_run(
             f"expected {expected_results} result records, found {len(result_names)}"
         )
     identities: set[tuple[str, str]] = set()
+    results: dict[tuple[str, str], dict[str, Any]] = {}
     expected_artifacts: set[str] = set()
     solver_counts: Counter[str] = Counter()
     for name in result_names:
@@ -344,6 +396,7 @@ def validate_run(
         if identity in identities:
             raise ValidationError(f"duplicate result identity: {identity}")
         identities.add(identity)
+        results[identity] = result
         solver_counts[solver] += 1
         base = name[: -len(".json")]
         for suffix, field in (
@@ -365,35 +418,27 @@ def validate_run(
     if present_artifacts != expected_artifacts:
         raise ValidationError("orphan or unreferenced result artifacts are present")
 
-    summary = parse_json(structured[summary_name], summary_name)
     expected_total = len(records) * 2
-    summary_checks = {
-        "contract_id": contract_id,
-        "manifest_sha256": manifest_hash,
-        "completed_results": expected_results,
-        "expected_results": expected_total,
-        "missing_results": expected_total - expected_results,
-        "complete": expected_results == expected_total,
-    }
-    for field, expected in summary_checks.items():
-        if summary.get(field) != expected:
-            raise ValidationError(f"summary has incompatible {field}")
-    for solver in ("umlaut", "vampire"):
-        solver_summary = summary.get("solvers", {}).get(solver)
-        if not isinstance(solver_summary, dict):
-            raise ValidationError(f"summary has no {solver} section")
-        completed = solver_summary.get("groups", {}).get("overall", {}).get(
-            "all", {}
-        ).get("completed")
-        if completed != solver_counts[solver]:
-            raise ValidationError(f"summary {solver} count mismatch")
+    expected_summary = expected_run_report(metadata, records, contract, results)
+    if summary_name in structured:
+        summary = parse_json(structured[summary_name], summary_name)
+        if summary != expected_summary:
+            raise ValidationError(
+                "summary does not reproduce from validated results"
+            )
+        summary_sha256 = hashes[summary_name]
+        summary_embedded = True
+    else:
+        summary = expected_summary
+        summary_sha256 = hashlib.sha256(canonical_json(summary)).hexdigest()
+        summary_embedded = False
 
     session_names = sorted(
         name
         for name in structured
         if name.startswith(f"{prefix}sessions/") and name.endswith(".json")
     )
-    if not session_names:
+    if not session_names and expected_results:
         raise ValidationError("target run has no session records")
     for name in session_names:
         session = parse_json(structured[name], name)
@@ -419,29 +464,94 @@ def validate_run(
         "missing_results": expected_total - expected_results,
         "result_counts": dict(sorted(solver_counts.items())),
         "session_count": len(session_names),
-        "summary_sha256": hashes[summary_name],
+        "summary_sha256": summary_sha256,
+        "summary_embedded": summary_embedded,
+        "_metadata": metadata,
+        "_records": records,
+        "_contract": contract,
+        "_results": results,
+        "_summary": summary,
     }
 
 
-def combined_result_counts(
-    summary: dict[str, Any],
-    releases: Sequence[str],
-) -> dict[str, int]:
-    release_values = summary.get("releases")
-    if not isinstance(release_values, dict) or set(release_values) != set(releases):
-        raise ValidationError("combined summary release set mismatch")
-    counts: dict[str, int] = {}
-    for release in releases:
-        value = release_values.get(release)
-        if not isinstance(value, dict) or not isinstance(value.get("summary"), dict):
-            raise ValidationError(f"combined summary has no {release} report")
-        count = value["summary"].get("completed_results")
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise ValidationError(
-                f"combined summary has invalid {release} result count"
-            )
-        counts[release] = count
-    return counts
+def public_run_evidence(run: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in run.items() if not key.startswith("_")}
+
+
+def expected_combined_report(
+    specifications: Sequence[tuple[str, Path, str, str]],
+    runs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    release_reports: dict[str, dict[str, Any]] = {}
+    combined_records: list[dict[str, Any]] = []
+    combined_results: dict[tuple[str, str], dict[str, Any]] = {}
+    expected_solvers: list[str] | None = None
+    official_csv_count = 0
+    for release, _manifest, _run_name, _contract_id in specifications:
+        run = runs[release]
+        contract = run["_contract"]
+        solvers = sorted(contract["solvers"])
+        if expected_solvers is None:
+            expected_solvers = solvers
+        elif solvers != expected_solvers:
+            raise ValidationError("combined runs have different solver sets")
+        for record in run["_records"]:
+            prefixed_id = f"{release}:{record['problem_id']}"
+            combined_record = dict(record)
+            combined_record["problem_id"] = prefixed_id
+            combined_record["release"] = release
+            combined_records.append(combined_record)
+            for solver in solvers:
+                result = run["_results"].get((solver, record["problem_id"]))
+                if result is None:
+                    continue
+                combined_result = dict(result)
+                combined_result["problem_id"] = prefixed_id
+                combined_result["release"] = release
+                combined_results[(solver, prefixed_id)] = combined_result
+        official_csv_count += run["official_csv_count"]
+        release_reports[release] = {
+            "corpus": run["corpus"],
+            "manifest_sha256": run["manifest_sha256"],
+            "contract_id": run["contract_id"],
+            "official_csv_count": run["official_csv_count"],
+            "summary": copy.deepcopy(run["_summary"]),
+        }
+
+    if expected_solvers is None:  # pragma: no cover - callers require two runs.
+        raise AssertionError("combined solver set was not initialized")
+    expected_results = len(combined_records) * len(expected_solvers)
+    missing_results = expected_results - len(combined_results)
+    value: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "umlaut-casc-combined-benchmark-report",
+        "complete": missing_results == 0,
+        "targeted_problems": len(combined_records),
+        "expected_results": expected_results,
+        "completed_results": len(combined_results),
+        "missing_results": missing_results,
+        "official_context": {
+            "csv_count": official_csv_count,
+            "warning": (
+                "Official result CSVs are contextual. Local Umlaut and pinned "
+                "Vampire runs are not claimed to reproduce official entries or "
+                "the StarExec environment."
+            ),
+        },
+        "releases": dict(sorted(release_reports.items())),
+        "solvers": {
+            solver: solver_summary(solver, combined_records, combined_results)
+            for solver in expected_solvers
+        },
+    }
+    if len(expected_solvers) == 2:
+        value["overlap"] = overlap_summary(
+            expected_solvers[0],
+            expected_solvers[1],
+            combined_records,
+            combined_results,
+        )
+    return value
 
 
 def validate_combined_summary(
@@ -451,77 +561,22 @@ def validate_combined_summary(
     specifications: Sequence[tuple[str, Path, str, str]],
     runs: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    expected_releases: dict[str, dict[str, Any]] = {}
-    total_problems = 0
-    total_expected = 0
-    total_completed = 0
-    official_csv_count = 0
-    solver_counts: Counter[str] = Counter()
-    for release, _manifest, run_name, _contract_id in specifications:
-        run = runs[release]
-        summary_name = f"casc-runs/{run_name}/summary.json"
-        if summary_name not in structured:
-            raise ValidationError(f"combined run has no summary: {run_name}")
-        run_summary = parse_json(structured[summary_name], summary_name)
-        expected_releases[release] = {
-            "corpus": run["corpus"],
-            "manifest_sha256": run["manifest_sha256"],
-            "contract_id": run["contract_id"],
-            "official_csv_count": run["official_csv_count"],
-            "summary": run_summary,
-        }
-        total_problems += run["problem_count"]
-        total_expected += run["expected_results"]
-        total_completed += run["completed_results"]
-        official_csv_count += run["official_csv_count"]
-        solver_counts.update(run["result_counts"])
-
-    checks = {
-        "schema_version": 1,
-        "kind": "umlaut-casc-combined-benchmark-report",
-        "complete": total_completed == total_expected,
-        "targeted_problems": total_problems,
-        "expected_results": total_expected,
-        "completed_results": total_completed,
-        "missing_results": total_expected - total_completed,
-    }
-    for field, expected in checks.items():
-        if summary.get(field) != expected:
-            raise ValidationError(f"combined summary has incompatible {field}")
-    if summary.get("releases") != dict(sorted(expected_releases.items())):
-        raise ValidationError("combined summary release reports do not match runs")
-    official = summary.get("official_context")
-    if not isinstance(official, dict) or official.get("csv_count") != (
-        official_csv_count
-    ):
-        raise ValidationError("combined summary official CSV count mismatch")
-    for solver in ("umlaut", "vampire"):
-        solver_summary = summary.get("solvers", {}).get(solver)
-        if not isinstance(solver_summary, dict):
-            raise ValidationError(f"combined summary has no {solver} section")
-        overall = solver_summary.get("groups", {}).get("overall", {}).get("all")
-        if not isinstance(overall, dict):
-            raise ValidationError(f"combined summary has no {solver} overall group")
-        solver_checks = {
-            "targeted": total_problems,
-            "completed": solver_counts[solver],
-            "missing": total_problems - solver_counts[solver],
-        }
-        if any(
-            overall.get(field) != expected
-            for field, expected in solver_checks.items()
-        ):
-            raise ValidationError(f"combined summary {solver} totals mismatch")
+    expected = expected_combined_report(specifications, runs)
+    if summary != expected:
+        raise ValidationError(
+            "combined summary does not reproduce from validated results"
+        )
     return {
         "summary_sha256": hashlib.sha256(
             structured["casc-runs/combined-summary.json"]
         ).hexdigest(),
-        "releases": sorted(expected_releases),
-        "targeted_problems": total_problems,
-        "expected_results": total_expected,
-        "completed_results": total_completed,
-        "missing_results": total_expected - total_completed,
-        "official_csv_count": official_csv_count,
+        "embedded": True,
+        "releases": sorted(runs),
+        "targeted_problems": expected["targeted_problems"],
+        "expected_results": expected["expected_results"],
+        "completed_results": expected["completed_results"],
+        "missing_results": expected["missing_results"],
+        "official_csv_count": expected["official_context"]["csv_count"],
     }
 
 
@@ -541,6 +596,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "require the embedded combined report and validate one constituent "
             "release; repeat for every combined release"
+        ),
+    )
+    parser.add_argument(
+        "--combined-output",
+        type=Path,
+        help=(
+            "write the exactly reconstructed combined report; this also permits "
+            "auditing a legacy checkpoint that predates its embedded report"
         ),
     )
     parser.add_argument("--output", type=Path)
@@ -607,6 +670,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             run_names = [arguments.run_name]
             selected_release = None
+        if arguments.combined_output is not None and not combined_specifications:
+            raise ValidationError("--combined-output requires --combined-run inputs")
         actual_archive_hash = sha256_file(archive)
         if actual_archive_hash != expected_archive_hash:
             raise ValidationError("checkpoint archive SHA-256 mismatch")
@@ -621,13 +686,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         combined = None
         if combined_specifications:
             combined_name = "casc-runs/combined-summary.json"
-            if combined_name not in structured:
+            if (
+                combined_name not in structured
+                and arguments.combined_output is None
+            ):
                 raise ValidationError("checkpoint has no combined-summary.json")
-            combined_summary = parse_json(structured[combined_name], combined_name)
-            result_counts = combined_result_counts(
-                combined_summary,
-                [value[0] for value in combined_specifications],
-            )
+            result_counts = {
+                release: sum(
+                    name.startswith(f"casc-runs/{run_name}/results/")
+                    and name.endswith(".json")
+                    for name in structured
+                )
+                for release, _manifest, run_name, _contract_id in (
+                    combined_specifications
+                )
+            }
             if result_counts[selected_release] != arguments.expected_results:
                 raise ValidationError(
                     "selected result count differs from combined summary"
@@ -640,18 +713,48 @@ def main(argv: Sequence[str] | None = None) -> int:
                     manifest_path=run_manifest,
                     contract_id=run_contract_id,
                     expected_results=result_counts[release],
+                    allow_missing_summary=arguments.combined_output is not None,
                 )
                 for release, run_manifest, run_name, run_contract_id in (
                     combined_specifications
                 )
             }
             run = runs[selected_release]
-            combined = validate_combined_summary(
-                summary=combined_summary,
-                structured=structured,
-                specifications=combined_specifications,
-                runs=runs,
+            expected_combined = expected_combined_report(
+                combined_specifications, runs
             )
+            expected_combined_bytes = canonical_json(expected_combined)
+            if combined_name in structured:
+                combined_summary = parse_json(
+                    structured[combined_name], combined_name
+                )
+                combined = validate_combined_summary(
+                    summary=combined_summary,
+                    structured=structured,
+                    specifications=combined_specifications,
+                    runs=runs,
+                )
+            else:
+                combined = {
+                    "summary_sha256": hashlib.sha256(
+                        expected_combined_bytes
+                    ).hexdigest(),
+                    "releases": sorted(runs),
+                    "targeted_problems": expected_combined["targeted_problems"],
+                    "expected_results": expected_combined["expected_results"],
+                    "completed_results": expected_combined[
+                        "completed_results"
+                    ],
+                    "missing_results": expected_combined["missing_results"],
+                    "official_csv_count": expected_combined[
+                        "official_context"
+                    ]["csv_count"],
+                    "embedded": False,
+                }
+            if arguments.combined_output is not None:
+                combined_destination = arguments.combined_output.resolve()
+                combined_destination.parent.mkdir(parents=True, exist_ok=True)
+                combined_destination.write_bytes(expected_combined_bytes)
         else:
             run = validate_run(
                 hashes=hashes,
@@ -676,7 +779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "sha256": outer["inner_sha256"],
                 "regular_member_count": inner_member_count,
             },
-            "run": run,
+            "run": public_run_evidence(run),
         }
         if combined is not None:
             result["combined"] = combined
