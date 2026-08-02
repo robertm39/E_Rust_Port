@@ -93,12 +93,22 @@ $checkpointPrefix = [string]$releaseConfig.checkpoint_prefix
 $servicePrefix = [string]$releaseConfig.service_prefix
 $sessionPrefix = [string]$releaseConfig.session_prefix
 $expectedTotalResults = [int]$releaseConfig.expected_total_results
+$casc2025Contract = (
+    "e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa"
+)
+$j13Contract = (
+    "9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676"
+)
 $casc2025ManifestRelative = "benchmarks/casc_2025_manifest.jsonl"
+$casc2025ManifestPath = Join-Path $repoRoot $casc2025ManifestRelative
+$casc2025RunName = "casc30-2025-089e06c8-v2"
 $casc2025RunRoot = (
-    "/opt/e-rust-port/casc-runs/casc30-2025-089e06c8-v2"
+    "/opt/e-rust-port/casc-runs/$casc2025RunName"
 )
 $j13ManifestRelative = "benchmarks/casc_2026_manifest.jsonl"
-$j13RunRoot = "/opt/e-rust-port/casc-runs/casc-j13-2026-089e06c8-v2"
+$j13ManifestPath = Join-Path $repoRoot $j13ManifestRelative
+$j13RunName = "casc-j13-2026-089e06c8-v2"
+$j13RunRoot = "/opt/e-rust-port/casc-runs/$j13RunName"
 $combinedSummary = "/opt/e-rust-port/casc-runs/combined-summary.json"
 $runnerPath = Join-Path $repoRoot "linode-runner.ps1"
 $validatorPath = Join-Path $PSScriptRoot "validate_casc_checkpoint.py"
@@ -326,7 +336,11 @@ function Invoke-CheckpointValidator {
         --manifest $manifestPath `
         --run-name $runName `
         --contract-id $expectedContract `
-        --expected-results $ResultCount 2>&1
+        --expected-results $ResultCount `
+        --combined-run CASC-2025 $casc2025ManifestPath `
+            $casc2025RunName $casc2025Contract `
+        --combined-run CASC-J13 $j13ManifestPath `
+            $j13RunName $j13Contract 2>&1
     $exitCode = $LASTEXITCODE
     if ($null -ne $output) {
         foreach ($line in $output) {

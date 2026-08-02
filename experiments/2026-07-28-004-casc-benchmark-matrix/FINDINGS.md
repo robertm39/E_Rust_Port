@@ -339,12 +339,18 @@ a temporary file without extracting it. It then recomputes the target contract
 ID, matches the immutable manifest selection, validates every result identity
 and path, hashes every referenced stdout/stderr artifact, rejects orphan
 artifacts, and reconciles solver/result counts with the regenerated report and
-session runner identities. The existing 965-result checkpoint passes with the
-same contract, inner-archive, report, and 483/482 solver hashes recorded above;
-wrong outer hashes and wrong expected-result counts are rejected. Six focused
-unit tests additionally reject absolute, parent-traversing, backslash,
-duplicate, linked, unchecksummed, contract-tampered, and orphan-artifact
-fixtures while accepting a complete internally consistent synthetic run.
+session runner identities. Future controller invocations additionally name both
+immutable releases: the local gate then requires `combined-summary.json`, fully
+validates both run roots, matches its embedded per-release reports byte-for-byte
+at the JSON-value level, and reconciles the campaign problem/result/solver and
+official-CSV totals before resource deletion. The opt-in combined gate preserves
+the single-release invocation used by the already armed controller. The existing
+965-result checkpoint passes that legacy-compatible path with the same contract,
+inner-archive, report, and 483/482 solver hashes recorded above; wrong outer
+hashes and wrong expected-result counts are rejected. Seven focused unit tests
+additionally reject absolute, parent-traversing, backslash, duplicate, linked,
+unchecksummed, contract-tampered, orphan-artifact, and inconsistent combined
+fixtures while accepting internally consistent single- and two-release runs.
 
 The validated next invocation is:
 

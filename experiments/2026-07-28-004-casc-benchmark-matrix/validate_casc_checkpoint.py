@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools" / "casc_benchmark"))
 from manifest import ManifestError, load_manifest, sha256_file  # noqa: E402
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+RUN_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 RESULT_PATTERN = re.compile(
     r"^results/(?P<solver>umlaut|vampire)/(?P<category>[a-z0-9]+)/"
     r"(?P<key>[a-z0-9-]+)\.json$"
@@ -213,9 +214,10 @@ def copy_validated_inner_archive(
 
 def read_inner_archive(
     inner_path: Path,
-    run_name: str,
+    run_names: Sequence[str],
 ) -> tuple[dict[str, str], dict[str, bytes], int]:
-    prefix = f"casc-runs/{run_name}/"
+    prefixes = tuple(f"casc-runs/{run_name}/" for run_name in run_names)
+    combined_name = "casc-runs/combined-summary.json"
     hashes: dict[str, str] = {}
     structured: dict[str, bytes] = {}
     member_count = 0
@@ -226,7 +228,9 @@ def read_inner_archive(
             source = archive.extractfile(member)
             if source is None:
                 raise ValidationError(f"cannot read inner member: {name}")
-            capture = name.startswith(prefix) and name.endswith(".json")
+            capture = name.endswith(".json") and (
+                name == combined_name or name.startswith(prefixes)
+            )
             if capture and member.size > JSON_LIMIT:
                 raise ValidationError(f"structured member is too large: {name}")
             digest = hashlib.sha256()
@@ -401,6 +405,11 @@ def validate_run(
         ):
             raise ValidationError(f"session has incomplete runner identity: {name}")
     return {
+        "run_name": run_name,
+        "corpus": metadata["corpus"],
+        "official_csv_count": len(
+            metadata["sources"]["official_result_file_sha256"]
+        ),
         "contract_file_sha256": hashes[contract_name],
         "contract_id": contract_id,
         "manifest_sha256": manifest_hash,
@@ -414,6 +423,108 @@ def validate_run(
     }
 
 
+def combined_result_counts(
+    summary: dict[str, Any],
+    releases: Sequence[str],
+) -> dict[str, int]:
+    release_values = summary.get("releases")
+    if not isinstance(release_values, dict) or set(release_values) != set(releases):
+        raise ValidationError("combined summary release set mismatch")
+    counts: dict[str, int] = {}
+    for release in releases:
+        value = release_values.get(release)
+        if not isinstance(value, dict) or not isinstance(value.get("summary"), dict):
+            raise ValidationError(f"combined summary has no {release} report")
+        count = value["summary"].get("completed_results")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValidationError(
+                f"combined summary has invalid {release} result count"
+            )
+        counts[release] = count
+    return counts
+
+
+def validate_combined_summary(
+    *,
+    summary: dict[str, Any],
+    structured: dict[str, bytes],
+    specifications: Sequence[tuple[str, Path, str, str]],
+    runs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    expected_releases: dict[str, dict[str, Any]] = {}
+    total_problems = 0
+    total_expected = 0
+    total_completed = 0
+    official_csv_count = 0
+    solver_counts: Counter[str] = Counter()
+    for release, _manifest, run_name, _contract_id in specifications:
+        run = runs[release]
+        summary_name = f"casc-runs/{run_name}/summary.json"
+        if summary_name not in structured:
+            raise ValidationError(f"combined run has no summary: {run_name}")
+        run_summary = parse_json(structured[summary_name], summary_name)
+        expected_releases[release] = {
+            "corpus": run["corpus"],
+            "manifest_sha256": run["manifest_sha256"],
+            "contract_id": run["contract_id"],
+            "official_csv_count": run["official_csv_count"],
+            "summary": run_summary,
+        }
+        total_problems += run["problem_count"]
+        total_expected += run["expected_results"]
+        total_completed += run["completed_results"]
+        official_csv_count += run["official_csv_count"]
+        solver_counts.update(run["result_counts"])
+
+    checks = {
+        "schema_version": 1,
+        "kind": "umlaut-casc-combined-benchmark-report",
+        "complete": total_completed == total_expected,
+        "targeted_problems": total_problems,
+        "expected_results": total_expected,
+        "completed_results": total_completed,
+        "missing_results": total_expected - total_completed,
+    }
+    for field, expected in checks.items():
+        if summary.get(field) != expected:
+            raise ValidationError(f"combined summary has incompatible {field}")
+    if summary.get("releases") != dict(sorted(expected_releases.items())):
+        raise ValidationError("combined summary release reports do not match runs")
+    official = summary.get("official_context")
+    if not isinstance(official, dict) or official.get("csv_count") != (
+        official_csv_count
+    ):
+        raise ValidationError("combined summary official CSV count mismatch")
+    for solver in ("umlaut", "vampire"):
+        solver_summary = summary.get("solvers", {}).get(solver)
+        if not isinstance(solver_summary, dict):
+            raise ValidationError(f"combined summary has no {solver} section")
+        overall = solver_summary.get("groups", {}).get("overall", {}).get("all")
+        if not isinstance(overall, dict):
+            raise ValidationError(f"combined summary has no {solver} overall group")
+        solver_checks = {
+            "targeted": total_problems,
+            "completed": solver_counts[solver],
+            "missing": total_problems - solver_counts[solver],
+        }
+        if any(
+            overall.get(field) != expected
+            for field, expected in solver_checks.items()
+        ):
+            raise ValidationError(f"combined summary {solver} totals mismatch")
+    return {
+        "summary_sha256": hashlib.sha256(
+            structured["casc-runs/combined-summary.json"]
+        ).hexdigest(),
+        "releases": sorted(expected_releases),
+        "targeted_problems": total_problems,
+        "expected_results": total_expected,
+        "completed_results": total_completed,
+        "missing_results": total_expected - total_completed,
+        "official_csv_count": official_csv_count,
+    }
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
@@ -422,6 +533,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--contract-id", required=True)
     parser.add_argument("--expected-results", type=int, required=True)
+    parser.add_argument(
+        "--combined-run",
+        action="append",
+        nargs=4,
+        metavar=("RELEASE", "MANIFEST", "RUN_NAME", "CONTRACT_ID"),
+        help=(
+            "require the embedded combined report and validate one constituent "
+            "release; repeat for every combined release"
+        ),
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
@@ -443,6 +564,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValidationError("--contract-id must be 64 lowercase hex digits")
         if arguments.expected_results < 0:
             raise ValidationError("--expected-results cannot be negative")
+        if not RUN_NAME_PATTERN.fullmatch(arguments.run_name):
+            raise ValidationError("--run-name is not a safe run identifier")
+
+        combined_specifications: list[tuple[str, Path, str, str]] = []
+        for raw in arguments.combined_run or []:
+            release, raw_manifest, run_name, raw_contract_id = raw
+            combined_manifest = Path(raw_manifest).resolve()
+            combined_contract_id = raw_contract_id.lower()
+            if not release or not RUN_NAME_PATTERN.fullmatch(run_name):
+                raise ValidationError("--combined-run has an invalid identifier")
+            if not combined_manifest.is_file():
+                raise ValidationError(
+                    f"combined manifest does not exist: {combined_manifest}"
+                )
+            if not SHA256_PATTERN.fullmatch(combined_contract_id):
+                raise ValidationError("--combined-run contract ID is invalid")
+            combined_specifications.append(
+                (release, combined_manifest, run_name, combined_contract_id)
+            )
+        if combined_specifications:
+            releases = [value[0] for value in combined_specifications]
+            run_names = [value[2] for value in combined_specifications]
+            if len(combined_specifications) < 2:
+                raise ValidationError("combined validation requires at least two runs")
+            if len(set(releases)) != len(releases):
+                raise ValidationError("duplicate --combined-run release")
+            if len(set(run_names)) != len(run_names):
+                raise ValidationError("duplicate --combined-run run name")
+            selected = [
+                value
+                for value in combined_specifications
+                if value[1] == manifest
+                and value[2] == arguments.run_name
+                and value[3] == contract_id
+            ]
+            if len(selected) != 1:
+                raise ValidationError(
+                    "selected run is not uniquely present in --combined-run inputs"
+                )
+            selected_release = selected[0][0]
+        else:
+            run_names = [arguments.run_name]
+            selected_release = None
         actual_archive_hash = sha256_file(archive)
         if actual_archive_hash != expected_archive_hash:
             raise ValidationError("checkpoint archive SHA-256 mismatch")
@@ -452,16 +616,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             inner_path = Path(temporary) / "casc-runs.tar.gz"
             outer = copy_validated_inner_archive(archive, root, inner_path)
             hashes, structured, inner_member_count = read_inner_archive(
-                inner_path, arguments.run_name
+                inner_path, run_names
             )
-        run = validate_run(
-            hashes=hashes,
-            structured=structured,
-            run_name=arguments.run_name,
-            manifest_path=manifest,
-            contract_id=contract_id,
-            expected_results=arguments.expected_results,
-        )
+        combined = None
+        if combined_specifications:
+            combined_name = "casc-runs/combined-summary.json"
+            if combined_name not in structured:
+                raise ValidationError("checkpoint has no combined-summary.json")
+            combined_summary = parse_json(structured[combined_name], combined_name)
+            result_counts = combined_result_counts(
+                combined_summary,
+                [value[0] for value in combined_specifications],
+            )
+            if result_counts[selected_release] != arguments.expected_results:
+                raise ValidationError(
+                    "selected result count differs from combined summary"
+                )
+            runs = {
+                release: validate_run(
+                    hashes=hashes,
+                    structured=structured,
+                    run_name=run_name,
+                    manifest_path=run_manifest,
+                    contract_id=run_contract_id,
+                    expected_results=result_counts[release],
+                )
+                for release, run_manifest, run_name, run_contract_id in (
+                    combined_specifications
+                )
+            }
+            run = runs[selected_release]
+            combined = validate_combined_summary(
+                summary=combined_summary,
+                structured=structured,
+                specifications=combined_specifications,
+                runs=runs,
+            )
+        else:
+            run = validate_run(
+                hashes=hashes,
+                structured=structured,
+                run_name=arguments.run_name,
+                manifest_path=manifest,
+                contract_id=contract_id,
+                expected_results=arguments.expected_results,
+            )
         result = {
             "schema_version": 1,
             "kind": "umlaut-casc-checkpoint-validation",
@@ -479,6 +678,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             "run": run,
         }
+        if combined is not None:
+            result["combined"] = combined
         output = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if arguments.output is not None:
             destination = arguments.output.resolve()

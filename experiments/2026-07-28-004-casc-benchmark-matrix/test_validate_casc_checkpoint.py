@@ -64,31 +64,40 @@ class PathAndInventoryTests(unittest.TestCase):
 
 class RunValidationTests(unittest.TestCase):
     def make_fixture(
-        self, root: Path
+        self,
+        root: Path,
+        *,
+        run_name: str = "fixture",
+        problem_id: str = "FIX001+1",
     ) -> tuple[Path, dict[str, str], dict[str, bytes], str]:
+        root.mkdir(parents=True, exist_ok=True)
         metadata = {
             "record_type": "manifest",
             "schema_version": 1,
             "kind": "umlaut-casc-benchmark-manifest",
+            "corpus": f"{run_name}-corpus",
             "problem_count": 1,
             "presentation": {"id": "fixture-presentation"},
+            "sources": {
+                "official_result_file_sha256": {"official.csv": "2" * 64}
+            },
         }
         record = {
             "record_type": "problem",
-            "problem_id": "FIX001+1",
+            "problem_id": problem_id,
             "category": "FOO",
             "sha256": "1" * 64,
         }
         manifest = root / "manifest.jsonl"
         manifest.write_bytes(canonical_json(metadata) + canonical_json(record))
         manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
-        selected_hash = hashlib.sha256(b"FIX001+1\n").hexdigest()
+        selected_hash = hashlib.sha256(f"{problem_id}\n".encode()).hexdigest()
         contract = {
             "schema_version": 1,
             "kind": "umlaut-casc-benchmark-run",
             "manifest_sha256": manifest_hash,
             "selected_problem_count": 1,
-            "selected_problem_ids": ["FIX001+1"],
+            "selected_problem_ids": [problem_id],
             "selected_problem_ids_sha256": selected_hash,
             "presentation_id": "fixture-presentation",
         }
@@ -98,7 +107,7 @@ class RunValidationTests(unittest.TestCase):
         stderr = b""
         result = {
             "contract_id": contract_id,
-            "problem_id": "FIX001+1",
+            "problem_id": problem_id,
             "problem_sha256": "1" * 64,
             "solver": "umlaut",
             "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
@@ -120,7 +129,7 @@ class RunValidationTests(unittest.TestCase):
             "contract_id": contract_id,
             "runner": {"label": "runner", "run_id": "run", "linode_id": 1},
         }
-        prefix = "casc-runs/fixture/"
+        prefix = f"casc-runs/{run_name}/"
         key = VALIDATOR.safe_result_key(1, record)
         base = f"{prefix}results/umlaut/foo/{key}"
         values = {
@@ -195,6 +204,103 @@ class RunValidationTests(unittest.TestCase):
                     manifest_path=manifest,
                     contract_id=contract_id,
                     expected_results=1,
+                )
+
+    def test_validates_two_release_combined_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            left = self.make_fixture(
+                root / "left", run_name="left-run", problem_id="FIX001+1"
+            )
+            right = self.make_fixture(
+                root / "right", run_name="right-run", problem_id="FIX002+1"
+            )
+            left_manifest, left_hashes, left_structured, left_contract = left
+            right_manifest, right_hashes, right_structured, right_contract = right
+            hashes = left_hashes | right_hashes
+            structured = left_structured | right_structured
+            specifications = [
+                ("LEFT", left_manifest, "left-run", left_contract),
+                ("RIGHT", right_manifest, "right-run", right_contract),
+            ]
+            runs = {
+                release: VALIDATOR.validate_run(
+                    hashes=hashes,
+                    structured=structured,
+                    run_name=run_name,
+                    manifest_path=manifest,
+                    contract_id=contract_id,
+                    expected_results=1,
+                )
+                for release, manifest, run_name, contract_id in specifications
+            }
+            releases = {
+                release: {
+                    "corpus": runs[release]["corpus"],
+                    "manifest_sha256": runs[release]["manifest_sha256"],
+                    "contract_id": runs[release]["contract_id"],
+                    "official_csv_count": 1,
+                    "summary": json.loads(
+                        structured[f"casc-runs/{run_name}/summary.json"]
+                    ),
+                }
+                for release, _manifest, run_name, _contract_id in specifications
+            }
+            combined = {
+                "schema_version": 1,
+                "kind": "umlaut-casc-combined-benchmark-report",
+                "complete": False,
+                "targeted_problems": 2,
+                "expected_results": 4,
+                "completed_results": 2,
+                "missing_results": 2,
+                "official_context": {"csv_count": 2},
+                "releases": dict(sorted(releases.items())),
+                "solvers": {
+                    "umlaut": {
+                        "groups": {
+                            "overall": {
+                                "all": {
+                                    "targeted": 2,
+                                    "completed": 2,
+                                    "missing": 0,
+                                }
+                            }
+                        }
+                    },
+                    "vampire": {
+                        "groups": {
+                            "overall": {
+                                "all": {
+                                    "targeted": 2,
+                                    "completed": 0,
+                                    "missing": 2,
+                                }
+                            }
+                        }
+                    },
+                },
+            }
+            combined_name = "casc-runs/combined-summary.json"
+            structured[combined_name] = canonical_json(combined)
+            evidence = VALIDATOR.validate_combined_summary(
+                summary=combined,
+                structured=structured,
+                specifications=specifications,
+                runs=runs,
+            )
+            self.assertEqual(evidence["completed_results"], 2)
+            self.assertEqual(evidence["official_csv_count"], 2)
+
+            combined["releases"]["RIGHT"]["summary"]["completed_results"] = 0
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "release reports do not match"
+            ):
+                VALIDATOR.validate_combined_summary(
+                    summary=combined,
+                    structured=structured,
+                    specifications=specifications,
+                    runs=runs,
                 )
 
 
