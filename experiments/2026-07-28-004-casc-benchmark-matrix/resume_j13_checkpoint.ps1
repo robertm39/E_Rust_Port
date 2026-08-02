@@ -642,7 +642,7 @@ python3 tools/casc_benchmark/report.py --manifest '$remoteManifestRelative' --ru
 grep -Fq '"contract_id":"$expectedContract"' '$runRoot/summary.json'
 grep -Fq '"completed_results":$ExpectedInitialResults' '$runRoot/summary.json'
 test "`$(find '$runRoot/results' -type f -name '*.json' | wc -l)" -eq '$ExpectedInitialResults'
-python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --problem-root /opt/e-rust-port/source --output-root '$runRoot' --umlaut-binary '$remoteUmlaut' --vampire-binary '$remoteVampire' --solvers both --cores 8 --memory-limit-mib 131072 --pids-limit 512 --vampire-seed 1 --wall-grace-seconds 0.25 --terminate-grace-seconds 1 --session-id '$Release-preflight-$runId' --source-snapshot-sha256 '$sourceSnapshot' --runner-label '$runnerLabel' --runner-run-id '$runId' --linode-id '$linodeId' --verify-only
+python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --problem-root /opt/e-rust-port/source --output-root '$runRoot' --umlaut-binary '$remoteUmlaut' --vampire-binary '$remoteVampire' --solvers both --cores 8 --memory-limit-mib 131072 --pids-limit 512 --vampire-seed 1 --wall-grace-seconds 0.25 --terminate-grace-seconds 1 --session-id '$Release-preflight-$runId' --source-snapshot-sha256 '$sourceSnapshot' --expected-contract-id '$expectedContract' --runner-label '$runnerLabel' --runner-run-id '$runId' --linode-id '$linodeId' --verify-only
 "@
     Invoke-Runner @("exec", "--", $preflightCommand) | Out-Null
     Write-ResumeLog "preflight_passed initial_results=$ExpectedInitialResults"
@@ -680,6 +680,8 @@ python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --pro
         $sessionId,
         "--source-snapshot-sha256",
         $sourceSnapshot,
+        "--expected-contract-id",
+        $expectedContract,
         "--runner-label=$runnerLabel",
         "--runner-run-id=$runId",
         "--linode-id=$linodeId"

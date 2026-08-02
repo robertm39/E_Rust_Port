@@ -569,6 +569,26 @@ This recovery proves only the host bootstrap and controller handoff; the matrix
 successor remains subject to the normal service, capture, and streaming archive
 validators.
 
+The first recovered-host handoff then exposed a separate historical-contract
+compatibility boundary before any solver launch.  Every corpus, binary, archive,
+inner inventory, contract-file hash, partial report, and 965-result count passed,
+but the current batch harness derived contract ID `ccd4e19b...` from fields whose
+frozen checkpoint ID is `9f29cac7...`.  A field-by-field comparison proved that
+`contract_id` was the only difference; the content remained identical.  The
+controller correctly classified this as a prelaunch failure and deleted Linode
+`102066534` and firewall `100863634`.
+
+Resumes now pass `--expected-contract-id` explicitly.  The batch harness retains
+an existing historical ID only when that supplied 64-hex ID matches the stored
+contract and every non-ID field equals the newly derived proposal.  It still
+rejects implicit compatibility, changed content, a wrong expected ID, and using
+a historical ID to seed a new run.  Twenty-six reporting/batch tests, 17 planner
+tests, and 11 checkpoint-validator tests passed.  A real checkpoint probe selected
+`9f29cac7...` over the newly proposed `ccd4e19b...` with `non_id_equal=true`.
+The next provider slice is shortened to 12,600 batch seconds plus a 300-second
+service guard, preserving transfer, capture, and teardown margin after the 1,381
+seconds already consumed from the 15,649-second bank-adjusted allowance.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

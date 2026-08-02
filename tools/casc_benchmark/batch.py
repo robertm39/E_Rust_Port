@@ -453,20 +453,55 @@ def contract_value(
     return value
 
 
-def ensure_contract(output_root: Path, contract: dict[str, Any]) -> None:
+def ensure_contract(
+    output_root: Path,
+    contract: dict[str, Any],
+    *,
+    expected_contract_id: str | None = None,
+) -> dict[str, Any]:
     path = output_root / "contract.json"
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise BatchError(f"cannot read existing run contract {path}: {error}") from error
-        if existing != contract:
-            raise BatchError(
-                "existing output uses an incompatible run contract; choose a "
-                "different output directory"
-            )
+        if existing == contract:
+            if (
+                expected_contract_id is not None
+                and existing.get("contract_id") != expected_contract_id
+            ):
+                raise BatchError(
+                    "existing run contract does not match the explicitly "
+                    "expected contract ID"
+                )
+            return existing
+        existing_without_id = {
+            key: value for key, value in existing.items() if key != "contract_id"
+        }
+        contract_without_id = {
+            key: value for key, value in contract.items() if key != "contract_id"
+        }
+        if (
+            expected_contract_id is not None
+            and existing.get("contract_id") == expected_contract_id
+            and existing_without_id == contract_without_id
+        ):
+            return existing
+        raise BatchError(
+            "existing output uses an incompatible run contract; choose a "
+            "different output directory"
+        )
     else:
+        if (
+            expected_contract_id is not None
+            and contract.get("contract_id") != expected_contract_id
+        ):
+            raise BatchError(
+                "explicit historical contract ID requires an existing "
+                "content-matching run contract"
+            )
         atomic_write_json(path, contract)
+        return contract
 
 
 def safe_result_key(index: int, record: dict[str, Any]) -> str:
@@ -759,6 +794,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--linode-id", type=int)
     parser.add_argument("--source-snapshot-sha256")
     parser.add_argument(
+        "--expected-contract-id",
+        help=(
+            "require this existing contract identity when resuming a run; "
+            "all non-ID contract fields must still match"
+        ),
+    )
+    parser.add_argument(
         "--allow-noncanonical-host",
         action="store_true",
         help="permit a smoke run on a smaller host; recorded as noncanonical",
@@ -873,6 +915,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.source_snapshot_sha256 = (
                 arguments.source_snapshot_sha256.lower()
             )
+        if arguments.expected_contract_id is not None:
+            if not re.fullmatch(
+                r"[0-9a-fA-F]{64}", arguments.expected_contract_id
+            ):
+                raise BatchError(
+                    "--expected-contract-id must be 64 hexadecimal digits"
+                )
+            arguments.expected_contract_id = (
+                arguments.expected_contract_id.lower()
+            )
         if canonical_selection and arguments.source_snapshot_sha256 is None:
             raise BatchError(
                 "canonical full runs require --source-snapshot-sha256"
@@ -899,7 +951,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             canonical_selection=canonical_selection,
         )
         output_root = arguments.output_root.resolve()
-        ensure_contract(output_root, contract)
+        contract = ensure_contract(
+            output_root,
+            contract,
+            expected_contract_id=arguments.expected_contract_id,
+        )
         session_id = arguments.session_id or (
             f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-"
             f"{socket.gethostname()}-{os.getpid()}"

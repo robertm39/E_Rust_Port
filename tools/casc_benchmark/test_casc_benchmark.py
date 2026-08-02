@@ -293,6 +293,64 @@ class BatchContractTests(unittest.TestCase):
             with self.assertRaisesRegex(batch.BatchError, "incompatible"):
                 batch.ensure_contract(root, {"contract_id": "two"})
 
+    def test_explicit_historical_contract_id_requires_equal_content(self):
+        historical_id = "a" * 64
+        generated_id = "b" * 64
+        historical = {
+            "schema_version": 1,
+            "contract_id": historical_id,
+            "selected_problem_count": 1350,
+        }
+        generated = {**historical, "contract_id": generated_id}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            batch.ensure_contract(root, historical)
+            selected = batch.ensure_contract(
+                root,
+                generated,
+                expected_contract_id=historical_id,
+            )
+            persisted = json.loads(
+                (root / "contract.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(selected, historical)
+        self.assertEqual(persisted, historical)
+
+    def test_historical_contract_compatibility_is_never_implicit(self):
+        historical = {
+            "schema_version": 1,
+            "contract_id": "a" * 64,
+            "selected_problem_count": 1350,
+        }
+        generated = {**historical, "contract_id": "b" * 64}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            batch.ensure_contract(root, historical)
+            with self.assertRaisesRegex(batch.BatchError, "incompatible"):
+                batch.ensure_contract(root, generated)
+            with self.assertRaisesRegex(batch.BatchError, "incompatible"):
+                batch.ensure_contract(
+                    root,
+                    {**generated, "selected_problem_count": 1349},
+                    expected_contract_id=historical["contract_id"],
+                )
+
+    def test_historical_contract_id_cannot_seed_a_new_run(self):
+        generated = {
+            "schema_version": 1,
+            "contract_id": "b" * 64,
+            "selected_problem_count": 1350,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                batch.BatchError, "requires an existing"
+            ):
+                batch.ensure_contract(
+                    Path(directory),
+                    generated,
+                    expected_contract_id="a" * 64,
+                )
+
     def test_session_records_runner_identity(self):
         runner = {
             "label": "e-rust-codex-260728-example",
