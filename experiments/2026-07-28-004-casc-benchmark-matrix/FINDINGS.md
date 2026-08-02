@@ -444,7 +444,10 @@ eleven focused tests cover guarded boundaries, release transition and campaign
 completion, malformed validation structure, wrong durations, and inconsistent
 allowance decisions. Final combined validation selects CASC-2025 so its selected
 run matches the 5,802-path outer inventory written by the campaign's final
-controller; the command-level transition test binds this invariant.
+controller. It separately reconstructs constituent runs in the canonical report
+order and spelling, `CASC-2025` then `CASC-J13`, rather than reusing the inverse
+campaign execution order or internal CLI keys. The command-level transition test
+binds both invariants.
 
 ## CASC-2025 continuation readiness
 

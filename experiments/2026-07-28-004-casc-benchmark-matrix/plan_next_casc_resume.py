@@ -19,6 +19,7 @@ RESUME_CONTROLLER = SCRIPT_DIR / "resume_j13_checkpoint.ps1"
 RUNNER = REPO_ROOT / "linode-runner.ps1"
 RELEASES = {
     "j13": {
+        "combined_release": "CASC-J13",
         "manifest": REPO_ROOT / "benchmarks" / "casc_2026_manifest.jsonl",
         "run_name": "casc-j13-2026-089e06c8-v2",
         "contract_id": (
@@ -29,6 +30,7 @@ RELEASES = {
         "official_csv_count": 26,
     },
     "casc2025": {
+        "combined_release": "CASC-2025",
         "manifest": REPO_ROOT / "benchmarks" / "casc_2025_manifest.jsonl",
         "run_name": "casc30-2025-089e06c8-v2",
         "contract_id": (
@@ -39,6 +41,7 @@ RELEASES = {
         "official_csv_count": 40,
     },
 }
+COMBINED_REPORT_ORDER = ("casc2025", "j13")
 
 
 class PlanningError(RuntimeError):
@@ -240,7 +243,10 @@ def build_campaign_complete_plan(
         "combined report embedding": (combined.get("embedded"), True),
         "combined releases": (
             combined.get("releases"),
-            sorted(RELEASES),
+            sorted(
+                str(config["combined_release"])
+                for config in RELEASES.values()
+            ),
         ),
         "combined targeted problems": (
             combined.get("targeted_problems"),
@@ -342,11 +348,12 @@ def validation_command(
         str(config["contract_id"]),
     ]
     if combined:
-        for combined_release, combined_config in RELEASES.items():
+        for combined_key in COMBINED_REPORT_ORDER:
+            combined_config = RELEASES[combined_key]
             command.extend(
                 [
                     "--combined-run",
-                    combined_release,
+                    str(combined_config["combined_release"]),
                     str(combined_config["manifest"]),
                     str(combined_config["run_name"]),
                     str(combined_config["contract_id"]),

@@ -59,7 +59,7 @@ class ResumePlanningTests(unittest.TestCase):
         validation["combined"] = {
             "summary_sha256": "b" * 64,
             "embedded": True,
-            "releases": ["casc2025", "j13"],
+            "releases": ["CASC-2025", "CASC-J13"],
             "targeted_problems": 4251,
             "expected_results": 8502,
             "completed_results": 8502,
@@ -227,6 +227,15 @@ class ResumePlanningTests(unittest.TestCase):
         self.assertEqual(runner.call_count, 3)
         combined_command = runner.call_args_list[2].args[0]
         self.assertEqual(combined_command.count("--combined-run"), 2)
+        combined_indexes = [
+            index
+            for index, argument in enumerate(combined_command)
+            if argument == "--combined-run"
+        ]
+        combined_labels = [
+            combined_command[index + 1] for index in combined_indexes
+        ]
+        self.assertEqual(combined_labels, ["CASC-2025", "CASC-J13"])
         manifest_index = combined_command.index("--manifest") + 1
         self.assertIn("casc_2025_manifest.jsonl", combined_command[manifest_index])
         which.assert_not_called()
