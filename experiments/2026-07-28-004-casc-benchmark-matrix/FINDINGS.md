@@ -384,6 +384,28 @@ release configurations. Regenerating the partial 2025 report at this untouched
 boundary also passed with the expected 0/5,802 count, zero results for each
 solver, and contract ID `e71fc642...`.
 
+## Partial combined-report gate
+
+The combined report remains complete-only by default, but now accepts an
+explicit `--allow-partial` monitoring mode with the same missing-result and
+per-release accounting used by the individual reports. It never synthesizes a
+missing solver/problem coordinate. The underlying report loader now also
+rejects any result identity outside the selected contract instead of allowing
+an extra result count to mask a missing coordinate. The focused benchmark-tool
+suite passes 23 tests, including complete combined output, partial combined
+output, default rejection of an incomplete combination, and rejection of an
+out-of-selection result.
+
+The actual two-release partial report over the current combined checkpoint is
+retained at `.artifacts/casc-benchmark/combined-partial-260802.json`, SHA-256
+`d325fa2d64945952d7a5f713e54d2e7ff0a9a858743688ff0a7bf285810955ad`.
+It records all 4,251 targeted problems and 8,502 expected coordinates, with 965
+completed and 7,537 explicitly missing. The combined per-solver totals are 483
+Umlaut and 482 Vampire, matching the J13 checkpoint while CASC-2025 remains at
+zero. Its official context totals exactly 66 CSVs (40 CASC-2025 plus 26 J13)
+and preserves the warning that local runs do not reproduce official entries or
+the StarExec environment.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

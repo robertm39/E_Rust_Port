@@ -379,6 +379,7 @@ class ReportTests(unittest.TestCase):
         self.run_root = Path(self.temporary.name)
         self.metadata, all_records = manifest.load_manifest(MANIFEST_PATH)
         self.records = all_records[:2]
+        self.unselected_record = all_records[2]
         self.contract = {
             "contract_id": "contract-test",
             "manifest_sha256": manifest.sha256_file(MANIFEST_PATH),
@@ -446,6 +447,19 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(batch.BatchError, "incomplete"):
             report.build_report(MANIFEST_PATH, self.run_root, require_complete=True)
 
+    def test_report_rejects_result_outside_contract_selection(self):
+        self.write_result(
+            "umlaut",
+            self.unselected_record,
+            status="Theorem",
+            solved=True,
+            wall=1.0,
+        )
+        with self.assertRaisesRegex(batch.BatchError, "outside.*selection"):
+            report.build_report(
+                MANIFEST_PATH, self.run_root, require_complete=False
+            )
+
     def test_combined_report_keeps_release_identities_distinct(self):
         first, second = self.records
         self.write_result("umlaut", first, status="Theorem", solved=True, wall=1.0)
@@ -469,6 +483,27 @@ class ReportTests(unittest.TestCase):
             ],
             2,
         )
+
+    def test_combined_partial_report_preserves_missing_and_context(self):
+        first, second = self.records
+        self.write_result("umlaut", first, status="Theorem", solved=True, wall=1.0)
+        self.write_result("vampire", first, status="Theorem", solved=True, wall=0.5)
+        self.write_result("umlaut", second, status="GaveUp", solved=False, wall=2.0)
+        inputs = [
+            ("first", MANIFEST_PATH, self.run_root),
+            ("second", MANIFEST_PATH, self.run_root),
+        ]
+        with self.assertRaisesRegex(batch.BatchError, "incomplete"):
+            combined_report.build_combined_report(inputs)
+        value = combined_report.build_combined_report(
+            inputs, require_complete=False
+        )
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["targeted_problems"], 4)
+        self.assertEqual(value["completed_results"], 6)
+        self.assertEqual(value["missing_results"], 2)
+        self.assertEqual(value["official_context"]["csv_count"], 80)
+        self.assertEqual(value["overlap"]["overall"]["all"]["incomplete"], 2)
 
 
 if __name__ == "__main__":

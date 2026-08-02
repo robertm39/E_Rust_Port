@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine complete, independently contracted CASC release reports."""
+"""Combine independently contracted complete or partial CASC reports."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ COMBINED_REPORT_SCHEMA_VERSION = 1
 
 def build_combined_report(
     inputs: Sequence[tuple[str, Path, Path]],
+    *,
+    require_complete: bool = True,
 ) -> dict[str, Any]:
     if len(inputs) < 2:
         raise BatchError("a combined report requires at least two releases")
@@ -37,11 +39,15 @@ def build_combined_report(
                 (run_root / "contract.json").read_text(encoding="utf-8")
             )
         except (OSError, json.JSONDecodeError) as error:
-            raise BatchError(f"cannot read run contract for {release}: {error}") from error
+            raise BatchError(
+                f"cannot read run contract for {release}: {error}"
+            ) from error
         if sha256_file(manifest_path) != contract.get("manifest_sha256"):
             raise BatchError(f"{release} manifest does not match its run contract")
 
-        per_release = build_report(manifest_path, run_root, require_complete=True)
+        per_release = build_report(
+            manifest_path, run_root, require_complete=require_complete
+        )
         solvers = sorted(contract["solvers"])
         if expected_solvers is None:
             expected_solvers = solvers
@@ -63,7 +69,10 @@ def build_combined_report(
             combined_record["release"] = release
             combined_records.append(combined_record)
             for solver in solvers:
-                result = dict(results[(solver, record["problem_id"])])
+                key = (solver, record["problem_id"])
+                if key not in results:
+                    continue
+                result = dict(results[key])
                 result["problem_id"] = prefixed_id
                 result["release"] = release
                 combined_results[(solver, prefixed_id)] = result
@@ -81,7 +90,8 @@ def build_combined_report(
     if expected_solvers is None:  # pragma: no cover - input length is checked.
         raise AssertionError("combined-report solver set was not initialized")
     expected_results = len(combined_records) * len(expected_solvers)
-    if len(combined_results) != expected_results:
+    missing_results = expected_results - len(combined_results)
+    if require_complete and missing_results:
         raise BatchError(
             f"combined results are incomplete: {len(combined_results)}/"
             f"{expected_results}"
@@ -90,11 +100,11 @@ def build_combined_report(
     value: dict[str, Any] = {
         "schema_version": COMBINED_REPORT_SCHEMA_VERSION,
         "kind": "umlaut-casc-combined-benchmark-report",
-        "complete": True,
+        "complete": missing_results == 0,
         "targeted_problems": len(combined_records),
         "expected_results": expected_results,
         "completed_results": len(combined_results),
-        "missing_results": 0,
+        "missing_results": missing_results,
         "official_context": {
             "csv_count": official_csv_count,
             "warning": (
@@ -127,7 +137,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs=3,
         metavar=("RELEASE", "MANIFEST", "RUN_ROOT"),
         required=True,
-        help="add one complete release as label, manifest path, and run root",
+        help="add one release as label, manifest path, and run root",
+    )
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="write a combined report with explicit missing-result counts",
     )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
@@ -140,7 +155,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             (release, Path(manifest).resolve(), Path(run_root).resolve())
             for release, manifest, run_root in arguments.input
         ]
-        value = build_combined_report(inputs)
+        value = build_combined_report(
+            inputs, require_complete=not arguments.allow_partial
+        )
         output = arguments.output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(canonical_json(value))

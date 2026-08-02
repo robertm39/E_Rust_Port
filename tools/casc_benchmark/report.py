@@ -158,7 +158,9 @@ def solver_summary(
     time_thresholds = [0.1, 1, 5, 15, 30, 60, 120, 240, 480]
     accepted = [result for result in all_solver_results if accepted_solve(result)]
     return {
-        "groups": {kind: dict(sorted(values.items())) for kind, values in groups.items()},
+        "groups": {
+            kind: dict(sorted(values.items())) for kind, values in groups.items()
+        },
         "classification_counts": dict(sorted(classification_counts.items())),
         "final_status_counts": dict(sorted(final_status_counts.items())),
         "time_curve": {
@@ -239,15 +241,27 @@ def build_report(
         raise BatchError("report manifest does not match the run contract")
     by_id = {record["problem_id"]: record for record in manifest_records}
     try:
-        selected = [by_id[problem_id] for problem_id in contract["selected_problem_ids"]]
+        selected = [
+            by_id[problem_id] for problem_id in contract["selected_problem_ids"]
+        ]
     except KeyError as error:
         raise BatchError(f"run contract selects unknown problem {error}") from error
     solvers = sorted(contract["solvers"])
     results = load_results(run_root, contract)
-    expected_results = len(selected) * len(solvers)
-    missing_results = expected_results - len(results)
-    if missing_results < 0:
-        raise BatchError("run contains more results than its contract permits")
+    expected_keys = {
+        (solver, record["problem_id"])
+        for solver in solvers
+        for record in selected
+    }
+    unexpected_results = set(results) - expected_keys
+    if unexpected_results:
+        unexpected = sorted(unexpected_results)[0]
+        raise BatchError(
+            "run contains a result outside its contract selection: "
+            f"{unexpected[0]}/{unexpected[1]}"
+        )
+    expected_results = len(expected_keys)
+    missing_results = len(expected_keys - set(results))
     if require_complete and missing_results:
         raise BatchError(
             f"run is incomplete: {len(results)}/{expected_results} results exist"
