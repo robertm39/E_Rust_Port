@@ -11,7 +11,7 @@ use crate::control::proc_ctrl::{
 use crate::control::session::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::inout::signals::terminate_process;
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::{self, JoinHandle};
@@ -40,6 +40,7 @@ pub struct EGPCtrl {
     result: ProverResult,
     output: DynamicString,
     child: Option<Child>,
+    descriptor_stdout: Option<ChildStdout>,
     output_rx: Option<Receiver<GenericProcessOutputMessage>>,
     output_thread: Option<JoinHandle<()>>,
     output_eof: bool,
@@ -58,6 +59,7 @@ impl EGPCtrl {
             result: ProverResult::NoResult,
             output: DynamicString::new(),
             child: None,
+            descriptor_stdout: None,
             output_rx: None,
             output_thread: None,
             output_eof: false,
@@ -110,13 +112,23 @@ impl EGPCtrl {
                 return Err(error);
             }
         };
-        let (output_rx, output_thread) = spawn_output_reader(stdout);
+        let reader_stdout = match clone_child_stdout(&stdout) {
+            Ok(reader_stdout) => reader_stdout,
+            Err(error) => {
+                cleanup_child(&mut child);
+                return Err(gproc_ctrl_system_error(format!(
+                    "Cannot duplicate generic subprocess output pipe: {error}"
+                )));
+            }
+        };
+        let (output_rx, output_thread) = spawn_output_reader(reader_stdout);
         let mut control = Self::new(cores);
         control.name = Some(name);
         control.pid = Some(child.id());
         control.descriptor = Some(descriptor);
         control.cpu_limit = cpu_limit;
         control.child = Some(child);
+        control.descriptor_stdout = Some(stdout);
         control.output_rx = Some(output_rx);
         control.output_thread = Some(output_thread);
         Ok(control)
@@ -191,6 +203,7 @@ impl EGPCtrl {
             let _join_result = output_thread.join();
         }
         self.output_rx = None;
+        self.descriptor_stdout = None;
         self.output_eof = false;
         self.pid = None;
         self.descriptor = None;
@@ -777,6 +790,13 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
         .map_err(|_| gproc_ctrl_error(format!("Invalid generic pipe descriptor: {raw}")))
 }
 
+#[cfg(unix)]
+fn clone_child_stdout(stdout: &ChildStdout) -> io::Result<ChildStdout> {
+    use std::os::fd::AsFd;
+
+    stdout.as_fd().try_clone_to_owned().map(ChildStdout::from)
+}
+
 #[cfg(windows)]
 fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diagnostic> {
     use std::os::windows::io::AsRawHandle;
@@ -789,6 +809,16 @@ fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diag
     } else {
         Ok(Descriptor::new(u64::try_from(raw).unwrap_or(u64::MAX)))
     }
+}
+
+#[cfg(windows)]
+fn clone_child_stdout(stdout: &ChildStdout) -> io::Result<ChildStdout> {
+    use std::os::windows::io::AsHandle;
+
+    stdout
+        .as_handle()
+        .try_clone_to_owned()
+        .map(ChildStdout::from)
 }
 
 #[cfg(test)]
@@ -991,6 +1021,30 @@ mod tests {
             .contains("% spawned with pid "));
         assert!(!control.has_child());
         control.cleanup().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_reader_keeps_its_active_control_descriptor_reserved() {
+        let first = EGPCtrl::spawn_command(status_command("first", 0), "first", 1, 1).unwrap();
+        let first_descriptor = first.descriptor().unwrap();
+        let reader_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !first.output_thread.as_ref().unwrap().is_finished() {
+            assert!(
+                std::time::Instant::now() < reader_deadline,
+                "instant child output reader did not finish"
+            );
+            std::thread::yield_now();
+        }
+
+        let second = EGPCtrl::spawn_command(status_command("second", 0), "second", 1, 1).unwrap();
+        let second_descriptor = second.descriptor().unwrap();
+
+        assert_ne!(first_descriptor, second_descriptor);
+        let mut set = EGPCtrlSet::new();
+        assert!(set.add_proc(first).unwrap().is_none());
+        assert!(set.add_proc(second).unwrap().is_none());
+        assert_eq!(set.cardinality(), 2);
     }
 
     #[cfg(target_os = "linux")]
