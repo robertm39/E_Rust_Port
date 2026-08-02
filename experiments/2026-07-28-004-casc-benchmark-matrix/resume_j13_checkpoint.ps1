@@ -48,6 +48,8 @@ $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $runnerPath = Join-Path $repoRoot "linode-runner.ps1"
+$validatorPath = Join-Path $PSScriptRoot "validate_casc_checkpoint.py"
+$manifestPath = Join-Path $repoRoot "benchmarks\casc_2026_manifest.jsonl"
 $corpusPath = Join-Path (
     $repoRoot
 ) ".artifacts\casc-benchmark\casc_2026_corpus.tar.gz"
@@ -97,6 +99,12 @@ function Get-VerifiedSha256 {
 
 if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
     throw "Linode runner is missing: $runnerPath"
+}
+if (-not (Test-Path -LiteralPath $validatorPath -PathType Leaf)) {
+    throw "Checkpoint validator is missing: $validatorPath"
+}
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "J13 manifest is missing: $manifestPath"
 }
 $null = Get-VerifiedSha256 -Path $checkpointPath -Expected $CheckpointSha256
 $null = Get-VerifiedSha256 -Path $corpusPath -Expected $corpusSha256
@@ -224,6 +232,47 @@ function Invoke-Runner {
         )
     }
     return ($output -join "`n")
+}
+
+function Invoke-CheckpointValidator {
+    param(
+        [Parameter(Mandatory = $true)][string]$Archive,
+        [Parameter(Mandatory = $true)][string]$ArchiveSha256,
+        [Parameter(Mandatory = $true)][int]$ResultCount
+    )
+
+    $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $python -PathType Leaf) {
+        $pythonPrefix = @("-u")
+    }
+    else {
+        $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
+        if ($null -ne $pythonCommand) {
+            $python = $pythonCommand.Source
+            $pythonPrefix = @("-3", "-u")
+        }
+        else {
+            $pythonCommand = Get-Command python -ErrorAction Stop
+            $python = $pythonCommand.Source
+            $pythonPrefix = @("-u")
+        }
+    }
+    $output = & $python @pythonPrefix $validatorPath `
+        --archive $Archive `
+        --archive-sha256 $ArchiveSha256 `
+        --manifest $manifestPath `
+        --run-name "casc-j13-2026-089e06c8-v2" `
+        --contract-id $expectedContract `
+        --expected-results $ResultCount 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($null -ne $output) {
+        foreach ($line in $output) {
+            Write-ResumeLog ([string]$line)
+        }
+    }
+    if ($exitCode -ne 0) {
+        throw "Downloaded checkpoint failed streaming validation"
+    }
 }
 
 function Get-RunnerStatus {
@@ -533,6 +582,11 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArch
             "$finalCount after $ExpectedInitialResults"
         )
     }
+
+    Invoke-CheckpointValidator `
+        -Archive $localArchive `
+        -ArchiveSha256 $localHash `
+        -ResultCount $finalCount
 
     $captureSucceeded = $true
     Write-ResumeLog (

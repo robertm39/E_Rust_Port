@@ -321,6 +321,18 @@ checkpoint, downloads and hash-checks that checkpoint, and only then deletes
 the managed Linode and firewall. A launch-uncertain or capture-failed runner is
 retained for recovery; a failure before any launch attempt is deleted.
 
+[`validate_casc_checkpoint.py`](validate_casc_checkpoint.py) supplies the final
+local deletion gate for subsequent slices. It first verifies the expected outer
+archive hash, rejects unsafe, duplicate, linked, or unchecksummed tar members,
+checks every outer `SHA256SUMS` entry, and streams the nested run archive through
+a temporary file without extracting it. It then recomputes the target contract
+ID, matches the immutable manifest selection, validates every result identity
+and path, hashes every referenced stdout/stderr artifact, rejects orphan
+artifacts, and reconciles solver/result counts with the regenerated report and
+session runner identities. The existing 965-result checkpoint passes with the
+same contract, inner-archive, report, and 483/482 solver hashes recorded above;
+wrong outer hashes and wrong expected-result counts are rejected.
+
 The validated next invocation is:
 
 ```powershell
@@ -338,6 +350,27 @@ The 14,400-second batch guard reserves the projected 20-minute bank after the
 capture, and teardown. The controller sleeps in intervals of at most 60 seconds
 until the explicit UTC boundary, then reruns mutable repository and provider
 preflights. The independent service ceiling is 14,700 seconds.
+
+## CASC-2025 continuation readiness
+
+The 2026-08-02 local readiness audit rehashed the complete CASC-2025 corpus
+against the immutable manifest: all 2,901 problem files and 2,425 axiom files
+passed. The corpus archive is 368,939,544 bytes with SHA-256
+`efcebc55298d4c6770113c095e8cefdd77b9e8cbe3afa3078201f541893d1a7d`;
+the manifest SHA-256 is
+`31c9a99e4b34b56352b3311f3efe5c97f728fd078783085e1811d83eec271f6d`.
+
+The current combined checkpoint already carries the corrected, untouched
+`casc30-2025-089e06c8-v2` run root with zero results. Its contract file SHA-256
+is `f895aa07141b091060f3ee46d28f91abd6f484f3ad690630af08a7dbe34284c5`,
+and its self-hashed contract ID is
+`e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa`.
+It selects all 2,901 manifest records and the same frozen Umlaut, pinned
+Vampire, and source snapshot used by J13. Completing it requires 5,802 result
+records: 1,000 SLH problems use 15 CPU seconds, 500 problems use 120 wall
+seconds, 1,300 use 240 wall seconds, and 101 use 480 wall seconds. No fresh
+contract construction or mixed binary is needed after J13 completes; the
+successor combined checkpoint is the canonical CASC-2025 starting point.
 
 ## Remaining acceptance boundary
 
