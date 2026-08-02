@@ -423,6 +423,19 @@ capture, and teardown. The controller sleeps in intervals of at most 60 seconds
 until the explicit UTC boundary, then reruns mutable repository and provider
 preflights. The independent service ceiling is 14,700 seconds.
 
+[`plan_next_casc_resume.py`](plan_next_casc_resume.py) is the nonmutating handoff
+for later slices. It invokes the streaming validator without a caller-supplied
+count, queries `linode-runner allowance --required-seconds` for the complete
+service ceiling, rejects mismatched schemas, archive/contract/release identities,
+active managed hosts, inconsistent duration decisions, complete releases, and
+boundaries too far away for the controller's 24-hour guard, then emits the exact
+argument vector to arm. On the current checkpoint it independently reproduced
+965 retained results and the existing 2026-08-02 05:00:10 UTC invocation. The
+ignored plan captured at provider time 02:07:25 UTC has SHA-256
+`1263d1f07bc095607b5194776994b793436534aa9c726f196feb18a147319cc7`;
+four focused tests cover the guarded boundary, complete-release stop, wrong
+duration, and inconsistent allowance decisions.
+
 ## CASC-2025 continuation readiness
 
 The 2026-08-02 local readiness audit rehashed the complete CASC-2025 corpus
