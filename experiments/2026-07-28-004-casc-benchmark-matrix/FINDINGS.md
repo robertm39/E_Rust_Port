@@ -357,10 +357,15 @@ outer `wc` record and full absolute result-file inventory and requires their
 count and path set to equal the selected nested run; the 965-result checkpoint's
 inventory hash is
 `b4d5e32777b02b7ca512a72c64de05736ec979ff5f783c1e754bd5dc33a5ef1d`.
-Nine focused unit tests additionally reject absolute, parent-traversing,
+The outer lifecycle gate also requires `Restart=no`, zero main PID and restarts,
+a terminal service state, and no live batch, Umlaut, or Vampire command in the
+captured process table. The real checkpoint's process and service-property
+hashes are respectively `1031c60ce31cd0ae09e94c1d907d51dfc61d0e34f5650e02ca1b5c9070cb9970`
+and `b298cfd3b13f34c2fb1cb576d7339701e5a62aaea42adf165ddc08ff06df2b7f`.
+Ten focused unit tests additionally reject absolute, parent-traversing,
 backslash, duplicate, linked, unchecksummed, contract-tampered, orphan-artifact,
 missing-summary-without-opt-in, inconsistent combined, and mismatched outer
-inventory fixtures while accepting internally consistent single- and
+inventory/lifecycle fixtures while accepting internally consistent single- and
 two-release runs.
 
 The validated next invocation is:

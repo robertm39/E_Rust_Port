@@ -78,6 +78,33 @@ class PathAndInventoryTests(unittest.TestCase):
                 expected_results=1,
             )
 
+    def test_rejects_nonterminal_outer_lifecycle(self) -> None:
+        captured = {
+            "processes.txt": b"PID PPID COMMAND ARGS\n1 0 systemd /sbin/init\n",
+            "service-properties.txt": (
+                b"Restart=no\nMainPID=0\nResult=success\nNRestarts=0\n"
+                b"ExecMainStatus=0\nActiveState=inactive\nSubState=dead\n"
+            ),
+        }
+        evidence = VALIDATOR.validate_outer_lifecycle_evidence(captured)
+        self.assertEqual(evidence["exec_main_status"], 0)
+
+        captured["processes.txt"] += (
+            b"42 1 umlaut /root/umlaut-4e87dac3 --auto problem.p\n"
+        )
+        with self.assertRaisesRegex(
+            VALIDATOR.ValidationError, "benchmark process"
+        ):
+            VALIDATOR.validate_outer_lifecycle_evidence(captured)
+
+        captured["processes.txt"] = b"PID PPID COMMAND ARGS\n"
+        captured["service-properties.txt"] = (
+            b"Restart=no\nMainPID=42\nNRestarts=0\nExecMainStatus=0\n"
+            b"ActiveState=active\nSubState=running\n"
+        )
+        with self.assertRaisesRegex(VALIDATOR.ValidationError, "MainPID"):
+            VALIDATOR.validate_outer_lifecycle_evidence(captured)
+
             linked = Path(temporary) / "linked.tar"
             with tarfile.open(linked, "w") as archive:
                 link = tarfile.TarInfo("root/link")

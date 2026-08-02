@@ -179,7 +179,12 @@ def copy_validated_inner_archive(
             raise ValidationError("outer archive has no casc-runs.tar.gz")
         actual_hashes: dict[str, str] = {}
         captured: dict[str, bytes] = {}
-        captured_names = {"result-count.txt", "result-files.txt"}
+        captured_names = {
+            "processes.txt",
+            "result-count.txt",
+            "result-files.txt",
+            "service-properties.txt",
+        }
         for name, member in members.items():
             if name == sums_name:
                 continue
@@ -308,6 +313,68 @@ def validate_outer_result_inventory(
         "result_count": recorded_count,
         "result_files_sha256": hashlib.sha256(
             captured["result-files.txt"]
+        ).hexdigest(),
+    }
+
+
+def validate_outer_lifecycle_evidence(
+    captured: dict[str, bytes],
+) -> dict[str, Any]:
+    required = {"processes.txt", "service-properties.txt"}
+    if not required.issubset(captured):
+        raise ValidationError("outer archive lacks lifecycle evidence")
+    try:
+        processes = captured["processes.txt"].decode("utf-8")
+        service_text = captured["service-properties.txt"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("outer lifecycle evidence is not UTF-8") from error
+    prohibited = (
+        re.compile(r"(?:^|\s)/root/umlaut-4e87dac3(?:\s|$)"),
+        re.compile(r"(?:^|\s)/root/vampire-5\.0\.1(?:\s|$)"),
+        re.compile(
+            r"(?:^|\s)/usr/bin/python3 "
+            r"/opt/e-rust-port/source/tools/casc_benchmark/batch\.py(?:\s|$)"
+        ),
+    )
+    if any(
+        pattern.search(line)
+        for line in processes.splitlines()
+        for pattern in prohibited
+    ):
+        raise ValidationError("outer process snapshot contains a benchmark process")
+    properties: dict[str, str] = {}
+    for line in service_text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in properties:
+            raise ValidationError(f"duplicate service property: {key}")
+        properties[key] = value
+    expected = {
+        "Restart": "no",
+        "MainPID": "0",
+        "NRestarts": "0",
+    }
+    for key, value in expected.items():
+        if properties.get(key) != value:
+            raise ValidationError(f"service has incompatible {key}")
+    if properties.get("ActiveState") not in {"inactive", "failed"}:
+        raise ValidationError("service did not reach a terminal state")
+    if properties.get("SubState") not in {"dead", "failed"}:
+        raise ValidationError("service substate is not terminal")
+    if not re.fullmatch(r"\d+", properties.get("ExecMainStatus", "")):
+        raise ValidationError("service has invalid ExecMainStatus")
+    return {
+        "active_state": properties["ActiveState"],
+        "sub_state": properties["SubState"],
+        "result": properties.get("Result"),
+        "exec_main_status": int(properties["ExecMainStatus"]),
+        "restarts": 0,
+        "process_snapshot_sha256": hashlib.sha256(
+            captured["processes.txt"]
+        ).hexdigest(),
+        "service_properties_sha256": hashlib.sha256(
+            captured["service-properties.txt"]
         ).hexdigest(),
     }
 
@@ -823,6 +890,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_name=arguments.run_name,
             expected_results=arguments.expected_results,
         )
+        outer_lifecycle = validate_outer_lifecycle_evidence(outer["captured"])
         result = {
             "schema_version": 1,
             "kind": "umlaut-casc-checkpoint-validation",
@@ -833,6 +901,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "root": root,
                 "outer_regular_member_count": outer["member_count"],
                 "result_inventory": outer_result_inventory,
+                "lifecycle": outer_lifecycle,
             },
             "inner_archive": {
                 "bytes": outer["inner_bytes"],
