@@ -589,6 +589,18 @@ The next provider slice is shortened to 12,600 batch seconds plus a 300-second
 service guard, preserving transfer, capture, and teardown margin after the 1,381
 seconds already consumed from the 15,649-second bank-adjusted allowance.
 
+That fresh launch completed bootstrap and saved runner
+`260802-052951-15ec` as `ready`, with quiescence-record SHA-256
+`a599e6284a04ab2e51aceaf563967b926d21f9ee2a51d781fd5345bb82f69876`.
+While replaying the successful native command's captured output, however, the
+resume logger attempted to bind an empty output record to its mandatory message
+parameter and stopped before source transfer.  The runner remained idle and no
+solver or batch process existed.  Both runner-output logging loops now discard
+only null/empty records while retaining every nonempty stdout/stderr record; two
+controller-source regressions pin that guard and the two explicit frozen-contract
+call sites.  The exact ready runner can therefore be claimed by the already
+fail-closed existing-runner path without another provider allocation.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

@@ -369,7 +369,10 @@ function Invoke-Runner {
     $exitCode = $LASTEXITCODE
     if ($null -ne $output) {
         foreach ($line in $output) {
-            Write-ResumeLog ([string]$line)
+            $text = [string]$line
+            if (-not [string]::IsNullOrEmpty($text)) {
+                Write-ResumeLog $text
+            }
         }
     }
     if ($exitCode -ne 0) {
@@ -423,7 +426,10 @@ function Invoke-CheckpointValidator {
     $exitCode = $LASTEXITCODE
     if ($null -ne $output) {
         foreach ($line in $output) {
-            Write-ResumeLog ([string]$line)
+            $text = [string]$line
+            if (-not [string]::IsNullOrEmpty($text)) {
+                Write-ResumeLog $text
+            }
         }
     }
     if ($exitCode -ne 0) {

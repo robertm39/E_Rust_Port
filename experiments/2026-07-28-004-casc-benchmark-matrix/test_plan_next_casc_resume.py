@@ -17,6 +17,23 @@ if SPEC is None or SPEC.loader is None:  # pragma: no cover
     raise RuntimeError(f"cannot load {SCRIPT}")
 PLANNER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PLANNER)
+CONTROLLER = SCRIPT.with_name("resume_j13_checkpoint.ps1")
+
+
+class ResumeControllerSourceTests(unittest.TestCase):
+    def test_native_output_logging_ignores_empty_records(self) -> None:
+        source = CONTROLLER.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            source.count('if (-not [string]::IsNullOrEmpty($text))'),
+            2,
+        )
+
+    def test_frozen_contract_identity_is_explicit_in_both_batch_calls(self) -> None:
+        source = CONTROLLER.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count('"--expected-contract-id"'), 1)
+        self.assertEqual(source.count("--expected-contract-id '$expectedContract'"), 1)
 
 
 class ResumePlanningTests(unittest.TestCase):
