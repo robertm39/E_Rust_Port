@@ -376,6 +376,34 @@ function Get-RunnerStatus {
     }
 }
 
+function Get-RequiredHighMemoryAllowance {
+    $raw = Invoke-Runner @(
+        "allowance",
+        "--required-seconds",
+        [string]$serviceRuntimeSeconds
+    )
+    try {
+        $allowance = $raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Could not parse high-memory allowance JSON"
+    }
+    if (
+        [int]$allowance.schema_version -ne 1 -or
+        [string]$allowance.kind -ne "umlaut-linode-high-memory-allowance" -or
+        [int]$allowance.required_seconds -ne $serviceRuntimeSeconds -or
+        -not [bool]$allowance.required_start_available_now -or
+        [int]$allowance.remaining_seconds -lt $serviceRuntimeSeconds -or
+        [int]$allowance.active_managed_high_memory -ne 0
+    ) {
+        throw (
+            "Trusted allowance does not permit the required " +
+            "$serviceRuntimeSeconds-second high-memory slice"
+        )
+    }
+    return $allowance
+}
+
 function ConvertFrom-SystemdProperties {
     param([Parameter(Mandatory = $true)][string]$Text)
 
@@ -422,6 +450,11 @@ try {
         throw "Parked managed runners must be resolved before a CASC resume"
     }
 
+    $allowance = Get-RequiredHighMemoryAllowance
+    Write-ResumeLog (
+        "allowance_verified observed_at=$($allowance.observed_at_utc) " +
+        "remaining_seconds=$($allowance.remaining_seconds)"
+    )
     Invoke-Runner @("check", "--high-memory") | Out-Null
     Invoke-Runner @("up", "--high-memory") | Out-Null
     $runnerAcquired = $true

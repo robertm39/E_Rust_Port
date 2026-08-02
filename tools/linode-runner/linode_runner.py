@@ -741,6 +741,97 @@ def report_high_memory_usage(usage: HighMemoryUsage) -> None:
         )
 
 
+def high_memory_usage_record(
+    usage: HighMemoryUsage,
+    *,
+    observed_at: datetime,
+    active_managed_high_memory: int,
+    required_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Return exact machine-readable scheduling state for guarded automation."""
+
+    earliest = observed_at if not usage.exhausted else usage.projected_eligible_at
+    next_capacity = max(
+        HIGH_MEMORY_DAILY_LIMIT + usage.next_balance,
+        timedelta(),
+    )
+    required_start: datetime | None = None
+    if required_seconds is not None:
+        required = timedelta(seconds=required_seconds)
+        if required <= usage.remaining:
+            required_start = observed_at
+        elif required <= HIGH_MEMORY_DAILY_LIMIT * 2:
+            required_start = usage.next_boundary
+            balance = usage.next_balance
+            while max(HIGH_MEMORY_DAILY_LIMIT + balance, timedelta()) < required:
+                balance = min(
+                    HIGH_MEMORY_DAILY_LIMIT,
+                    balance + HIGH_MEMORY_DAILY_LIMIT,
+                )
+                required_start += timedelta(days=1)
+    value = {
+        "schema_version": 1,
+        "kind": "umlaut-linode-high-memory-allowance",
+        "accounting_timezone": "fixed UTC-05:00",
+        "observed_at_utc": format_utc(observed_at),
+        "day_start_utc": format_utc(usage.day_start),
+        "next_boundary_utc": format_utc(usage.next_boundary),
+        "earliest_new_start_utc": format_utc(earliest),
+        "new_starts_allowed": not usage.exhausted,
+        "active_managed_high_memory": active_managed_high_memory,
+        "daily_base_seconds": int(HIGH_MEMORY_DAILY_LIMIT.total_seconds()),
+        "banked_at_start_seconds": int(usage.banked_at_start.total_seconds()),
+        "debt_at_start_seconds": int(usage.debt_at_start.total_seconds()),
+        "capacity_seconds": int(usage.capacity.total_seconds()),
+        "actual_seconds": int(usage.actual.total_seconds()),
+        "remaining_seconds": int(usage.remaining.total_seconds()),
+        "projected_capacity_at_next_boundary_seconds": int(
+            next_capacity.total_seconds()
+        ),
+        "banked_at_next_boundary_seconds": int(
+            usage.banked_at_next_boundary.total_seconds()
+        ),
+        "debt_at_next_boundary_seconds": int(
+            usage.debt_at_next_boundary.total_seconds()
+        ),
+    }
+    if required_seconds is not None:
+        value["required_seconds"] = required_seconds
+        value["required_start_available_now"] = required_start == observed_at
+        value["projected_earliest_required_start_utc"] = (
+            format_utc(required_start) if required_start is not None else None
+        )
+        value["required_start_projection_warning"] = (
+            "The projection assumes no additional high-memory usage accrues."
+        )
+    return value
+
+
+def report_high_memory_allowance_json(
+    api: LinodeApi,
+    *,
+    required_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Query trusted provider state and emit a read-only JSON allowance record."""
+
+    observed_at = api.trusted_now()
+    active_linodes = api.list_all("/linode/instances")
+    usage = high_memory_usage(observed_at, active_linodes=active_linodes)
+    active_managed = sum(
+        linode.get("type") == HIGH_MEMORY_TYPE
+        and is_managed_label(linode.get("label"))
+        for linode in active_linodes
+    )
+    value = high_memory_usage_record(
+        usage,
+        observed_at=observed_at,
+        active_managed_high_memory=active_managed,
+        required_seconds=required_seconds,
+    )
+    print(json.dumps(value, indent=2, sort_keys=True))
+    return value
+
+
 def require_high_memory_allowance(usage: HighMemoryUsage) -> None:
     if usage.exhausted:
         raise RunnerError(
@@ -2718,6 +2809,15 @@ def parser() -> argparse.ArgumentParser:
         help="delete the active runner and every parked runner immediately",
     )
     commands.add_parser("status", help="show local and live runner state")
+    allowance = commands.add_parser(
+        "allowance",
+        help="show machine-readable guarded high-memory allowance state",
+    )
+    allowance.add_argument(
+        "--required-seconds",
+        type=int,
+        help="project the earliest start with at least this much capacity",
+    )
     reap = commands.add_parser("reap", help=argparse.SUPPRESS)
     reap.add_argument("--linode-id", type=int, required=True)
     reap.add_argument("--lease-id", required=True)
@@ -2802,6 +2902,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Runner and firewall deleted.")
         elif arguments.command == "status":
             status(api)
+        elif arguments.command == "allowance":
+            if (
+                arguments.required_seconds is not None
+                and arguments.required_seconds <= 0
+            ):
+                raise RunnerError("--required-seconds must be positive")
+            report_high_memory_allowance_json(
+                api,
+                required_seconds=arguments.required_seconds,
+            )
         elif arguments.command == "reap":
             path = parked_state_path(arguments.linode_id)
             with lifecycle_lock():

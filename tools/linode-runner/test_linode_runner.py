@@ -695,6 +695,74 @@ class HighMemoryUsageTests(unittest.TestCase):
             self.assertEqual(usage.remaining, timedelta(hours=8))
             self.assertEqual(usage.next_balance, timedelta(hours=4))
 
+    def test_machine_allowance_record_exposes_exact_boundaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            usage = self.usage(Path(temporary) / "runs")
+            value = runner.high_memory_usage_record(
+                usage,
+                observed_at=self.NOW,
+                active_managed_high_memory=0,
+            )
+        self.assertEqual(
+            value["kind"], "umlaut-linode-high-memory-allowance"
+        )
+        self.assertEqual(value["observed_at_utc"], "2026-07-27T15:00:00+00:00")
+        self.assertEqual(value["next_boundary_utc"], "2026-07-28T05:00:00+00:00")
+        self.assertEqual(
+            value["earliest_new_start_utc"], "2026-07-27T15:00:00+00:00"
+        )
+        self.assertTrue(value["new_starts_allowed"])
+        self.assertEqual(value["capacity_seconds"], 8 * 60 * 60)
+        self.assertEqual(value["remaining_seconds"], 8 * 60 * 60)
+        self.assertEqual(
+            value["projected_capacity_at_next_boundary_seconds"],
+            8 * 60 * 60,
+        )
+
+    def test_machine_allowance_projects_required_slice_boundary(self):
+        usage = runner.HighMemoryUsage(
+            actual=timedelta(seconds=27_551),
+            balance_at_start=timedelta(hours=4),
+            day_start=datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
+            next_boundary=datetime(2026, 8, 2, 5, tzinfo=timezone.utc),
+        )
+        value = runner.high_memory_usage_record(
+            usage,
+            observed_at=datetime(2026, 8, 2, 2, tzinfo=timezone.utc),
+            active_managed_high_memory=0,
+            required_seconds=14_700,
+        )
+        self.assertEqual(value["remaining_seconds"], 1_249)
+        self.assertEqual(
+            value["projected_capacity_at_next_boundary_seconds"], 15_649
+        )
+        self.assertFalse(value["required_start_available_now"])
+        self.assertEqual(
+            value["projected_earliest_required_start_utc"],
+            "2026-08-02T05:00:00+00:00",
+        )
+
+    def test_allowance_command_emits_read_only_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = ProvisionApi()
+            with (
+                mock.patch.object(runner, "RUN_HISTORY", root / "runs"),
+                mock.patch.object(runner, "CURRENT_STATE", root / "current.json"),
+                mock.patch.object(runner, "PARKED_ROOT", root / "parked"),
+                mock.patch.object(runner, "LinodeApi", return_value=api),
+                mock.patch("sys.stdout", new_callable=StringIO) as stdout,
+            ):
+                exit_code = runner.main(
+                    ["allowance", "--required-seconds", "14700"]
+                )
+            value = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(value["actual_seconds"], 0)
+        self.assertEqual(value["active_managed_high_memory"], 0)
+        self.assertTrue(value["required_start_available_now"])
+        self.assertEqual(api.posts, [])
+
     def test_usage_counts_only_current_day_high_memory_overlap(self):
         with tempfile.TemporaryDirectory() as temporary:
             history = Path(temporary) / "runs"

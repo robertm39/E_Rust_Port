@@ -62,6 +62,14 @@ adjusted capacity, actual and remaining time, projected balance at the next
 boundary, and projected eligibility when blocked. It returns nonzero when a new
 high-memory start would be blocked.
 
+`allowance` is the read-only automation interface for the same trusted
+accounting state. It emits JSON with exact UTC boundaries and integer-second
+balances, capacity, usage, remaining time, and active managed high-memory count.
+Pass `--required-seconds N` to project the earliest boundary with at least that
+much capacity if no additional usage accrues; the record explicitly labels this
+assumption. Guarded controllers must still recheck the live allowance immediately
+before acquisition.
+
 This worker is the project's sole Rust/C execution environment. Do not run
 Cargo, `rustc`, Rust project binaries, the C build, C binaries, WSL, Valgrind,
 or Callgrind on the local computer. Local PowerShell only orchestrates the
@@ -202,6 +210,7 @@ runners:
 .\linode-runner.ps1 init
 .\linode-runner.ps1 check
 .\linode-runner.ps1 check --high-memory
+.\linode-runner.ps1 allowance --required-seconds 14700
 ```
 
 The key and controller state are stored under

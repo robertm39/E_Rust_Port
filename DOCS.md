@@ -529,6 +529,10 @@ timestamps rather than the local Windows clock. Run
 `.\linode-runner.ps1 check --high-memory` to see the base allowance, starting
 bank or debt, adjusted capacity, actual and remaining usage, projected next
 balance, next accounting boundary, and projected eligibility when blocked. Use
+`.\linode-runner.ps1 allowance --required-seconds N` when automation needs the
+same trusted state as JSON plus the earliest projected boundary with enough
+capacity for an `N`-second slice. The projection assumes no further usage and
+must be rechecked immediately before acquisition. Use
 the guarded `up`/`sync`/`exec`/`down` lifecycle documented in the runbook only
 when an exceptional task needs individual remote commands.
 

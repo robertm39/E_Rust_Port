@@ -14,6 +14,7 @@ param(
         "run",
         "down",
         "status",
+        "allowance",
         "reap",
         "gc"
     )]

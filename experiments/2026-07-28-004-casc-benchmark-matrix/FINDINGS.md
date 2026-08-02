@@ -339,7 +339,10 @@ Umlaut, and pinned Vampire, then emits the proposed immutable contract and
 resource limits. `-Execute` additionally requires a clean `main`, checks the
 guarded high-memory allowance immediately before acquisition, and pins the
 fresh runner, Linode, transient-service PID, invocation, and zero-restart
-identity.
+identity. Future invocations query the runner's machine-readable allowance with
+the complete 14,700-second service ceiling, require both sufficient live
+remaining capacity and zero active managed high-memory hosts, then retain the
+broader catalog/permission check as a separate preflight.
 
 Before launching a prover, the controller safely restores both archives,
 checks the checkpoint's inner hashes and contract file, regenerates the partial
