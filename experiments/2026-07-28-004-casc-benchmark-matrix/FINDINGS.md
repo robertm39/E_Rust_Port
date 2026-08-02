@@ -299,6 +299,33 @@ Clippy, native and Windows GNU x64 builds, clean FOL/HO C builds, 50 main and
 216 tool comparisons with zero unexpected mismatches, and ten behavior-exact
 benchmarks at a `1.0821091514x` aggregate Rust/C wall-time ratio.
 
+## J13 checkpoint throughput forecast
+
+[`forecast_casc_checkpoint.py`](forecast_casc_checkpoint.py) first applies the
+same outer-hash, nested-contract, result-artifact, report, inventory, and
+lifecycle validation as the deletion gate, then forecasts only from those
+accepted records. The reproducible 965-result invocation uses the checkpoint,
+manifest, contract, `--session-seconds 14400`, and `--recent-window 100` values
+recorded above. Its ignored canonical output is
+`.artifacts/casc-benchmark/j13-965-forecast.json`, SHA-256
+`a8e5912d772e3e2e6bb59ba280f51f534869f097b44d6ff1838ef60d314fe983`.
+
+The first missing coordinate is Vampire on manifest record 483,
+`LCL646+1.010`. All 1,735 remaining J13 coordinates have 180-second wall
+limits: 35 FNE, 600 FEQ, 100 FNN, 200 FNQ, and 800 UEQ, for a deliberately
+loose all-timeout upper bound of 312,300 seconds. The latest 100 completions
+used 5,295.123 seconds (52.951 seconds/result), with 82 solved, 17 timeouts, and
+one give-up. Their mean CPU use was 5.954 cores for Umlaut and 7.839 for
+Vampire, so running coordinates concurrently would oversubscribe the immutable
+eight-core contract rather than safely accelerate it.
+
+The 100-result stationary projection is 271 new results per four-hour slice and
+seven remaining slices. This is a planning estimate, not an acceptance claim:
+50-, 200-, and 500-result windows project respectively 222/eight, 326/six, and
+511/four. The observed slowdown therefore supports the existing fail-closed
+daily checkpointing but does not justify changing the frozen execution order or
+resource contract.
+
 ## Guarded checkpoint controller
 
 [`resume_j13_checkpoint.ps1`](resume_j13_checkpoint.ps1) turns each remaining
