@@ -622,6 +622,19 @@ controller/planner tests, 26 batch/report tests, 11 checkpoint-validator tests,
 and the forecast regression pass; the PowerShell parser, Python compiler, and
 whitespace gate also pass.
 
+At `2026-08-02T05:52:40Z`, trusted allowance reported 13,568 seconds remaining,
+below the complete 14,700-second service ceiling, and projected 27,968 seconds
+of capacity at the next fixed-EST boundary.  The validated successor plan is
+retained at
+`.artifacts/casc-benchmark/j13-965-next-resume-plan-260803.json`, SHA-256
+`43b0d90a11adf5ec25527c5717f9338f012bea4ab87f927041d15e197a095909`.
+Exactly one hidden clean-main controller, PID `32600`, is waiting for
+`2026-08-03T05:00:10Z` with a 14,400-second batch cap and 14,700-second service
+ceiling.  It has already hash-verified the 965-result checkpoint and immutable
+inputs; stderr is empty and runner state remains empty.  Its logs are
+`.artifacts/casc-benchmark/j13-boundary-launch-260803-050010.stdout.log` and
+`.stderr.log`.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
