@@ -326,7 +326,9 @@ combined summary with parentage and lifecycle evidence in a normalized
 checkpoint. It downloads and hash-checks that checkpoint and only then deletes
 the managed Linode and firewall. A launch-uncertain or capture-failed runner is
 retained for recovery; a failure before any launch attempt is deleted. The
-already armed 2026-08-02 J13 controller loaded the preceding script version;
+future controller also writes a sibling `.validation.json` containing the exact
+machine-readable local deletion-gate evidence and logs that sidecar's SHA-256.
+The already armed 2026-08-02 J13 controller loaded the preceding script version;
 its successor checkpoint therefore still requires an explicit local combined
 report check before the next resume, whose capture will enforce this stronger
 gate.
@@ -357,6 +359,10 @@ outer `wc` record and full absolute result-file inventory and requires their
 count and path set to equal the selected nested run; the 965-result checkpoint's
 inventory hash is
 `b4d5e32777b02b7ca512a72c64de05736ec979ff5f783c1e754bd5dc33a5ef1d`.
+For post-capture inspection, `--expected-results` may now be omitted: the same
+hash-verified outer count is used to validate the inner run and is reported with
+`count_source: outer-inventory`. Controller calls retain their explicit count,
+so both the caller and the archive must agree before automatic teardown.
 The outer lifecycle gate also requires `Restart=no`, zero main PID and restarts,
 a terminal service state, and no live batch, Umlaut, or Vampire command in the
 captured process table. The real checkpoint's process and service-property

@@ -66,6 +66,13 @@ class PathAndInventoryTests(unittest.TestCase):
             expected_results=1,
         )
         self.assertEqual(evidence["result_count"], 1)
+        derived = VALIDATOR.validate_outer_result_inventory(
+            captured=captured,
+            hashes=hashes,
+            run_name="run",
+            expected_results=None,
+        )
+        self.assertEqual(derived["count_source"], "outer-inventory")
 
         captured["result-count.txt"] = b"2 result-files.txt\n"
         with self.assertRaisesRegex(

@@ -280,20 +280,16 @@ def validate_outer_result_inventory(
     captured: dict[str, bytes],
     hashes: dict[str, str],
     run_name: str,
-    expected_results: int,
+    expected_results: int | None,
 ) -> dict[str, Any]:
     required = {"result-count.txt", "result-files.txt"}
     if not required.issubset(captured):
         raise ValidationError("outer archive lacks result inventory evidence")
+    recorded_count = parse_outer_result_count(captured)
     try:
-        count_text = captured["result-count.txt"].decode("utf-8")
         files_text = captured["result-files.txt"].decode("utf-8")
     except UnicodeDecodeError as error:
         raise ValidationError("outer result inventory is not UTF-8") from error
-    count_match = re.fullmatch(r"\s*(\d+)\s+\S*result-files\.txt\s*", count_text)
-    if count_match is None:
-        raise ValidationError("outer result count has an invalid format")
-    recorded_count = int(count_match.group(1))
     lines = files_text.splitlines()
     if any(not line or line != line.strip() for line in lines):
         raise ValidationError("outer result inventory has an invalid path line")
@@ -307,14 +303,34 @@ def validate_outer_result_inventory(
     }
     if set(lines) != expected_paths:
         raise ValidationError("outer result inventory differs from nested results")
-    if recorded_count != len(lines) or recorded_count != expected_results:
+    if recorded_count != len(lines):
         raise ValidationError("outer result count differs from validated results")
+    if expected_results is not None and recorded_count != expected_results:
+        raise ValidationError("outer result count differs from caller expectation")
     return {
         "result_count": recorded_count,
+        "count_source": (
+            "outer-inventory"
+            if expected_results is None
+            else "caller-and-outer-inventory"
+        ),
         "result_files_sha256": hashlib.sha256(
             captured["result-files.txt"]
         ).hexdigest(),
     }
+
+
+def parse_outer_result_count(captured: dict[str, bytes]) -> int:
+    if "result-count.txt" not in captured:
+        raise ValidationError("outer archive lacks result count evidence")
+    try:
+        count_text = captured["result-count.txt"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("outer result count is not UTF-8") from error
+    count_match = re.fullmatch(r"\s*(\d+)\s+\S*result-files\.txt\s*", count_text)
+    if count_match is None:
+        raise ValidationError("outer result count has an invalid format")
+    return int(count_match.group(1))
 
 
 def validate_outer_lifecycle_evidence(
@@ -707,7 +723,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--contract-id", required=True)
-    parser.add_argument("--expected-results", type=int, required=True)
+    parser.add_argument(
+        "--expected-results",
+        type=int,
+        help=(
+            "require this selected-run count; omit to derive it from the "
+            "hash-verified outer inventory"
+        ),
+    )
     parser.add_argument(
         "--combined-run",
         action="append",
@@ -745,7 +768,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValidationError("--archive-sha256 must be 64 lowercase hex digits")
         if not SHA256_PATTERN.fullmatch(contract_id):
             raise ValidationError("--contract-id must be 64 lowercase hex digits")
-        if arguments.expected_results < 0:
+        if (
+            arguments.expected_results is not None
+            and arguments.expected_results < 0
+        ):
             raise ValidationError("--expected-results cannot be negative")
         if not RUN_NAME_PATTERN.fullmatch(arguments.run_name):
             raise ValidationError("--run-name is not a safe run identifier")
@@ -803,6 +829,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             hashes, structured, inner_member_count = read_inner_archive(
                 inner_path, run_names
             )
+        selected_expected_results = (
+            arguments.expected_results
+            if arguments.expected_results is not None
+            else parse_outer_result_count(outer["captured"])
+        )
         combined = None
         if combined_specifications:
             combined_name = "casc-runs/combined-summary.json"
@@ -821,7 +852,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     combined_specifications
                 )
             }
-            if result_counts[selected_release] != arguments.expected_results:
+            if result_counts[selected_release] != selected_expected_results:
                 raise ValidationError(
                     "selected result count differs from combined summary"
                 )
@@ -882,7 +913,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_name=arguments.run_name,
                 manifest_path=manifest,
                 contract_id=contract_id,
-                expected_results=arguments.expected_results,
+                expected_results=selected_expected_results,
             )
         outer_result_inventory = validate_outer_result_inventory(
             captured=outer["captured"],

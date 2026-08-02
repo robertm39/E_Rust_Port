@@ -330,6 +330,10 @@ function Invoke-CheckpointValidator {
             $pythonPrefix = @("-u")
         }
     }
+    $validationOutput = "$Archive.validation.json"
+    if (Test-Path -LiteralPath $validationOutput) {
+        throw "Refusing to overwrite validation output: $validationOutput"
+    }
     $output = & $python @pythonPrefix $validatorPath `
         --archive $Archive `
         --archive-sha256 $ArchiveSha256 `
@@ -340,7 +344,8 @@ function Invoke-CheckpointValidator {
         --combined-run CASC-2025 $casc2025ManifestPath `
             $casc2025RunName $casc2025Contract `
         --combined-run CASC-J13 $j13ManifestPath `
-            $j13RunName $j13Contract 2>&1
+            $j13RunName $j13Contract `
+        --output $validationOutput 2>&1
     $exitCode = $LASTEXITCODE
     if ($null -ne $output) {
         foreach ($line in $output) {
@@ -350,6 +355,15 @@ function Invoke-CheckpointValidator {
     if ($exitCode -ne 0) {
         throw "Downloaded checkpoint failed streaming validation"
     }
+    if (-not (Test-Path -LiteralPath $validationOutput -PathType Leaf)) {
+        throw "Checkpoint validator did not write its evidence sidecar"
+    }
+    $validationHash = (
+        Get-FileHash -LiteralPath $validationOutput -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    Write-ResumeLog (
+        "validation_sidecar path=$validationOutput sha256=$validationHash"
+    )
 }
 
 function Get-RunnerStatus {
