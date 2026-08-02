@@ -104,18 +104,19 @@ def build_resume_plan(
     release: str,
     checkpoint: Path,
     checkpoint_sha256: str,
-    validation: dict[str, Any],
+    completed_results: int,
     allowance: dict[str, Any],
     max_session_wall_seconds: int,
     boundary_guard_seconds: int,
 ) -> dict[str, Any]:
     config = RELEASES[release]
     service_runtime_seconds = max_session_wall_seconds + 300
-    completed = validated_result_count(
-        release=release,
-        checkpoint_sha256=checkpoint_sha256,
-        validation=validation,
-    )
+    if isinstance(completed_results, bool) or not isinstance(
+        completed_results, int
+    ):
+        raise PlanningError("completed result count is invalid")
+    if not 0 <= completed_results <= config["expected_results"]:
+        raise PlanningError("completed result count is outside the release boundary")
     checks = {
         "allowance kind": (
             allowance.get("kind"),
@@ -161,7 +162,7 @@ def build_resume_plan(
         "checkpoint": {
             "path": str(checkpoint.resolve()),
             "sha256": checkpoint_sha256,
-            "completed_results": completed,
+            "completed_results": completed_results,
             "expected_results": config["expected_results"],
         },
         "allowance": {
@@ -174,7 +175,7 @@ def build_resume_plan(
             "remaining_seconds": allowance.get("remaining_seconds"),
         },
     }
-    if completed == config["expected_results"]:
+    if completed_results == config["expected_results"]:
         result["status"] = "release_complete"
         result["controller"] = None
         return result
@@ -191,7 +192,7 @@ def build_resume_plan(
         "-CheckpointSha256",
         checkpoint_sha256,
         "-ExpectedInitialResults",
-        str(completed),
+        str(completed_results),
         "-MaxSessionWallSeconds",
         str(max_session_wall_seconds),
     ]
@@ -208,28 +209,20 @@ def build_resume_plan(
     return result
 
 
-def build_campaign_complete_plan(
+def validated_combined_result_counts(
     *,
-    checkpoint: Path,
+    selected_release: str,
     checkpoint_sha256: str,
-    completed_results: dict[str, int],
-    combined_validation: dict[str, Any],
-) -> dict[str, Any]:
-    expected_results = {
-        release: int(config["expected_results"])
-        for release, config in RELEASES.items()
-    }
-    if completed_results != expected_results:
-        raise PlanningError("campaign completion requires every release boundary")
-    final_release = tuple(RELEASES)[-1]
-    validated_result_count(
-        release=final_release,
+    validation: dict[str, Any],
+) -> tuple[dict[str, int], dict[str, Any]]:
+    selected_count = validated_result_count(
+        release=selected_release,
         checkpoint_sha256=checkpoint_sha256,
-        validation=combined_validation,
+        validation=validation,
     )
-    combined = combined_validation.get("combined")
+    combined = validation.get("combined")
     if not isinstance(combined, dict):
-        raise PlanningError("campaign completion has no combined evidence")
+        raise PlanningError("campaign checkpoint has no combined evidence")
     expected_targeted_problems = sum(
         int(config["targeted_problems"]) for config in RELEASES.values()
     )
@@ -239,15 +232,31 @@ def build_campaign_complete_plan(
     expected_official_csv_count = sum(
         int(config["official_csv_count"]) for config in RELEASES.values()
     )
+    expected_releases = sorted(
+        str(config["combined_release"]) for config in RELEASES.values()
+    )
+    raw_counts = combined.get("release_completed_results")
+    if not isinstance(raw_counts, dict):
+        raise PlanningError("combined evidence has no per-release result counts")
+    if sorted(raw_counts) != expected_releases:
+        raise PlanningError("combined per-release identities do not match")
+    completed_results: dict[str, int] = {}
+    for release, config in RELEASES.items():
+        label = str(config["combined_release"])
+        count = raw_counts.get(label)
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise PlanningError(f"combined {label} result count is invalid")
+        if not 0 <= count <= config["expected_results"]:
+            raise PlanningError(
+                f"combined {label} result count is outside its boundary"
+            )
+        completed_results[release] = count
+    if completed_results[selected_release] != selected_count:
+        raise PlanningError("selected and combined result counts differ")
+    completed_total = sum(completed_results.values())
     combined_checks = {
         "combined report embedding": (combined.get("embedded"), True),
-        "combined releases": (
-            combined.get("releases"),
-            sorted(
-                str(config["combined_release"])
-                for config in RELEASES.values()
-            ),
-        ),
+        "combined releases": (combined.get("releases"), expected_releases),
         "combined targeted problems": (
             combined.get("targeted_problems"),
             expected_targeted_problems,
@@ -258,9 +267,12 @@ def build_campaign_complete_plan(
         ),
         "combined completed results": (
             combined.get("completed_results"),
-            expected_combined_results,
+            completed_total,
         ),
-        "combined missing results": (combined.get("missing_results"), 0),
+        "combined missing results": (
+            combined.get("missing_results"),
+            expected_combined_results - completed_total,
+        ),
         "combined official CSV count": (
             combined.get("official_csv_count"),
             expected_official_csv_count,
@@ -274,6 +286,31 @@ def build_campaign_complete_plan(
         raise PlanningError("combined report has an invalid SHA-256")
     if any(value not in "0123456789abcdef" for value in summary_sha256):
         raise PlanningError("combined report has an invalid SHA-256")
+    return completed_results, combined
+
+
+def build_campaign_complete_plan(
+    *,
+    checkpoint: Path,
+    checkpoint_sha256: str,
+    completed_results: dict[str, int],
+    selected_release: str,
+    combined_validation: dict[str, Any],
+) -> dict[str, Any]:
+    expected_results = {
+        release: int(config["expected_results"])
+        for release, config in RELEASES.items()
+    }
+    if completed_results != expected_results:
+        raise PlanningError("campaign completion requires every release boundary")
+    validated_counts, combined = validated_combined_result_counts(
+        selected_release=selected_release,
+        checkpoint_sha256=checkpoint_sha256,
+        validation=combined_validation,
+    )
+    if validated_counts != completed_results:
+        raise PlanningError("caller and combined per-release result counts differ")
+    summary_sha256 = combined["summary_sha256"]
     return {
         "schema_version": 1,
         "kind": "umlaut-casc-next-resume-plan",
@@ -391,57 +428,105 @@ def main(argv: Sequence[str] | None = None) -> int:
             value not in "0123456789abcdef" for value in checkpoint_sha256
         ):
             raise PlanningError("--checkpoint-sha256 must be lowercase hex")
-        releases = (
-            tuple(RELEASES)
-            if arguments.release == "auto"
-            else (arguments.release,)
-        )
-        completed_results: dict[str, int] = {}
-        selected_release: str | None = None
-        selected_validation: dict[str, Any] | None = None
-        for release in releases:
-            config = RELEASES[release]
-            validation = run_json(
+        selected_release: str
+        selected_count: int
+        if arguments.release != "auto":
+            selected_release = arguments.release
+            selected_validation = run_json(
                 validation_command(
                     checkpoint=checkpoint,
                     checkpoint_sha256=checkpoint_sha256,
-                    release=release,
+                    release=selected_release,
                 ),
-                f"{release} checkpoint validation",
+                f"{selected_release} checkpoint validation",
             )
-            completed_results[release] = validated_result_count(
-                release=release,
+            selected_count = validated_result_count(
+                release=selected_release,
                 checkpoint_sha256=checkpoint_sha256,
-                validation=validation,
+                validation=selected_validation,
             )
-            if completed_results[release] < config["expected_results"]:
-                selected_release = release
-                selected_validation = validation
-                break
-        if selected_release is None:
-            if arguments.release != "auto":
-                selected_release = arguments.release
-                selected_validation = validation
+        else:
+            valid_outer_releases: dict[str, tuple[dict[str, Any], int]] = {}
+            validation_failures: dict[str, str] = {}
+            for release in RELEASES:
+                try:
+                    validation = run_json(
+                        validation_command(
+                            checkpoint=checkpoint,
+                            checkpoint_sha256=checkpoint_sha256,
+                            release=release,
+                        ),
+                        f"{release} outer checkpoint validation",
+                    )
+                    completed = validated_result_count(
+                        release=release,
+                        checkpoint_sha256=checkpoint_sha256,
+                        validation=validation,
+                    )
+                    valid_outer_releases[release] = (validation, completed)
+                except PlanningError as error:
+                    validation_failures[release] = str(error)
+            if len(valid_outer_releases) != 1:
+                passed = sorted(valid_outer_releases)
+                failed = "; ".join(
+                    f"{release}: {detail}"
+                    for release, detail in validation_failures.items()
+                )
+                raise PlanningError(
+                    "checkpoint outer inventory did not select exactly one "
+                    f"release; passed={passed!r}; failed={failed}"
+                )
+            outer_release, (outer_validation, outer_count) = next(
+                iter(valid_outer_releases.items())
+            )
+            first_release = tuple(RELEASES)[0]
+            if (
+                outer_release == first_release
+                and outer_count < RELEASES[first_release]["expected_results"]
+            ):
+                selected_release = outer_release
+                selected_count = outer_count
             else:
                 combined_validation = run_json(
                     validation_command(
                         checkpoint=checkpoint,
                         checkpoint_sha256=checkpoint_sha256,
-                        release=tuple(RELEASES)[-1],
+                        release=outer_release,
                         combined=True,
                     ),
-                    "complete campaign validation",
+                    "campaign checkpoint validation",
                 )
-                plan = build_campaign_complete_plan(
-                    checkpoint=checkpoint,
+                completed_results, _combined = validated_combined_result_counts(
+                    selected_release=outer_release,
                     checkpoint_sha256=checkpoint_sha256,
-                    completed_results=completed_results,
-                    combined_validation=combined_validation,
+                    validation=combined_validation,
                 )
-                emit_plan(plan, arguments.output)
-                return 0
-        if selected_validation is None:  # pragma: no cover - defensive invariant
-            raise PlanningError("release selection produced no validation evidence")
+                outer_index = tuple(RELEASES).index(outer_release)
+                for prior_release in tuple(RELEASES)[:outer_index]:
+                    expected = RELEASES[prior_release]["expected_results"]
+                    if completed_results[prior_release] != expected:
+                        raise PlanningError(
+                            "campaign advanced past an incomplete release: "
+                            f"{prior_release} has "
+                            f"{completed_results[prior_release]}/{expected}"
+                        )
+                incomplete_releases = [
+                    release
+                    for release, config in RELEASES.items()
+                    if completed_results[release] < config["expected_results"]
+                ]
+                if not incomplete_releases:
+                    plan = build_campaign_complete_plan(
+                        checkpoint=checkpoint,
+                        checkpoint_sha256=checkpoint_sha256,
+                        completed_results=completed_results,
+                        selected_release=outer_release,
+                        combined_validation=combined_validation,
+                    )
+                    emit_plan(plan, arguments.output)
+                    return 0
+                selected_release = incomplete_releases[0]
+                selected_count = completed_results[selected_release]
         powershell = shutil.which("powershell.exe") or shutil.which("powershell")
         if powershell is None:
             raise PlanningError("PowerShell is required to query runner allowance")
@@ -465,7 +550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             release=selected_release,
             checkpoint=checkpoint,
             checkpoint_sha256=checkpoint_sha256,
-            validation=selected_validation,
+            completed_results=selected_count,
             allowance=allowance,
             max_session_wall_seconds=arguments.max_session_wall_seconds,
             boundary_guard_seconds=arguments.boundary_guard_seconds,

@@ -424,30 +424,32 @@ until the explicit UTC boundary, then reruns mutable repository and provider
 preflights. The independent service ceiling is 14,700 seconds.
 
 [`plan_next_casc_resume.py`](plan_next_casc_resume.py) is the nonmutating handoff
-for later slices. Its default `auto` mode lazily invokes the streaming validator
-without a caller-supplied count in campaign order, selects the first incomplete
-release, and crosses from J13 to CASC-2025 only after observing J13's exact 2,700
-result boundary. It reports `campaign_complete` without a provider query only
-after validating both exact release boundaries and reproducing the embedded
-4,251-problem, 8,502-result combined report with all 66 contextual CSVs; an
-explicit release remains available for diagnosis. For a continuation it queries
-`linode-runner allowance --required-seconds` for the complete service ceiling,
+for later slices. Its default `auto` mode runs strict selected-run validation for
+each candidate and requires exactly one release to match the SHA-bound outer
+result inventory. An incomplete J13 outer run continues directly, which preserves
+compatibility with the current legacy checkpoint's intentionally absent untouched
+CASC-2025 summary. At the J13 boundary and for every CASC-2025 checkpoint, a full
+combined pass exposes independently validated per-release counts, rejects an
+advance past incomplete J13, and selects the first incomplete campaign release.
+It reports `campaign_complete` without a provider query only after validating both
+exact release boundaries and reproducing the embedded 4,251-problem, 8,502-result
+combined report with all 66 contextual CSVs. An explicit release remains available
+for diagnosis. For a continuation it queries the complete service ceiling through
+`linode-runner allowance --required-seconds`; rejects mismatched schemas,
 archive/contract/release identities, active managed hosts, inconsistent duration
-decisions, and boundaries too far away for the controller's 24-hour guard, then
-emits the exact argument vector to arm. On the current legacy checkpoint, lazy
-validation stops at incomplete J13 without requiring the intentionally absent
-untouched CASC-2025 summary. It independently reproduced 965 retained results and
-the existing 2026-08-02 05:00:10 UTC invocation. The ignored plan captured at
-provider time 02:07:25 UTC has SHA-256
+decisions, and boundaries too far away for the controller's 24-hour guard; then
+emits the exact argument vector to arm. On the current checkpoint it independently
+reproduced 965 retained results and the existing 2026-08-02 05:00:10 UTC
+invocation. The ignored plan captured at provider time 02:07:25 UTC has SHA-256
 `1263d1f07bc095607b5194776994b793436534aa9c726f196feb18a147319cc7`;
-eleven focused tests cover guarded boundaries, release transition and campaign
-completion, malformed validation structure, wrong durations, and inconsistent
-allowance decisions. Final combined validation selects CASC-2025 so its selected
-run matches the 5,802-path outer inventory written by the campaign's final
-controller. It separately reconstructs constituent runs in the canonical report
-order and spelling, `CASC-2025` then `CASC-J13`, rather than reusing the inverse
-campaign execution order or internal CLI keys. The command-level transition test
-binds both invariants.
+15 focused tests cover guarded boundaries, both outer-run continuations, release
+transition, campaign completion, ambiguous inventories, malformed or inconsistent
+validation, illegal campaign ordering, and allowance decisions. The real legacy
+combined bridge now reports per-release counts `CASC-J13=965` and `CASC-2025=0`
+while reproducing combined-summary SHA-256 `d325fa2d...`. Final combined validation
+selects CASC-2025 so its selected run matches the 5,802-path outer inventory; it
+reconstructs constituent runs in the canonical report order and spelling,
+`CASC-2025` then `CASC-J13`, rather than reusing campaign order or internal keys.
 
 ## CASC-2025 continuation readiness
 

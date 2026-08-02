@@ -342,6 +342,10 @@ class RunValidationTests(unittest.TestCase):
             )
             self.assertEqual(evidence["completed_results"], 2)
             self.assertEqual(evidence["official_csv_count"], 2)
+            self.assertEqual(
+                evidence["release_completed_results"],
+                {"LEFT": 1, "RIGHT": 1},
+            )
 
             combined["releases"]["RIGHT"]["summary"]["completed_results"] = 0
             with self.assertRaisesRegex(

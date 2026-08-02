@@ -708,6 +708,10 @@ def validate_combined_summary(
         ).hexdigest(),
         "embedded": True,
         "releases": sorted(runs),
+        "release_completed_results": {
+            release: runs[release]["completed_results"]
+            for release in sorted(runs)
+        },
         "targeted_problems": expected["targeted_problems"],
         "expected_results": expected["expected_results"],
         "completed_results": expected["completed_results"],
@@ -891,6 +895,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         expected_combined_bytes
                     ).hexdigest(),
                     "releases": sorted(runs),
+                    "release_completed_results": {
+                        release: runs[release]["completed_results"]
+                        for release in sorted(runs)
+                    },
                     "targeted_problems": expected_combined["targeted_problems"],
                     "expected_results": expected_combined["expected_results"],
                     "completed_results": expected_combined[

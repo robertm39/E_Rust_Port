@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,21 +54,33 @@ class ResumePlanningTests(unittest.TestCase):
         }
 
     @classmethod
-    def combined_validation(cls) -> dict:
-        validation = cls.validation(5802, "casc2025")
+    def combined_validation(
+        cls,
+        *,
+        selected_release: str = "casc2025",
+        j13: int = 2700,
+        casc2025: int = 5802,
+    ) -> dict:
+        selected_count = j13 if selected_release == "j13" else casc2025
+        validation = cls.validation(selected_count, selected_release)
+        completed = j13 + casc2025
         validation["combined"] = {
             "summary_sha256": "b" * 64,
             "embedded": True,
             "releases": ["CASC-2025", "CASC-J13"],
+            "release_completed_results": {
+                "CASC-2025": casc2025,
+                "CASC-J13": j13,
+            },
             "targeted_problems": 4251,
             "expected_results": 8502,
-            "completed_results": 8502,
-            "missing_results": 0,
+            "completed_results": completed,
+            "missing_results": 8502 - completed,
             "official_csv_count": 66,
         }
         return validation
 
-    def run_main(self, responses: list[dict]) -> tuple[int, dict, object, object]:
+    def run_main(self, responses: list[object]) -> tuple[int, dict, object, object]:
         output = io.StringIO()
         with (
             patch.object(PLANNER, "run_json", side_effect=responses) as runner,
@@ -89,12 +101,38 @@ class ResumePlanningTests(unittest.TestCase):
             )
         return status, json.loads(output.getvalue()), runner, which
 
+    def run_main_error(
+        self, responses: list[object]
+    ) -> tuple[int, str, object, object]:
+        output = io.StringIO()
+        error_output = io.StringIO()
+        with (
+            patch.object(PLANNER, "run_json", side_effect=responses) as runner,
+            patch.object(
+                PLANNER.shutil,
+                "which",
+                return_value="powershell.exe",
+            ) as which,
+            redirect_stdout(output),
+            redirect_stderr(error_output),
+        ):
+            status = PLANNER.main(
+                [
+                    "--checkpoint",
+                    str(self.CHECKPOINT),
+                    "--checkpoint-sha256",
+                    self.SHA256,
+                ]
+            )
+        self.assertEqual(output.getvalue(), "")
+        return status, error_output.getvalue(), runner, which
+
     def test_plans_guarded_boundary_from_validated_inputs(self) -> None:
         value = PLANNER.build_resume_plan(
             release="j13",
             checkpoint=self.CHECKPOINT,
             checkpoint_sha256=self.SHA256,
-            validation=self.validation(965),
+            completed_results=965,
             allowance=self.allowance(available=False),
             max_session_wall_seconds=14400,
             boundary_guard_seconds=10,
@@ -109,7 +147,7 @@ class ResumePlanningTests(unittest.TestCase):
             release="j13",
             checkpoint=self.CHECKPOINT,
             checkpoint_sha256=self.SHA256,
-            validation=self.validation(2700),
+            completed_results=2700,
             allowance=self.allowance(available=True),
             max_session_wall_seconds=14400,
             boundary_guard_seconds=10,
@@ -125,7 +163,7 @@ class ResumePlanningTests(unittest.TestCase):
                 release="j13",
                 checkpoint=self.CHECKPOINT,
                 checkpoint_sha256=self.SHA256,
-                validation=self.validation(965),
+                completed_results=965,
                 allowance=allowance,
                 max_session_wall_seconds=14400,
                 boundary_guard_seconds=10,
@@ -139,7 +177,7 @@ class ResumePlanningTests(unittest.TestCase):
                 release="j13",
                 checkpoint=self.CHECKPOINT,
                 checkpoint_sha256=self.SHA256,
-                validation=self.validation(965),
+                completed_results=965,
                 allowance=allowance,
                 max_session_wall_seconds=14400,
                 boundary_guard_seconds=10,
@@ -161,6 +199,7 @@ class ResumePlanningTests(unittest.TestCase):
                 checkpoint=self.CHECKPOINT,
                 checkpoint_sha256=self.SHA256,
                 completed_results={"j13": 2700, "casc2025": 5801},
+                selected_release="casc2025",
                 combined_validation=self.combined_validation(),
             )
 
@@ -169,6 +208,7 @@ class ResumePlanningTests(unittest.TestCase):
             checkpoint=self.CHECKPOINT,
             checkpoint_sha256=self.SHA256,
             completed_results={"j13": 2700, "casc2025": 5802},
+            selected_release="casc2025",
             combined_validation=self.combined_validation(),
         )
         self.assertEqual(value["status"], "campaign_complete")
@@ -185,39 +225,95 @@ class ResumePlanningTests(unittest.TestCase):
                 checkpoint=self.CHECKPOINT,
                 checkpoint_sha256=self.SHA256,
                 completed_results={"j13": 2700, "casc2025": 5802},
+                selected_release="casc2025",
                 combined_validation=validation,
+            )
+
+    def test_combined_counts_reject_selected_count_disagreement(self) -> None:
+        validation = self.combined_validation(casc2025=50)
+        validation["combined"]["release_completed_results"]["CASC-2025"] = 49
+        with self.assertRaisesRegex(PLANNER.PlanningError, "selected and combined"):
+            PLANNER.validated_combined_result_counts(
+                selected_release="casc2025",
+                checkpoint_sha256=self.SHA256,
+                validation=validation,
             )
 
     def test_auto_mode_stops_validation_at_incomplete_j13(self) -> None:
         status, value, runner, which = self.run_main(
-            [self.validation(965), self.allowance(available=True)]
+            [
+                self.validation(965),
+                PLANNER.PlanningError("not the outer release"),
+                self.allowance(available=True),
+            ]
         )
         self.assertEqual(status, 0)
         self.assertEqual(value["release"], "j13")
-        self.assertEqual(runner.call_count, 2)
+        self.assertEqual(runner.call_count, 3)
         which.assert_called_once()
 
     def test_auto_mode_transitions_to_casc2025(self) -> None:
         status, value, runner, which = self.run_main(
             [
                 self.validation(2700),
-                self.validation(0, "casc2025"),
+                PLANNER.PlanningError("not the outer release"),
+                self.combined_validation(
+                    selected_release="j13",
+                    j13=2700,
+                    casc2025=0,
+                ),
                 self.allowance(available=True),
             ]
         )
         self.assertEqual(status, 0)
         self.assertEqual(value["release"], "casc2025")
-        self.assertEqual(runner.call_count, 3)
-        second_command = runner.call_args_list[1].args[0]
-        self.assertTrue(
-            any("casc_2025_manifest.jsonl" in str(part) for part in second_command)
-        )
+        self.assertEqual(runner.call_count, 4)
+        combined_command = runner.call_args_list[2].args[0]
+        manifest_index = combined_command.index("--manifest") + 1
+        self.assertIn("casc_2026_manifest.jsonl", combined_command[manifest_index])
         which.assert_called_once()
+
+    def test_auto_mode_continues_casc2025_from_its_outer_inventory(self) -> None:
+        status, value, runner, which = self.run_main(
+            [
+                PLANNER.PlanningError("not the outer release"),
+                self.validation(50, "casc2025"),
+                self.combined_validation(casc2025=50),
+                self.allowance(available=True),
+            ]
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(value["release"], "casc2025")
+        self.assertEqual(value["checkpoint"]["completed_results"], 50)
+        self.assertEqual(runner.call_count, 4)
+        which.assert_called_once()
+
+    def test_auto_mode_rejects_ambiguous_outer_inventory(self) -> None:
+        status, error, runner, which = self.run_main_error(
+            [self.validation(965), self.validation(50, "casc2025")]
+        )
+        self.assertEqual(status, 2)
+        self.assertIn("did not select exactly one release", error)
+        self.assertEqual(runner.call_count, 2)
+        which.assert_not_called()
+
+    def test_auto_mode_rejects_advancing_past_incomplete_j13(self) -> None:
+        status, error, runner, which = self.run_main_error(
+            [
+                PLANNER.PlanningError("not the outer release"),
+                self.validation(50, "casc2025"),
+                self.combined_validation(j13=2699, casc2025=50),
+            ]
+        )
+        self.assertEqual(status, 2)
+        self.assertIn("advanced past an incomplete release", error)
+        self.assertEqual(runner.call_count, 3)
+        which.assert_not_called()
 
     def test_auto_mode_ends_without_provider_query(self) -> None:
         status, value, runner, which = self.run_main(
             [
-                self.validation(2700),
+                PLANNER.PlanningError("not the outer release"),
                 self.validation(5802, "casc2025"),
                 self.combined_validation(),
             ]
