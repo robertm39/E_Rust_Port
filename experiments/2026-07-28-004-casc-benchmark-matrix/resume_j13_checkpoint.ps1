@@ -93,6 +93,13 @@ $checkpointPrefix = [string]$releaseConfig.checkpoint_prefix
 $servicePrefix = [string]$releaseConfig.service_prefix
 $sessionPrefix = [string]$releaseConfig.session_prefix
 $expectedTotalResults = [int]$releaseConfig.expected_total_results
+$casc2025ManifestRelative = "benchmarks/casc_2025_manifest.jsonl"
+$casc2025RunRoot = (
+    "/opt/e-rust-port/casc-runs/casc30-2025-089e06c8-v2"
+)
+$j13ManifestRelative = "benchmarks/casc_2026_manifest.jsonl"
+$j13RunRoot = "/opt/e-rust-port/casc-runs/casc-j13-2026-089e06c8-v2"
+$combinedSummary = "/opt/e-rust-port/casc-runs/combined-summary.json"
 $runnerPath = Join-Path $repoRoot "linode-runner.ps1"
 $validatorPath = Join-Path $PSScriptRoot "validate_casc_checkpoint.py"
 $manifestPath = Join-Path (
@@ -588,8 +595,13 @@ python3 tools/casc_benchmark/batch.py --manifest '$remoteManifestRelative' --pro
 set -Eeuo pipefail
 if pgrep -f '^/root/umlaut-4e87dac3( |$)' || pgrep -f '^/root/vampire-5.0.1( |$)' || pgrep -f '^/usr/bin/python3 /opt/e-rust-port/source/tools/casc_benchmark/batch.py( |$)'; then echo 'solver or batch process remains' >&2; exit 1; fi
 cd /opt/e-rust-port/source
-python3 tools/casc_benchmark/report.py --manifest '$remoteManifestRelative' --run-root '$runRoot' --allow-partial
+python3 tools/casc_benchmark/report.py --manifest '$casc2025ManifestRelative' --run-root '$casc2025RunRoot' --allow-partial
+python3 tools/casc_benchmark/report.py --manifest '$j13ManifestRelative' --run-root '$j13RunRoot' --allow-partial
+python3 tools/casc_benchmark/combined_report.py --allow-partial --input CASC-2025 '$casc2025ManifestRelative' '$casc2025RunRoot' --input CASC-J13 '$j13ManifestRelative' '$j13RunRoot' --output '$combinedSummary'
 grep -Fq '"contract_id":"$expectedContract"' '$runRoot/summary.json'
+grep -Fq '"expected_results":8502' '$combinedSummary'
+grep -Fq '"targeted_problems":4251' '$combinedSummary'
+grep -Fq '"csv_count":66' '$combinedSummary'
 test ! -e '$remoteCheckpointRoot'
 install -d -m 0700 '$remoteCheckpointRoot'
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteCheckpointRoot/casc-runs.tar.gz' -C /opt/e-rust-port casc-runs

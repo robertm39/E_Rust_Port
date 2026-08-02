@@ -320,10 +320,16 @@ report to validate every retained result and stdout/stderr hash, checks the
 expected retained-result count, and runs the batch harness's canonical host,
 corpus, binary, cgroup, and contract preflight. It monitors at most once per
 minute. After service exit it rejects process, cgroup, and unit residue,
-regenerates the report, embeds parentage and lifecycle evidence in a normalized
-checkpoint, downloads and hash-checks that checkpoint, and only then deletes
+regenerates both release reports plus the 8,502-coordinate combined partial
+report, verifies its 4,251-problem and 66-official-CSV context, and embeds that
+combined summary with parentage and lifecycle evidence in a normalized
+checkpoint. It downloads and hash-checks that checkpoint and only then deletes
 the managed Linode and firewall. A launch-uncertain or capture-failed runner is
-retained for recovery; a failure before any launch attempt is deleted.
+retained for recovery; a failure before any launch attempt is deleted. The
+already armed 2026-08-02 J13 controller loaded the preceding script version;
+its successor checkpoint therefore still requires an explicit local combined
+report check before the next resume, whose capture will enforce this stronger
+gate.
 
 [`validate_casc_checkpoint.py`](validate_casc_checkpoint.py) supplies the final
 local deletion gate for subsequent slices. It first verifies the expected outer
