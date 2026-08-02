@@ -51,6 +51,7 @@ def validated_member_name(name: str) -> PurePosixPath:
     if (
         not name
         or path.is_absolute()
+        or "\\" in name
         or ".." in path.parts
         or "." in path.parts
         or path.as_posix() != name

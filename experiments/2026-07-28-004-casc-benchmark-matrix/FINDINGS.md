@@ -331,7 +331,10 @@ and path, hashes every referenced stdout/stderr artifact, rejects orphan
 artifacts, and reconciles solver/result counts with the regenerated report and
 session runner identities. The existing 965-result checkpoint passes with the
 same contract, inner-archive, report, and 483/482 solver hashes recorded above;
-wrong outer hashes and wrong expected-result counts are rejected.
+wrong outer hashes and wrong expected-result counts are rejected. Six focused
+unit tests additionally reject absolute, parent-traversing, backslash,
+duplicate, linked, unchecksummed, contract-tampered, and orphan-artifact
+fixtures while accepting a complete internally consistent synthetic run.
 
 The validated next invocation is:
 

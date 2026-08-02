@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Focused tests for the guarded CASC checkpoint validator."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPT = Path(__file__).with_name("validate_casc_checkpoint.py")
+SPEC = importlib.util.spec_from_file_location("validate_casc_checkpoint", SCRIPT)
+if SPEC is None or SPEC.loader is None:  # pragma: no cover
+    raise RuntimeError(f"cannot load {SCRIPT}")
+VALIDATOR = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(VALIDATOR)
+
+
+def canonical_json(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+class PathAndInventoryTests(unittest.TestCase):
+    def test_rejects_unsafe_member_paths(self) -> None:
+        for name in ("/absolute", "../escape", "root/../escape", "root\\file"):
+            with self.subTest(name=name):
+                with self.assertRaises(VALIDATOR.ValidationError):
+                    VALIDATOR.validated_member_name(name)
+
+    def test_rejects_unsafe_and_duplicate_checksum_names(self) -> None:
+        digest = "a" * 64
+        for value in (
+            f"{digest}  path/file\n".encode(),
+            f"{digest}  file\n{digest}  file\n".encode(),
+            b"not-a-hash  file\n",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(VALIDATOR.ValidationError):
+                    VALIDATOR.parse_sha256s(value)
+
+    def test_rejects_duplicate_and_link_members(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            duplicate = Path(temporary) / "duplicate.tar"
+            with tarfile.open(duplicate, "w") as archive:
+                archive.addfile(tarfile.TarInfo("root"))
+                archive.addfile(tarfile.TarInfo("root"))
+            with tarfile.open(duplicate, "r") as archive:
+                with self.assertRaises(VALIDATOR.ValidationError):
+                    VALIDATOR.regular_members(archive)
+
+            linked = Path(temporary) / "linked.tar"
+            with tarfile.open(linked, "w") as archive:
+                link = tarfile.TarInfo("root/link")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "target"
+                archive.addfile(link)
+            with tarfile.open(linked, "r") as archive:
+                with self.assertRaises(VALIDATOR.ValidationError):
+                    VALIDATOR.regular_members(archive)
+
+
+class RunValidationTests(unittest.TestCase):
+    def make_fixture(
+        self, root: Path
+    ) -> tuple[Path, dict[str, str], dict[str, bytes], str]:
+        metadata = {
+            "record_type": "manifest",
+            "schema_version": 1,
+            "kind": "umlaut-casc-benchmark-manifest",
+            "problem_count": 1,
+            "presentation": {"id": "fixture-presentation"},
+        }
+        record = {
+            "record_type": "problem",
+            "problem_id": "FIX001+1",
+            "category": "FOO",
+            "sha256": "1" * 64,
+        }
+        manifest = root / "manifest.jsonl"
+        manifest.write_bytes(canonical_json(metadata) + canonical_json(record))
+        manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        selected_hash = hashlib.sha256(b"FIX001+1\n").hexdigest()
+        contract = {
+            "schema_version": 1,
+            "kind": "umlaut-casc-benchmark-run",
+            "manifest_sha256": manifest_hash,
+            "selected_problem_count": 1,
+            "selected_problem_ids": ["FIX001+1"],
+            "selected_problem_ids_sha256": selected_hash,
+            "presentation_id": "fixture-presentation",
+        }
+        contract_id = hashlib.sha256(canonical_json(contract)).hexdigest()
+        contract["contract_id"] = contract_id
+        stdout = b"proof\n"
+        stderr = b""
+        result = {
+            "contract_id": contract_id,
+            "problem_id": "FIX001+1",
+            "problem_sha256": "1" * 64,
+            "solver": "umlaut",
+            "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+        }
+        summary = {
+            "contract_id": contract_id,
+            "manifest_sha256": manifest_hash,
+            "completed_results": 1,
+            "expected_results": 2,
+            "missing_results": 1,
+            "complete": False,
+            "solvers": {
+                "umlaut": {"groups": {"overall": {"all": {"completed": 1}}}},
+                "vampire": {"groups": {"overall": {"all": {"completed": 0}}}},
+            },
+        }
+        session = {
+            "contract_id": contract_id,
+            "runner": {"label": "runner", "run_id": "run", "linode_id": 1},
+        }
+        prefix = "casc-runs/fixture/"
+        key = VALIDATOR.safe_result_key(1, record)
+        base = f"{prefix}results/umlaut/foo/{key}"
+        values = {
+            f"{prefix}contract.json": canonical_json(contract),
+            f"{prefix}summary.json": canonical_json(summary),
+            f"{prefix}sessions/session.json": canonical_json(session),
+            f"{base}.json": canonical_json(result),
+            f"{base}.stdout": stdout,
+            f"{base}.stderr": stderr,
+        }
+        hashes = {
+            name: hashlib.sha256(value).hexdigest() for name, value in values.items()
+        }
+        structured = {
+            name: value for name, value in values.items() if name.endswith(".json")
+        }
+        return manifest, hashes, structured, contract_id
+
+    def test_accepts_consistent_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, hashes, structured, contract_id = self.make_fixture(
+                Path(temporary)
+            )
+            result = VALIDATOR.validate_run(
+                hashes=hashes,
+                structured=structured,
+                run_name="fixture",
+                manifest_path=manifest,
+                contract_id=contract_id,
+                expected_results=1,
+            )
+        self.assertEqual(result["completed_results"], 1)
+        self.assertEqual(result["result_counts"], {"umlaut": 1})
+
+    def test_rejects_tampered_contract_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, hashes, structured, contract_id = self.make_fixture(
+                Path(temporary)
+            )
+            name = "casc-runs/fixture/contract.json"
+            contract = json.loads(structured[name])
+            contract["presentation_id"] = "tampered"
+            structured[name] = canonical_json(contract)
+            hashes[name] = hashlib.sha256(structured[name]).hexdigest()
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "content does not hash"
+            ):
+                VALIDATOR.validate_run(
+                    hashes=hashes,
+                    structured=structured,
+                    run_name="fixture",
+                    manifest_path=manifest,
+                    contract_id=contract_id,
+                    expected_results=1,
+                )
+
+    def test_rejects_orphan_result_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, hashes, structured, contract_id = self.make_fixture(
+                Path(temporary)
+            )
+            hashes["casc-runs/fixture/results/umlaut/foo/orphan.stdout"] = (
+                hashlib.sha256(b"").hexdigest()
+            )
+            with self.assertRaisesRegex(
+                VALIDATOR.ValidationError, "orphan or unreferenced"
+            ):
+                VALIDATOR.validate_run(
+                    hashes=hashes,
+                    structured=structured,
+                    run_name="fixture",
+                    manifest_path=manifest,
+                    contract_id=contract_id,
+                    expected_results=1,
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
