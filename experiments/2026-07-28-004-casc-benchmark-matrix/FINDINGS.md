@@ -628,12 +628,15 @@ of capacity at the next fixed-EST boundary.  The validated successor plan is
 retained at
 `.artifacts/casc-benchmark/j13-965-next-resume-plan-260803.json`, SHA-256
 `43b0d90a11adf5ec25527c5717f9338f012bea4ab87f927041d15e197a095909`.
-Exactly one hidden clean-main controller, PID `32600`, is waiting for
-`2026-08-03T05:00:10Z` with a 14,400-second batch cap and 14,700-second service
-ceiling.  It has already hash-verified the 965-result checkpoint and immutable
-inputs; stderr is empty and runner state remains empty.  Its logs are
-`.artifacts/casc-benchmark/j13-boundary-launch-260803-050010.stdout.log` and
-`.stderr.log`.
+The first detached controller, PID `32600`, hash-verified the inputs but did not
+survive beyond its launching execution environment; it exited silently while
+sleeping and never contacted the provider.  The durable replacement is Windows
+scheduled task `Umlaut-CASC-J13-Resume-20260803T050010Z`, state `Ready`, with an
+exact next-run time of `2026-08-03T05:00:10Z`.  Its action is the planner's
+clean-main controller invocation with a 14,400-second batch cap and
+14,700-second service ceiling, an eight-hour task ceiling, and duplicate starts
+disabled.  Task history is still `never run`, the transient process is absent,
+and runner state remains empty.
 
 ## Remaining acceptance boundary
 
