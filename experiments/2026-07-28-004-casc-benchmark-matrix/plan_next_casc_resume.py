@@ -218,8 +218,9 @@ def build_campaign_complete_plan(
     }
     if completed_results != expected_results:
         raise PlanningError("campaign completion requires every release boundary")
+    final_release = tuple(RELEASES)[-1]
     validated_result_count(
-        release="j13",
+        release=final_release,
         checkpoint_sha256=checkpoint_sha256,
         validation=combined_validation,
     )
@@ -419,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     validation_command(
                         checkpoint=checkpoint,
                         checkpoint_sha256=checkpoint_sha256,
-                        release="j13",
+                        release=tuple(RELEASES)[-1],
                         combined=True,
                     ),
                     "complete campaign validation",

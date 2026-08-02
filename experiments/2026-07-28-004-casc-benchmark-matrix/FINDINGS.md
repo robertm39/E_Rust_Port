@@ -442,7 +442,9 @@ provider time 02:07:25 UTC has SHA-256
 `1263d1f07bc095607b5194776994b793436534aa9c726f196feb18a147319cc7`;
 eleven focused tests cover guarded boundaries, release transition and campaign
 completion, malformed validation structure, wrong durations, and inconsistent
-allowance decisions.
+allowance decisions. Final combined validation selects CASC-2025 so its selected
+run matches the 5,802-path outer inventory written by the campaign's final
+controller; the command-level transition test binds this invariant.
 
 ## CASC-2025 continuation readiness
 

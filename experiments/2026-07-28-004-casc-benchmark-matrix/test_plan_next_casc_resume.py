@@ -55,7 +55,7 @@ class ResumePlanningTests(unittest.TestCase):
 
     @classmethod
     def combined_validation(cls) -> dict:
-        validation = cls.validation(2700)
+        validation = cls.validation(5802, "casc2025")
         validation["combined"] = {
             "summary_sha256": "b" * 64,
             "embedded": True,
@@ -227,6 +227,8 @@ class ResumePlanningTests(unittest.TestCase):
         self.assertEqual(runner.call_count, 3)
         combined_command = runner.call_args_list[2].args[0]
         self.assertEqual(combined_command.count("--combined-run"), 2)
+        manifest_index = combined_command.index("--manifest") + 1
+        self.assertIn("casc_2025_manifest.jsonl", combined_command[manifest_index])
         which.assert_not_called()
 
 
