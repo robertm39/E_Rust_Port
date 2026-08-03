@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -264,14 +265,33 @@ class Cgroup:
     def close(self) -> None:
         self.kill()
         deadline = time.monotonic() + 2.0
-        while self.pids() and time.monotonic() < deadline:
+        last_error: OSError | None = None
+        while True:
+            pids = self.pids()
+            populated = parse_key_values(self.path / "cgroup.events").get(
+                "populated"
+            )
+            if not pids and populated == 0:
+                try:
+                    self.path.rmdir()
+                    return
+                except OSError as error:
+                    if error.errno not in {errno.EBUSY, errno.ENOTEMPTY}:
+                        raise BatchError(
+                            "cgroup cleanup could not remove empty boundary "
+                            f"{self.path}: {error}"
+                        ) from error
+                    last_error = error
+            if time.monotonic() >= deadline:
+                detail = (
+                    f"pids={pids}, populated={populated}, "
+                    f"last_remove_error={last_error}"
+                )
+                raise BatchError(
+                    "cgroup cleanup left live processes or state in "
+                    f"{self.path}: {detail}"
+                ) from last_error
             time.sleep(0.01)
-        try:
-            self.path.rmdir()
-        except OSError as error:
-            raise BatchError(
-                f"cgroup cleanup left live processes or state in {self.path}: {error}"
-            ) from error
 
     def __enter__(self) -> Cgroup:
         return self

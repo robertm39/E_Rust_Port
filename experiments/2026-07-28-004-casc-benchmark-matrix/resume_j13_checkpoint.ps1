@@ -29,6 +29,16 @@ param(
 
     [switch]$AdoptCompletedService,
 
+    [switch]$AdoptFailedService,
+
+    [ValidateSet("exit-code", "signal", "timeout", "watchdog", "oom-kill")]
+    [string]$ExpectedServiceResult,
+
+    [ValidateRange(1, 255)]
+    [int]$ExpectedServiceExecStatus,
+
+    [switch]$ClearFailedCaptureResidue,
+
     [ValidateRange(1, 2147483647)]
     [int64]$ExpectedServiceMainPid,
 
@@ -51,7 +61,7 @@ $vampireSha256 = (
     "3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665"
 )
 $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
-$completedCaptureAllowanceSeconds = 1800
+$terminalCaptureAllowanceSeconds = 600
 $runnerProbeTimeoutSeconds = 90
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
@@ -161,9 +171,15 @@ $CheckpointSha256 = $CheckpointSha256.ToLowerInvariant()
 
 $adoptingExistingService = $AdoptExistingService.IsPresent
 $adoptingCompletedService = $AdoptCompletedService.IsPresent
-$adoptingAnyService = $adoptingExistingService -or $adoptingCompletedService
-if ($adoptingExistingService -and $adoptingCompletedService) {
-    throw "AdoptExistingService and AdoptCompletedService are mutually exclusive"
+$adoptingFailedService = $AdoptFailedService.IsPresent
+$adoptionCount = @(
+    $adoptingExistingService,
+    $adoptingCompletedService,
+    $adoptingFailedService
+).Where({ $_ }).Count
+$adoptingAnyService = $adoptionCount -eq 1
+if ($adoptionCount -gt 1) {
+    throw "Service adoption modes are mutually exclusive"
 }
 if ($adoptingAnyService) {
     if (
@@ -180,15 +196,142 @@ if ($adoptingAnyService) {
         )
     }
 }
+if ($adoptingFailedService) {
+    if (
+        -not $PSBoundParameters.ContainsKey("ExpectedServiceResult") -or
+        -not $PSBoundParameters.ContainsKey("ExpectedServiceExecStatus")
+    ) {
+        throw (
+            "Failed-service adoption requires ExpectedServiceResult and " +
+            "ExpectedServiceExecStatus"
+        )
+    }
+}
 elseif (
-    $PSBoundParameters.ContainsKey("ExpectedServiceMainPid") -or
-    $PSBoundParameters.ContainsKey("ExpectedServiceInvocationId")
+    $PSBoundParameters.ContainsKey("ExpectedServiceResult") -or
+    $PSBoundParameters.ContainsKey("ExpectedServiceExecStatus") -or
+    $ClearFailedCaptureResidue
+) {
+    throw (
+        "Failed-service outcome and residue cleanup require " +
+        "AdoptFailedService"
+    )
+}
+elseif (
+    -not $adoptingAnyService -and
+    (
+        $PSBoundParameters.ContainsKey("ExpectedServiceMainPid") -or
+        $PSBoundParameters.ContainsKey("ExpectedServiceInvocationId")
+    )
 ) {
     throw (
         "Expected service identity requires AdoptExistingService or " +
-        "AdoptCompletedService"
+        "a terminal adoption mode"
     )
 }
+
+$failedTerminalJournalVerifier = @'
+import base64
+import json
+import sys
+
+
+unit, invocation, pid_text, command_base64, result, status_text = sys.argv[1:]
+expected_pid = int(pid_text)
+expected_status = int(status_text)
+expected_command = base64.b64decode(command_base64).decode("utf-8")
+records = []
+for line_number, line in enumerate(sys.stdin, 1):
+    if not line.strip():
+        continue
+    try:
+        records.append(json.loads(line))
+    except json.JSONDecodeError as error:
+        raise SystemExit(
+            f"invalid journal JSON at line {line_number}: {error}"
+        )
+
+service_records = [
+    record
+    for record in records
+    if record.get("_SYSTEMD_UNIT") == unit or record.get("UNIT") == unit
+]
+if not service_records:
+    raise SystemExit("journal contains no records for the expected unit")
+observed_invocations = {
+    value
+    for record in service_records
+    for value in (
+        record.get("_SYSTEMD_INVOCATION_ID"),
+        record.get("INVOCATION_ID"),
+    )
+    if value
+}
+if observed_invocations != {invocation}:
+    raise SystemExit(
+        "journal invocation set mismatch: "
+        f"{sorted(observed_invocations)!r}"
+    )
+commands = {
+    record.get("_CMDLINE")
+    for record in service_records
+    if record.get("_SYSTEMD_UNIT") == unit
+    and record.get("_SYSTEMD_INVOCATION_ID") == invocation
+    and str(record.get("_PID")) == str(expected_pid)
+    and record.get("_CMDLINE")
+}
+if commands != {expected_command}:
+    raise SystemExit("journal command does not match the guarded batch")
+
+exit_records = [
+    record
+    for record in service_records
+    if record.get("UNIT") == unit
+    and record.get("INVOCATION_ID") == invocation
+    and record.get("MESSAGE_ID") == "98e322203f7a4ed290d09fe03c09fe15"
+    and record.get("COMMAND") == "ExecStart"
+    and record.get("EXIT_CODE") == "exited"
+    and str(record.get("EXIT_STATUS")) == str(expected_status)
+]
+if len(exit_records) != 1:
+    raise SystemExit("journal must contain exactly one matching process exit")
+failure_message = f"{unit}: Failed with result '{result}'."
+failure_records = [
+    record
+    for record in service_records
+    if record.get("UNIT") == unit
+    and record.get("INVOCATION_ID") == invocation
+    and record.get("MESSAGE_ID") == "d9b373ed55a64feb8242e02dbe79a49c"
+    and record.get("UNIT_RESULT") == result
+    and record.get("MESSAGE") == failure_message
+]
+if len(failure_records) != 1:
+    raise SystemExit("journal must contain exactly one matching terminal failure")
+exit_sequence = int(exit_records[0]["__SEQNUM"])
+failure_sequence = int(failure_records[0]["__SEQNUM"])
+if failure_sequence <= exit_sequence:
+    raise SystemExit("terminal failure precedes the guarded process exit")
+boot_ids = {
+    record.get("_BOOT_ID") for record in service_records if record.get("_BOOT_ID")
+}
+if len(boot_ids) != 1:
+    raise SystemExit("journal records span an ambiguous boot identity")
+print(
+    json.dumps(
+        {
+            "boot_id": next(iter(boot_ids)),
+            "exec_status": expected_status,
+            "failure_sequence": failure_sequence,
+            "invocation_id": invocation,
+            "main_pid": expected_pid,
+            "result": result,
+            "unit": unit,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+'@
 
 $terminalJournalVerifier = @'
 import base64
@@ -754,6 +897,64 @@ function Get-VerifiedCompletedServiceEvidence {
     return $evidence
 }
 
+function Get-VerifiedFailedServiceEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$Unit,
+        [Parameter(Mandatory = $true)][hashtable]$Properties,
+        [Parameter(Mandatory = $true)][string]$ExpectedInvocation,
+        [Parameter(Mandatory = $true)][string]$ExpectedMainPid,
+        [Parameter(Mandatory = $true)][string]$ExpectedCommand,
+        [Parameter(Mandatory = $true)][string]$ExpectedResult,
+        [Parameter(Mandatory = $true)][int]$ExpectedExecStatus
+    )
+
+    if (
+        [string]$Properties.LoadState -ne "loaded" -or
+        [string]$Properties.ActiveState -ne "failed" -or
+        [string]$Properties.SubState -ne "failed" -or
+        [string]$Properties.MainPID -ne "0" -or
+        [string]$Properties.InvocationID -ne $ExpectedInvocation -or
+        [string]$Properties.NRestarts -ne "0" -or
+        [string]$Properties.Result -ne $ExpectedResult -or
+        [string]$Properties.ExecMainStatus -ne [string]$ExpectedExecStatus
+    ) {
+        throw "Failed service properties do not match the expected terminal state"
+    }
+
+    $verifierBase64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($failedTerminalJournalVerifier)
+    )
+    $commandBase64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($ExpectedCommand)
+    )
+    $launcher = "import base64;exec(base64.b64decode('$verifierBase64'))"
+    $remoteCommand = (
+        "journalctl -u '$Unit' -o json --no-pager | " +
+        "python3 -c `"$launcher`" '$Unit' '$ExpectedInvocation' " +
+        "'$ExpectedMainPid' '$commandBase64' '$ExpectedResult' " +
+        "'$ExpectedExecStatus'"
+    )
+    $raw = Invoke-RunnerProbe -RemoteCommand $remoteCommand
+    try {
+        $evidence = $raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Could not parse failed-service journal evidence"
+    }
+    if (
+        [string]$evidence.unit -ne $Unit -or
+        [string]$evidence.invocation_id -ne $ExpectedInvocation -or
+        [string]$evidence.main_pid -ne $ExpectedMainPid -or
+        [string]$evidence.result -ne $ExpectedResult -or
+        [int]$evidence.exec_status -ne $ExpectedExecStatus -or
+        [string]$evidence.boot_id -notmatch "^[0-9a-f]{32}$" -or
+        [int64]$evidence.failure_sequence -le 0
+    ) {
+        throw "Failed-service journal evidence is inconsistent"
+    }
+    return $evidence
+}
+
 $runnerAcquired = $false
 $launchAttempted = $false
 $captureSucceeded = $false
@@ -796,8 +997,10 @@ try {
         ) {
             throw "Requested existing runner is not the exact ready host"
         }
-        $requiredExistingSeconds = if ($adoptingCompletedService) {
-            $completedCaptureAllowanceSeconds
+        $requiredExistingSeconds = if (
+            $adoptingCompletedService -or $adoptingFailedService
+        ) {
+            $terminalCaptureAllowanceSeconds
         }
         else {
             $serviceRuntimeSeconds
@@ -926,6 +1129,102 @@ try {
                 -ExpectedCommand $batchCommand
             $terminalReportedResults = [int]$terminalEvidence.reported_results
         }
+        elseif ($adoptingFailedService) {
+            $terminalEvidence = Get-VerifiedFailedServiceEvidence `
+                -Unit $unit `
+                -Properties $properties `
+                -ExpectedInvocation $expectedInvocation `
+                -ExpectedMainPid $expectedMainPid `
+                -ExpectedCommand $batchCommand `
+                -ExpectedResult $ExpectedServiceResult `
+                -ExpectedExecStatus $ExpectedServiceExecStatus
+            if ($ClearFailedCaptureResidue) {
+                $cleanupFailedCaptureCommand = @"
+set -Eeuo pipefail
+test ! -e '$remoteArchive'
+python3 - '$remoteCheckpointRoot' '$expectedMainPid' '$runRoot' <<'PY'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected_pid = sys.argv[2]
+run_root = Path(sys.argv[3])
+if str(root) != os.path.realpath(root):
+    raise SystemExit(f"partial checkpoint path is not exact: {root}")
+if not root.is_dir() or root.is_symlink():
+    raise SystemExit(f"partial checkpoint is not a plain directory: {root}")
+allowed = {
+    "casc-runs.tar.gz",
+    "cgroup-residue.txt",
+    "package-maintenance-quiescence.json",
+    "processes.txt",
+    "result-count.txt",
+    "result-files.txt",
+    "service-journal.jsonl",
+    "service-properties.txt",
+    "service.log",
+    "solver-units.txt",
+}
+children = list(root.iterdir())
+names = {child.name for child in children}
+if names != allowed or any(not child.is_file() or child.is_symlink() for child in children):
+    raise SystemExit(f"unexpected partial checkpoint inventory: {sorted(names)!r}")
+partial_count = int((root / "result-count.txt").read_text().split()[0])
+live_count = sum(1 for _path in (run_root / "results").rglob("*.json"))
+if partial_count != live_count:
+    raise SystemExit(
+        f"partial/live result count mismatch: {partial_count} != {live_count}"
+    )
+residues = [
+    Path(line)
+    for line in (root / "cgroup-residue.txt").read_text().splitlines()
+    if line
+]
+if len(residues) != 1:
+    raise SystemExit(f"expected one captured cgroup residue, got {residues!r}")
+for residue in residues:
+    if (
+        residue.parent != Path("/sys/fs/cgroup")
+        or not residue.name.startswith(f"umlaut-casc-{expected_pid}-")
+        or str(residue) != os.path.realpath(residue)
+        or not residue.is_dir()
+        or residue.is_symlink()
+    ):
+        raise SystemExit(f"cgroup residue identity mismatch: {residue}")
+    procs = (residue / "cgroup.procs").read_text().split()
+    threads = (residue / "cgroup.threads").read_text().split()
+    events = dict(
+        line.split(maxsplit=1)
+        for line in (residue / "cgroup.events").read_text().splitlines()
+    )
+    if procs or threads or events.get("populated") != "0":
+        raise SystemExit(
+            f"cgroup residue remains populated: {residue} "
+            f"procs={procs!r} threads={threads!r} events={events!r}"
+        )
+    residue.rmdir()
+shutil.rmtree(root)
+print(f"cleared_failed_capture_result_count={live_count}")
+PY
+test ! -e '$remoteCheckpointRoot'
+"@
+                $cleanupOutput = Invoke-RunnerProbe `
+                    -RemoteCommand $cleanupFailedCaptureCommand
+                if (
+                    $cleanupOutput -notmatch
+                        "cleared_failed_capture_result_count=(\d+)"
+                ) {
+                    throw "Failed-capture cleanup did not return a result count"
+                }
+                $clearedCaptureResultCount = [int]$Matches[1]
+                Write-ResumeLog (
+                    "failed_capture_residue_cleared unit=$unit " +
+                    "result_count=$clearedCaptureResultCount"
+                )
+            }
+        }
         else {
             if (
                 [string]$properties.LoadState -ne "loaded" -or
@@ -992,8 +1291,20 @@ PY
                 "inventory: $terminalReportedResults != $adoptedResultCount"
             )
         }
+        if (
+            $ClearFailedCaptureResidue -and
+            $adoptedResultCount -ne $clearedCaptureResultCount
+        ) {
+            throw (
+                "Cleared partial checkpoint count does not match the result " +
+                "inventory: $clearedCaptureResultCount != $adoptedResultCount"
+            )
+        }
         $adoptionKind = if ($adoptingCompletedService) {
             "completed_service_adopted"
+        }
+        elseif ($adoptingFailedService) {
+            "failed_service_adopted"
         }
         else {
             "existing_service_adopted"
@@ -1190,16 +1501,21 @@ PY
         }
     }
 
-    $serviceSucceeded = (
-        $null -ne $terminalEvidence -or
+    $serviceSucceeded = if ($adoptingFailedService) {
+        $false
+    }
+    else {
         (
-            [string]$properties.ActiveState -eq "inactive" -and
-            [string]$properties.Result -eq "success" -and
-            [string]$properties.ExecMainStatus -eq "0" -and
-            [string]$properties.InvocationID -eq $expectedInvocation -and
-            [string]$properties.NRestarts -eq "0"
+            $null -ne $terminalEvidence -or
+            (
+                [string]$properties.ActiveState -eq "inactive" -and
+                [string]$properties.Result -eq "success" -and
+                [string]$properties.ExecMainStatus -eq "0" -and
+                [string]$properties.InvocationID -eq $expectedInvocation -and
+                [string]$properties.NRestarts -eq "0"
+            )
         )
-    )
+    }
     if ($null -ne $terminalEvidence) {
         Write-ResumeLog (
             "terminal_service_identity_verified unit=$unit " +

@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path, PurePosixPath
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -168,6 +169,54 @@ class BatchContractTests(unittest.TestCase):
         }
         record.update(changes)
         return record
+
+    def cgroup_for_cleanup(self):
+        cgroup = object.__new__(batch.Cgroup)
+        cgroup.path = mock.MagicMock(spec=Path)
+        cgroup.kill = mock.Mock()
+        cgroup.pids = mock.Mock(return_value=[])
+        events = mock.Mock(spec=Path)
+        cgroup.path.__truediv__.return_value = events
+        return cgroup, events
+
+    def test_cgroup_cleanup_retries_transient_busy_after_empty(self):
+        cgroup, events = self.cgroup_for_cleanup()
+        events.read_text.return_value = "populated 0\n"
+        cgroup.path.rmdir.side_effect = [
+            OSError(16, "Device or resource busy"),
+            None,
+        ]
+        with (
+            mock.patch.object(batch.time, "monotonic", side_effect=[0.0, 0.1]),
+            mock.patch.object(batch.time, "sleep") as sleep,
+        ):
+            cgroup.close()
+        cgroup.kill.assert_called_once_with()
+        self.assertEqual(cgroup.path.rmdir.call_count, 2)
+        sleep.assert_called_once_with(0.01)
+
+    def test_cgroup_cleanup_rejects_persistently_populated_boundary(self):
+        cgroup, events = self.cgroup_for_cleanup()
+        cgroup.pids.return_value = [123]
+        events.read_text.return_value = "populated 1\n"
+        with (
+            mock.patch.object(batch.time, "monotonic", side_effect=[0.0, 2.0]),
+            self.assertRaisesRegex(batch.BatchError, "pids=\\[123\\], populated=1"),
+        ):
+            cgroup.close()
+        cgroup.path.rmdir.assert_not_called()
+
+    def test_cgroup_cleanup_rejects_persistent_empty_busy_boundary(self):
+        cgroup, events = self.cgroup_for_cleanup()
+        events.read_text.return_value = "populated 0\n"
+        busy = OSError(16, "Device or resource busy")
+        cgroup.path.rmdir.side_effect = busy
+        with (
+            mock.patch.object(batch.time, "monotonic", side_effect=[0.0, 2.0]),
+            self.assertRaisesRegex(batch.BatchError, "last_remove_error"),
+        ):
+            cgroup.close()
+        cgroup.path.rmdir.assert_called_once_with()
 
     def test_umlaut_and_vampire_commands_pin_schedules_and_limits(self):
         record = self.sample_record()

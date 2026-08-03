@@ -28,6 +28,14 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         if match is None:
             raise AssertionError("terminal journal verifier is missing")
         cls.terminal_verifier = match.group("code")
+        failed_match = re.search(
+            r"\$failedTerminalJournalVerifier = @'\n(?P<code>.*?)\n'@",
+            cls.source,
+            re.DOTALL,
+        )
+        if failed_match is None:
+            raise AssertionError("failed terminal journal verifier is missing")
+        cls.failed_terminal_verifier = failed_match.group("code")
 
     def test_probe_deadline_is_bounded_inside_monitor_slack(self) -> None:
         match = re.search(
@@ -58,7 +66,7 @@ class CascResumeControllerProbeTests(unittest.TestCase):
     def test_all_short_service_and_inventory_probes_are_bounded(self) -> None:
         self.assertEqual(
             self.source.count("Invoke-RunnerProbe -RemoteCommand"),
-            7,
+            8,
         )
         self.assertIn(
             'Invoke-Runner @("exec", "--", $captureCommand)',
@@ -68,6 +76,10 @@ class CascResumeControllerProbeTests(unittest.TestCase):
     def test_adoption_requires_complete_exact_identity(self) -> None:
         self.assertIn("[switch]$AdoptExistingService", self.source)
         self.assertIn("[switch]$AdoptCompletedService", self.source)
+        self.assertIn("[switch]$AdoptFailedService", self.source)
+        self.assertIn("[string]$ExpectedServiceResult", self.source)
+        self.assertIn("[int]$ExpectedServiceExecStatus", self.source)
+        self.assertIn("[switch]$ClearFailedCaptureResidue", self.source)
         self.assertIn("[int64]$ExpectedServiceMainPid", self.source)
         self.assertIn("[string]$ExpectedServiceInvocationId", self.source)
         self.assertIn(
@@ -78,7 +90,7 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         self.assertIn('$expectedRunnerPhase = if ($adoptingAnyService)', self.source)
         self.assertIn('"synced"', self.source)
         self.assertIn('[string]$candidate.phase -ne $expectedRunnerPhase', self.source)
-        self.assertIn("$completedCaptureAllowanceSeconds = 1800", self.source)
+        self.assertIn("$terminalCaptureAllowanceSeconds = 600", self.source)
 
     def test_adoption_fails_closed_before_skipping_restore_and_launch(self) -> None:
         runner_ready = self.source.index("runner_ready run_id=")
@@ -106,7 +118,12 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         self.assertIn("result count outside recovery range", branch)
         self.assertIn("existing_service_adopted", branch)
         self.assertIn("completed_service_adopted", branch)
+        self.assertIn("failed_service_adopted", branch)
         self.assertIn("Get-VerifiedCompletedServiceEvidence", branch)
+        self.assertIn("Get-VerifiedFailedServiceEvidence", branch)
+        self.assertIn("cleared_failed_capture_result_count", branch)
+        self.assertIn('residue.parent != Path("/sys/fs/cgroup")', branch)
+        self.assertIn('events.get("populated") != "0"', branch)
         self.assertNotIn('Invoke-Runner @("sync")', branch)
         self.assertIn(
             'Invoke-Runner @("exec", "--", $launchCommand)',
@@ -184,6 +201,69 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         }
         return [process, summary, success, resource]
 
+    def run_failed_terminal_verifier(
+        self,
+        records: list[dict[str, object]],
+        *,
+        command: str = "/usr/bin/python3 guarded-batch.py --exact",
+    ) -> subprocess.CompletedProcess[str]:
+        unit = "casc-j13-v2-resume-260803-182617-21a7.service"
+        invocation = "a" * 32
+        return subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                self.failed_terminal_verifier,
+                unit,
+                invocation,
+                "3997",
+                base64.b64encode(command.encode("utf-8")).decode("ascii"),
+                "exit-code",
+                "2",
+            ],
+            input="".join(json.dumps(record) + "\n" for record in records),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def failed_terminal_records(self) -> list[dict[str, object]]:
+        unit = "casc-j13-v2-resume-260803-182617-21a7.service"
+        invocation = "a" * 32
+        boot = "c" * 32
+        process = {
+            "_SYSTEMD_UNIT": unit,
+            "_SYSTEMD_INVOCATION_ID": invocation,
+            "_PID": "3997",
+            "_CMDLINE": "/usr/bin/python3 guarded-batch.py --exact",
+            "_BOOT_ID": boot,
+            "__SEQNUM": "1",
+            "MESSAGE": "error: guarded cleanup failed",
+        }
+        process_exit = {
+            "UNIT": unit,
+            "INVOCATION_ID": invocation,
+            "_SYSTEMD_UNIT": "init.scope",
+            "_BOOT_ID": boot,
+            "__SEQNUM": "2",
+            "MESSAGE_ID": "98e322203f7a4ed290d09fe03c09fe15",
+            "COMMAND": "ExecStart",
+            "EXIT_CODE": "exited",
+            "EXIT_STATUS": "2",
+            "MESSAGE": f"{unit}: Main process exited, code=exited, status=2",
+        }
+        failure = {
+            "UNIT": unit,
+            "INVOCATION_ID": invocation,
+            "_SYSTEMD_UNIT": "init.scope",
+            "_BOOT_ID": boot,
+            "__SEQNUM": "3",
+            "MESSAGE_ID": "d9b373ed55a64feb8242e02dbe79a49c",
+            "UNIT_RESULT": "exit-code",
+            "MESSAGE": f"{unit}: Failed with result 'exit-code'.",
+        }
+        return [process, process_exit, failure]
+
     def test_terminal_journal_verifier_accepts_exact_completed_identity(self) -> None:
         result = self.run_terminal_verifier(self.terminal_records())
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -233,6 +313,47 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         for name, records in cases.items():
             with self.subTest(name=name):
                 result = self.run_terminal_verifier(records)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_failed_journal_verifier_accepts_exact_terminal_identity(self) -> None:
+        result = self.run_failed_terminal_verifier(self.failed_terminal_records())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["result"], "exit-code")
+        self.assertEqual(evidence["exec_status"], 2)
+        self.assertEqual(evidence["failure_sequence"], 3)
+        self.assertEqual(evidence["boot_id"], "c" * 32)
+
+    def test_failed_journal_verifier_rejects_outcome_ambiguity(self) -> None:
+        base = self.failed_terminal_records()
+        cases: dict[str, list[dict[str, object]]] = {}
+
+        wrong_status = copy.deepcopy(base)
+        wrong_status[1]["EXIT_STATUS"] = "1"
+        cases["wrong status"] = wrong_status
+
+        wrong_result = copy.deepcopy(base)
+        wrong_result[2]["UNIT_RESULT"] = "signal"
+        cases["wrong result"] = wrong_result
+
+        duplicate_failure = copy.deepcopy(base)
+        duplicate = copy.deepcopy(duplicate_failure[2])
+        duplicate["__SEQNUM"] = "4"
+        duplicate_failure.append(duplicate)
+        cases["duplicate failure"] = duplicate_failure
+
+        failure_before_exit = copy.deepcopy(base)
+        failure_before_exit[1]["__SEQNUM"] = "3"
+        failure_before_exit[2]["__SEQNUM"] = "2"
+        cases["failure before exit"] = failure_before_exit
+
+        wrong_command = copy.deepcopy(base)
+        wrong_command[0]["_CMDLINE"] = "/usr/bin/python3 replacement.py"
+        cases["wrong command"] = wrong_command
+
+        for name, records in cases.items():
+            with self.subTest(name=name):
+                result = self.run_failed_terminal_verifier(records)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
 
 

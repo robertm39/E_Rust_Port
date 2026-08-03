@@ -956,6 +956,62 @@ start-available policy, `IgnoreNew`, and eight-hour ceiling.  This supplies the
 real successor gate required by the missed-trigger repair while leaving the
 incomplete matrix campaign active.
 
+## Session-wall cgroup teardown race
+
+Question: can a terminal J13 slice retain its completed results without
+weakening the cgroup-residue deletion gate when cgroup v2 reports a transient
+`EBUSY` during teardown?  The guarded 9,000-second slice on runner
+`260803-182617-21a7` reproduced that boundary.  Service
+`casc-j13-v2-resume-260803-182617-21a7.service`, MainPID `3997`, invocation
+`5f0221c8996441daae9ed0a06e3fd45b`, and boot
+`7ff4be2759d64125934fc2107d815b34` advanced the frozen J13 run from 1,457 to
+1,531 records.  At the session wall, cleanup of
+`/sys/fs/cgroup/umlaut-casc-3997-766-vampire-8b69c10d` received errno 16.
+The batch exited 2; systemd journal records 13,075 and 13,076 prove the exact
+`ExecStart` exit and later `exit-code` unit failure.  The controller regenerated
+all partial reports but correctly rejected its nonempty cgroup inventory and
+retained Linode `102210235` plus firewall `103722650`.
+
+A later bounded probe falsified a live-process interpretation: `cgroup.procs`
+and `cgroup.threads` were empty, `cgroup.events` reported `populated 0`, no
+batch/Umlaut/Vampire process or solver unit remained, and the failed service
+still had `NRestarts=0`, `Result=exit-code`, and `ExecMainStatus=2`.  The
+partial checkpoint contains ten expected regular files, including the
+18,717,247-byte inner run archive and a 1,531-line result inventory; capture
+stopped before input hashes, resume metadata, outer hashes, or the outer
+archive could be created.
+
+The batch cleanup now waits for both an empty PID inventory and an explicit
+`populated=0`, then retries only `EBUSY`/`ENOTEMPTY` removal failures within its
+existing two-second monotonic deadline.  Persistent population, missing
+population proof, persistent busy state, and unrelated removal errors remain
+fatal.  The recovery controller adds a separate failed-service adoption mode.
+It requires exact failed properties plus one journal boot/invocation,
+PID/command, `ExecStart` exit status, later unit-result record, uploaded hashes,
+contract hash, and result inventory.  Optional partial-capture cleanup is
+restricted to that mode and verifies the exact directory inventory, live and
+partial counts, a PID-prefixed cgroup path, empty procs/threads, and
+`populated=0` before removing only that cgroup and checkpoint directory.  A
+terminal recovery reserves 600 seconds; previous verified captures completed
+in well under a minute, while the controller still fails closed if the trusted
+allowance cannot cover that bound.
+
+Reproduction and focused validation from the repository root:
+
+```text
+python -m unittest tools.casc_benchmark.test_casc_benchmark
+python experiments/2026-07-28-004-casc-benchmark-matrix/test_resume_j13_checkpoint.py
+[System.Management.Automation.Language.Parser]::ParseFile(...resume_j13_checkpoint.ps1...)
+git diff --check
+```
+
+The 29 batch/report tests and 10 controller tests pass.  The cleanup tests
+simulate a delayed empty `EBUSY`, permanently populated state, and persistent
+empty-but-busy state; the journal tests falsify wrong command, exit status,
+unit result, terminal ordering, and duplicate failure evidence.  Live recovery
+and independent archive validation remain required before the retained runner
+may be deleted or this incident Bead may close.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
